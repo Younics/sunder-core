@@ -1,0 +1,200 @@
+{
+  "schemaVersion": 1,
+  "status": "reviewed-current-metadata",
+  "scope": "Complete current conformance metadata; no historical receipt reconstruction or source-compiler equivalence claim.",
+  "inputFiles": [
+    { "path": "../conformance/valid/mixed-contract-lock.json", "byteLength": 3116, "sha256": "6ea46e7a2e9dcfc2b04f221224cb61434dcc181bc53f540fe3b3f9527f36a93e" },
+    { "path": "../conformance/valid/authoring-receipt-mixed.json", "byteLength": 9732, "sha256": "66701e195a329d22521e716ebaca8c785887175c50f80cf6cf9affecfd2d1c89" },
+    { "path": "../conformance/valid/package-api-mixed-authority-contract-lock.json", "byteLength": 2335, "sha256": "e06b9d71283895d9c67e9f58649facf4e4df4a808ab7522867c217585ace732b" },
+    { "path": "../conformance/valid/package-api-contract-lock.json", "byteLength": 1648, "sha256": "c89732eb3e01fb179574808f1d4794e35a0e2cc32dbf384a7f0c498be4cf24f9" },
+    { "path": "../conformance/valid/package-public-inventory-mixed-authority.json", "byteLength": 1367, "sha256": "7200ff61842e67ca5b01848150111f1f38030ae488cb07a0ab209189c3424edb" },
+    { "path": "../conformance/valid/package-project-export-private.json", "byteLength": 1673, "sha256": "61a9fce24ddba5d7913fbe943e03e05e40f53983a25703f902b761de30044be1" },
+    { "path": "../conformance/valid/rpc-model-projection-nonempty.json", "byteLength": 475, "sha256": "6547e16179e682ab249c64dfbf496d972aad6ff6e4965bc96ef662c0395e2b0a" },
+    { "path": "../conformance/valid/rpc-model-projection-mixed-authority.json", "byteLength": 840, "sha256": "2bfacdb1415230a81b6004e0d1cf2c2d3be9e68b6e5295c3cba83b7d418732e1" }
+  ],
+  "lockToReceiptProjection": {
+    "lockPath": "../conformance/valid/mixed-contract-lock.json",
+    "receiptPath": "../conformance/valid/authoring-receipt-mixed.json",
+    "packageId": "example.dependency",
+    "lockPresence": "optional",
+    "receiptPresence": "optional",
+    "consumerRoles": ["runtime"],
+    "lockSha256": "6ea46e7a2e9dcfc2b04f221224cb61434dcc181bc53f540fe3b3f9527f36a93e"
+  },
+  "executableShapes": [
+    {
+      "id": "same-package-app-use",
+      "input": {
+        "projectExportPath": "../conformance/valid/package-project-export-private.json",
+        "projectExportSchema": "../package-project-export.schema.json",
+        "appPolicy": { "role": "app", "required": true, "actions": ["discover", "invoke"], "contractKey": "minimal" }
+      },
+      "expectedProjectExportContracts": [
+        {
+          "contractKey": "minimal", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0-beta.1+build.7", "exposure": "package",
+          "source": "owned", "authorityKind": "package", "authorityId": "example.owner", "descriptorBytes": 502,
+          "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0-beta.1+build.7\"}",
+          "descriptorSha256": "d91e24740135b749202b9ab3e643c8a518f48d2d85e86141cd9f8269335634be",
+          "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+          "modelProjection": { "models": {}, "serviceReferences": {} }
+        }
+      ],
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "minimal", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0-beta.1+build.7", "exposure": "package", "descriptorBytes": 502,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0-beta.1+build.7\"}",
+            "descriptorSha256": "d91e24740135b749202b9ab3e643c8a518f48d2d85e86141cd9f8269335634be",
+            "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+            "modelProjection": { "models": {}, "serviceReferences": {} }
+          }
+        ],
+        "packageArtifacts": [],
+        "bundles": [{ "contractKey": "minimal", "source": "owned", "authorityKind": "package", "authorityId": "example.owner" }],
+        "packageArtifactImports": [], "packageApiImports": [], "providerImports": [], "platformImports": [], "providers": [],
+        "uses": [{ "role": "app", "required": true, "actions": ["discover", "invoke"], "contractKey": "minimal" }],
+        "generatedPackageFacades": [],
+        "generatedBindings": [{ "contractKey": "minimal", "logicalName": "Sunder.Generated.Rpc.Minimal" }]
+      }
+    },
+    {
+      "id": "whole-package-public-api-import",
+      "input": {
+        "lockPath": "../conformance/valid/package-api-mixed-authority-contract-lock.json", "lockSchema": "../contract-lock.schema.json",
+        "publicInventoryPath": "../conformance/valid/package-public-inventory-mixed-authority.json", "publicInventorySchema": "../package-public-inventory.schema.json",
+        "recordDonorReceiptPath": "../conformance/valid/authoring-receipt-mixed.json", "receiptSchema": "../authoring-receipt.schema.json", "consumerRole": "runtime"
+      },
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "example.rpc.v1.minimal", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0", "exposure": "public", "descriptorBytes": 487,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371", "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+            "modelProjection": { "models": {}, "serviceReferences": {} }
+          }
+        ],
+        "packageArtifacts": [
+          {
+            "packageId": "example.dependency", "requestedVersionRange": ">=1.0.0 <2.0.0", "includePrerelease": false, "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111", "registryOrigin": "https://registry.example/", "publicContractCount": 2,
+            "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+            "modelProjectionBytes": 840, "modelProjectionSha256": "2bfacdb1415230a81b6004e0d1cf2c2d3be9e68b6e5295c3cba83b7d418732e1",
+            "contracts": [
+              {
+                "contractId": "example.rpc.v1.minimal", "artifactSource": "owned", "authorityKind": "package", "authorityId": "example.dependency", "selectedAuthorityRelease": "1.2.3",
+                "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111", "resolvedContractVersion": "2.0.0", "descriptorBytes": 487,
+                "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371", "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+                "etag": "\"709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371\""
+              },
+              {
+                "contractId": "sunder.stack.contributor", "artifactSource": "imported", "authorityKind": "platform", "authorityId": "sunder.core", "selectedAuthorityRelease": "1.1.0",
+                "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930", "resolvedContractVersion": "2.0.0", "descriptorBytes": 489,
+                "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567", "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+                "etag": "\"6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567\""
+              }
+            ]
+          }
+        ],
+        "bundles": [{ "contractKey": "example.rpc.v1.minimal", "source": "imported", "authorityKind": "package", "authorityId": "example.dependency", "selectedAuthorityRelease": "1.2.3", "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111" }],
+        "packageArtifactImports": [
+          {
+            "packageId": "example.dependency", "requestedVersionRange": ">=1.0.0 <2.0.0", "includePrerelease": false, "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111", "publicContractCount": 2, "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+            "authorityConstraints": [
+              { "authorityKind": "package", "authorityId": "example.dependency", "selectedAuthorityRelease": "1.2.3", "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111" },
+              { "authorityKind": "platform", "authorityId": "sunder.core", "selectedAuthorityRelease": "1.1.0", "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930" }
+            ]
+          }
+        ],
+        "packageApiImports": [{ "packageId": "example.dependency", "presence": "optional", "bundleRefs": [{ "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0" }], "useRefs": [{ "role": "runtime", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0" }] }],
+        "providerImports": [], "platformImports": [], "providers": [],
+        "uses": [{ "role": "runtime", "required": true, "actions": ["discover", "invoke"], "contractKey": "example.rpc.v1.minimal" }],
+        "generatedPackageFacades": [{ "packageId": "example.dependency", "localName": "dependency", "logicalName": "Sunder.Generated.Rpc.DependencyPackageApi" }],
+        "generatedBindings": [{ "contractKey": "example.rpc.v1.minimal", "logicalName": "Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal" }]
+      },
+      "excludedPublicInventoryContracts": [{ "contractId": "sunder.stack.contributor", "contractVersion": "2.0.0", "descriptorBytes": 489, "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567", "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56", "reason": "authorityKind=platform" }]
+    },
+    {
+      "id": "explicit-package-provider-import",
+      "input": {
+        "lockBasePath": "../conformance/valid/package-api-contract-lock.json", "lockSchema": "../contract-lock.schema.json",
+        "recordDonorReceiptPath": "../conformance/valid/authoring-receipt-mixed.json", "receiptSchema": "../authoring-receipt.schema.json",
+        "lockTransformations": [
+          { "operation": "remove", "path": "/packageImports/example.dependency" },
+          { "operation": "set", "path": "/providerImports/minimalProvider", "value": { "packageId": "example.dependency", "contractId": "example.rpc.v1.minimal" } }
+        ],
+        "providerBinding": { "key": "minimalProvider", "providerId": "example.consumer.minimal.provider", "role": "runtime", "audience": "public" }
+      },
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "example.rpc.v1.minimal", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0", "exposure": "public", "descriptorBytes": 487,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"example.rpc.v1.minimal\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+            "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371", "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42",
+            "modelProjection": { "models": {}, "serviceReferences": {} }
+          }
+        ],
+        "packageArtifacts": [
+          {
+            "packageId": "example.dependency", "requestedVersionRange": ">=1.0.0 <2.0.0", "includePrerelease": false, "selectedPackageVersion": "1.2.3",
+            "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111", "registryOrigin": "https://registry.example/", "publicContractCount": 1,
+            "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe", "modelProjectionBytes": 475, "modelProjectionSha256": "6547e16179e682ab249c64dfbf496d972aad6ff6e4965bc96ef662c0395e2b0a",
+            "contracts": [
+              {
+                "contractId": "example.rpc.v1.minimal", "artifactSource": "owned", "authorityKind": "package", "authorityId": "example.dependency", "selectedAuthorityRelease": "1.2.3",
+                "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111", "resolvedContractVersion": "2.0.0", "descriptorBytes": 487,
+                "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371", "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42", "etag": "\"709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371\""
+              }
+            ]
+          }
+        ],
+        "bundles": [{ "contractKey": "example.rpc.v1.minimal", "source": "imported", "authorityKind": "package", "authorityId": "example.dependency", "selectedAuthorityRelease": "1.2.3", "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111" }],
+        "packageArtifactImports": [
+          {
+            "packageId": "example.dependency", "requestedVersionRange": ">=1.0.0 <2.0.0", "includePrerelease": false, "selectedPackageVersion": "1.2.3", "selectedPackageContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111",
+            "publicContractCount": 1, "publicInventorySha256": "1d1c5dbcae220e7052df3f87f9b4fe9e5feb3fd2a23c70f2b41453039ccb9fbe",
+            "authorityConstraints": [{ "authorityKind": "package", "authorityId": "example.dependency", "selectedAuthorityRelease": "1.2.3", "selectedAuthorityContentIdentity": "1111111111111111111111111111111111111111111111111111111111111111" }]
+          }
+        ],
+        "packageApiImports": [],
+        "providerImports": [{ "key": "minimalProvider", "packageId": "example.dependency", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0", "bundleRef": { "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0" }, "providerRefs": [{ "role": "runtime", "providerId": "example.consumer.minimal.provider", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0" }] }],
+        "platformImports": [],
+        "providers": [{ "providerId": "example.consumer.minimal.provider", "role": "runtime", "audience": "public", "contractKey": "example.rpc.v1.minimal" }],
+        "uses": [], "generatedPackageFacades": [],
+        "generatedBindings": [{ "contractKey": "example.rpc.v1.minimal", "logicalName": "Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal" }]
+      }
+    },
+    {
+      "id": "explicit-platform-import",
+      "input": {
+        "lockPath": "../conformance/valid/mixed-contract-lock.json", "lockSchema": "../contract-lock.schema.json",
+        "recordDonorReceiptPath": "../conformance/valid/authoring-receipt-mixed.json", "receiptSchema": "../authoring-receipt.schema.json", "lockKey": "stackContributor",
+        "lockTransformations": [{ "operation": "remove", "path": "/packageImports/example.dependency" }, { "operation": "remove", "path": "/packageArtifacts/example.dependency" }]
+      },
+      "expectedRecords": {
+        "contracts": [
+          {
+            "contractKey": "sunder.stack.contributor", "contractId": "sunder.stack.contributor", "contractVersion": "2.0.0", "exposure": "public", "descriptorBytes": 489,
+            "canonicalDescriptor": "{\"$defs\":{\"Empty\":{\"additionalProperties\":false,\"properties\":{},\"required\":[],\"title\":\"Empty value\",\"type\":\"object\"}},\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"contractId\":\"sunder.stack.contributor\",\"descriptorVersion\":1,\"errors\":{},\"schemaProfile\":\"sunder.rpc.values.v1\",\"services\":{\"example\":{\"methods\":{\"ping\":{\"errors\":[],\"idempotency\":\"idempotent\",\"kind\":\"unary\",\"requestSchema\":{\"$ref\":\"#/$defs/Empty\"},\"responseSchema\":{\"$ref\":\"#/$defs/Empty\"}}}}},\"version\":\"2.0.0\"}",
+            "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567", "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56",
+            "modelProjection": { "models": {}, "serviceReferences": {} }
+          }
+        ],
+        "packageArtifacts": [],
+        "bundles": [{ "contractKey": "sunder.stack.contributor", "source": "imported", "authorityKind": "platform", "authorityId": "sunder.core", "selectedAuthorityRelease": "1.1.0", "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930" }],
+        "packageArtifactImports": [], "packageApiImports": [], "providerImports": [],
+        "platformImports": [
+          {
+            "key": "stackContributor", "authorityKind": "platform", "authorityId": "sunder.core", "authorityReleaseRange": ">=1.0.0 <2.0.0", "includePrerelease": false, "selectedAuthorityRelease": "1.1.0",
+            "selectedAuthorityContentIdentity": "5ef72ceacb24db5ca51a51f977c47853f787198e563a6fa8950fd62f636ea930", "contractId": "sunder.stack.contributor", "contractVersion": "2.0.0",
+            "bundleRef": { "contractId": "sunder.stack.contributor", "contractVersion": "2.0.0" },
+            "providerRefs": [{ "role": "runtime", "providerId": "example.consumer.stack", "contractId": "sunder.stack.contributor", "contractVersion": "2.0.0" }]
+          }
+        ],
+        "providers": [{ "providerId": "example.consumer.stack", "role": "runtime", "audience": "public", "contractKey": "sunder.stack.contributor" }],
+        "uses": [], "generatedPackageFacades": [],
+        "generatedBindings": [{ "contractKey": "sunder.stack.contributor", "logicalName": "Sunder.Generated.Rpc.Imports.CSunder_Stack_Contributor" }]
+      }
+    }
+  ]
+}

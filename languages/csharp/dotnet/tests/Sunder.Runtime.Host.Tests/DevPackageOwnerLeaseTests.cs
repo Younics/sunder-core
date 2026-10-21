@@ -9,8 +9,145 @@ using Xunit;
 namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
-public sealed class DevPackageOwnerLeaseTests
+public sealed partial class DevPackageOwnerLeaseTests
 {
+    [Fact]
+    public async Task ExplicitSameByteReloadRetiresTheExactWorkerInsteadOfPreservingItsActivationState()
+    {
+        var fixture = CreateFixture();
+        var maker = CreatePackageLayout(fixture.Paths.RootPath, "maker", "startup.counted.package", "1.0.0").InstallPath;
+        const string token = "owner-token-reload-reload-reload-reload";
+        try
+        {
+            await fixture.Host.LoadInstalledPackagesAsync();
+            await fixture.Host.ReplaceDevPackageOwnerAsync("maker", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, maker, false));
+            var original = fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"];
+            var stage = await fixture.Host.StagePackageLifecycleAsync(new(["startup.counted.package"]));
+            Assert.NotNull(stage.StageId);
+            var committed = await fixture.Host.CommitPackageLifecycleStageAsync(stage.StageId);
+            Assert.True(committed.Success, committed.Message);
+            var current = fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"];
+            Assert.NotEqual(original.RuntimeActivationId, current.RuntimeActivationId);
+            Assert.NotSame(original.Worker, current.Worker);
+            Assert.True(original.Worker.GenerationCompletion.IsCompleted);
+            Assert.Throws<RuntimeUnavailableException>(() => fixture.Host.SessionOwner.State.AcquirePackageActivationLease("startup.counted.package",
+                new(original.RuntimeActivationId, original.ActivationSessionGeneration!.Value)));
+        }
+        finally { await fixture.DisposeAsync(); }
+    }
+
+    [Fact]
+    public async Task UnrelatedOwnerAddRemoveRetainsLiveWorkerAndBirthAuthorityUntilItsActualOwnerReleases()
+    {
+        var fixture = CreateFixture();
+        var maker = CreateRolePackage(fixture.Paths.RootPath, "startup.counted.package", workerMode: "v1-publication-discovery");
+        var target = CreatePackageLayout(fixture.Paths.RootPath, "target", "target.package", "1.0.0").InstallPath;
+        const string makerToken = "owner-token-maker-maker-maker-maker";
+        const string targetToken = "owner-token-target-target-target-target";
+        try
+        {
+            await fixture.Host.LoadInstalledPackagesAsync();
+            await fixture.Host.ReplaceDevPackageOwnerAsync("maker", Mutation(fixture.Host.RuntimeInstanceId, makerToken, "load", 1, maker, false));
+            var original = fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"];
+            Assert.IsType<ProcessRuntimeWorker>(original.Worker);
+            var birth = new RuntimePackageGeneration(original.RuntimeActivationId, original.ActivationSessionGeneration!.Value);
+            var snapshotFolder = original.Source.EffectiveSnapshotFolder;
+            var counters = Path.Combine(original.Worker.WorkspaceRootPath!, "activation-counters.txt");
+            var before = File.ReadAllText(counters);
+            await AssertWorkerDiscoveryAsync("initial");
+            await fixture.Host.ReplaceDevPackageOwnerAsync("target", Mutation(fixture.Host.RuntimeInstanceId, targetToken, "load", 1, target, true));
+            Assert.Same(original.Worker, fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"].Worker);
+            Assert.False(original.Worker.GenerationCompletion.IsCompleted);
+            Assert.True(Directory.Exists(snapshotFolder));
+            using (var lease = fixture.Host.SessionOwner.State.AcquirePackageActivationLease("startup.counted.package", birth))
+                Assert.True(lease.Generation > birth.SessionGeneration);
+            await ReleaseWithDiscoveryProbeAsync("target", targetToken, "continuing", "unavailable", "rpc.session.transitioning");
+            Assert.Same(original.Worker, fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"].Worker);
+            Assert.Equal(before, File.ReadAllText(counters));
+            await AssertWorkerDiscoveryAsync("continued");
+            await ReleaseWithDiscoveryProbeAsync("maker", makerToken, "retiring", "stale-endpoint", "rpc.caller.generation-stale");
+            Assert.True(original.Worker.GenerationCompletion.IsCompleted);
+            Assert.False(Directory.Exists(snapshotFolder));
+            Assert.Throws<RuntimeUnavailableException>(() => fixture.Host.SessionOwner.State.AcquirePackageActivationLease("startup.counted.package", birth));
+
+            async Task ReleaseWithDiscoveryProbeAsync(string owner, string ownerToken, string probe, string kind, string code)
+            {
+                // Hold an actual lease so the previous generation remains in its
+                // drain boundary before the candidate catalog is installed.
+                using var lease = fixture.Host.AcquireSessionLease();
+                var draining = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = lease.RetirementToken.Register(() => draining.TrySetResult());
+                var release = fixture.Host.ReleaseDevPackageOwnerAsync(owner, new(fixture.Host.RuntimeInstanceId, ownerToken));
+                try
+                {
+                    await draining.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.False(release.IsCompleted);
+                    await AssertWorkerDiscoveryAsync(probe, kind, code);
+                    Assert.False(original.Worker.GenerationCompletion.IsCompleted);
+                }
+                finally
+                {
+                    lease.Dispose();
+                    await release.WaitAsync(TimeSpan.FromSeconds(5));
+                }
+            }
+
+            async Task AssertWorkerDiscoveryAsync(string probe, string? kind = null, string? code = null)
+            {
+                var provider = Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers);
+                using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                // The direct host-side invocation only triggers autonomous Worker
+                // discovery while ordinary session lease acquisition is fenced.
+                await ((ProcessRuntimeWorker)original.Worker).InvokeUnaryAsync(provider.ProviderId,
+                    new(provider.PackageId, provider.PackageVersion, provider, DateTimeOffset.UtcNow.AddSeconds(5), 1, deadline.Token),
+                    "messages", "send", JsonSerializer.SerializeToElement(new { message = probe }), deadline.Token);
+                var path = Path.Combine(((ProcessRuntimeWorker)original.Worker).WorkerTemporaryPath, "publication-discovery-" + probe + ".json");
+                using var response = JsonDocument.Parse(await File.ReadAllBytesAsync(path, deadline.Token));
+                if (kind is null)
+                {
+                    Assert.Equal("host.result", response.RootElement.GetProperty("type").GetString());
+                    Assert.Single(response.RootElement.GetProperty("value").GetProperty("providers").EnumerateArray());
+                }
+                else
+                {
+                    Assert.Equal("host.error", response.RootElement.GetProperty("type").GetString());
+                    var error = response.RootElement.GetProperty("error");
+                    Assert.Equal(kind, error.GetProperty("kind").GetString());
+                    Assert.Equal(code, error.GetProperty("code").GetString());
+                    Assert.Equal("not-dispatched", error.GetProperty("dispatchState").GetString());
+                    Assert.Equal("safe", error.GetProperty("retrySafety").GetString());
+                }
+            }
+        }
+        finally { await fixture.DisposeAsync(); }
+    }
+
+    [Fact]
+    public async Task UnrelatedDevGraphChangesPreserveInstalledAppFingerprintButSourceOverrideInvalidatesIt()
+    {
+        var fixture = CreateFixture();
+        var installed = CreatePackageLayout(fixture.Paths.RootPath, "installed", "builder.package", "1.0.0");
+        var project = CreatePackageLayout(fixture.Paths.RootPath, "project", "project.package", "1.0.0").InstallPath;
+        var replacement = CreatePackageLayout(fixture.Paths.RootPath, "replacement", "builder.package", "1.0.0").InstallPath;
+        const string token = "owner-token-retention-retention-retention";
+        try
+        {
+            await AddInstalledPackageAsync(fixture.Store, installed);
+            Assert.True((await fixture.Host.LoadInstalledPackagesAsync()).Success);
+            var before = Assert.Single(fixture.Host.GetActivePackageUiSnapshots());
+            Assert.NotNull(before.ActivationFingerprint);
+            await fixture.Host.ReplaceDevPackageOwnerAsync("owner-a", Mutation(fixture.Host.RuntimeInstanceId, token, "add", 1, project, false));
+            var added = fixture.Host.GetActivePackageUiSnapshots().Single(source => source.PackageId == "builder.package");
+            Assert.Equal(before.ActivationFingerprint, added.ActivationFingerprint);
+            Assert.Equal(before.ProjectionReference!.CacheKey, added.ProjectionReference!.CacheKey);
+            await fixture.Host.ReleaseDevPackageOwnerAsync("owner-a", new(fixture.Host.RuntimeInstanceId, token));
+            Assert.Equal(before.ActivationFingerprint, Assert.Single(fixture.Host.GetActivePackageUiSnapshots()).ActivationFingerprint);
+            await fixture.Host.ReplaceDevPackageOwnerAsync("owner-a", Mutation(fixture.Host.RuntimeInstanceId, token, "override", 1, replacement, false));
+            Assert.NotEqual(before.ActivationFingerprint, Assert.Single(fixture.Host.GetActivePackageUiSnapshots()).ActivationFingerprint);
+        }
+        finally { await fixture.DisposeAsync(); }
+    }
+
     [Fact]
     public async Task WarmRuntime_LeaseKeepsInstanceAndReleaseRestoresInstalledPackage()
     {
@@ -286,6 +423,7 @@ public sealed class DevPackageOwnerLeaseTests
             await AddInstalledPackageAsync(fixture.Store, installed);
             Assert.True((await fixture.Host.LoadInstalledPackagesAsync()).Success);
 
+            var retainedWorker = fixture.Host.ActiveSession.LoadedPackageMap[installed.PackageId].Worker;
             await Assert.ThrowsAsync<RuntimePackageValidationException>(() =>
                 fixture.Host.ReplaceDevPackageOwnerAsync(
                     "owner-a",
@@ -299,6 +437,7 @@ public sealed class DevPackageOwnerLeaseTests
 
             var active = Assert.Single(fixture.Host.GetActivePackages());
             Assert.Equal("installed.package", active.PackageId);
+            Assert.Same(retainedWorker, fixture.Host.ActiveSession.LoadedPackageMap[installed.PackageId].Worker);
             Assert.False(fixture.Host.ContainsDevPackageOwner("owner-a"));
         }
         finally
@@ -445,10 +584,18 @@ public sealed class DevPackageOwnerLeaseTests
                 Mutation(fixture.Host.RuntimeInstanceId, "owner-token-hhhhhhhhhhhhhhhhhhhh", "mutation-1", 1, dev, watch: true));
             Assert.True((await fixture.Host.GetPackageSessionStatusAsync("test.package"))?.WatchEnabled);
 
+            var observed = await fixture.Host.HeartbeatDevPackageOwnerAsync("owner-a",
+                new(fixture.Host.RuntimeInstanceId, "owner-token-gggggggggggggggggggg"));
+            Assert.False(Assert.Single(observed.Packages).Watch);
+            Assert.True(observed.Packages[0].EffectiveWatch);
+
             await fixture.Host.ReleaseDevPackageOwnerAsync(
                 "owner-b",
                 new DevPackageOwnerReleaseRequest(fixture.Host.RuntimeInstanceId, "owner-token-hhhhhhhhhhhhhhhhhhhh"));
             Assert.False((await fixture.Host.GetPackageSessionStatusAsync("test.package"))?.WatchEnabled);
+            var unobserved = await fixture.Host.HeartbeatDevPackageOwnerAsync("owner-a",
+                new(fixture.Host.RuntimeInstanceId, "owner-token-gggggggggggggggggggg"));
+            Assert.False(Assert.Single(unobserved.Packages).EffectiveWatch);
             Assert.Single(fixture.Host.GetActivePackages());
 
             await fixture.Host.ReleaseDevPackageOwnerAsync(
@@ -506,7 +653,13 @@ public sealed class DevPackageOwnerLeaseTests
     private static TestFixture CreateFixture(
         RuntimeLifecyclePolicyOptions? policy = null,
         TimeProvider? timeProvider = null,
-        ILogger<RuntimePackageSessionTestHost>? logger = null)
+        ILogger<RuntimePackageSessionTestHost>? logger = null,
+        RuntimeEventStreamService? events = null,
+        RuntimeOperationGate? operationGate = null,
+        RuntimePackageRecoveryQueue? recoveryQueue = null,
+        IExecutionRuntimeLaunchResolver? executionRuntimeLaunchResolver = null,
+        PackagePolicyAdmission? packagePolicy = null,
+        Func<PackageSessionState, RuntimeProtocolDescriptor, PackageUiSnapshotStore, RuntimeRpcReadinessEvaluator, AppProcessPolicySessions>? appPolicyFactory = null)
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-dev-owner-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -517,8 +670,14 @@ public sealed class DevPackageOwnerLeaseTests
             logger ?? NullLogger<RuntimePackageSessionTestHost>.Instance,
             store,
             installer,
+            operationGate: operationGate,
+            eventStream: events,
             lifecyclePolicy: policy,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider,
+            executionRuntimeLaunchResolver: executionRuntimeLaunchResolver,
+            recoveryQueue: recoveryQueue,
+            packagePolicy: packagePolicy,
+            appPolicyFactory: appPolicyFactory);
         host.MarkBootstrapReady();
         return new TestFixture(paths, store, host);
     }

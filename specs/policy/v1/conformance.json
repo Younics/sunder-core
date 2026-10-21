@@ -1,6 +1,9 @@
 {
   "schemaVersion": 1,
   "fixtures": {
+    "app-activation-retirement-request.json": "appActivationRetirementRequest",
+    "app-activation-retirement-result.json": "appActivationRetirementResult",
+    "app-activation-retirement-requirement.json": "appActivationRetirementRequirement",
     "app-exit-proven.json": "appSessionStatus",
     "app-heartbeat.json": "appSessionRequest",
     "app-open.json": "appOpenRequest",
@@ -8,6 +11,8 @@
     "app-permit-request.json": "appPermitRequest",
     "app-permit-result.json": "appPermitResult",
     "app-session-status.json": "appSessionStatus",
+    "app-retirements-pending.json": "appSessionStatus",
+    "app-tracked-permit-request.json": "appPermitRequest",
     "app-session.json": "appSession",
     "cohort-request.json": "cohortRequest",
     "cohort-result.json": "cohortResult",
@@ -32,8 +37,6 @@
     "provider-missing.json": "providerSelection",
     "provider-unsatisfied-problem.json": "providerProblem",
     "provider-unsatisfied.json": "providerUnsatisfied",
-    "registry-bootstrap-required.json": "registryStatus",
-    "registry-status.json": "registryStatus",
     "resolution-policy.json": "resolutionPolicy",
     "runtime-package-blocked.json": "runtimePackagePolicy",
     "runtime-package-policy.json": "runtimePackagePolicy",

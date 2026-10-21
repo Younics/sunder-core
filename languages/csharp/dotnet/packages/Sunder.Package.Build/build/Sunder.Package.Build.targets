@@ -1,4 +1,14 @@
 <Project>
+  <!-- Capabilities are logical IDs, not files. Keep their evaluated values available to manifest inference. -->
+  <ItemDefinitionGroup>
+    <SunderSdkCapability>
+      <Visible>false</Visible>
+    </SunderSdkCapability>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <AvailableItemName Include="SunderSdkCapability" Visible="false" />
+  </ItemGroup>
+
   <PropertyGroup Condition="'$(SunderRpcProjectExportBuild)' == 'true'">
     <!-- The neutral export's intermediate directory belongs only to its package
          project. Let source SDK/helper references use their own canonical layout
@@ -900,19 +910,6 @@
                                Presence="$(SunderPackageApiPresence)" LocalName="$(SunderPackageApiLocalName)"
                                Candidate="$(SunderPackageCandidatePath)" />
   </Target>
-  <Target Name="MigrateSunderPackageApiConsumerRoles" DependsOnTargets="_PrepareSunderContractCommand">
-    <ManageSunderPackageApiTask Operation="MigrateConsumerRoles" ProjectDirectory="$(MSBuildProjectDirectory)"
-                               ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
-                               ConsumerRoles="$(SunderPackageApiConsumerRoles)" PackageId="$(SunderPackageId)"
-                               ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)"
-                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
-                               SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageVersion="$(Version)"
-                               OwnedContractsPath="$(SunderOwnedContractsPath)" IntermediateOutputPath="$(IntermediateOutputPath)"
-                               ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
-                               OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" DefineConstants="$(DefineConstants)" NullableEnabled="$(_SunderRpcNullableEnabled)"
-                               GeneratePackageRoles="$(_SunderPackageSingleProject)" ResourceItems="@(_SunderResourceInputs)"
-                               GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)" />
-  </Target>
   <Target Name="RequireSunderPackageApi" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
     <ManageSunderPackageApiTask Operation="Require" ProjectDirectory="$(MSBuildProjectDirectory)"
                                AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
@@ -1079,19 +1076,6 @@
                                   OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
                                   ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)"
                                   IntermediateOutputPath="$(IntermediateOutputPath)" />
-  </Target>
-  <Target Name="MigratePrivateSunderContracts" DependsOnTargets="_PrepareSunderContractCommand">
-    <GenerateSunderRpcBindingsTask ContractOperation="MigratePrivate" GeneratePackageRoles="$(_SunderPackageSingleProject)"
-                                   ContractReviewPath="$(SunderContractReviewPath)" ContractReviewOutputPath="$(SunderContractReviewOutputPath)"
-                                   ProjectFile="$(MSBuildProjectFullPath)" ProjectImports="$(MSBuildAllProjects)"
-                                  ResourceItems="@(_SunderResourceInputs)" GeneratorAnalyzers="@(Analyzer)" GeneratorProperties="@(_SunderGeneratorProperty)" RootNamespace="$(RootNamespace)"
-                                  AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)" ContractKey="$(SunderContractKey)"
-                                  ContractCurrentVersion="$(SunderContractCurrentVersion)" ContractNextVersion="$(SunderContractNextVersion)" AcknowledgeBreakingChange="$(SunderAcknowledgeBreakingChange)"
-                                  SourceFiles="@(_SunderRpcCommandSource)" ReferencePaths="@(ReferencePath)" PackageId="$(SunderPackageId)" PackageVersion="$(Version)"
-                                  ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
-                                  DefineConstants="$(DefineConstants)" OutputType="$(OutputType)" AssemblyName="$(AssemblyName)" NullableEnabled="$(_SunderRpcNullableEnabled)"
-                                  OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
-                                  ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)" IntermediateOutputPath="$(IntermediateOutputPath)" />
   </Target>
 
   <Target Name="_GenerateSunderRpcContractExports"

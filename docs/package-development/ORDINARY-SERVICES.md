@@ -58,6 +58,30 @@ receive descriptor definitions named `<Service><Method>Request`,
 `<Service><Method>Result`, or `<Service><Method>Event`. These are wire schemas, not
 developer-maintained wrapper classes.
 
+### Preserving public model names
+
+Wire definition names and exported model names are separate identities. Before
+renaming an implementation type, pin both names to their existing public spellings:
+
+```csharp
+[SunderValue("WireGreeting", PublicName = "GreetingResult")]
+public sealed record InternalGreeting(string Message);
+```
+
+The constructor still names the `$defs` wire definition; optional `PublicName`
+selects the exact exported name in the package's Models namespace. Omitting it
+(or setting it to `null`) retains source-derived public naming. An unchanged value
+shape with both names pinned retains its descriptor/ABI bytes and `modelProjection`
+when `InternalGreeting` is renamed. Owning roles continue using the real source
+type, including its constructors and ordinary methods.
+
+Explicit public names must match `[A-Za-z_][A-Za-z0-9_]{0,127}` and must not be
+reserved C#/TypeScript keywords. Spelling is exact: it is not Pascal-cased or
+escaped. Distinct source models cannot share a name, including ASCII case-only
+differences, across the source compilation. Invalid names and collisions produce
+source diagnostics before export. Changing a public name is an API projection
+change even when the wire definition is unchanged.
+
 ### Constructor-bound source values
 
 Positional records and ordinary source classes/structs may use a uniquely selected
@@ -161,6 +185,16 @@ Optional metadata:
 
 ## Selected package services
 
+The current first-party Agent package line is `2.0.0`. Its 18 public
+`younics.ai.agent.*` contract families start at `1.0.0`; package-private contracts
+follow package version `2.0.0` (13 current private APIs). Package Maker is
+`younics.sunder.package.maker`. Agent's independently reviewed
+`compatibility/agent-current-inventory.json` defines the current 15 project/package
+pairs and 62 providers; the workspace-path migrator API is absent. Current byte
+expectations are separately reviewed in `compatibility/agent-current-contracts.json`,
+after qualification of fresh artifacts. Archived identity maps and predecessor
+descriptors do not define these expectations.
+
 Package API selection stores explicit `consumerRoles`. New Add defaults to both
 App and Runtime; Update and Restore preserve existing reviewed intent. Each role
 gets its complete selected public package API with independent required-wins policy.
@@ -168,19 +202,19 @@ gets its complete selected public package API with independent required-wins pol
 Generated names use the canonical package ID, independent of import aliases and
 authored namespaces. Uppercase the first character of each dot-separated segment,
 join the segments with `_`, and append the area suffix; a digit-leading stem gets
-a leading `_`. For `sunder.package.agent`:
+a leading `_`. For `younics.ai.agent`:
 
 ```csharp
-using Sunder.Generated.Packages.Sunder_Package_Agent_Models;
-using Sunder.Generated.Packages.Sunder_Package_Agent_Services;
+using Sunder.Generated.Packages.Younics_Ai_Agent_Models;
+using Sunder.Generated.Packages.Younics_Ai_Agent_Services;
 ```
 
-The injectable selected-package root is `IPackageApi`. Service interfaces are flat
-in that same `_Services` namespace: `chat-provider` generates
-`IChatProviderService`, and `runtime-catalog` generates `IRuntimeCatalogService`.
+The injectable selected-package root is `IPackageApi`. Imported service interfaces
+use contract-symbol subnamespaces: `CYounics_Ai_Agent_Chat_Provider.IChatProviderService`
+and `CYounics_Ai_Agent_Runtime_Catalog.IRuntimeCatalogService` under `_Services`.
 For example, an injected Agent `IPackageApi` exposes
-`agent.Sunder_Agent_Runtime_Catalog.RuntimeCatalog.GetProfileAsync(profileId, token)`.
-Contract scopes are root properties, not model or service subnamespaces.
+`agent.Younics_Ai_Agent_Runtime_Catalog.RuntimeCatalog.GetProfileAsync(profileId, token)`.
+Contract scopes are root properties; shared models remain flat under `_Models`.
 
 Owned roles reuse authored business records. Importers receive one generated model
 per source identity in the authority package's flat `_Models` namespace, shared
@@ -195,7 +229,7 @@ Imported methods follow the descriptor shape: scalar/list/nullable roots stay na
 nonempty request objects remain one typed request, and empty requests and unary
 completion are hidden. Compiler-created multi-argument envelopes also live in Models;
 for example, embedding generation uses
-`CSunder_Agent_Embedding_Provider_EmbeddingProviderGenerateRequest`. Authors do not
+`CYounics_Ai_Agent_Embedding_Provider_EmbeddingProviderGenerateRequest`. Authors do not
 maintain these envelopes. Ambiguous public names fail rather than gaining numeric,
 hash or contract-namespace suffixes. Transport implementation stays in `_Internal`.
 
@@ -326,23 +360,22 @@ No-argument methods and `Task`/`ValueTask` completion need no authored `Unit` or
 request type. Generated metadata handles the empty-object wire form automatically;
 compiler-owned request envelopes and imported wire types remain implementation details.
 
-## Strict role migration
+## Explicit consumer roles
 
-Final readers reject missing or invalid `consumerRoles`; Build and Restore never
-write it. Explicit migration preserves a missing old field as Runtime-only:
+Readers reject missing or invalid `consumerRoles`; Build and Restore never infer
+or write it. Select roles through normal targeted Add/Update:
 
 ```sh
-dotnet msbuild Package.csproj -t:MigrateSunderPackageApiConsumerRoles
-dotnet msbuild Package.csproj -t:MigrateSunderPackageApiConsumerRoles \
+dotnet msbuild Package.csproj -t:UpdateSunderPackageApi \
   -p:SunderPackageId=example.dependency -p:SunderPackageApiConsumerRoles=app%2Cruntime
 ```
 
 The option values after MSBuild decoding are exactly `app`, `runtime`, and
 `app,runtime`. Use `%2C` for the comma in a command-line property. The same property
 applies to targeted Add/Update. A global operation cannot apply a per-selection
-override. Migration reparses the complete proposal, checks retained role/action
-evidence and current source, and atomically replaces only the lock. Unrepresentable
-narrow actions fail explicit migration rather than expanding authority.
+override. Selection reparses the complete proposal, validates current source and
+atomically replaces only the lock. An incomplete lock requires restoration of its
+reviewed role intent.
 
 ## Private identity and public lifecycle
 
@@ -351,16 +384,9 @@ prerelease and case-sensitive build metadata. A private-only project needs no ow
 baseline and no Accept/Freeze. Check and Freeze are no-ops when there are no public
 contracts to transition. Normal Build/Check/Pack never rewrite a tracked baseline.
 
-Retire old active private records explicitly:
-
-```sh
-dotnet msbuild Package.csproj -t:MigratePrivateSunderContracts
-# Optional: -p:SunderContractKey=<exact-key>
-```
-
-The command moves complete original records into `retiredPrivateContracts`, retaining
-draft/frozen/published/history-only snapshots and all evidence. Existing archived
-records are immutable; the active and archived maps share the 128-entry budget.
+Existing `retiredPrivateContracts` records remain readable and immutable; normal
+commands cannot add to, remove or enrich the archive. Active private baselines are
+unsupported. The active and archived maps share the 128-entry budget.
 Public current/history evidence is classified first, so demotion, renaming, removal
 or baseline deletion cannot bypass public review. A later public successor requires
 explicit acceptance and can coexist with the unchanged private archive.

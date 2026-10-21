@@ -40,6 +40,7 @@ public sealed class MacOsReleasePackagingTests
         var root = LocateRepositoryRoot();
         var packager = File.ReadAllText(Path.Combine(root, "scripts", "release", "package-sunder.sh"));
         var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "sunder-app-release.yml"));
+        var publisher = File.ReadAllText(Path.Combine(root, "scripts", "release", "github_release.py"));
         var installer = File.ReadAllText(Path.Combine(root, "scripts", "install", "install.sh"));
 
         Assert.Contains("--noInst", packager, StringComparison.Ordinal);
@@ -47,9 +48,17 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("map(select(.RelativeFileName != $portable", packager, StringComparison.Ordinal);
         Assert.Contains(".Type == \"Full\" or .Type == \"Delta\"", packager, StringComparison.Ordinal);
         Assert.DoesNotContain("portable_entry=", packager, StringComparison.Ordinal);
-        Assert.Contains("Sunder-app-osx-x64-$RELEASE_CHANNEL.dmg", workflow, StringComparison.Ordinal);
-        Assert.Contains("Sunder-app-osx-arm64-$RELEASE_CHANNEL.dmg", workflow, StringComparison.Ordinal);
-        Assert.Contains("*-Setup.pkg|*-Portable.zip", workflow, StringComparison.Ordinal);
+        Assert.Contains("runtime: osx-x64", workflow, StringComparison.Ordinal);
+        Assert.Contains("runtime: osx-arm64", workflow, StringComparison.Ordinal);
+        Assert.Contains("Sunder-app-$RUNTIME-$RELEASE_CHANNEL.dmg", workflow, StringComparison.Ordinal);
+        Assert.Contains("github_release.py stage", workflow, StringComparison.Ordinal);
+        Assert.Contains("github_release.py finalize", workflow, StringComparison.Ordinal);
+        Assert.Contains("else \".dmg\"", publisher, StringComparison.Ordinal);
+        Assert.Contains("f\"Sunder-app-{rid}-{channel}{suffix}\"", publisher, StringComparison.Ordinal);
+        Assert.Contains("f\"Sunder-{version}-app-{rid}-{channel}-full.nupkg\"", publisher, StringComparison.Ordinal);
+        Assert.Contains("set(files) - EVIDENCE == expected", publisher, StringComparison.Ordinal);
+        Assert.DoesNotContain("-Setup.pkg", publisher, StringComparison.Ordinal);
+        Assert.DoesNotContain("-Portable.zip", publisher, StringComparison.Ordinal);
         Assert.Contains("vpk upload local", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("vpk upload github", workflow, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-x64-stable.dmg", installer, StringComparison.Ordinal);

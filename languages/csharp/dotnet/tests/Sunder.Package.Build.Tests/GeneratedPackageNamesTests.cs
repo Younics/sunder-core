@@ -8,8 +8,9 @@ namespace Sunder.Package.Build.Tests;
 public sealed class GeneratedPackageNamesTests
 {
     [Theory]
-    [InlineData("sunder.package.agent", "Sunder_Package_Agent")]
-    [InlineData("sunder.package.agent.provider.openai", "Sunder_Package_Agent_Provider_Openai")]
+    [InlineData("younics.ai.agent", "Younics_Ai_Agent")]
+    [InlineData("younics.ai.agent.provider.openai", "Younics_Ai_Agent_Provider_Openai")]
+    [InlineData("younics.sunder.package.maker", "Younics_Sunder_Package_Maker")]
     [InlineData("1.2.a", "_1_2_A")]
     [InlineData("example.1a", "Example_1a")]
     [InlineData("class.namespace", "Class_Namespace")]
@@ -45,4 +46,18 @@ public sealed class GeneratedPackageNamesTests
     [InlineData("éxample.package")]
     public void InvalidIdsCannotAliasValidNamespaces(string packageId)
         => Assert.Throws<ArgumentException>(() => GeneratedPackageNames.Services(packageId));
+
+    [Theory]
+    [InlineData("younics.ai.agent", "younics.ai.agent.runtime.catalog", "runtime-catalog", "Younics_Ai_Agent", "CYounics_Ai_Agent_Runtime_Catalog", "IRuntimeCatalogService")]
+    [InlineData("example.dependency", "example.rpc.v1.minimal", "example", "Example_Dependency", "CExample_Rpc_V1_Minimal", "IExampleService")]
+    [InlineData("1.2.a", "1a.2", "3-service", "_1_2_A", "C1a_2", "I_3Service")]
+    [InlineData("example.dependency", "a.bc", "run-control", "Example_Dependency", "CA_Bc", "IRunControlService")]
+    [InlineData("example.dependency", "ab.c", "run-control", "Example_Dependency", "CAb_C", "IRunControlService")]
+    public void ImportedServicesAlwaysIncludeContractIdentityWhileOwnedServicesRemainFlat(string packageId, string contractId,
+        string serviceId, string authority, string contract, string service)
+    {
+        Assert.Equal($"Sunder.Generated.Packages.{authority}_Services.{contract}.{service}",
+            GeneratedPackageNames.ImportedServiceInterface(packageId, contractId, serviceId));
+        Assert.Equal($"Sunder.Generated.Packages.{authority}_Services.{service}", GeneratedPackageNames.ServiceInterface(packageId, serviceId));
+    }
 }

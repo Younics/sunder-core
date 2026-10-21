@@ -30,13 +30,10 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
         string cacheRoot,
         SunderRpcPackageApiRequest request,
         Action<SunderRpcContractLock, SunderRpcContractLock, string>? validateSource = null,
-        CancellationToken token = default,
-        Action<string>? report = null)
+        CancellationToken token = default)
     {
         ValidateRequest(request);
         lockPath = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(lockPath);
-        if (request.Operation == "MigrateConsumerRoles") return SunderRpcConsumerRoleMigration.Execute(lockPath, request.PackageId, request.ConsumerRoles,
-            restore.AllowDevelopmentRegistryOrigin, validateSource, report, token);
         var before = ReadBefore();
         if (request.Operation is "List" or "PlatformList") return new(false, before, false);
         var document = JsonNode.Parse(before.ExactBytes)!.AsObject();
@@ -204,10 +201,22 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
             document[mapName] = new JsonObject(document[mapName]!.AsObject().OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .Select(pair => new KeyValuePair<string, JsonNode?>(pair.Key, pair.Value!.DeepClone())));
         var bytes = SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(document));
+        return await CommitProposalAsync(lockPath, cacheRoot, before, bytes, hydrate, request.Candidate, request.PlatformCatalog,
+            validateSource, ReadBefore, token);
+
+        SunderRpcContractLock ReadBefore() => SunderRpcAuthoringDocuments.ReadContractLock(lockPath, restore.AllowDevelopmentRegistryOrigin);
+    }
+
+    // Every selection takes the strict parse, authority, hydration, source-validation and leased rename path.
+    private async Task<SunderRpcPackageApiResult> CommitProposalAsync(string lockPath, string cacheRoot,
+        SunderRpcContractLock before, byte[] bytes, bool hydrate, string? candidate, string? platformCatalog,
+        Action<SunderRpcContractLock, SunderRpcContractLock, string>? validateSource,
+        Func<SunderRpcContractLock> readBefore, CancellationToken token)
+    {
         var after = SunderRpcAuthoringDocuments.ParseContractLock(bytes, restore.AllowDevelopmentRegistryOrigin);
         ValidateReviewedAuthorities(after);
         var changed = !before.ExactBytes.AsSpan().SequenceEqual(bytes);
-        if (!changed && !hydrate) return new(false, before, request.Candidate is not null);
+        if (!changed && !hydrate) return new(false, before, candidate is not null);
 
         var stage = lockPath + ".stage-" + Guid.NewGuid().ToString("N");
         GeneratedOutputPathSafety.EnsureSafeAncestors(lockPath, includeLeaf: true, "contract lock selection");
@@ -218,21 +227,22 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
             { stageCreated = true; stream.Write(bytes); stream.Flush(flushToDisk: true); }
             if (hydrate)
             {
-                await restore.RestoreAsync(stage, cacheRoot, request.Candidate is null ? [] : [request.Candidate], token, request.PlatformCatalog);
+                await restore.RestoreAsync(stage, cacheRoot, candidate is null ? [] : [candidate], token, platformCatalog);
                 _ = SunderRpcCSharpImportPrepass.Prepare(after, cacheRoot);
             }
             token.ThrowIfCancellationRequested();
             using var lease = GeneratedOutputLock.Acquire([lockPath], TimeSpan.FromSeconds(30), token);
             validateSource?.Invoke(before, after, stage);
-            if (request.Candidate is not null) await restore.VerifyCandidateSelectionAsync(request.Candidate, after, token);
-            if (!ReadBefore().ExactBytes.AsSpan().SequenceEqual(before.ExactBytes)
+            if (candidate is not null) await restore.VerifyCandidateSelectionAsync(candidate, after, token);
+            if (!readBefore().ExactBytes.AsSpan().SequenceEqual(before.ExactBytes)
                 || !SunderRpcAuthoringDocuments.ReadContractLock(stage, restore.AllowDevelopmentRegistryOrigin).ExactBytes.AsSpan().SequenceEqual(bytes))
                 throw Error("rpc-authoring.evidence-mismatch", "The contract lock changed during selection; retry against the current lock.");
             GeneratedOutputPathSafety.EnsureSafeAncestors(lockPath, includeLeaf: true, "contract lock selection");
             token.ThrowIfCancellationRequested();
-            if (!changed) return new(false, before, request.Candidate is not null);
+            if (!changed) return new(false, before, candidate is not null);
+            lease.VerifyHeld();
             File.Move(stage, lockPath, overwrite: true);
-            return new(true, after, request.Candidate is not null);
+            return new(true, after, candidate is not null);
         }
         finally
         {
@@ -246,10 +256,6 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException) { }
             }
         }
-
-        SunderRpcContractLock ReadBefore() => request.Operation == "Update"
-            ? SunderRpcAuthoringDocuments.ReadContractLockForArtifactUpdate(lockPath, request.PackageId, restore.AllowDevelopmentRegistryOrigin)
-            : SunderRpcAuthoringDocuments.ReadContractLock(lockPath, restore.AllowDevelopmentRegistryOrigin);
     }
 
     private static void ValidateReviewedAuthorities(SunderRpcContractLock value)
@@ -284,8 +290,8 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
         if (request.ConsumerRoles is not null)
         {
             _ = SunderRpcAuthoringDocuments.ParseConsumerRolesOption(request.ConsumerRoles);
-            if (request.Operation is not ("Add" or "Update" or "MigrateConsumerRoles") || request.PackageId is null)
-                throw Error("package-api.consumer-roles-invalid", "A reviewed consumer-role override requires a targeted Add, Update or MigrateSunderPackageApiConsumerRoles operation.");
+            if (request.Operation is not ("Add" or "Update") || request.PackageId is null)
+                throw Error("package-api.consumer-roles-invalid", "A reviewed consumer-role override requires a targeted Add or Update operation.");
         }
         if (request.Operation.StartsWith("Platform", StringComparison.Ordinal))
         {
@@ -305,14 +311,14 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 throw Error("platform-api.import-not-found", "Platform command target or options do not apply; update uses locked origins.");
             return;
         }
-        if (request.Operation is not ("Add" or "Update" or "Remove" or "Require" or "Unrequire" or "Implement" or "Unimplement" or "List" or "MigrateConsumerRoles"))
+        if (request.Operation is not ("Add" or "Update" or "Remove" or "Require" or "Unrequire" or "Implement" or "Unimplement" or "List"))
             throw Error("package-api.import-not-found", "Unknown package API operation.");
         foreach (var value in new[] { request.PackageId, request.ContractId, request.VersionRange, request.RegistryOrigin, request.Presence, request.LocalName, request.ProviderKey, request.Candidate, request.PlatformCatalog })
             if (value is not null && string.IsNullOrWhiteSpace(value)) throw Error("package-api.import-not-found", "Supplied command values must be nonempty.");
         if (request.Presence is not null and not ("required" or "optional")) throw Error("package-api.import-not-found", "Presence must be exactly required or optional.");
         if (request.PackageId is not null && !PackageId.TryParse(request.PackageId, out _)
             || request.ContractId is not null && !PackageId.TryParse(request.ContractId, out _)) throw Missing();
-        if (request.Operation is not ("Update" or "List" or "MigrateConsumerRoles") && request.PackageId is null) throw Missing();
+        if (request.Operation is not ("Update" or "List") && request.PackageId is null) throw Missing();
         var needsContract = request.Operation is "Require" or "Unrequire" or "Implement" or "Unimplement";
         if (needsContract != (request.ContractId is not null)) throw Missing();
         if (request.Operation == "List" && request.PackageId is not null) throw Missing();

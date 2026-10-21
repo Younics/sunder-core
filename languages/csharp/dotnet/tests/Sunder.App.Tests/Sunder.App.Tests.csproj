@@ -1,6 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
+    <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_SunderAppTargetPath" />
+    <Compile Remove="SdkCorpusAppProbe.cs" />
+    <None Include="SdkCorpusAppProbe.cs" />
+    <Compile Remove="PolicyHeartbeatProcessProbe.cs" />
+    <None Include="PolicyHeartbeatProcessProbe.cs" />
   </ItemGroup>
 
   <Target Name="WriteSunderAppTargetPathForTests"
@@ -13,4 +19,25 @@
                       Overwrite="true" />
   </Target>
 
+  <Target Name="BuildSdkCorpusAppProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectDirectory)/SdkCorpusAppProbe.cs;$(MSBuildProjectDirectory)/TestAppPackageHost.cs;$(MSBuildProjectDirectory)/RuntimeContractTestData.cs;@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)corpus-probe/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)corpus-probe" />
+    <Csc Sources="SdkCorpusAppProbe.cs;TestAppPackageHost.cs;RuntimeContractTestData.cs"
+         References="@(ReferencePathWithRefAssemblies)" OutputAssembly="$(TargetDir)corpus-probe/Sunder.App.Tests.dll"
+         TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+
+  <Target Name="BuildPolicyHeartbeatProcessProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectDirectory)/PolicyHeartbeatProcessProbe.cs;@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)policy-heartbeat-probe/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)policy-heartbeat-probe" />
+    <Csc Sources="PolicyHeartbeatProcessProbe.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)policy-heartbeat-probe/Sunder.App.Tests.dll"
+         TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
 </Project>

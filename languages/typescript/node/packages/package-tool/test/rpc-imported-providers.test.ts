@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -16,12 +16,14 @@ import { packageApiCommand, type PackageApiRequest } from "../src/rpc-package-co
 import { generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
 import { rebindFixtureProjection } from "./model-projection-fixtures";
 import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
+import { serviceApiSource } from "../src/service-bindings";
+import { importedProviderMethodNames } from "../src/service-source";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
-const source = (providers = 'export const extension=defineService({ping(request, context){context.signal.throwIfAborted(); return request;}},{implements:imported.extension});') =>
+const source = (providers = 'export const extension=defineService({examplePing(request, context){context.signal.throwIfAborted(); return request;}},{implements:imported.extension});') =>
   `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";\n${providers}`;
-async function fixture(extension = "ts", consumer = false, stream = false) {
+async function fixture(extension = "ts", consumer = false, stream = false, additionalService = false) {
   const root = await mkdtemp(join(tmpdir(), "sunder-imported-providers-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
   const value = JSON.parse(await readFile(join(ROOT, "authoring/conformance/valid/package-api-contract-lock.json"), "utf8"));
   if (consumer) { value.packageImports["example.dependency"].presence = "optional"; value.packageImports["example.dependency"].requiredContracts = []; }
@@ -29,9 +31,10 @@ async function fixture(extension = "ts", consumer = false, stream = false) {
   value.providerImports = { extension: { packageId: "example.dependency", contractId: "example.rpc.v1.minimal" } };
   const descriptorValue = JSON.parse(await readFile(join(ROOT, "conformance/valid/minimal.rpc.json"), "utf8"));
   if (stream) descriptorValue.services.example.methods.watch = { kind: "server-stream", idempotency: "none", errors: [], requestSchema: { $ref: "#/$defs/Empty" }, eventSchema: { $ref: "#/$defs/Empty" } };
+  if (additionalService) descriptorValue.services.other = structuredClone(descriptorValue.services.example);
   const descriptor = parseRpcContractDescriptor(JSON.stringify(descriptorValue)); const bytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
   const hash = createHash("sha256").update(bytes).digest("hex"); const abi = await computeRpcAbiSha256(descriptor);
-  if (stream) {
+  if (stream || additionalService) {
     const artifact = value.packageArtifacts["example.dependency"]; const contract = artifact.contracts[descriptor.contractId];
     Object.assign(contract, { descriptorBytes: bytes.length, descriptorSha256: hash, abiSha256: abi, etag: `"${hash}"` });
     const inventory = { schemaVersion: 1, packageId: "example.dependency", packageVersion: artifact.selectedPackageVersion, packageContentIdentity: artifact.selectedPackageContentIdentity,
@@ -47,7 +50,7 @@ async function fixture(extension = "ts", consumer = false, stream = false) {
   const lockPath = join(root, "sunder-contracts.lock.json"); await writeFile(lockPath, original);
   await writeFile(join(root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "authoring/conformance/valid/minimal-package-owned-baseline.json")));
   const sourcePath = join(root, `src/rpc.${extension}`);
-  await writeFile(sourcePath, stream ? source().replace("return request;}", "return request;}, async *watch(request, context){context.signal.throwIfAborted(); yield request;}") : source());
+  await writeFile(sourcePath, stream ? source().replace("return request;}", "return request;}, async *exampleWatch(request, context){context.signal.throwIfAborted(); yield request;}") : source());
   await writeFile(join(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Imported Provider", version: "1.0.0",
     workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
   const load = () => loadProjectWithOwnedFrame(root, { contractCacheRoot: cache });
@@ -78,6 +81,48 @@ for (const extension of ["ts", "js"]) test(`imported ${extension} providers comp
   } finally { await c.dispose(); }
 });
 
+for (const extension of ["ts", "js"]) test(`imported ${extension} provider spelling stays stable from one to two services and dispatches original wire IDs`, async () => {
+  const c = await fixture(extension); const next = await fixture(extension, false, false, true);
+  try {
+    const originalSource = await readFile(c.sourcePath, "utf8"); const before = await c.load();
+    await generateRpcBindingsForLoadedProject(before);
+    assert.deepEqual(await (await generatedProviders(c.root))[0]!.handler.invokeUnary(invocation(), "example", "ping", {}), {});
+    await cp(next.cache, c.cache, { recursive: true }); await writeFile(c.lockPath, next.original);
+    // The new service needs a handler, but the original handler is not renamed.
+    await assert.rejects(c.load(), /handler-incomplete/);
+    assert.equal(await readFile(c.sourcePath, "utf8"), originalSource);
+    const added = originalSource.replace("return request;}", "return request;}, otherPing(request, context){context.signal.throwIfAborted(); return request;}");
+    await writeFile(c.sourcePath, added); const after = await c.load(); await generateRpcBindingsForLoadedProject(after);
+    assert.deepEqual(after.contracts[0]!.descriptor.services.example, before.contracts[0]!.descriptor.services.example);
+    for (const project of [before, after]) {
+      assert.match(project.ownedRpc!.files.get("api.d.ts")!, /examplePing:/);
+      assert.match(project.ownedRpc!.files.get("adapter.ts")!, /methods!\["examplePing"\]/);
+    }
+    const registration = (await generatedProviders(c.root))[0]!;
+    for (const service of ["example", "other"]) assert.deepEqual(await registration.handler.invokeUnary(invocation(), service, "ping", {}), {});
+    assert.deepEqual(await readFile(c.lockPath), next.original);
+  } finally { await next.dispose(); await c.dispose(); }
+});
+
+test("imported provider flattening rejects normalized cross-service handler collisions", async () => {
+  const c = await fixture();
+  try {
+    const loaded = await c.load(); const original = loaded.contracts[0]!;
+    const method = original.descriptor.services.example!.methods.ping!;
+    const descriptor = { ...original.descriptor, services: {
+      example: { methods: { "ping-pong": method } }, "example-ping": { methods: { pong: method } },
+    } };
+    const collision = { ...original, descriptor };
+    const diagnostic = /generated-name-collision.*example\/ping-pong.*example-ping\/pong.*examplePingPong/;
+    assert.throws(() => importedProviderMethodNames(descriptor), diagnostic);
+    assert.throws(() => serviceApiSource("example.owner", [collision], [], {
+      ...loaded.ownedRpc!.imports, contracts: [collision], providerSurfaces: new Map([["extension", collision]]),
+    }, "1.0.0"), diagnostic);
+    assert.deepEqual(await readFile(c.lockPath), c.original);
+    await assert.rejects(stat(join(c.root, ".sunder/generated/rpc")), { code: "ENOENT" });
+  } finally { await c.dispose(); }
+});
+
 test("provider intent requires a complete implementation and never borrows a consumer's optional presence", async () => {
   const c = await fixture("ts", true);
   try {
@@ -94,7 +139,7 @@ for (const extension of ["ts", "js"]) test(`imported ${extension} handlers retai
   const c = await fixture(extension);
   try {
     const variants = [
-      source().replace("return request", "return request.missing"), source().replace("ping(request, context)", "other(request, context)"),
+      source().replace("return request", "return request.missing"), source().replace("examplePing(request, context)", "other(request, context)"),
       source().replace("imported.extension", "imported.missing"),
       source().replace('from "#sunder/api"', 'from "./fake.js"'),
       source().replace("implements:imported.extension", "implements:builder").replace("export const", "const builder=imported.extension; export const"),
@@ -119,7 +164,7 @@ for (const extension of ["ts", "js"]) test(`multiple imported ${extension} imple
     const configPath=join(c.root,"sunder.package.json"); const config=JSON.parse(await readFile(configPath,"utf8"));
     config.app={root:"app",entryPoint:"index.html",views:[{viewId:"example.owner.main",displayName:"Provider",route:"/",defaultPlacement:"middle",showInHotbar:true}]};
     await writeFile(configPath,JSON.stringify(config));
-    const binding = 'defineService({ping(request){return request;}},{implements:imported.extension})';
+    const binding = 'defineService({examplePing(request){return request;}},{implements:imported.extension})';
     await writeFile(c.sourcePath, source(`export const one=${binding}; export const two=${binding};`)); await assert.rejects(c.load(), /explicit provider IDs/u);
     await writeFile(c.sourcePath, source(`export const one=${binding.replace("{implements", '{providerId:"example.one",implements')}; export const two=${binding.replace("{implements", '{providerId:"example.two",implements')};`));
     const loaded = await c.load(); const receipt = JSON.parse(loaded.ownedRpc!.files.get("authoring-receipt.v1.json")!);
@@ -181,7 +226,7 @@ for (const extension of ["ts", "js"]) test(`mixed ${extension} owned/imported sh
   const c = await fixture(extension);
   try {
     const text = (valid: boolean, reverse: boolean) => {
-      const providers = ['export const localImpl=defineService(handlers,{implements:local});', 'export const extension=defineService(handlers,{implements:imported.extension});'];
+      const providers = ['export const localImpl=defineService(handlers,{implements:local});', 'export const extension=defineService({examplePing:handlers.ping},{implements:imported.extension});'];
       if (reverse) providers.reverse();
       return `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";
 /** @typedef {{ping(request:{},context:import("@sunder/sdk").ServiceContext):import("@sunder/sdk").JsonObject}} Local */

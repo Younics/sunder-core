@@ -23,6 +23,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
     private readonly object _gate = new();
     private readonly Dictionary<string, WatchRegistration> _registrations = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _changedPackageIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _completedPublications = new(StringComparer.OrdinalIgnoreCase);
     private CancellationTokenSource? _reloadCancellation;
     private Task _reloadTask = Task.CompletedTask;
     private bool _enabled;
@@ -33,7 +34,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         RuntimeEventStreamService eventStream,
         ILogger<DevPackageWatchService> logger)
         : this(
-            packageSessionService.StageAsync,
+            packageSessionService.StageWatchedAsync,
             packageSessionService.CommitStageAsync,
             packageSessionService.DiscardStageAsync,
             eventStream,
@@ -74,11 +75,27 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 _enabled = targets.Count > 0;
-                ReplaceRegistrations(targets);
+                var withdrawn = ReplaceRegistrations(targets);
+                var superseded = withdrawn.Any(_changedPackageIds.Contains);
+                foreach (var packageId in withdrawn)
+                {
+                    _changedPackageIds.Remove(packageId);
+                    _completedPublications.Remove(packageId);
+                }
                 if (!_enabled)
                 {
                     _reloadCancellation?.Cancel();
                     _changedPackageIds.Clear();
+                    _completedPublications.Clear();
+                }
+                else if (superseded)
+                {
+                    // Disabling/rebinding one owner also revokes its pending
+                    // staging work, even while unrelated registrations survive.
+                    // A late candidate is discarded before commit. Keep any
+                    // still-owned dirty packages queued under the new graph.
+                    if (_changedPackageIds.Count > 0) StartReloadLocked();
+                    else _reloadCancellation?.Cancel();
                 }
             }
             synchronized = true;
@@ -128,6 +145,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
                 _registrations.Clear();
                 _changedPackageIds.Clear();
+                _completedPublications.Clear();
                 reloadTask = _reloadTask;
             }
 
@@ -151,10 +169,12 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         }
     }
 
-    private void ReplaceRegistrations(IReadOnlyList<DevPackageWatchTarget> targets)
+    private HashSet<string> ReplaceRegistrations(IReadOnlyList<DevPackageWatchTarget> targets)
     {
+        var withdrawn = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var packageId in _registrations.Keys.Except(targets.Select(target => target.PackageId), StringComparer.OrdinalIgnoreCase).ToArray())
         {
+            withdrawn.Add(packageId);
             _registrations.Remove(packageId, out var registration);
             registration?.Dispose();
         }
@@ -167,15 +187,17 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                 continue;
             }
 
+            if (existing is not null) withdrawn.Add(target.PackageId);
             existing?.Dispose();
             _registrations[target.PackageId] = new WatchRegistration(
                 target.PackageId,
                 target.Folder,
                 ScheduleReload);
         }
+        return withdrawn;
     }
 
-    private void ScheduleReload(string packageId, bool refreshWatcher)
+    private void ScheduleReload(string packageId, bool refreshWatcher, bool publicationCompleted)
     {
         lock (_gate)
         {
@@ -189,17 +211,52 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                 registration.RefreshFolderWatcher(recreate: true);
             }
 
+            var publicationInProgress = IsPublicationInProgress(registration.Folder);
+            // Parent and recursive watchers can deliver the same transaction's
+            // notifications after journal removal, including after strict staging
+            // has started. Coalesce an unchanged filesystem observation instead of
+            // canceling that candidate and repeatedly restarting its publication.
+            // These stamps are scheduling evidence only; every candidate still
+            // goes through strict canonical/content/import validation.
+            if (!publicationInProgress && !refreshWatcher && registration.CompletedPublicationFiles is { } completedFiles
+                && TrySnapshotFiles([registration], out var currentFiles) && SnapshotsEqual(completedFiles, currentFiles))
+            {
+                _logger.LogDebug("Coalesced delayed notification for completed dev publication {PackageId}", packageId);
+                return;
+            }
+
             _changedPackageIds.Add(packageId);
-            _reloadCancellation?.Cancel();
-            var cancellation = new CancellationTokenSource();
-            var previousReload = _reloadTask;
-            _reloadCancellation = cancellation;
-            _reloadTask = RunSerializedReloadAsync(previousReload, cancellation);
-            _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloadDebounce, _changedPackageIds.ToArray());
+            if (publicationCompleted && !publicationInProgress)
+            {
+                _completedPublications.Add(packageId);
+                registration.CompletedPublicationFiles = TrySnapshotFiles([registration], out var files) ? files : null;
+            }
+            else if (publicationInProgress || refreshWatcher || registration.CompletedPublicationFiles is not null)
+            {
+                _completedPublications.Remove(packageId);
+                registration.CompletedPublicationFiles = null;
+            }
+            // Without a new journal or changed observation, a delayed child event
+            // must not erase an already observed completion boundary.
+            _logger.LogDebug("Scheduled dev watch reload for {PackageId}: publication completed {PublicationCompleted}, publication in progress {PublicationInProgress}, rebind {RefreshWatcher}",
+                packageId, publicationCompleted, publicationInProgress, refreshWatcher);
+            StartReloadLocked();
         }
     }
 
-    private async Task RunSerializedReloadAsync(Task previousReload, CancellationTokenSource cancellation)
+    private void StartReloadLocked()
+    {
+        _reloadCancellation?.Cancel();
+        var cancellation = new CancellationTokenSource();
+        var previousReload = _reloadTask;
+        _reloadCancellation = cancellation;
+        _reloadTask = RunSerializedReloadAsync(previousReload, cancellation,
+            _changedPackageIds.All(_completedPublications.Contains), Stopwatch.GetTimestamp());
+        _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloadDebounce, _changedPackageIds.ToArray());
+    }
+
+    private async Task RunSerializedReloadAsync(Task previousReload, CancellationTokenSource cancellation,
+        bool publicationCompleted, long scheduledAt)
     {
         try
         {
@@ -209,15 +266,20 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         {
         }
 
-        await DebounceAndReloadAsync(cancellation).ConfigureAwait(false);
+        await DebounceAndReloadAsync(cancellation, publicationCompleted, scheduledAt).ConfigureAwait(false);
     }
 
-    private async Task DebounceAndReloadAsync(CancellationTokenSource cancellation)
+    private async Task DebounceAndReloadAsync(CancellationTokenSource cancellation, bool publicationCompleted, long scheduledAt)
     {
         var cancellationToken = cancellation.Token;
         try
         {
-            await _delayAsync(DebounceDelay, cancellationToken).ConfigureAwait(false);
+            // A completed directory+handoff transaction already supplies the write
+            // boundary. The strict staging path still validates the full manifest,
+            // indexed bytes, canonical shadow and import authority before commit.
+            // Ordinary in-place edits keep the debounce/stability fallback.
+            if (publicationCompleted) await Task.Yield();
+            else await _delayAsync(DebounceDelay, cancellationToken).ConfigureAwait(false);
             WatchRegistration[] registrations;
             lock (_gate)
             {
@@ -228,7 +290,9 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                 }
 
                 var changedIds = _changedPackageIds.ToArray();
-                _changedPackageIds.Clear();
+                // Keep the entire dirty set until this attempt finishes. A new
+                // event may cancel staging after this point; its successor must
+                // include every package from the interrupted attempt.
                 registrations = changedIds
                     .Select(packageId => _registrations.GetValueOrDefault(packageId))
                     .Where(registration => registration is not null)
@@ -243,7 +307,8 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
             var packageIds = registrations.Select(registration => registration.PackageId).ToArray();
             _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloadStabilityCheck, packageIds);
-            if (!await WaitForStableFoldersAsync(registrations, cancellationToken).ConfigureAwait(false))
+            if (!(publicationCompleted && registrations.All(registration => IsLoadableDevPackageFolder(registration.Folder)))
+                && !await WaitForStableFoldersAsync(registrations, cancellationToken).ConfigureAwait(false))
             {
                 const string message = "Dev package output did not become stable before the reload deadline.";
                 _eventStream.PublishDevReloadResult(false, packageIds, message);
@@ -252,9 +317,11 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
             }
 
             _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloading, packageIds);
+            var stageStarted = Stopwatch.GetTimestamp();
             var stage = await _stageAsync(
                 new PackageLifecycleStageRequest(packageIds),
                 cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Dev package watch strict staging completed in {ElapsedMilliseconds} ms", Stopwatch.GetElapsedTime(stageStarted).TotalMilliseconds);
             if (stage.StageId is null || stage.Errors.Count > 0)
             {
                 _eventStream.PublishDevReloadResult(false, packageIds, stage.Errors.FirstOrDefault() ?? "Runtime rejected the dev package reload.");
@@ -263,7 +330,15 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (registrations.Any(registration => !IsLoadableDevPackageFolder(registration.Folder)))
+                    throw new IOException("Dev package output publication changed before reload commit.");
                 var result = await _commitAsync(stage.StageId, cancellationToken).ConfigureAwait(false);
+                // An owner can withdraw/rebind while the exact commit response is
+                // returning. Its late result no longer describes the current watch
+                // attempt. Drain/discard that stage through the cancellation path;
+                // an actual committed Runtime generation publishes its own snapshot.
+                cancellationToken.ThrowIfCancellationRequested();
                 _eventStream.PublishDevReloadResult(
                     result.Success && result.Errors.Count == 0,
                     result.ImpactedPackageIds.Count == 0 ? packageIds : result.ImpactedPackageIds,
@@ -277,6 +352,7 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            _logger.LogDebug("Dev package watch reload was superseded after {ElapsedMilliseconds} ms", Stopwatch.GetElapsedTime(scheduledAt).TotalMilliseconds);
         }
         catch (Exception ex)
         {
@@ -290,7 +366,13 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                 if (ReferenceEquals(_reloadCancellation, cancellation))
                 {
                     _reloadCancellation = null;
+                    _changedPackageIds.Clear();
+                    _completedPublications.Clear();
                     _eventStream.PublishOperationPhase(RuntimeOperationPhase.Idle);
+                    _logger.LogInformation(
+                        "Dev package watch reload using {SchedulingMode} scheduling completed in {ElapsedMilliseconds} ms",
+                        publicationCompleted ? "transaction" : "stability",
+                        Stopwatch.GetElapsedTime(scheduledAt).TotalMilliseconds);
                 }
             }
 
@@ -330,10 +412,13 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
     private static bool IsLoadableDevPackageFolder(string folder)
         => Directory.Exists(folder)
-           && !File.Exists(folder + OutputTransactionSuffix)
+           && !IsPublicationInProgress(folder)
            && File.Exists(Path.Combine(folder, "manifest", "sunder-package.json"))
            && File.Exists(Path.Combine(folder, "manifest", "content-index.json"))
            && Directory.Exists(Path.Combine(folder, "payload"));
+
+    internal static bool IsPublicationInProgress(string folder)
+        => File.Exists(Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)) + OutputTransactionSuffix);
 
     private static bool TrySnapshotFiles(
         IReadOnlyList<WatchRegistration> registrations,
@@ -400,16 +485,16 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
     private sealed class WatchRegistration : IDisposable
     {
-        private readonly Action<string, bool> _onChanged;
+        private readonly Action<string, bool, bool> _onChanged;
         private readonly object _syncRoot = new();
         private FileSystemWatcher? _folderWatcher;
         private readonly FileSystemWatcher? _parentWatcher;
         private bool _disposed;
 
-        public WatchRegistration(string packageId, string folder, Action<string, bool> onChanged)
+        public WatchRegistration(string packageId, string folder, Action<string, bool, bool> onChanged)
         {
             PackageId = packageId;
-            Folder = Path.GetFullPath(folder);
+            Folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
             _onChanged = onChanged;
             _folderWatcher = CreateFolderWatcher();
             var parent = Path.GetDirectoryName(Folder);
@@ -422,6 +507,9 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
         public string PackageId { get; }
 
         public string Folder { get; }
+
+        // Accessed only while the owning service's scheduling gate is held.
+        public Dictionary<string, FileSnapshot>? CompletedPublicationFiles { get; set; }
 
         public void RefreshFolderWatcher(bool recreate = false)
         {
@@ -510,7 +598,12 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
             if (!ShouldIgnorePath(e.FullPath))
             {
-                _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher) && IsTargetFolder(e.FullPath));
+                // A directory Changed event does not mean its watcher binding was
+                // replaced. Recreating it here can replay native events and turn a
+                // single publication into a self-sustaining cancellation storm.
+                _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher) && IsTargetFolder(e.FullPath)
+                        && e.ChangeType is WatcherChangeTypes.Created or WatcherChangeTypes.Deleted,
+                    ReferenceEquals(sender, _parentWatcher) && IsJournalPath(e.FullPath) && !IsPublicationInProgress(Folder));
             }
         }
 
@@ -533,7 +626,8 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
             if (!ShouldIgnorePath(e.FullPath) || !ShouldIgnorePath(e.OldFullPath))
             {
                 _onChanged(PackageId, ReferenceEquals(sender, _parentWatcher)
-                    && (IsTargetFolder(e.FullPath) || IsTargetFolder(e.OldFullPath)));
+                    && (IsTargetFolder(e.FullPath) || IsTargetFolder(e.OldFullPath)),
+                    ReferenceEquals(sender, _parentWatcher) && IsJournalPath(e.OldFullPath) && !IsPublicationInProgress(Folder));
             }
         }
 
@@ -546,11 +640,14 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
                     return;
                 }
             }
-            _onChanged(PackageId, true);
+            _onChanged(PackageId, true, false);
         }
 
         private bool IsTargetFolder(string path)
             => string.Equals(Path.GetFullPath(path), Folder, PathComparison);
+
+        private bool IsJournalPath(string path)
+            => string.Equals(Path.GetFullPath(path), Folder + OutputTransactionSuffix, PathComparison);
 
         private bool IsPublicationPath(string path)
         {

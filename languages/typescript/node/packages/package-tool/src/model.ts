@@ -179,6 +179,8 @@ export async function loadProjectWithOwnedFrame(projectPath: string, analysisOpt
 /** Tool-private configuration reader shared by initial dependency selection and source analysis. */
 export async function loadProjectConfiguration(projectPath: string): Promise<{ project: LoadedProject; configBytes: Buffer }> {
   const root = resolve(projectPath);
+  if (await exists(resolve(root, ".sunder-builder-metadata.transaction.json")))
+    throw new Error("metadata.recovery: An interrupted metadata save has recovery data. Recover the source transaction before generation or build.");
   const configPath = resolve(root, "sunder.package.json");
   const configBytes = await readProjectDescriptorFile(root, configPath, "Package config");
   const configText = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(configBytes);

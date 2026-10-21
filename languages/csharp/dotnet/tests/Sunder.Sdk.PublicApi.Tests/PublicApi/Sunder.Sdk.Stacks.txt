@@ -1,453 +1,513 @@
+# sunder-public-api-v2
+assembly Sunder.Sdk.Stacks, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackContributor
-  property System.String ContributorId { get; }
-  property System.String DisplayName { get; }
+type public interface Sunder.Sdk.Stacks.IPackageStackContributor
+  property System.String ContributorId { public abstract virtual get; }
+  property System.String DisplayName { public abstract virtual get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackExporter : Sunder.Sdk.Stacks.IPackageStackContributor
-  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackExportContribution> ExportAsync(Sunder.Sdk.Stacks.StackExportRequest request, System.Threading.CancellationToken cancellationToken = null)
-  method abstract System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor>> ListExportItemsAsync(Sunder.Sdk.Stacks.StackExportDiscoveryContext context, System.Threading.CancellationToken cancellationToken = null)
+type public interface Sunder.Sdk.Stacks.IPackageStackExporter : Sunder.Sdk.Stacks.IPackageStackContributor
+  method public abstract virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackExportContribution> ExportAsync(Sunder.Sdk.Stacks.StackExportRequest request, System.Threading.CancellationToken cancellationToken = null)
+  method public abstract virtual System.Threading.Tasks.ValueTask<System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor>> ListExportItemsAsync(Sunder.Sdk.Stacks.StackExportDiscoveryContext context, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackImportAppliedHandler : Sunder.Sdk.Stacks.IPackageStackContributor
-  method abstract System.Threading.Tasks.ValueTask OnStackImportAppliedAsync(Sunder.Sdk.Stacks.StackImportAppliedContext context, System.Threading.CancellationToken cancellationToken = null)
+type public interface Sunder.Sdk.Stacks.IPackageStackImportAppliedHandler : Sunder.Sdk.Stacks.IPackageStackContributor
+  method public abstract virtual System.Threading.Tasks.ValueTask OnStackImportAppliedAsync(Sunder.Sdk.Stacks.StackImportAppliedContext context, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type interface Sunder.Sdk.Stacks.IPackageStackImporter : Sunder.Sdk.Stacks.IPackageStackContributor
-  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportPreview> PreviewImportAsync(Sunder.Sdk.Stacks.StackImportPreviewRequest request, System.Threading.CancellationToken cancellationToken = null)
-  method abstract System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportResult> ImportAsync(Sunder.Sdk.Stacks.StackImportRequest request, System.Threading.CancellationToken cancellationToken = null)
-type sealed class Sunder.Sdk.Stacks.StackContributorMetadata : System.IEquatable<Sunder.Sdk.Stacks.StackContributorMetadata>
-  method .ctor(System.String ContributorId, System.String DisplayName, System.Boolean SupportsExport, System.Boolean SupportsImport, System.Boolean SupportsImportApplied)
-  property System.String ContributorId { get; init; }
-  property System.String DisplayName { get; init; }
-  property System.Boolean SupportsExport { get; init; }
-  property System.Boolean SupportsImport { get; init; }
-  property System.Boolean SupportsImportApplied { get; init; }
-  method Sunder.Sdk.Stacks.StackContributorMetadata <Clone>$()
-  method System.Void Deconstruct(out System.String ContributorId, out System.String DisplayName, out System.Boolean SupportsExport, out System.Boolean SupportsImport, out System.Boolean SupportsImportApplied)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackContributorMetadata? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public interface Sunder.Sdk.Stacks.IPackageStackImporter : Sunder.Sdk.Stacks.IPackageStackContributor
+  method public abstract virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportPreview> PreviewImportAsync(Sunder.Sdk.Stacks.StackImportPreviewRequest request, System.Threading.CancellationToken cancellationToken = null)
+  method public abstract virtual System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportResult> ImportAsync(Sunder.Sdk.Stacks.StackImportRequest request, System.Threading.CancellationToken cancellationToken = null)
+type public sealed class Sunder.Sdk.Stacks.StackContributorMetadata : System.IEquatable<Sunder.Sdk.Stacks.StackContributorMetadata>
+  method public .ctor(System.String ContributorId, System.String DisplayName, System.Boolean SupportsExport, System.Boolean SupportsImport, System.Boolean SupportsImportApplied)
+  property System.Boolean SupportsExport { public get; public init; }
+  property System.Boolean SupportsImport { public get; public init; }
+  property System.Boolean SupportsImportApplied { public get; public init; }
+  property System.String ContributorId { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackContributorMetadata <Clone>$()
+  method public System.Void Deconstruct(out System.String ContributorId, out System.String DisplayName, out System.Boolean SupportsExport, out System.Boolean SupportsImport, out System.Boolean SupportsImportApplied)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackContributorMetadata? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackContributorMetadata? left, Sunder.Sdk.Stacks.StackContributorMetadata? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackContributorMetadata? left, Sunder.Sdk.Stacks.StackContributorMetadata? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackContributorServiceAdapter
-  method .ctor(Sunder.Sdk.Stacks.IPackageStackContributor contributor)
-  method System.Threading.Tasks.ValueTask ImportAppliedAsync(Sunder.Sdk.Stacks.StackImportAppliedContext request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
-  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackContributorMetadata> GetMetadataAsync()
-  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackExportItemList> ListExportItemsAsync(Sunder.Sdk.Stacks.StackExportDiscoveryContext request, System.Threading.CancellationToken cancellationToken)
-  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportPreview> PreviewImportAsync(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
-  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportResult> ImportAsync(Sunder.Sdk.Stacks.StackRpcImportRequest request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
-  method System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackRpcExportContribution> ExportAsync(Sunder.Sdk.Stacks.StackExportRequest request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
+type public sealed class Sunder.Sdk.Stacks.StackContributorServiceAdapter
+  method public .ctor(Sunder.Sdk.Stacks.IPackageStackContributor contributor)
+  method public System.Threading.Tasks.ValueTask ImportAppliedAsync(Sunder.Sdk.Stacks.StackImportAppliedContext request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
+  method public System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackContributorMetadata> GetMetadataAsync()
+  method public System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackExportItemList> ListExportItemsAsync(Sunder.Sdk.Stacks.StackExportDiscoveryContext request, System.Threading.CancellationToken cancellationToken)
+  method public System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportPreview> PreviewImportAsync(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
+  method public System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackImportResult> ImportAsync(Sunder.Sdk.Stacks.StackRpcImportRequest request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
+  method public System.Threading.Tasks.ValueTask<Sunder.Sdk.Stacks.StackRpcExportContribution> ExportAsync(Sunder.Sdk.Stacks.StackExportRequest request, Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.Threading.CancellationToken cancellationToken)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportContribution : System.IEquatable<Sunder.Sdk.Stacks.StackExportContribution>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentExport> Fragments, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, System.Collections.Generic.IReadOnlyList<System.String> Warnings)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentExport> Fragments { get; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements { get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; }
-  method Sunder.Sdk.Stacks.StackExportContribution <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentExport> Fragments, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, out System.Collections.Generic.IReadOnlyList<System.String> Warnings)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportContribution? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportContribution : System.IEquatable<Sunder.Sdk.Stacks.StackExportContribution>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentExport> Fragments, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, System.Collections.Generic.IReadOnlyList<System.String> Warnings)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentExport> Fragments { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { public get; }
+  method public Sunder.Sdk.Stacks.StackExportContribution <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentExport> Fragments, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, out System.Collections.Generic.IReadOnlyList<System.String> Warnings)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportContribution? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportContribution? left, Sunder.Sdk.Stacks.StackExportContribution? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportContribution? left, Sunder.Sdk.Stacks.StackExportContribution? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportDetailSelection : System.IEquatable<Sunder.Sdk.Stacks.StackExportDetailSelection>
-  method .ctor(System.String DetailId, System.Boolean IsSelected = true, System.String? ValueOverride = null, Sunder.Sdk.Stacks.StackValueSensitivity? SensitivityOverride = null)
-  property System.String DetailId { get; init; }
-  property System.Boolean IsSelected { get; init; }
-  property Sunder.Sdk.Stacks.StackValueSensitivity? SensitivityOverride { get; init; }
-  property System.String? ValueOverride { get; init; }
-  method Sunder.Sdk.Stacks.StackExportDetailSelection <Clone>$()
-  method System.Void Deconstruct(out System.String DetailId, out System.Boolean IsSelected, out System.String? ValueOverride, out Sunder.Sdk.Stacks.StackValueSensitivity? SensitivityOverride)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportDetailSelection? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportDetailSelection : System.IEquatable<Sunder.Sdk.Stacks.StackExportDetailSelection>
+  method public .ctor(System.String DetailId, System.Boolean IsSelected = true, System.String? ValueOverride = null, Sunder.Sdk.Stacks.StackValueSensitivity? SensitivityOverride = null)
+  property System.Boolean IsSelected { public get; public init; }
+  property Sunder.Sdk.Stacks.StackValueSensitivity? SensitivityOverride { public get; public init; }
+  property System.String DetailId { public get; public init; }
+  property System.String? ValueOverride { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackExportDetailSelection <Clone>$()
+  method public System.Void Deconstruct(out System.String DetailId, out System.Boolean IsSelected, out System.String? ValueOverride, out Sunder.Sdk.Stacks.StackValueSensitivity? SensitivityOverride)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportDetailSelection? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportDetailSelection? left, Sunder.Sdk.Stacks.StackExportDetailSelection? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportDetailSelection? left, Sunder.Sdk.Stacks.StackExportDetailSelection? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportDiscoveryContext : System.IEquatable<Sunder.Sdk.Stacks.StackExportDiscoveryContext>
-  method .ctor(System.String PackageId)
-  property System.String PackageId { get; init; }
-  method Sunder.Sdk.Stacks.StackExportDiscoveryContext <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportDiscoveryContext? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportDiscoveryContext : System.IEquatable<Sunder.Sdk.Stacks.StackExportDiscoveryContext>
+  method public .ctor(System.String PackageId)
+  property System.String PackageId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackExportDiscoveryContext <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportDiscoveryContext? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportDiscoveryContext? left, Sunder.Sdk.Stacks.StackExportDiscoveryContext? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportDiscoveryContext? left, Sunder.Sdk.Stacks.StackExportDiscoveryContext? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportItemDescriptor : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemDescriptor>
-  method .ctor(System.String ItemId, System.String DisplayName, System.String Kind, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDetail>? Details = null)
-  property System.Boolean DefaultSelected { get; init; }
-  property System.String? Description { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDetail>? Details { get; }
-  property System.String DisplayName { get; init; }
-  property System.String ItemId { get; init; }
-  property System.String Kind { get; init; }
-  method Sunder.Sdk.Stacks.StackExportItemDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String ItemId, out System.String DisplayName, out System.String Kind, out System.String? Description, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDetail>? Details)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemDescriptor? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportItemDescriptor : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemDescriptor>
+  method public .ctor(System.String ItemId, System.String DisplayName, System.String Kind, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDetail>? Details = null)
+  property System.Boolean DefaultSelected { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDetail>? Details { public get; }
+  property System.String? Description { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  property System.String ItemId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackExportItemDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String ItemId, out System.String DisplayName, out System.String Kind, out System.String? Description, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDetail>? Details)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportItemDescriptor? left, Sunder.Sdk.Stacks.StackExportItemDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportItemDescriptor? left, Sunder.Sdk.Stacks.StackExportItemDescriptor? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportItemDetail : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemDetail>
-  method .ctor(System.String Label, System.String Value, Sunder.Sdk.Stacks.StackValueSensitivity? Sensitivity = null, System.String? Description = null, System.String? ValueWhenExcluded = null, System.String? DetailId = null, System.Boolean DefaultSelected = true, System.Boolean IsEditable = true, System.Boolean SupportsAskOnImport = false)
-  property System.Boolean DefaultSelected { get; init; }
-  property System.String? Description { get; init; }
-  property System.String? DetailId { get; init; }
-  property System.Boolean IsEditable { get; init; }
-  property System.String Label { get; init; }
-  property Sunder.Sdk.Stacks.StackValueSensitivity? Sensitivity { get; init; }
-  property System.Boolean SupportsAskOnImport { get; init; }
-  property System.String Value { get; init; }
-  property System.String? ValueWhenExcluded { get; init; }
-  method Sunder.Sdk.Stacks.StackExportItemDetail <Clone>$()
-  method System.Void Deconstruct(out System.String Label, out System.String Value, out Sunder.Sdk.Stacks.StackValueSensitivity? Sensitivity, out System.String? Description, out System.String? ValueWhenExcluded, out System.String? DetailId, out System.Boolean DefaultSelected, out System.Boolean IsEditable, out System.Boolean SupportsAskOnImport)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemDetail? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackExportItemList : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemList>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor> Items)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor> Items { get; init; }
-  method Sunder.Sdk.Stacks.StackExportItemList <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor> Items)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemList? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportItemDetail : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemDetail>
+  method public .ctor(System.String Label, System.String Value, Sunder.Sdk.Stacks.StackValueSensitivity? Sensitivity = null, System.String? Description = null, System.String? ValueWhenExcluded = null, System.String? DetailId = null, System.Boolean DefaultSelected = true, System.Boolean IsEditable = true, System.Boolean SupportsAskOnImport = false)
+  property System.Boolean DefaultSelected { public get; public init; }
+  property System.Boolean IsEditable { public get; public init; }
+  property System.Boolean SupportsAskOnImport { public get; public init; }
+  property Sunder.Sdk.Stacks.StackValueSensitivity? Sensitivity { public get; public init; }
+  property System.String? Description { public get; public init; }
+  property System.String? DetailId { public get; public init; }
+  property System.String Label { public get; public init; }
+  property System.String Value { public get; public init; }
+  property System.String? ValueWhenExcluded { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackExportItemDetail <Clone>$()
+  method public System.Void Deconstruct(out System.String Label, out System.String Value, out Sunder.Sdk.Stacks.StackValueSensitivity? Sensitivity, out System.String? Description, out System.String? ValueWhenExcluded, out System.String? DetailId, out System.Boolean DefaultSelected, out System.Boolean IsEditable, out System.Boolean SupportsAskOnImport)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemDetail? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportItemDetail? left, Sunder.Sdk.Stacks.StackExportItemDetail? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportItemDetail? left, Sunder.Sdk.Stacks.StackExportItemDetail? right)
+type public sealed class Sunder.Sdk.Stacks.StackExportItemList : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemList>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor> Items)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor> Items { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackExportItemList <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemDescriptor> Items)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemList? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportItemList? left, Sunder.Sdk.Stacks.StackExportItemList? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportItemList? left, Sunder.Sdk.Stacks.StackExportItemList? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportItemSelection : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemSelection>
-  method .ctor(System.String ItemId, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportDetailSelection>? Details = null)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportDetailSelection>? Details { get; }
-  property System.String ItemId { get; init; }
-  method Sunder.Sdk.Stacks.StackExportItemSelection <Clone>$()
-  method System.Void Deconstruct(out System.String ItemId, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportDetailSelection>? Details)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemSelection? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportItemSelection : System.IEquatable<Sunder.Sdk.Stacks.StackExportItemSelection>
+  method public .ctor(System.String ItemId, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportDetailSelection>? Details = null)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportDetailSelection>? Details { public get; }
+  property System.String ItemId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackExportItemSelection <Clone>$()
+  method public System.Void Deconstruct(out System.String ItemId, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportDetailSelection>? Details)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportItemSelection? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportItemSelection? left, Sunder.Sdk.Stacks.StackExportItemSelection? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportItemSelection? left, Sunder.Sdk.Stacks.StackExportItemSelection? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportPayloadHandle : System.IEquatable<Sunder.Sdk.Stacks.StackExportPayloadHandle>
-  method .ctor(System.String relativePath, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> openReadAsync, System.Int64? length = null)
-  property System.Int64? Length { get; }
-  property System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> OpenReadAsync { get; }
-  property System.String RelativePath { get; }
-  method Sunder.Sdk.Stacks.StackExportPayloadHandle <Clone>$()
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportPayloadHandle? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportPayloadHandle : System.IEquatable<Sunder.Sdk.Stacks.StackExportPayloadHandle>
+  method public .ctor(System.String relativePath, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> openReadAsync, System.Int64? length = null)
+  property System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> OpenReadAsync { public get; }
+  property System.Int64? Length { public get; }
+  property System.String RelativePath { public get; }
+  method public Sunder.Sdk.Stacks.StackExportPayloadHandle <Clone>$()
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportPayloadHandle? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportPayloadHandle? left, Sunder.Sdk.Stacks.StackExportPayloadHandle? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportPayloadHandle? left, Sunder.Sdk.Stacks.StackExportPayloadHandle? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportRequest : System.IEquatable<Sunder.Sdk.Stacks.StackExportRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemSelection> ItemSelections)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemSelection> ItemSelections { get; }
-  method Sunder.Sdk.Stacks.StackExportRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemSelection> ItemSelections)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportRequest? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackExportRequest : System.IEquatable<Sunder.Sdk.Stacks.StackExportRequest>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemSelection> ItemSelections)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemSelection> ItemSelections { public get; }
+  method public Sunder.Sdk.Stacks.StackExportRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportItemSelection> ItemSelections)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackExportRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackExportRequest? left, Sunder.Sdk.Stacks.StackExportRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackExportRequest? left, Sunder.Sdk.Stacks.StackExportRequest? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackExportSelectionExtensions
-  method static Sunder.Sdk.Stacks.StackExportItemSelection? GetItemSelection(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId)
-  method static Sunder.Sdk.Stacks.StackValueSensitivity GetDetailSensitivity(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, Sunder.Sdk.Stacks.StackValueSensitivity fallback, System.Boolean defaultSelected)
-  method static System.Boolean IsDetailSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.Boolean defaultSelected)
-  method static System.Boolean IsItemSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId)
-  method static System.String GetDetailValue(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.String fallback, System.Boolean defaultSelected)
+type public static class Sunder.Sdk.Stacks.StackExportSelectionExtensions
+  method public static Sunder.Sdk.Stacks.StackExportItemSelection? GetItemSelection(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId)
+  method public static Sunder.Sdk.Stacks.StackValueSensitivity GetDetailSensitivity(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, Sunder.Sdk.Stacks.StackValueSensitivity fallback, System.Boolean defaultSelected)
+  method public static System.Boolean IsDetailSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.Boolean defaultSelected)
+  method public static System.Boolean IsItemSelected(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId)
+  method public static System.String GetDetailValue(Sunder.Sdk.Stacks.StackExportRequest request, System.String itemId, System.String detailId, System.String fallback, System.Boolean defaultSelected)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackFragmentExport : System.IEquatable<Sunder.Sdk.Stacks.StackFragmentExport>
-  method .ctor(System.String FragmentId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files = null, System.String? SourceItemId = null)
-  property System.Boolean DefaultSelected { get; init; }
-  property System.String? Description { get; init; }
-  property System.String DisplayName { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files { get; }
-  property System.String FragmentId { get; init; }
-  property System.String JsonPayload { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs { get; }
-  property System.String SchemaId { get; init; }
-  property System.Int32 SchemaVersion { get; init; }
-  property System.String? SourceItemId { get; init; }
-  method Sunder.Sdk.Stacks.StackFragmentExport <Clone>$()
-  method System.Void Deconstruct(out System.String FragmentId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files, out System.String? SourceItemId)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackFragmentExport? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackFragmentExport : System.IEquatable<Sunder.Sdk.Stacks.StackFragmentExport>
+  method public .ctor(System.String FragmentId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files = null, System.String? SourceItemId = null)
+  property System.Boolean DefaultSelected { public get; public init; }
+  property System.Int32 SchemaVersion { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs { public get; }
+  property System.String? Description { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  property System.String FragmentId { public get; public init; }
+  property System.String JsonPayload { public get; public init; }
+  property System.String SchemaId { public get; public init; }
+  property System.String? SourceItemId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackFragmentExport <Clone>$()
+  method public System.Void Deconstruct(out System.String FragmentId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackExportPayloadHandle>? Files, out System.String? SourceItemId)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackFragmentExport? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackFragmentExport? left, Sunder.Sdk.Stacks.StackFragmentExport? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackFragmentExport? left, Sunder.Sdk.Stacks.StackFragmentExport? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackFragmentImport : System.IEquatable<Sunder.Sdk.Stacks.StackFragmentImport>
-  method .ctor(System.String FragmentId, System.String OwnerPackageId, System.String ContributorId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportPayloadHandle>? Files = null)
-  property System.String ContributorId { get; init; }
-  property System.String? Description { get; init; }
-  property System.String DisplayName { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportPayloadHandle>? Files { get; }
-  property System.String FragmentId { get; init; }
-  property System.String JsonPayload { get; init; }
-  property System.String OwnerPackageId { get; init; }
-  property System.String SchemaId { get; init; }
-  property System.Int32 SchemaVersion { get; init; }
-  method Sunder.Sdk.Stacks.StackFragmentImport <Clone>$()
-  method System.Void Deconstruct(out System.String FragmentId, out System.String OwnerPackageId, out System.String ContributorId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportPayloadHandle>? Files)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackFragmentImport? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackFragmentImport : System.IEquatable<Sunder.Sdk.Stacks.StackFragmentImport>
+  method public .ctor(System.String FragmentId, System.String OwnerPackageId, System.String ContributorId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportPayloadHandle>? Files = null)
+  property System.Int32 SchemaVersion { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportPayloadHandle>? Files { public get; }
+  property System.String ContributorId { public get; public init; }
+  property System.String? Description { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  property System.String FragmentId { public get; public init; }
+  property System.String JsonPayload { public get; public init; }
+  property System.String OwnerPackageId { public get; public init; }
+  property System.String SchemaId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackFragmentImport <Clone>$()
+  method public System.Void Deconstruct(out System.String FragmentId, out System.String OwnerPackageId, out System.String ContributorId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportPayloadHandle>? Files)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackFragmentImport? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackFragmentImport? left, Sunder.Sdk.Stacks.StackFragmentImport? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackFragmentImport? left, Sunder.Sdk.Stacks.StackFragmentImport? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportAction : System.IEquatable<Sunder.Sdk.Stacks.StackImportAction>
-  method .ctor(System.String ActionId, System.String DisplayName, Sunder.Sdk.Stacks.StackImportActionKind Kind, System.Boolean DefaultSelected = true, System.String? Description = null)
-  property System.String ActionId { get; init; }
-  property System.Boolean DefaultSelected { get; init; }
-  property System.String? Description { get; init; }
-  property System.String DisplayName { get; init; }
-  property Sunder.Sdk.Stacks.StackImportActionKind Kind { get; init; }
-  method Sunder.Sdk.Stacks.StackImportAction <Clone>$()
-  method System.Void Deconstruct(out System.String ActionId, out System.String DisplayName, out Sunder.Sdk.Stacks.StackImportActionKind Kind, out System.Boolean DefaultSelected, out System.String? Description)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportAction? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportAction : System.IEquatable<Sunder.Sdk.Stacks.StackImportAction>
+  method public .ctor(System.String ActionId, System.String DisplayName, Sunder.Sdk.Stacks.StackImportActionKind Kind, System.Boolean DefaultSelected = true, System.String? Description = null)
+  property System.Boolean DefaultSelected { public get; public init; }
+  property Sunder.Sdk.Stacks.StackImportActionKind Kind { public get; public init; }
+  property System.String ActionId { public get; public init; }
+  property System.String? Description { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackImportAction <Clone>$()
+  method public System.Void Deconstruct(out System.String ActionId, out System.String DisplayName, out Sunder.Sdk.Stacks.StackImportActionKind Kind, out System.Boolean DefaultSelected, out System.String? Description)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportAction? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportAction? left, Sunder.Sdk.Stacks.StackImportAction? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportAction? left, Sunder.Sdk.Stacks.StackImportAction? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type enum Sunder.Sdk.Stacks.StackImportActionKind : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Sdk.Stacks.StackImportActionKind Create = 0
-  field static Sunder.Sdk.Stacks.StackImportActionKind Replace = 2
-  field static Sunder.Sdk.Stacks.StackImportActionKind Reuse = 3
-  field static Sunder.Sdk.Stacks.StackImportActionKind Skip = 4
-  field static Sunder.Sdk.Stacks.StackImportActionKind Update = 1
-  field System.Int32 value__
+type public enum Sunder.Sdk.Stacks.StackImportActionKind : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Stacks.StackImportActionKind Create = 0
+  field public const Sunder.Sdk.Stacks.StackImportActionKind Replace = 2
+  field public const Sunder.Sdk.Stacks.StackImportActionKind Reuse = 3
+  field public const Sunder.Sdk.Stacks.StackImportActionKind Skip = 4
+  field public const Sunder.Sdk.Stacks.StackImportActionKind Update = 1
+  field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportAppliedContext : System.IEquatable<Sunder.Sdk.Stacks.StackImportAppliedContext>
-  method .ctor(System.String OwnerPackageId, System.String ContributorId, System.Collections.Generic.IReadOnlyList<System.String> FragmentIds, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems)
-  property System.String ContributorId { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> FragmentIds { get; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems { get; }
-  property System.String OwnerPackageId { get; init; }
-  method Sunder.Sdk.Stacks.StackImportAppliedContext <Clone>$()
-  method System.Void Deconstruct(out System.String OwnerPackageId, out System.String ContributorId, out System.Collections.Generic.IReadOnlyList<System.String> FragmentIds, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportAppliedContext? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportAppliedContext : System.IEquatable<Sunder.Sdk.Stacks.StackImportAppliedContext>
+  method public .ctor(System.String OwnerPackageId, System.String ContributorId, System.Collections.Generic.IReadOnlyList<System.String> FragmentIds, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> FragmentIds { public get; }
+  property System.String ContributorId { public get; public init; }
+  property System.String OwnerPackageId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackImportAppliedContext <Clone>$()
+  method public System.Void Deconstruct(out System.String OwnerPackageId, out System.String ContributorId, out System.Collections.Generic.IReadOnlyList<System.String> FragmentIds, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportAppliedContext? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportAppliedContext? left, Sunder.Sdk.Stacks.StackImportAppliedContext? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportAppliedContext? left, Sunder.Sdk.Stacks.StackImportAppliedContext? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportConflict : System.IEquatable<Sunder.Sdk.Stacks.StackImportConflict>
-  method .ctor(System.String ConflictId, System.String Message, Sunder.Sdk.Stacks.StackImportConflictSeverity Severity, System.String? FragmentId = null)
-  property System.String ConflictId { get; init; }
-  property System.String? FragmentId { get; init; }
-  property System.String Message { get; init; }
-  property Sunder.Sdk.Stacks.StackImportConflictSeverity Severity { get; init; }
-  method Sunder.Sdk.Stacks.StackImportConflict <Clone>$()
-  method System.Void Deconstruct(out System.String ConflictId, out System.String Message, out Sunder.Sdk.Stacks.StackImportConflictSeverity Severity, out System.String? FragmentId)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportConflict? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportConflict : System.IEquatable<Sunder.Sdk.Stacks.StackImportConflict>
+  method public .ctor(System.String ConflictId, System.String Message, Sunder.Sdk.Stacks.StackImportConflictSeverity Severity, System.String? FragmentId = null)
+  property Sunder.Sdk.Stacks.StackImportConflictSeverity Severity { public get; public init; }
+  property System.String ConflictId { public get; public init; }
+  property System.String? FragmentId { public get; public init; }
+  property System.String Message { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackImportConflict <Clone>$()
+  method public System.Void Deconstruct(out System.String ConflictId, out System.String Message, out Sunder.Sdk.Stacks.StackImportConflictSeverity Severity, out System.String? FragmentId)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportConflict? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportConflict? left, Sunder.Sdk.Stacks.StackImportConflict? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportConflict? left, Sunder.Sdk.Stacks.StackImportConflict? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type enum Sunder.Sdk.Stacks.StackImportConflictSeverity : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Sdk.Stacks.StackImportConflictSeverity Error = 1
-  field static Sunder.Sdk.Stacks.StackImportConflictSeverity Warning = 0
-  field System.Int32 value__
+type public enum Sunder.Sdk.Stacks.StackImportConflictSeverity : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Stacks.StackImportConflictSeverity Error = 1
+  field public const Sunder.Sdk.Stacks.StackImportConflictSeverity Warning = 0
+  field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type enum Sunder.Sdk.Stacks.StackImportOutcome : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Sdk.Stacks.StackImportOutcome Completed = 0
-  field static Sunder.Sdk.Stacks.StackImportOutcome Failed = 2
-  field static Sunder.Sdk.Stacks.StackImportOutcome Partial = 1
-  field System.Int32 value__
+type public enum Sunder.Sdk.Stacks.StackImportOutcome : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Stacks.StackImportOutcome Completed = 0
+  field public const Sunder.Sdk.Stacks.StackImportOutcome Failed = 2
+  field public const Sunder.Sdk.Stacks.StackImportOutcome Partial = 1
+  field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportPayloadHandle : System.IEquatable<Sunder.Sdk.Stacks.StackImportPayloadHandle>
-  method .ctor(System.String relativePath, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> openReadAsync, System.Int64 length)
-  property System.Int64 Length { get; }
-  property System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> OpenReadAsync { get; }
-  property System.String RelativePath { get; }
-  method Sunder.Sdk.Stacks.StackImportPayloadHandle <Clone>$()
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportPayloadHandle? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportPayloadHandle : System.IEquatable<Sunder.Sdk.Stacks.StackImportPayloadHandle>
+  method public .ctor(System.String relativePath, System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> openReadAsync, System.Int64 length)
+  property System.Int64 Length { public get; }
+  property System.Func<System.Threading.CancellationToken, System.Threading.Tasks.ValueTask<System.IO.Stream>> OpenReadAsync { public get; }
+  property System.String RelativePath { public get; }
+  method public Sunder.Sdk.Stacks.StackImportPayloadHandle <Clone>$()
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportPayloadHandle? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportPayloadHandle? left, Sunder.Sdk.Stacks.StackImportPayloadHandle? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportPayloadHandle? left, Sunder.Sdk.Stacks.StackImportPayloadHandle? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportPreview : System.IEquatable<Sunder.Sdk.Stacks.StackImportPreview>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportAction> Actions, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor> RequiredInputs, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportConflict> Conflicts, System.Collections.Generic.IReadOnlyList<System.String> Warnings)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportAction> Actions { get; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportConflict> Conflicts { get; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor> RequiredInputs { get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; }
-  method Sunder.Sdk.Stacks.StackImportPreview <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportAction> Actions, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor> RequiredInputs, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportConflict> Conflicts, out System.Collections.Generic.IReadOnlyList<System.String> Warnings)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportPreview? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportPreview : System.IEquatable<Sunder.Sdk.Stacks.StackImportPreview>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportAction> Actions, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor> RequiredInputs, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportConflict> Conflicts, System.Collections.Generic.IReadOnlyList<System.String> Warnings)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportAction> Actions { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportConflict> Conflicts { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor> RequiredInputs { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { public get; }
+  method public Sunder.Sdk.Stacks.StackImportPreview <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportAction> Actions, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor> RequiredInputs, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportConflict> Conflicts, out System.Collections.Generic.IReadOnlyList<System.String> Warnings)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportPreview? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportPreview? left, Sunder.Sdk.Stacks.StackImportPreview? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportPreview? left, Sunder.Sdk.Stacks.StackImportPreview? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportPreviewRequest : System.IEquatable<Sunder.Sdk.Stacks.StackImportPreviewRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments { get; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { get; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { get; }
-  method Sunder.Sdk.Stacks.StackImportPreviewRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportPreviewRequest? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportPreviewRequest : System.IEquatable<Sunder.Sdk.Stacks.StackImportPreviewRequest>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { public get; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments { public get; }
+  method public Sunder.Sdk.Stacks.StackImportPreviewRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportPreviewRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportPreviewRequest? left, Sunder.Sdk.Stacks.StackImportPreviewRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportPreviewRequest? left, Sunder.Sdk.Stacks.StackImportPreviewRequest? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportRequest : System.IEquatable<Sunder.Sdk.Stacks.StackImportRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments { get; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { get; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds { get; }
-  method Sunder.Sdk.Stacks.StackImportRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportRequest? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportRequest : System.IEquatable<Sunder.Sdk.Stacks.StackImportRequest>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { public get; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds { public get; }
+  method public Sunder.Sdk.Stacks.StackImportRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportRequest? left, Sunder.Sdk.Stacks.StackImportRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportRequest? left, Sunder.Sdk.Stacks.StackImportRequest? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportResult : System.IEquatable<Sunder.Sdk.Stacks.StackImportResult>
-  method .ctor(Sunder.Sdk.Stacks.StackImportOutcome Outcome, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
-  property System.Collections.Generic.IReadOnlyList<System.String> Errors { get; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { get; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems { get; }
-  property Sunder.Sdk.Stacks.StackImportOutcome Outcome { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; }
-  method Sunder.Sdk.Stacks.StackImportResult <Clone>$()
-  method System.Void Deconstruct(out Sunder.Sdk.Stacks.StackImportOutcome Outcome, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportResult? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportResult : System.IEquatable<Sunder.Sdk.Stacks.StackImportResult>
+  method public .ctor(Sunder.Sdk.Stacks.StackImportOutcome Outcome, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> Warnings, System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  property Sunder.Sdk.Stacks.StackImportOutcome Outcome { public get; public init; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Errors { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { public get; }
+  method public Sunder.Sdk.Stacks.StackImportResult <Clone>$()
+  method public System.Void Deconstruct(out Sunder.Sdk.Stacks.StackImportOutcome Outcome, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackImportedItem> ImportedItems, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> Warnings, out System.Collections.Generic.IReadOnlyList<System.String> Errors)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportResult? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportResult? left, Sunder.Sdk.Stacks.StackImportResult? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportResult? left, Sunder.Sdk.Stacks.StackImportResult? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackImportedItem : System.IEquatable<Sunder.Sdk.Stacks.StackImportedItem>
-  method .ctor(System.String ItemId, System.String DisplayName, System.String Kind)
-  property System.String DisplayName { get; init; }
-  property System.String ItemId { get; init; }
-  property System.String Kind { get; init; }
-  method Sunder.Sdk.Stacks.StackImportedItem <Clone>$()
-  method System.Void Deconstruct(out System.String ItemId, out System.String DisplayName, out System.String Kind)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportedItem? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackImportedItem : System.IEquatable<Sunder.Sdk.Stacks.StackImportedItem>
+  method public .ctor(System.String ItemId, System.String DisplayName, System.String Kind)
+  property System.String DisplayName { public get; public init; }
+  property System.String ItemId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackImportedItem <Clone>$()
+  method public System.Void Deconstruct(out System.String ItemId, out System.String DisplayName, out System.String Kind)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackImportedItem? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackImportedItem? left, Sunder.Sdk.Stacks.StackImportedItem? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackImportedItem? left, Sunder.Sdk.Stacks.StackImportedItem? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackPackageRequirement : System.IEquatable<Sunder.Sdk.Stacks.StackPackageRequirement>
-  method .ctor(System.String PackageId, System.String InstallTag = "latest", System.String? CreatedWithVersion = null, System.String? MinimumVersion = null, System.Boolean Required = true)
-  property System.String? CreatedWithVersion { get; init; }
-  property System.String InstallTag { get; init; }
-  property System.String? MinimumVersion { get; init; }
-  property System.String PackageId { get; init; }
-  property System.Boolean Required { get; init; }
-  method Sunder.Sdk.Stacks.StackPackageRequirement <Clone>$()
-  method System.Void Deconstruct(out System.String PackageId, out System.String InstallTag, out System.String? CreatedWithVersion, out System.String? MinimumVersion, out System.Boolean Required)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackPackageRequirement? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackPackageRequirement : System.IEquatable<Sunder.Sdk.Stacks.StackPackageRequirement>
+  method public .ctor(System.String PackageId, System.String InstallTag = "latest", System.String? CreatedWithVersion = null, System.String? MinimumVersion = null, System.Boolean Required = true)
+  property System.Boolean Required { public get; public init; }
+  property System.String? CreatedWithVersion { public get; public init; }
+  property System.String InstallTag { public get; public init; }
+  property System.String? MinimumVersion { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackPackageRequirement <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String InstallTag, out System.String? CreatedWithVersion, out System.String? MinimumVersion, out System.Boolean Required)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackPackageRequirement? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackPackageRequirement? left, Sunder.Sdk.Stacks.StackPackageRequirement? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackPackageRequirement? left, Sunder.Sdk.Stacks.StackPackageRequirement? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.StackRequiredInputDescriptor : System.IEquatable<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>
-  method .ctor(System.String InputId, System.String Label, Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity, System.Boolean Required = true, System.String? Description = null, System.String? DefaultValue = null)
-  property System.String? DefaultValue { get; }
-  property System.String? Description { get; init; }
-  property System.String InputId { get; init; }
-  property System.String Label { get; init; }
-  property System.Boolean Required { get; init; }
-  property Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity { get; }
-  method Sunder.Sdk.Stacks.StackRequiredInputDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String InputId, out System.String Label, out Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity, out System.Boolean Required, out System.String? Description, out System.String? DefaultValue)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRequiredInputDescriptor? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackRpcExportContribution : System.IEquatable<Sunder.Sdk.Stacks.StackRpcExportContribution>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentExport> Fragments, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, System.Collections.Generic.IReadOnlyList<System.String> Warnings)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentExport> Fragments { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { get; init; }
-  method Sunder.Sdk.Stacks.StackRpcExportContribution <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentExport> Fragments, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, out System.Collections.Generic.IReadOnlyList<System.String> Warnings)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcExportContribution? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackRpcFragmentExport : System.IEquatable<Sunder.Sdk.Stacks.StackRpcFragmentExport>
-  method .ctor(System.String FragmentId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files = null, System.String? SourceItemId = null)
-  property System.Boolean DefaultSelected { get; init; }
-  property System.String? Description { get; init; }
-  property System.String DisplayName { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files { get; init; }
-  property System.String FragmentId { get; init; }
-  property System.String JsonPayload { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs { get; init; }
-  property System.String SchemaId { get; init; }
-  property System.Int32 SchemaVersion { get; init; }
-  property System.String? SourceItemId { get; init; }
-  method Sunder.Sdk.Stacks.StackRpcFragmentExport <Clone>$()
-  method System.Void Deconstruct(out System.String FragmentId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files, out System.String? SourceItemId)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcFragmentExport? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackRpcFragmentImport : System.IEquatable<Sunder.Sdk.Stacks.StackRpcFragmentImport>
-  method .ctor(System.String FragmentId, System.String OwnerPackageId, System.String ContributorId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files = null)
-  property System.String ContributorId { get; init; }
-  property System.String? Description { get; init; }
-  property System.String DisplayName { get; init; }
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files { get; init; }
-  property System.String FragmentId { get; init; }
-  property System.String JsonPayload { get; init; }
-  property System.String OwnerPackageId { get; init; }
-  property System.String SchemaId { get; init; }
-  property System.Int32 SchemaVersion { get; init; }
-  method Sunder.Sdk.Stacks.StackRpcFragmentImport <Clone>$()
-  method System.Void Deconstruct(out System.String FragmentId, out System.String OwnerPackageId, out System.String ContributorId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcFragmentImport? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackRpcImportPreviewRequest : System.IEquatable<Sunder.Sdk.Stacks.StackRpcImportPreviewRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments { get; init; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { get; init; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { get; init; }
-  method Sunder.Sdk.Stacks.StackRpcImportPreviewRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackRpcImportRequest : System.IEquatable<Sunder.Sdk.Stacks.StackRpcImportRequest>
-  method .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
-  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments { get; init; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { get; init; }
-  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds { get; init; }
-  method Sunder.Sdk.Stacks.StackRpcImportRequest <Clone>$()
-  method System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcImportRequest? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Sdk.Stacks.StackRpcPayloadFile : System.IEquatable<Sunder.Sdk.Stacks.StackRpcPayloadFile>
-  method .ctor(System.String RelativePath, Sunder.Sdk.Rpc.SunderRpcContentReference Content)
-  property Sunder.Sdk.Rpc.SunderRpcContentReference Content { get; init; }
-  property System.String RelativePath { get; init; }
-  method Sunder.Sdk.Stacks.StackRpcPayloadFile <Clone>$()
-  method System.Void Deconstruct(out System.String RelativePath, out Sunder.Sdk.Rpc.SunderRpcContentReference Content)
-  method virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcPayloadFile? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
+type public sealed class Sunder.Sdk.Stacks.StackRequiredInputDescriptor : System.IEquatable<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>
+  method public .ctor(System.String InputId, System.String Label, Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity, System.Boolean Required = true, System.String? Description = null, System.String? DefaultValue = null)
+  property System.Boolean Required { public get; public init; }
+  property Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity { public get; }
+  property System.String? DefaultValue { public get; }
+  property System.String? Description { public get; public init; }
+  property System.String InputId { public get; public init; }
+  property System.String Label { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRequiredInputDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String InputId, out System.String Label, out Sunder.Sdk.Stacks.StackValueSensitivity Sensitivity, out System.Boolean Required, out System.String? Description, out System.String? DefaultValue)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRequiredInputDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRequiredInputDescriptor? left, Sunder.Sdk.Stacks.StackRequiredInputDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRequiredInputDescriptor? left, Sunder.Sdk.Stacks.StackRequiredInputDescriptor? right)
+type public sealed class Sunder.Sdk.Stacks.StackRpcExportContribution : System.IEquatable<Sunder.Sdk.Stacks.StackRpcExportContribution>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentExport> Fragments, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, System.Collections.Generic.IReadOnlyList<System.String> Warnings)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentExport> Fragments { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Warnings { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRpcExportContribution <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentExport> Fragments, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackPackageRequirement> PackageRequirements, out System.Collections.Generic.IReadOnlyList<System.String> Warnings)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcExportContribution? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRpcExportContribution? left, Sunder.Sdk.Stacks.StackRpcExportContribution? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRpcExportContribution? left, Sunder.Sdk.Stacks.StackRpcExportContribution? right)
+type public sealed class Sunder.Sdk.Stacks.StackRpcFragmentExport : System.IEquatable<Sunder.Sdk.Stacks.StackRpcFragmentExport>
+  method public .ctor(System.String FragmentId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Boolean DefaultSelected = true, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files = null, System.String? SourceItemId = null)
+  property System.Boolean DefaultSelected { public get; public init; }
+  property System.Int32 SchemaVersion { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files { public get; public init; }
+  property System.String? Description { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  property System.String FragmentId { public get; public init; }
+  property System.String JsonPayload { public get; public init; }
+  property System.String SchemaId { public get; public init; }
+  property System.String? SourceItemId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRpcFragmentExport <Clone>$()
+  method public System.Void Deconstruct(out System.String FragmentId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Boolean DefaultSelected, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRequiredInputDescriptor>? RequiredInputs, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files, out System.String? SourceItemId)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcFragmentExport? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRpcFragmentExport? left, Sunder.Sdk.Stacks.StackRpcFragmentExport? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRpcFragmentExport? left, Sunder.Sdk.Stacks.StackRpcFragmentExport? right)
+type public sealed class Sunder.Sdk.Stacks.StackRpcFragmentImport : System.IEquatable<Sunder.Sdk.Stacks.StackRpcFragmentImport>
+  method public .ctor(System.String FragmentId, System.String OwnerPackageId, System.String ContributorId, System.String SchemaId, System.Int32 SchemaVersion, System.String DisplayName, System.String JsonPayload, System.String? Description = null, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files = null)
+  property System.Int32 SchemaVersion { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files { public get; public init; }
+  property System.String ContributorId { public get; public init; }
+  property System.String? Description { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  property System.String FragmentId { public get; public init; }
+  property System.String JsonPayload { public get; public init; }
+  property System.String OwnerPackageId { public get; public init; }
+  property System.String SchemaId { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRpcFragmentImport <Clone>$()
+  method public System.Void Deconstruct(out System.String FragmentId, out System.String OwnerPackageId, out System.String ContributorId, out System.String SchemaId, out System.Int32 SchemaVersion, out System.String DisplayName, out System.String JsonPayload, out System.String? Description, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcPayloadFile>? Files)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcFragmentImport? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRpcFragmentImport? left, Sunder.Sdk.Stacks.StackRpcFragmentImport? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRpcFragmentImport? left, Sunder.Sdk.Stacks.StackRpcFragmentImport? right)
+type public sealed class Sunder.Sdk.Stacks.StackRpcImportPreviewRequest : System.IEquatable<Sunder.Sdk.Stacks.StackRpcImportPreviewRequest>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { public get; public init; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRpcImportPreviewRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest? left, Sunder.Sdk.Stacks.StackRpcImportPreviewRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRpcImportPreviewRequest? left, Sunder.Sdk.Stacks.StackRpcImportPreviewRequest? right)
+type public sealed class Sunder.Sdk.Stacks.StackRpcImportRequest : System.IEquatable<Sunder.Sdk.Stacks.StackRpcImportRequest>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { public get; public init; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRpcImportRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Stacks.StackRpcFragmentImport> Fragments, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps, out System.Collections.Generic.IReadOnlyList<System.String> SelectedActionIds)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcImportRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRpcImportRequest? left, Sunder.Sdk.Stacks.StackRpcImportRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRpcImportRequest? left, Sunder.Sdk.Stacks.StackRpcImportRequest? right)
+type public sealed class Sunder.Sdk.Stacks.StackRpcPayloadFile : System.IEquatable<Sunder.Sdk.Stacks.StackRpcPayloadFile>
+  method public .ctor(System.String RelativePath, Sunder.Sdk.Rpc.SunderRpcContentReference Content)
+  property Sunder.Sdk.Rpc.SunderRpcContentReference Content { public get; public init; }
+  property System.String RelativePath { public get; public init; }
+  method public Sunder.Sdk.Stacks.StackRpcPayloadFile <Clone>$()
+  method public System.Void Deconstruct(out System.String RelativePath, out Sunder.Sdk.Rpc.SunderRpcContentReference Content)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Stacks.StackRpcPayloadFile? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Stacks.StackRpcPayloadFile? left, Sunder.Sdk.Stacks.StackRpcPayloadFile? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Stacks.StackRpcPayloadFile? left, Sunder.Sdk.Stacks.StackRpcPayloadFile? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type enum Sunder.Sdk.Stacks.StackValueSensitivity : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Sdk.Stacks.StackValueSensitivity Public = 0
-  field static Sunder.Sdk.Stacks.StackValueSensitivity Secret = 1
-  field System.Int32 value__
+type public enum Sunder.Sdk.Stacks.StackValueSensitivity : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Stacks.StackValueSensitivity Public = 0
+  field public const Sunder.Sdk.Stacks.StackValueSensitivity Secret = 1
+  field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
-type sealed class Sunder.Sdk.Stacks.SunderStackContributorRpc
-  field static System.String AbiSha256 = "6ca6d6385c720290548592de890f3e3ceb86f3d999167f4e80c6afb15f8a02d8"
-  field static System.String ContractId = "sunder.stack.contributor"
-  field static System.String ContractVersion = "2.0.0"
-  field static System.String DescriptorSha256 = "38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898"
-  field static System.Int32 DescriptorVersion = 1
-  field static System.String ServiceId = "stack-contributor"
-  property static Sunder.Sdk.Rpc.SunderRpcContractDescriptor Descriptor { get; }
-  method static Sunder.Sdk.Rpc.ISunderRpcServiceHandler CreateHandler(Sunder.Sdk.Stacks.IPackageStackContributor contributor)
+type public static class Sunder.Sdk.Stacks.SunderStackContributorRpc
+  field public const System.String AbiSha256 = "6ca6d6385c720290548592de890f3e3ceb86f3d999167f4e80c6afb15f8a02d8"
+  field public const System.String ContractId = "sunder.stack.contributor"
+  field public const System.String ContractVersion = "2.0.0"
+  field public const System.String DescriptorSha256 = "38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898"
+  field public const System.Int32 DescriptorVersion = 1
+  field public const System.String ServiceId = "stack-contributor"
+  property Sunder.Sdk.Rpc.SunderRpcContractDescriptor Descriptor { public static get; }
+  method public static Sunder.Sdk.Rpc.ISunderRpcServiceHandler CreateHandler(Sunder.Sdk.Stacks.IPackageStackContributor contributor)

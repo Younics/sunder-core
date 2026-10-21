@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, stat, readdir, open, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import ts from "typescript";
@@ -17,6 +17,7 @@ import { emptyLock, fixtureSource, generatedProviders, invocation, writeSourceFi
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
 import { exercisePackedOwned } from "./packed-owned";
 import { workerResolutionOptions } from "../src/rpc-runtime-inputs";
+import { MODEL_PROJECTION_PATH } from "../src/rpc-model-projection";
 
 const exec = promisify(execFile); const cli = resolve(__dirname, "../../dist/cli.js");
 async function project(source = numericSource, extension = "ts", id = "example.owned") {
@@ -240,7 +241,11 @@ test("closed configuration rejects obsolete authoring, malformed evidence and fa
     for(const name of ["rpc","contracts","providers","usesContracts","rpcBindings","platformImports"]){await writeFile(path,JSON.stringify({...config,[name]:[]}));await assert.rejects(loadProject(root),/unknown property/);}
     await writeFile(path,JSON.stringify({...config,schemaVersion:2}));await assert.rejects(loadProject(root),/retired/);
     delete config.services;config.entry="src/worker.ts";await writeFile(path,JSON.stringify(config));await writeFile(resolve(root,"src/worker.ts"),'export {};');await assert.rejects(loadProject(root),/fallback/);
-    await rm(resolve(root,"sunder-contracts.lock.json"));await generateRpcBindings(root);await assert.rejects(stat(rpcBindingsOutputRoot(root)),{code:"ENOENT"});
+    await rm(resolve(root,"sunder-contracts.lock.json"));await generateRpcBindings(root);
+    assert.deepEqual(await readdir(rpcBindingsOutputRoot(root)),[dirname(MODEL_PROJECTION_PATH)]);
+    assert.deepEqual(await readdir(resolve(rpcBindingsOutputRoot(root),dirname(MODEL_PROJECTION_PATH))),[basename(MODEL_PROJECTION_PATH)]);
+    assert.deepEqual(JSON.parse(await readFile(resolve(rpcBindingsOutputRoot(root),MODEL_PROJECTION_PATH),"utf8")),{schemaVersion:1,packageId:config.id,packageVersion:config.version,contracts:[]});
+    for(const name of ["sunder-contracts.lock.json","sunder-contracts.owned.json"])await assert.rejects(stat(resolve(root,name)),{code:"ENOENT"});
   }finally{await rm(root,{recursive:true,force:true});}
 });
 test("bounded source/semantic graphs reject byte, node, reference, service and provider overflow",async()=>{

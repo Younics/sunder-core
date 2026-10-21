@@ -10,7 +10,7 @@ public sealed class PublicApiFidelityTests
     public void PackageBuildTaskPropertiesMatchAccessorAndFunctionalAttributeSnapshot()
     {
         var actual = FormatAssembly(typeof(GenerateSunderPackageManifestTask).Assembly);
-        var updateRoot = Environment.GetEnvironmentVariable("SUNDER_UPDATE_PUBLIC_API_FIDELITY_ROOT");
+        var updateRoot = PublicApiSnapshotPolicy.GetUpdateRoot("SUNDER_UPDATE_PUBLIC_API_FIDELITY_ROOT");
         if (!string.IsNullOrWhiteSpace(updateRoot))
         {
             Directory.CreateDirectory(updateRoot);

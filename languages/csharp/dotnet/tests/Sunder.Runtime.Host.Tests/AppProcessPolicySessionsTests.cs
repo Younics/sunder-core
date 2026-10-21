@@ -20,7 +20,7 @@ using static Sunder.Runtime.Host.Tests.ActivePolicyTestContext;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class AppProcessPolicySessionsTests
+public sealed partial class AppProcessPolicySessionsTests
 {
     [Theory]
     [InlineData(false)]
@@ -371,7 +371,8 @@ public sealed class AppProcessPolicySessionsTests
     {
         internal AppPolicyProcessState State = AppPolicyProcessState.Alive;
         internal int Terminations;
-        public AppPolicyProcessState Probe() => State;
+        internal Action? NextProbe;
+        public AppPolicyProcessState Probe() { Interlocked.Exchange(ref NextProbe, null)?.Invoke(); return State; }
         public void Terminate() => Terminations++;
         public void Dispose() { }
     }

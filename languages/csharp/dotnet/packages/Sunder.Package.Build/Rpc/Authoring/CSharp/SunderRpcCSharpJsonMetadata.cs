@@ -188,9 +188,12 @@ internal static class SunderRpcCSharpJsonMetadata
             else output.Append("                    Setter = static (value, property) => Set").Append(index).Append('_').Append(memberIndex).Append('(')
                     .Append(layout.ValueType ? "ref global::System.Runtime.CompilerServices.Unsafe.Unbox<" + type + ">(value)" : "(" + type + ")value")
                     .AppendLine(", property!),");
-            output.AppendLine("                    IgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.Never,")
+            // Imported optional nonnullable fields use CLR null for absence;
+            // required nullable fields must still emit null and remain required.
+            output.Append("                    IgnoreCondition = global::System.Text.Json.Serialization.JsonIgnoreCondition.")
+                .Append(member.IgnoreWhenNull ? "WhenWritingNull" : "Never").AppendLine(",")
                 .AppendLine("                });")
-                .Append("                p").Append(memberIndex).Append(".IsRequired = ").Append(member.OptionalWrapper ? "false" : "true").AppendLine(";");
+                .Append("                p").Append(memberIndex).Append(".IsRequired = ").Append(member.OptionalWrapper || member.IgnoreWhenNull ? "false" : "true").AppendLine(";");
             if (member.OptionalWrapper)
                 output.Append("                p").Append(memberIndex).Append(".ShouldSerialize = static (_, value) => ((").Append(member.TypeName).AppendLine(")value!).IsPresent;");
             output.Append("                properties[").Append(memberIndex).Append("] = p").Append(memberIndex).AppendLine(";");

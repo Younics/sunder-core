@@ -29,7 +29,6 @@ public sealed class PolicyContractTests
     private static RegistryPackageVersionIdentity Package => new("example.agent", "2.0.0", Hash('a'));
     private static RegistryPlatformCatalogIdentity Platform => new("sunder.core", "1.1.0", Hash('b'));
     private static RegistryPolicyIdentity Policy => new(42, Hash('c'));
-    private static RegistryPolicyCheckpointIdentity Checkpoint => new(99, Hash('d'), 1, Hash('e'));
     private static RegistryExactRpcRequirement Rpc => new("example.agent.tools", "1.0.0", Hash('f'), Hash('1'));
     private static RegistryPackageAvailabilityChange Change => new(Package, "Listed", "Yanked");
     private static RegistryPackageCompatibilityRequirement Requirement => new(Package.PackageId, ">=2.0.0 <3.0.0", false, "required", [Rpc], "example.consumer");
@@ -38,8 +37,10 @@ public sealed class PolicyContractTests
     private static Guid HostInstance => Guid.Parse("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
     private static RuntimeAppProcessIdentity Process => new(42, "boot-session:process-birth-42", Hash('5'), "1.0.0+fixture", AppGeneration, HostInstance);
     private static RuntimeAppPolicySessionRequest Session => new(Nonce, AppGeneration, HostInstance);
+    private static Guid Activation => Guid.Parse("22222222-3333-4444-8555-666666666666");
+    private static RuntimeAppActivationRetirementRequirement Retirement => new(Nonce, Activation, Nonce, LocalPackage) { StageId = Nonce };
     private static RuntimePolicyLeaseStatus Lease => new("valid", null,
-        new("https://registry.example", 42, Hash('c'), 99, Hash('d'), 1, Hash('e')), Nonce, Hash('6'), Observed, Observed.AddHours(24),
+        new("https://registry.example", 42, Hash('c')), Nonce, Hash('6'), Observed, Observed.AddHours(24),
         new("boot-session", "continuous-test-clock", 1000, 10_000, 86_410_000, 10_001, null));
     private static RuntimeRequiredProviderPredicate Predicate => new("example.consumer", "runtime", new(Rpc.ContractId, Rpc.ContractVersion, Rpc.DescriptorSha256, Rpc.AbiSha256), ["discover", "invoke"]);
 
@@ -49,31 +50,29 @@ public sealed class PolicyContractTests
 
     public static TheoryData<string, object, string> Cases => new()
     {
-        { "sync-request.json", new RegistryPolicySynchronizationRequest(Nonce, [Package], [Platform], Policy, Checkpoint), "synchronizationRequest" },
-        { "sync-response.json", new RegistryPolicySynchronizationResponse(Nonce, "https://registry.example", Policy, Checkpoint, Observed, Observed.AddHours(24),
+        { "sync-request.json", new RegistryPolicySynchronizationRequest(Nonce, [Package], [Platform], Policy), "synchronizationRequest" },
+        { "sync-response.json", new RegistryPolicySynchronizationResponse(Nonce, "https://registry.example", Policy, Observed, Observed.AddHours(24),
             [new(Package, "Active", "Listed", "Allowed", null, null, [Platform])], [new(Platform, "Supported", "Allowed", null, null)]), "synchronizationResponse" },
         { "package-denial.json", new RegistryPackagePolicyDecision(Package, "SecurityBlocked", "Listed", "Denied", PackagePolicyErrorCodes.SecurityBlocked, "Security policy blocks this package identity.", [Platform]), "packageDecision" },
         { "package-publication.json", new RegistryPackagePublicationEvidence(Package, Nonce, Hash('9'), "Yanked"), "publicationEvidence" },
         { "platform-denial.json", new RegistryPlatformPolicyDecision(Platform, "Revoked", "Denied", PackagePolicyErrorCodes.ContractAuthorityRevoked, Observed), "platformDecision" },
         { "cohort-request.json", new PackageVersionCohortAvailabilityTransitionV1("release-2026-09", 41, [Change], [new(Package.PackageId, "latest", null)]), "cohortRequest" },
-        { "cohort-result.json", new PackageVersionCohortAvailabilityResultV1("release-2026-09", Hash('8'), Policy, Checkpoint, Observed, [Change],
+        { "cohort-result.json", new PackageVersionCohortAvailabilityResultV1("release-2026-09", Hash('8'), Policy, Observed, [Change],
             [new(Package.PackageId, [new(Package.PackageId, "latest", Package)])], [new(Package.PackageId, [])]), "cohortResult" },
         { "package-block.json", new RegistryPackageSecurityBlockRequest("block-package", 41, "Security policy blocks this package identity."), "packageBlockRequest" },
         { "version-block.json", new RegistryPackageVersionSecurityBlockRequest("block-version", 41, Hash('a'), "Security policy blocks this immutable version."), "versionBlockRequest" },
-        { "policy-mutation.json", new RegistryPolicyMutationResult("block-package", Hash('8'), Policy, Checkpoint, Observed), "policyMutation" },
+        { "policy-mutation.json", new RegistryPolicyMutationResult("block-package", Hash('8'), Policy, Observed), "policyMutation" },
         { "compatibility-requirement.json", Requirement, "packageRequirement" },
         { "compatibility-conflict.json", new RegistryPackageCompatibilityConflict(Package.PackageId, "package-api.contract-conflict", [Requirement]), "compatibilityConflict" },
-        { "resolution-policy.json", new RegistryPackageResolutionPolicy(Policy, Checkpoint, [Requirement],
+        { "resolution-policy.json", new RegistryPackageResolutionPolicy(Policy, [Requirement],
             [new("https://registry.example", new(new(1, Package.PackageId, Package.Version, Package.PackageContentIdentity, 1,
                 [new(Rpc.ContractId, Rpc.ContractVersion, 420, Rpc.DescriptorSha256, Rpc.AbiSha256, "owned", "package", Package.PackageId, Package.Version, Package.PackageContentIdentity)]), Hash('9')),
                 ">=2.0.0 <3.0.0", false, [new(Package.PackageId, ">=2.0.0 <3.0.0", false)])],
             [new("example.consumer", "example.optional", "omitted", null, "package-api.package-unavailable")], [new(Platform, "Supported", "Allowed", null, null)]), "resolutionPolicy" },
-        { "registry-status.json", new RegistryPolicyStatusV1("registry.ready", true, true, Checkpoint, Checkpoint, Checkpoint, Policy, new(8, Hash('a')), new(2, Hash('b')), 2), "registryStatus" },
-        { "registry-bootstrap-required.json", new RegistryPolicyStatusV1(RegistryV1ErrorCodes.BootstrapRequired, false, false, null, null, null, null, null, null, null), "registryStatus" },
         { "stack-revision.json", new RegistryStackRevisionDetails(new("example.stack", 7, Hash('a')), Nonce, Nonce, Observed, "Example Stack", "Immutable revision.", null, Hash('b'), 512,
             "https://registry.example/api/v1/stacks/example.stack/revisions/7/download", [new(Package.PackageId, "latest", Package.Version, "2.0.0", true)], [], [],
             [new(AppGeneration, "cover.png", "image/png", 128, Hash('c'), "https://registry.example/media/cover.png", 0, null)]), "stackRevision" },
-        { "stack-policy.json", new RegistryStackPolicySnapshot("example.stack", Nonce, new("example.stack", 7, Hash('a')), "Listed", null, Policy, Checkpoint), "stackPolicy" },
+        { "stack-policy.json", new RegistryStackPolicySnapshot("example.stack", Nonce, new("example.stack", 7, Hash('a')), "Listed", null, Policy), "stackPolicy" },
         { "stack-visibility.json", new RegistryStackVisibilityRequest("unlist-stack", 41, "Listed", "Unlisted"), "stackVisibilityRequest" },
         { "stack-block.json", new RegistryStackSecurityBlockRequest("block-stack", 41, "Security policy blocks this Stack."), "stackBlockRequest" },
         { "runtime-package-policy.json", new RuntimePackagePolicyStatus(LocalPackage, "Active", "Listed", "Allowed", null, null, null, Lease, "active"), "runtimePackagePolicy" },
@@ -94,6 +93,12 @@ public sealed class PolicyContractTests
         { "app-permit-request.json", new RuntimeAppPackageLoadPermitRequest(Session, LocalPackage), "appPermitRequest" },
         { "app-permit-result.json", new RuntimeAppPackageLoadPermitResult(true, null, Nonce, Session, LocalPackage, Lease), "appPermitResult" },
         { "app-permit-denied.json", new RuntimeAppPackageLoadPermitResult(false, PackagePolicyErrorCodes.PolicyExpired, null, Session, LocalPackage, ExpiredLease), "appPermitResult" },
+        { "app-tracked-permit-request.json", new RuntimeAppPackageLoadPermitRequest(Session, LocalPackage)
+            { SnapshotId = Nonce, AppActivationId = Activation, AppTarget = new("app", "osx-arm64", "web", "index.html", null, "1.1.0", []) }, "appPermitRequest" },
+        { "app-activation-retirement-request.json", new RuntimeAppActivationRetirementRequest(Session, Activation, Nonce), "appActivationRetirementRequest" },
+        { "app-activation-retirement-result.json", new RuntimeAppActivationRetirementResult(Session, Activation, Nonce, "retired"), "appActivationRetirementResult" },
+        { "app-activation-retirement-requirement.json", Retirement, "appActivationRetirementRequirement" },
+        { "app-retirements-pending.json", new RuntimeAppPolicySessionStatus(Nonce, "active", null, false, [LocalPackage]) { Retirements = [Retirement] }, "appSessionStatus" },
         { "provider-missing.json", new RuntimeRpcProviderSelectionDetails(new(Rpc.ContractId, Rpc.ContractVersion, Rpc.DescriptorSha256, Rpc.AbiSha256), Package.PackageId, 0), "providerSelection" },
         { "provider-unsatisfied.json", new RuntimeRequiredProviderUnsatisfiedDetails([Predicate]), "providerUnsatisfied" },
         { "provider-cycle.json", new RuntimeRequiredProviderCycleDetails(["example.agent", "example.consumer"], [Predicate]), "providerCycle" },
@@ -124,6 +129,16 @@ public sealed class PolicyContractTests
         {
             var missing = json.DeepClone().AsObject(); missing.Remove(key);
             var rejected = Record.Exception(() => JsonSerializer.Deserialize(missing.ToJsonString(), type, Json));
+            if (type == typeof(RuntimeAppPolicySessionStatus) && key == "retirements"
+                || type == typeof(RuntimeAppActivationRetirementRequirement) && key == "stageId"
+                || type == typeof(RuntimeAppPackageLoadPermitRequest) && key is "snapshotId" or "appActivationId" or "appTarget")
+            {
+                Assert.Null(rejected);
+                // Tracked admission fields are optional for legacy readers but
+                // must be supplied together to obtain Host activation authority.
+                Assert.Equal(type != typeof(RuntimeAppPackageLoadPermitRequest), ValidateSchema(schemaDefinition, missing));
+                continue;
+            }
             Assert.True(rejected is JsonException or ArgumentException, $"{file}: missing '{key}' did not produce a closed-contract error.");
             Assert.False(ValidateSchema(schemaDefinition, missing), $"{file}: schema accepted missing '{key}'.");
         }
@@ -141,7 +156,7 @@ public sealed class PolicyContractTests
     [InlineData("extra")]
     public void SynchronizationWireSchema_RejectsInvalidOrIncompleteSubjectSets(string mutation)
     {
-        var request = JsonSerializer.SerializeToNode(new RegistryPolicySynchronizationRequest(Nonce, [Package], [], null, null), Json)!.AsObject();
+        var request = JsonSerializer.SerializeToNode(new RegistryPolicySynchronizationRequest(Nonce, [Package], [], null), Json)!.AsObject();
         switch (mutation)
         {
             case "nonce": request["nonce"] = "replayed-or-unbounded"; break;
@@ -181,12 +196,19 @@ public sealed class PolicyContractTests
         var original = Requirement with { Contracts = tuples }; tuples[0] = Rpc with { ContractVersion = "2.0.0" };
         Assert.Equal("1.0.0", Assert.Single(original.Contracts).ContractVersion);
         RegistryPackageVersionIdentity[] packages = [Package];
-        var request = new RegistryPolicySynchronizationRequest(Nonce, packages, [], null, null);
+        var request = new RegistryPolicySynchronizationRequest(Nonce, packages, [], null);
         packages[0] = Package with { Version = "3.0.0" }; Assert.Equal("2.0.0", Assert.Single(request.Packages).Version);
         string[] actions = ["discover"];
         var predicate = Predicate with { Actions = actions }; actions[0] = "invoke"; Assert.Equal("discover", Assert.Single(predicate.Actions));
         Assert.Throws<ArgumentException>(() => request with { Packages = [null!] });
         Assert.Throws<ArgumentException>(() => Predicate with { Actions = [null!] });
+        RuntimeAppActivationRetirementRequirement[] retirements = [Retirement];
+        var status = new RuntimeAppPolicySessionStatus(Nonce, "active", null, false, [LocalPackage]) { Retirements = retirements };
+        var stage = new PackageLifecycleStageResult(Nonce, [], [], [], []) { Retirements = retirements };
+        retirements[0] = Retirement with { AppActivationId = Guid.NewGuid() };
+        Assert.Equal(Activation, Assert.Single(status.Retirements).AppActivationId);
+        Assert.Equal(Activation, Assert.Single(stage.Retirements).AppActivationId);
+        Assert.Throws<ArgumentException>(() => status with { Retirements = [null!] });
     }
 
     [Theory]
@@ -206,9 +228,10 @@ public sealed class PolicyContractTests
     [InlineData("lease-expired.json", "lease", "errorCode", null)]
     [InlineData("lease-clock-invalid.json", "lease", "state", "valid")]
     [InlineData("optional-included.json", "optionalPackage", "selectedPackage", null)]
-    [InlineData("registry-bootstrap-required.json", "registryStatus", "publicReady", true)]
     [InlineData("provider-missing-problem.json", "providerProblem", "status", 409)]
     [InlineData("provider-cycle-problem.json", "providerProblem", "status", 404)]
+    [InlineData("app-activation-retirement-result.json", "appActivationRetirementResult", "state", "exit-proven")]
+    [InlineData("app-activation-retirement-request.json", "appActivationRetirementRequest", "appActivationId", "00000000-0000-0000-0000-000000000000")]
     public void PolicySchemaRejectsBroadenedOrContradictoryDecisions(string file, string definition, string property, object? value)
     {
         var data = ReadGolden(file);
@@ -282,8 +305,13 @@ public sealed class PolicyContractTests
     [InlineData("sync-request.json", "minimumRuntimePolicyRevision")]
     [InlineData("sync-response.json", "runtimes")]
     [InlineData("sync-response.json", "runtimePolicyRevision")]
-    [InlineData("registry-status.json", "runtimePolicyRevision")]
-    public void PackagePlatformPolicyRejectsRemovedRuntimeAuthorityEvenWhenNull(string file, string property)
+    [InlineData("sync-request.json", "minimumCheckpoint")]
+    [InlineData("sync-response.json", "checkpoint")]
+    [InlineData("cohort-result.json", "checkpoint")]
+    [InlineData("policy-mutation.json", "checkpoint")]
+    [InlineData("resolution-policy.json", "checkpoint")]
+    [InlineData("stack-policy.json", "checkpoint")]
+    public void PolicyRejectsRemovedAuthorityMembersEvenWhenNull(string file, string property)
     {
         var entry = Cases.Single(data => (string)data[0] == file);
         var value = entry[1];
@@ -296,11 +324,25 @@ public sealed class PolicyContractTests
         Assert.False(ValidateSchema((string)entry[2], json));
     }
 
+    [Theory]
+    [InlineData("checkpointSequence")]
+    [InlineData("checkpointDigest")]
+    [InlineData("topologyGeneration")]
+    [InlineData("topologyFingerprint")]
+    public void RuntimeLeaseRejectsRemovedAuthorityMembersEvenWhenNull(string property)
+    {
+        var json = JsonSerializer.SerializeToNode(Lease, Json)!.AsObject();
+        Assert.True(ValidateSchema("lease", json));
+        json["watermark"]![property] = null;
+        Assert.Throws<JsonException>(() => json.Deserialize<RuntimePolicyLeaseStatus>(Json));
+        Assert.False(ValidateSchema("lease", json));
+    }
+
     [Fact]
     public void PackagePlatformSubjectBoundsRejectOverflowAndKeepBothSubjectKindsIndependent()
     {
         var platforms = new[] { Platform };
-        var request = new RegistryPolicySynchronizationRequest(Nonce, [], platforms, Policy, Checkpoint);
+        var request = new RegistryPolicySynchronizationRequest(Nonce, [], platforms, Policy);
         platforms[0] = Platform with { ReleaseVersion = "99.0.0" };
         Assert.Equal(Platform, Assert.Single(request.PlatformCatalogs));
         Assert.True(ValidateSchema("synchronizationRequest", JsonSerializer.SerializeToNode(request, Json)!));
@@ -312,7 +354,7 @@ public sealed class PolicyContractTests
         Assert.Throws<ArgumentException>(() => request with
         { Packages = Enumerable.Repeat(Package, RegistryPolicyLimits.MaximumPackageSubjects + 1).ToArray() });
         Assert.Throws<ArgumentException>(() => new RegistryPolicySynchronizationRequest(Nonce, [],
-            Enumerable.Repeat(Platform, RegistryPolicyLimits.MaximumPlatformSubjects + 1).ToArray(), Policy, Checkpoint));
+            Enumerable.Repeat(Platform, RegistryPolicyLimits.MaximumPlatformSubjects + 1).ToArray(), Policy));
         var watermark = JsonSerializer.SerializeToNode(Lease.Watermark, Json)!.AsObject();
         watermark["runtimePolicyRevision"] = 1;
         Assert.Throws<JsonException>(() => watermark.Deserialize<RuntimePolicyWatermark>(Json));
@@ -347,6 +389,7 @@ public sealed class PolicyContractTests
         Assert.Throws<ArgumentOutOfRangeException>(() => RegistryApiRoutes.StackRevision("example.stack", 0));
         Assert.Equal("/api/v1/app-policy-sessions/session%2Fid/load-permit", RuntimeApiRoutes.AppPolicyLoadPermit("session/id"));
         Assert.Equal("/api/v1/app-policy-sessions/session%2Fid/shutdown", RuntimeApiRoutes.AppPolicyShutdown("session/id"));
+        Assert.Equal($"/api/v1/app-policy-sessions/session%2Fid/activations/{Activation:D}/retire", RuntimeApiRoutes.AppPolicyRetireActivation("session/id", Activation));
         Assert.Throws<ArgumentException>(() => RuntimeApiRoutes.AppPolicySession(".."));
     }
 
@@ -363,22 +406,26 @@ public sealed class PolicyContractTests
     [Fact]
     public void PackagePlansCarryVerifiedPolicyIdentityWithoutInventingItForFailures()
     {
-        var plan = new RegistryResolveInstallPlanResponse(true, [], [], [], [], []) { PackagePolicy = Policy, PolicyCheckpoint = Checkpoint };
+        var plan = new RegistryResolveInstallPlanResponse(true, [], [], [], [], []) { PackagePolicy = Policy };
         var json = JsonSerializer.SerializeToNode(plan, Json)!.AsObject();
         Assert.Equal(42, json["packagePolicy"]!["revision"]!.GetValue<long>());
-        Assert.Equal(99, json["policyCheckpoint"]!["sequence"]!.GetValue<long>());
         var decoded = JsonSerializer.Deserialize<RegistryResolveInstallPlanResponse>(json.ToJsonString(), Json)!;
-        Assert.Equal(Policy, decoded.PackagePolicy); Assert.Equal(Checkpoint, decoded.PolicyCheckpoint);
+        Assert.Equal(Policy, decoded.PackagePolicy);
         var failure = JsonSerializer.SerializeToNode(new RegistryResolveInstallPlanResponse(false, [], [], ["Unavailable."], [], []), Json)!.AsObject();
-        Assert.False(failure.ContainsKey("packagePolicy")); Assert.False(failure.ContainsKey("policyCheckpoint"));
-        var updates = new RegistryResolveUpdatesResponse([], [], []) { PackagePolicy = Policy, PolicyCheckpoint = Checkpoint };
+        Assert.False(failure.ContainsKey("packagePolicy"));
+        var updates = new RegistryResolveUpdatesResponse([], [], []) { PackagePolicy = Policy };
         Assert.Equal(Policy, JsonSerializer.Deserialize<RegistryResolveUpdatesResponse>(JsonSerializer.Serialize(updates, Json), Json)!.PackagePolicy);
+        json["policyCheckpoint"] = null;
+        Assert.Throws<JsonException>(() => json.Deserialize<RegistryResolveInstallPlanResponse>(Json));
+        var updateJson = JsonSerializer.SerializeToNode(updates, Json)!.AsObject();
+        updateJson["policyCheckpoint"] = null;
+        Assert.Throws<JsonException>(() => updateJson.Deserialize<RegistryResolveUpdatesResponse>(Json));
     }
 
     [Fact]
     public void CompatiblePlansExposeRequirementsAndDetachedConflictsSeparatelyFromRestoreProvenance()
     {
-        var policy = new RegistryPackageResolutionPolicy(Policy, Checkpoint, [Requirement], [], [], []);
+        var policy = new RegistryPackageResolutionPolicy(Policy, [Requirement], [], [], []);
         RegistryPackageCompatibilityConflict[] conflicts = [new(Package.PackageId, PackagePolicyErrorCodes.ContractAuthorityReleaseConflict, [Requirement])];
         var response = new RegistryResolveInstallPlanResponse(false, [], [], [], [], []) { ResolutionPolicy = policy, CompatibilityConflicts = conflicts };
         conflicts[0] = conflicts[0] with { PackageId = "changed" };

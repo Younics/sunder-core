@@ -42,9 +42,13 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
     [ObservableProperty] private double? _progressPercent;
 
     public bool HasIssue => !string.IsNullOrWhiteSpace(IssueText);
+    public bool HasUsageText => !string.IsNullOrWhiteSpace(UsageText);
+    public bool HasDetails => !string.IsNullOrWhiteSpace(Details);
     public bool IsProgressIndeterminate => ProgressPercent is null;
     public double ProgressValue => ProgressPercent ?? 0;
     partial void OnIssueTextChanged(string value) => OnPropertyChanged(nameof(HasIssue));
+    partial void OnUsageTextChanged(string value) => OnPropertyChanged(nameof(HasUsageText));
+    partial void OnDetailsChanged(string value) => OnPropertyChanged(nameof(HasDetails));
     partial void OnProgressPercentChanged(double? value)
     {
         OnPropertyChanged(nameof(IsProgressIndeterminate));
@@ -79,10 +83,8 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
         VersionText = Installed is { } installed
             ? $"Version {installed.Runtime.Identity.VendorVersion} · {installed.Runtime.Support.SupportLine}"
             : Available is { } available ? $"Latest LTS · {available.Entry.Artifact.Identity.VendorVersion}" : "Latest supported LTS";
-        UsageText = Installed?.UsedBy ?? Description;
-        Details = Installed is { } detail
-            ? $"{detail.Status}\n{detail.Health}\n{detail.Retention}\n{detail.RemovalReason}\n{detail.Details}"
-            : Available?.Details ?? Description;
+        UsageText = Installed is null ? Description : string.Empty;
+        Details = Installed?.Details ?? Available?.Details ?? string.Empty;
         IssueText = _operationError ?? _catalogError ?? string.Empty;
         Action = PackageRuntimeFamilyAction.None;
 
@@ -124,7 +126,7 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
             IssueText = Prepared.Status;
         PrimaryActionText = Action switch
         {
-            PackageRuntimeFamilyAction.Install => "Install LTS",
+            PackageRuntimeFamilyAction.Install => "Install",
             PackageRuntimeFamilyAction.Update => "Download & Install",
             PackageRuntimeFamilyAction.Repair => "Repair",
             _ => string.Empty,

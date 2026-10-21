@@ -30,6 +30,12 @@ Use this package for ordinary services, App lifecycle roles, shared values and p
 
 SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
 
+App development tools can inject `IPackageDevelopmentService` for activation-owned
+development-folder sessions and `IPackageLogNavigationService` for explicit navigation
+to package-filtered logs. Both require a published App activation and are rejected in
+Worker V1. See the [App development-session guide](https://github.com/Younics/sunder-core/blob/main/docs/package-development/APP-DEVELOPMENT-SESSIONS.md)
+for prerequisite approval, disposal, generation lifetime, and Host-only readiness.
+
 ## Install
 
 ```powershell
@@ -243,11 +249,12 @@ Ordinary C# authoring uses `Sunder.Sdk.Services`: mark a partial service with
 `SunderService` and inject its generated `I<Service>` interface. Public async methods
 and natural values define the service; optional `SunderMethod`, `SunderValue` and
 related metadata preserve explicit semantics. The canonical package ID determines
-the flat generated namespace. Selecting `sunder.package.agent`, for example, gives:
+the flat generated package namespace. Selecting `younics.ai.agent`, for example, gives:
 
 ```csharp
-using Sunder.Generated.Packages.Sunder_Package_Agent_Services;
-using Sunder.Generated.Packages.Sunder_Package_Agent_Models;
+using Sunder.Generated.Packages.Younics_Ai_Agent_Services;
+using Sunder.Generated.Packages.Younics_Ai_Agent_Models;
+using IChatProviderService = Sunder.Generated.Packages.Younics_Ai_Agent_Services.CYounics_Ai_Agent_Chat_Provider.IChatProviderService;
 ```
 
 Inject `IPackageApi` for that selected package, or `IServiceProviders<IChatProviderService>`

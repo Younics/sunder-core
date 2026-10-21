@@ -121,9 +121,9 @@ selection, and Restore never widens or migrates it. See the
 A Worker remains a supervised full-trust child process. It is not a sandbox and runs with the current user's operating-system permissions. Package trust and execution-runtime trust are separate:
 
 - The package archive carries a content-indexed CommonJS module, its contracts, and an exact execution-runtime requirement.
-- The Node executable and its licenses live in a signed `.sunderruntime` artifact installed in the Host runtime store.
+- Host downloads the official Node archive, verifies its vendor checksum and materializes the executable/license into a private managed root.
 - Runtime resolves `sunder.runtime.node`, a compatible `24.x` release, the current RID, and `sunder.node-worker-module.v1` before launch.
-- A missing, incompatible, retired, revoked, or untrusted execution runtime fails closed. Runtime never substitutes `process.execPath`, a `PATH` Node, or adjacent development metadata.
+- Missing, incompatible or unhealthy runtime bytes fail before launch. Runtime never substitutes `process.execPath`, a `PATH` Node or development metadata.
 
 The fixed package requirement is:
 
@@ -150,7 +150,11 @@ The immutable ready catalog may also advertise settings schemas, state and secre
 
 Large RPC payloads stay off the framed JSON control plane. Provider handlers use invocation-bound content APIs to register package/private files, open caller content as private temporary files, and discard those files early. Host fencing binds every operation to the invocation, provider activation, caller audience, Runtime generation, expiry, hash, and use count.
 
-There are no automatic restart loops. Crash, malformed protocol, invalid provider output, startup timeout, and unexpected exit fault the exact activation. Session replacement and dev reload cancel and drain work, request graceful shutdown, and finally terminate the process tree after the deadline.
+Crash, malformed protocol, invalid provider output, startup timeout, and unexpected
+exit fault the exact activation. Host-managed recovery may create a fresh activation
+after cleanup is proven, with bounded retries; it does not replay interrupted calls
+or retarget old endpoints. Session replacement and dev reload cancel and drain work,
+request graceful shutdown, and finally terminate the process tree after the deadline.
 
 ## Commands
 
@@ -168,7 +172,8 @@ npm run package
 - `smoke` passes the canonical development package to `sunder dev package smoke`; it never invokes local Node directly.
 - `package` builds all six exact-RID Runtime leaves, plus six App leaves when configured, and deterministically aggregates them into one universal `.sunderpkg`.
 
-Managed smoke requires an approved execution runtime for the current RID. Install one from the configured Registry when available:
+Managed smoke requires a verified execution runtime for the current RID. Acquire one
+through the Host's official vendor source:
 
 ```bash
 sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1
@@ -199,7 +204,10 @@ Package-owned native addons and sidecars are declared with an exact-RID `nativeA
 }
 ```
 
-Native sources must be project-contained regular files. They cannot escape through symlinks or collide with generated payload paths. Configured and detected native files remain in `payload/runtime/<rid>` even when multiple RIDs have identical bytes. Node/.NET runtime binaries, runtime packs, SDK/toolchain assets, and the active build-time Node executable are rejected; they belong only in signed execution-runtime artifacts.
+Native sources must be project-contained regular files. They cannot escape through
+symlinks or collide with generated payload paths. Native files stay under the exact
+RID even when bytes match. Runtime binaries/packs, SDK/toolchain assets and build-time
+Node are excluded from packages; Host-managed official runtime roots are separate.
 
 Every successful package writes deterministic `<id>.<version>.package-evidence.json` beside the archive. It binds the archive hash and size, payload and metadata bytes, per-target shared/exact-RID ownership, native asset hashes, and a zero-byte execution-runtime closure assertion. CI retains this file as release evidence; it is not part of the package archive.
 
@@ -222,6 +230,13 @@ and a generated Worker. The Host injects exact `sunder.bridge.v1` APIs carrying
 opaque provider handles; web code never receives Runtime credentials, local
 filesystem paths or broker endpoint references. Manifest-declared RPC actions
 remain default-deny outside the exact installed grant.
+
+Catalog entries include the Host-stamped activation ID, epoch and session
+generation needed for exact typed-service binding. Their `endpointReference` is
+the same document-local opaque alias as `providerHandle`, **not** a broker endpoint
+reference. Invocation still requires that document's handle, origin and nonce;
+raw broker references cannot be used as handles. Navigation retires those aliases.
+Do not treat a document-local alias as a portable broker endpoint.
 
 ## Browser And React Lifetimes
 

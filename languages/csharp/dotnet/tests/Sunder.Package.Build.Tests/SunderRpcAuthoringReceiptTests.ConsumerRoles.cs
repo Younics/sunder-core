@@ -22,7 +22,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests
     }
 
     [Fact]
-    public void ConsumerRoleMigrationRefusesUnrepresentableRetainedNarrowActions()
+    public void ConsumerRolesMissingFromALockAreNeverInferredFromRetainedReceipts()
     {
         var contractLock = ReadLock(); var imports = Prepare(contractLock);
         var receipt = JsonNode.Parse(Write(contractLock, Compile(imports), imports))!;
@@ -31,8 +31,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests
         receipt["lockSha256"] = Sha256(original); receipt["uses"]![0]!["actions"] = new JsonArray("discover");
         var output = _temporary.CreateDirectory("obj", "sunder-rpc");
         File.WriteAllBytes(Path.Combine(output, SunderRpcAuthoringDocuments.AuthoringReceiptFileName), Serialize(receipt.AsObject()));
-        var error = Assert.Throws<InvalidDataException>(() => SunderRpcConsumerRoleMigration.Execute(path, null, null, false, null, null, default));
-        Assert.Contains("consumer-roles-migration-ambiguous", error.Message, StringComparison.Ordinal);
+        var error = Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ReadContractLock(path));
+        Assert.Contains("missing consumerRoles", error.Message, StringComparison.Ordinal);
         Assert.Equal(original, File.ReadAllBytes(path));
     }
 
@@ -84,20 +84,4 @@ public sealed partial class SunderRpcAuthoringReceiptTests
         }
     }
 
-    [Fact]
-    public void ConsumerRoleMigrationIsExplicitConservativeAtomicAndNoOpStable()
-    {
-        var document = LockDocument(); document["packageImports"]!["example.dependency"]!.AsObject().Remove("consumerRoles");
-        var path = _temporary.GetPath("migrate.lock.json"); var original = Serialize(document); File.WriteAllBytes(path, original);
-        Assert.Contains("consumer-roles-migration-required", Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ReadContractLock(path)).Message, StringComparison.Ordinal);
-        Assert.Throws<IOException>(() => SunderRpcConsumerRoleMigration.Execute(path, null, null, false, (_, _, _) => throw new IOException("source changed"), null, default));
-        Assert.Equal(original, File.ReadAllBytes(path));
-        var migrated = SunderRpcConsumerRoleMigration.Execute(path, null, null, false, null, null, default);
-        Assert.True(migrated.Changed); Assert.Equal(new[] { "runtime" }, migrated.ContractLock.PackageImports["example.dependency"].ConsumerRoles);
-        var stamp = File.GetLastWriteTimeUtc(path); var bytes = File.ReadAllBytes(path);
-        Assert.False(SunderRpcConsumerRoleMigration.Execute(path, null, null, false, null, null, default).Changed);
-        Assert.Equal(stamp, File.GetLastWriteTimeUtc(path)); Assert.Equal(bytes, File.ReadAllBytes(path));
-        Assert.True(SunderRpcConsumerRoleMigration.Execute(path, "example.dependency", "app,runtime", false, null, null, default).Changed);
-        Assert.Equal(new[] { "app", "runtime" }, SunderRpcAuthoringDocuments.ReadContractLock(path).PackageImports["example.dependency"].ConsumerRoles);
-    }
 }

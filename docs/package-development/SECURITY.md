@@ -10,7 +10,13 @@ Runtime targets execute only as supervised Worker V1 child processes; App module
 
 Process supervision, App load contexts, separate role lifetimes, path validation, and package-scoped APIs improve lifecycle and integrity. They are **not** a security boundary. Native libraries are supported and execute with the same permissions.
 
-Workers receive a closed environment rather than the Runtime process environment. `PATH`, home, locale, language-runtime selectors, Runtime/Registry tokens, cloud credentials, managed/native profiler injection, startup hooks, and arbitrary `SUNDER_*` bootstrap values are not inherited. Every platform receives only activation-owned `TMPDIR`/`TMP`/`TEMP` paths plus documented Sunder activation values. Windows also receives `SystemRoot` and `WINDIR`; macOS receives `__CF_USER_TEXT_ENCODING`; Linux inherits no OS values. These platform values are retained only for operating-system runtime support. The Host invokes an absolute launcher below the verified execution-runtime store root, and its path, size, and SHA-256 identity come from that root's signed receipt. `docker-environment.v1` is an install/update consent requirement that admits only the bounded Docker connection allowlist; it never admits Docker auth JSON or passphrases. This reduces accidental ambient leakage but is not a sandbox: package code still runs as the user and can read resources that user can access.
+Workers receive a closed environment instead of inherited Runtime credentials,
+language-runtime selectors or loader/profiler hooks. Activation-owned temporary paths
+and documented platform values support native execution. Host launches an absolute
+executable in its official runtime root, bound to vendor checksum, verified extracted
+content and a local receipt. `docker-environment.v1` admits only the consented bounded
+connection allowlist, never Docker auth JSON/passphrases. This reduces ambient leakage;
+package code still has the operating-system authority of the current user.
 
 Only install packages whose code and distribution source you trust. A Registry ownership record controls publication; it does not make the contained code safe.
 
@@ -31,8 +37,8 @@ The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative so
 - Keep normal Sunder SDK/build references in the coordinated `[1.1.0,1.2.0)` range. `Sunder.Sdk.Worker` intentionally requires the exact matching `Sunder.Sdk` patch version.
 - Bound other NuGet dependencies intentionally and commit `packages.lock.json` for reproducible CI restore.
 - Review transitive and native assets included under package `lib`/`runtimes`.
-- Put language-neutral RPC descriptors and optional typed helpers in a minimal protocol package; never expose implementation or Host types.
-- Declare Sunder runtime dependencies separately from NuGet protocol-helper dependencies.
+- Derive language-neutral contracts and package-local bindings from ordinary source; never expose implementation or Host types.
+- Review API locks and their derived package dependencies; do not duplicate imported dependencies or ship Protocol helpers.
 - Validate the exact Release artifact that will be uploaded.
 - Never overwrite a published version; publish a new SemVer and deprecate/yank a bad immutable version.
 - Treat development-package folders as trusted local code. `--watch` rebuilds can replace active code without a new install prompt.

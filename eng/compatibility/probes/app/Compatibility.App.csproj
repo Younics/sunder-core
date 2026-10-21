@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Version>1.0.0</Version>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <CorpusSdkVersion Condition="'$(CorpusSdkVersion)' == ''">1.1.0</CorpusSdkVersion>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <SunderSdkPackageVersion>$(CorpusSdkVersion)</SunderSdkPackageVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Avalonia" Version="[$(CorpusSdkVersion)]" />
+    <PackageReference Include="Sunder.Package.Build" Version="[$(CorpusSdkVersion)]" PrivateAssets="all" />
+    <SunderPackageTarget Include="app/$(RuntimeIdentifier)" Role="app" Rid="$(RuntimeIdentifier)" Kind="avalonia" />
+  </ItemGroup>
+</Project>

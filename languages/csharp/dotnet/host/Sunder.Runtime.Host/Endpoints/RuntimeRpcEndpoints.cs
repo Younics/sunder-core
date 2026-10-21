@@ -23,6 +23,7 @@ internal static class RuntimeRpcEndpoints
     public static IEndpointRouteBuilder MapRuntimeRpcEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var rpc = endpoints.MapGroup("/rpc");
+        rpc.MapWorkerExecutionObservationEndpoints();
         rpc.MapGet("catalog", (RuntimeRpcCatalog catalog) =>
         {
             var snapshot = catalog.GetSnapshot();

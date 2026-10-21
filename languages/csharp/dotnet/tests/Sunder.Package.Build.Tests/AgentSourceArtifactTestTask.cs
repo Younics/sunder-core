@@ -14,7 +14,7 @@ public sealed class AgentSourceArtifactTestTask : Microsoft.Build.Utilities.Task
     public string IntermediateOutputPath { get; set; } = "";
     public string AssemblyName { get; set; } = "Sunder.Package.Agent";
     public string ProjectIdentity { get; set; } = "AgentOwnerSource.csproj";
-    public string PackageId { get; set; } = "sunder.package.agent";
+    public string PackageId { get; set; } = "younics.ai.agent";
     public string OutputType { get; set; } = "Exe";
     public string DefineConstants { get; set; } = "";
     public string CacheRoot { get; set; } = "";
@@ -62,7 +62,7 @@ public sealed class AgentSourceArtifactTestTask : Microsoft.Build.Utilities.Task
                     Configuration = "Debug", TargetFramework = "net10.0", OutputType = OutputType, DefineConstants = DefineConstants,
                     IntermediateOutputPath = IntermediateOutputPath,
                 };
-                var request = new SunderRpcPackageApiRequest(Operation, "sunder.package.agent",
+                var request = new SunderRpcPackageApiRequest(Operation, "younics.ai.agent",
                     ContractId: string.IsNullOrEmpty(ContractId) ? null : ContractId,
                     VersionRange: Operation == "Require" ? null : ">=2.0.0 <3.0.0",
                     RegistryOrigin: Operation == "Require" ? null : "https://registry.example/",

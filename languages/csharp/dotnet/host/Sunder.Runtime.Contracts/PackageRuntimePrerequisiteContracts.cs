@@ -8,7 +8,7 @@ public sealed record RuntimePackageRuntimePrerequisiteExpectation(
     [property: JsonRequired] string Rid);
 
 /// <summary>
-/// Exactly one source: a Registry selection, source adoption, or local install/upgrade uploads.
+/// Exactly one source: a Registry selection, source adoption, local install/upgrade uploads, or a canonical development folder.
 /// Host inspects authoritative manifests; client-authored runtime requirements never authorize installation.
 /// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -17,6 +17,10 @@ public sealed record RuntimePackageRuntimePrerequisiteRequest(
     PackageStoreStageRequest? Local = null,
     string? ExpectedSourceFingerprint = null)
 {
+    /// <summary>Explicit built canonical folder on the Host's filesystem. Never treated as an archive installation.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DevelopmentFolder { get; init; }
+
     private RuntimeRegistrySourceAdoptionRequest? _adoption;
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -81,6 +85,10 @@ public sealed record RuntimePackageRuntimePrerequisitePlan(
     IReadOnlyList<RuntimePackageRuntimePrerequisite> Requirements,
     IReadOnlyList<string> Warnings)
 {
+    /// <summary>Host-validated package identity when the source is a development folder.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DevelopmentPackageId { get; init; }
+
     private IReadOnlyList<RuntimePackageRuntimePrerequisite> _requirements
         = RuntimeContractCollections.FreezeBounded(Requirements, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     private IReadOnlyList<string> _warnings

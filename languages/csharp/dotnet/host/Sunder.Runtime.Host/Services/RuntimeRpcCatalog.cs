@@ -358,7 +358,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             package,
             sessionGeneration,
             allowsPrePublicationLease,
-            activationGeneration);
+            activationGeneration ?? package.ActivationSessionGeneration);
         packages.Add(package.Descriptor.PackageId, owner);
         foreach (var registration in package.RpcProviders.Values.OrderBy(
                      static registration => registration.ProviderId,
@@ -377,7 +377,10 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                 ?? throw new InvalidDataException(
                     $"RPC provider '{registration.ProviderId}' is missing its ABI identity."),
                 package.RuntimeActivationId,
-                checked(++_activationEpoch),
+                _providers.TryGetValue(registration.ProviderId, out var previous)
+                    && previous.Snapshot.ActivationId == package.RuntimeActivationId
+                    && ReferenceEquals(previous.Owner.Package.Worker, package.Worker)
+                        ? previous.Snapshot.ActivationEpoch : checked(++_activationEpoch),
                 sessionGeneration,
                 endpoint,
                 catalogRevision,
@@ -919,6 +922,7 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
     private readonly CancellationTokenSource _retirement = new();
     private readonly TaskCompletionSource _drained = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _callerCalls;
+    private int _callerObservations;
     private int _activeLeases;
     private bool _retired;
     private Task _retirementCallbacks = Task.CompletedTask;
@@ -980,18 +984,19 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
         Volatile.Write(ref _allowsPrePublicationLease, 0);
     }
 
-    public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease)
+    public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false)
     {
         lock (_gate)
         {
-            if (_retired || _callerCalls >= maximumCalls)
+            ref var active = ref (observation ? ref _callerObservations : ref _callerCalls);
+            if (_retired || active >= maximumCalls)
             {
                 lease = null;
                 return false;
             }
-            _callerCalls++;
+            active++;
             _activeLeases++;
-            lease = new RuntimeRpcActivationLease(_retirement.Token, ReleaseCaller);
+            lease = new RuntimeRpcActivationLease(_retirement.Token, () => ReleaseCaller(observation));
             return true;
         }
     }
@@ -1028,12 +1033,13 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
         return _retirementCallbacks;
     }
 
-    private void ReleaseCaller()
+    private void ReleaseCaller(bool observation)
     {
         var drained = false;
         lock (_gate)
         {
-            if (_callerCalls > 0) _callerCalls--;
+            ref var active = ref (observation ? ref _callerObservations : ref _callerCalls);
+            if (active > 0) active--;
             if (_activeLeases > 0) _activeLeases--;
             drained = _retired && _activeLeases == 0;
         }
@@ -1056,6 +1062,7 @@ internal sealed class RuntimeRpcProviderActivation
 {
     private readonly object _gate = new();
     private int _calleeCalls;
+    private int _calleeObservations;
     private SunderRpcProviderSnapshot _snapshot;
 
     public RuntimeRpcProviderActivation(
@@ -1078,7 +1085,7 @@ internal sealed class RuntimeRpcProviderActivation
         }
     }
 
-    public bool TryAcquireCallee(int maximumCalls, out RuntimeRpcActivationLease? lease)
+    public bool TryAcquireCallee(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false)
     {
         RuntimeRpcActivationLease? ownerLease;
         if (!Owner.TryAcquireCallee(out ownerLease) || ownerLease is null)
@@ -1088,18 +1095,19 @@ internal sealed class RuntimeRpcProviderActivation
         }
         lock (_gate)
         {
-            if (_snapshot.State != SunderRpcProviderState.Active || _calleeCalls >= maximumCalls)
+            ref var active = ref (observation ? ref _calleeObservations : ref _calleeCalls);
+            if (_snapshot.State != SunderRpcProviderState.Active || active >= maximumCalls)
             {
                 ownerLease.Dispose();
                 lease = null;
                 return false;
             }
-            _calleeCalls++;
+            active++;
             lease = new RuntimeRpcActivationLease(
                 Owner.RetirementToken,
                 () =>
                 {
-                    ReleaseCallee();
+                    ReleaseCallee(observation);
                     ownerLease.Dispose();
                 });
             return true;
@@ -1111,11 +1119,12 @@ internal sealed class RuntimeRpcProviderActivation
         lock (_gate) _snapshot = snapshot;
     }
 
-    private void ReleaseCallee()
+    private void ReleaseCallee(bool observation)
     {
         lock (_gate)
         {
-            if (_calleeCalls > 0) _calleeCalls--;
+            ref var active = ref (observation ? ref _calleeObservations : ref _calleeCalls);
+            if (active > 0) active--;
         }
     }
 }

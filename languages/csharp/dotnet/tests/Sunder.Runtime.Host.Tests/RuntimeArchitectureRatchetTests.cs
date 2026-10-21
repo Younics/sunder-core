@@ -23,10 +23,25 @@ public sealed class RuntimeArchitectureRatchetTests
             .Select(static field => (string)field.GetRawConstantValue()!)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        var key = new SunderPackageTargetKey("runtime", "win-x64");
-        var target = CreateTarget("1.1.0", publishedCapabilities);
-
-        Assert.Empty(SunderSdkCompatibilityProfile.Validate("test.package", key, target));
+        foreach (var capability in publishedCapabilities)
+        {
+            // Recognition is not permission to use every API from a Worker.
+            // The independent membership ratchet below requires an explicit
+            // classification for every published SDK capability.
+            var worker = SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification[capability];
+            var key = new SunderPackageTargetKey(worker ? "runtime" : "app", "win-x64");
+            string[] capabilities = worker
+                ? [SunderSdkCapabilities.Baseline11V1, SunderWorkerProtocol.V1Capability, capability]
+                : [SunderSdkCapabilities.Baseline11V1, capability];
+            var target = new SunderPackageTargetManifest
+            {
+                Role = key.Role, Rid = key.Rid,
+                Kind = worker ? SunderPackageFormat.WorkerTargetKind : SunderPackageFormat.AvaloniaTargetKind,
+                EntryPoint = "lib/test.dll", TargetFramework = "net10.0", SdkVersion = "1.1.0",
+                RequiredHostCapabilities = capabilities.Distinct(StringComparer.Ordinal).Cast<string?>().ToArray(),
+            };
+            Assert.Empty(SunderSdkCompatibilityProfile.Validate("test.package", key, target));
+        }
     }
 
     [Fact]

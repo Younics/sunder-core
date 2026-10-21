@@ -27,7 +27,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
         Assert.Equal("Up to date", page.Families[0].Status);
         Assert.Same(current, page.Families[0].Installed!.Runtime);
         Assert.Equal("Not installed", page.Families[1].Status);
-        Assert.Equal("Install LTS", page.Families[1].PrimaryActionText);
+        Assert.Equal("Install", page.Families[1].PrimaryActionText);
         Assert.StartsWith("Last checked ", page.LastCheckedText);
         Assert.Equal([ConfiguredOfficialSourceId.DotNet, ConfiguredOfficialSourceId.Node], client.CatalogRequests.Select(request => request.SourceId!.Value));
         Assert.All(client.CatalogRequests, request => { Assert.Equal(0, request.Skip); Assert.Equal(1, request.Take); });

@@ -24,12 +24,15 @@ internal sealed class PackageSessionSourceState
 {
     private readonly object _gate = new();
     private Dictionary<string, Dictionary<string, PackageSessionDevOverlay>> _devOverlays = CreateOverlayMap();
+    private long _revision;
+
+    internal bool IsCurrent(PackageSessionSourceSnapshot snapshot) { lock (_gate) return snapshot.BaseRevision == _revision; }
 
     public PackageSessionSourceSnapshot Snapshot()
     {
         lock (_gate)
         {
-            return new PackageSessionSourceSnapshot(CloneOverlayMap(_devOverlays));
+            return new PackageSessionSourceSnapshot(CloneOverlayMap(_devOverlays)) { BaseRevision = _revision };
         }
     }
 
@@ -38,6 +41,7 @@ internal sealed class PackageSessionSourceState
         lock (_gate)
         {
             _devOverlays = snapshot.CloneOverlayMap();
+            _revision++;
         }
     }
 
@@ -70,6 +74,7 @@ internal sealed class PackageSessionSourceState
 internal sealed class PackageSessionSourceSnapshot(
     Dictionary<string, Dictionary<string, PackageSessionDevOverlay>> devOverlays)
 {
+    internal long BaseRevision { get; init; }
     public IReadOnlyList<PackageSessionDevOverlay> ActiveDevOverlays => devOverlays.Values
         .Select(GetActiveDevOverlay)
         .Where(static overlay => overlay is not null)

@@ -12,6 +12,7 @@ internal sealed class GeneratedOutputLock : IDisposable
 
     private const string TransitionSuffix = ".transition";
     private const string ProcessMarkerDirectory = "sunder-generated-output/processes";
+    private static readonly TimeSpan UnverifiableOwnerTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan DefaultWaitTimeout = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -27,15 +28,17 @@ internal sealed class GeneratedOutputLock : IDisposable
         => _locks = [.. locks];
 
     public static GeneratedOutputLock Acquire(
-        IEnumerable<string> paths, TimeSpan? waitTimeout = null, CancellationToken cancellationToken = default)
-        => Acquire([], paths, waitTimeout, cancellationToken);
+        IEnumerable<string> paths, TimeSpan? waitTimeout = null, CancellationToken cancellationToken = default,
+        Action<string>? waitingForOutput = null)
+        => Acquire([], paths, waitTimeout, cancellationToken, waitingForOutput: waitingForOutput);
 
     public static GeneratedOutputLock Acquire(
         IEnumerable<string> containerPaths,
         IEnumerable<string> outputPaths,
         TimeSpan? waitTimeout = null,
         CancellationToken cancellationToken = default,
-        Action? waitBeforeRetry = null)
+        Action? waitBeforeRetry = null,
+        Action<string>? waitingForOutput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var containers = NormalizePaths(containerPaths);
@@ -56,9 +59,14 @@ internal sealed class GeneratedOutputLock : IDisposable
         if (timeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(waitTimeout));
         var deadline = DateTime.UtcNow + timeout;
         var locks = new List<OwnedDirectory>(ordered.Length);
+        var reportedWaits = new HashSet<string>(PathComparer);
+        void ReportWaiting(string path)
+        {
+            if (reportedWaits.Add(path)) waitingForOutput?.Invoke(path);
+        }
         try
         {
-            foreach (var path in ordered) locks.Add(AcquireOne(path, deadline, timeout, cancellationToken, waitBeforeRetry));
+            foreach (var path in ordered) locks.Add(AcquireOne(path, deadline, timeout, cancellationToken, waitBeforeRetry, ReportWaiting));
             cancellationToken.ThrowIfCancellationRequested();
             return new GeneratedOutputLock(locks);
         }
@@ -122,6 +130,17 @@ internal sealed class GeneratedOutputLock : IDisposable
         if (errors is not null) throw new AggregateException("One or more generated output locks could not be released safely.", errors);
     }
 
+    internal void VerifyHeld()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        foreach (var owned in _locks)
+        {
+            GeneratedOutputPathSafety.EnsureRegularDirectory(owned.Path, "generated output lease");
+            if (TryReadOwner(owned.Path)?.Token != owned.Token)
+                throw new IOException($"Generated output lease '{owned.Path}' changed before publication; no proposal was published.");
+        }
+    }
+
     public void Retain(IEnumerable<string> paths)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -176,17 +195,19 @@ internal sealed class GeneratedOutputLock : IDisposable
         }
     }
 
-    private static OwnedDirectory AcquireOne(string outputPath, DateTime deadline, TimeSpan timeout, CancellationToken cancellationToken, Action? waitBeforeRetry)
+    private static OwnedDirectory AcquireOne(string outputPath, DateTime deadline, TimeSpan timeout, CancellationToken cancellationToken,
+        Action? waitBeforeRetry, Action<string> waitingForOutput)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var lockPath = outputPath + LockSuffix;
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)
                                   ?? throw new InvalidOperationException($"Output lock '{lockPath}' has no parent directory."));
+        Stopwatch? unverifiable = null;
         while (true)
         {
             OwnedDirectory? acquired = null;
             string? quarantinePath = null;
-            var transition = AcquireTransitionGuard(lockPath, deadline, timeout, cancellationToken);
+            var transition = AcquireTransitionGuard(lockPath, deadline, timeout, cancellationToken, waitingForOutput);
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -199,7 +220,9 @@ internal sealed class GeneratedOutputLock : IDisposable
                 {
                     EnsureDirectory(lockPath, "generated output lock");
                     var candidate = TryReadOwner(lockPath);
-                    if (candidate is not null && GetOwnerState(candidate) == OwnerState.Dead)
+                    var state = candidate is null ? OwnerState.Unverifiable : GetOwnerState(candidate);
+                    CheckUnverifiableOwner(state, ref unverifiable, deadline, timeout, lockPath);
+                    if (candidate is not null && state == OwnerState.Dead)
                     {
                         var current = TryReadOwner(lockPath);
                         if (current is not null
@@ -222,15 +245,18 @@ internal sealed class GeneratedOutputLock : IDisposable
             ThrowIfTimedOut(deadline, timeout, lockPath);
             // The transition guard has been released. MSBuild callers can wait
             // as a dependency, freeing their node for the holder's nested work.
+            if (quarantinePath is null) waitingForOutput(lockPath);
             if (waitBeforeRetry is null) WaitBeforeRetry(cancellationToken);
             else waitBeforeRetry();
         }
     }
 
     private static OwnedDirectory AcquireTransitionGuard(
-        string lockPath, DateTime deadline, TimeSpan timeout, CancellationToken cancellationToken = default)
+        string lockPath, DateTime deadline, TimeSpan timeout, CancellationToken cancellationToken = default,
+        Action<string>? waitingForOutput = null)
     {
         var guardPath = lockPath + TransitionSuffix;
+        Stopwatch? unverifiable = null;
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -242,7 +268,9 @@ internal sealed class GeneratedOutputLock : IDisposable
                 continue;
             }
             var candidate = TryReadOwner(guardPath);
-            if (candidate is not null && GetOwnerState(candidate) == OwnerState.Dead)
+            var state = candidate is null ? OwnerState.Unverifiable : GetOwnerState(candidate);
+            CheckUnverifiableOwner(state, ref unverifiable, deadline, timeout, guardPath);
+            if (candidate is not null && state == OwnerState.Dead)
             {
                 var current = TryReadOwner(guardPath);
                 if (current is not null
@@ -256,6 +284,7 @@ internal sealed class GeneratedOutputLock : IDisposable
             }
             cancellationToken.ThrowIfCancellationRequested();
             ThrowIfTimedOut(deadline, timeout, guardPath);
+            waitingForOutput?.Invoke(guardPath);
             WaitBeforeRetry(cancellationToken);
         }
     }
@@ -459,7 +488,7 @@ internal sealed class GeneratedOutputLock : IDisposable
 
     private static OwnerState GetOwnerState(LockOwner owner)
     {
-        if (!HasValidLocalProcessMarker(owner)) return OwnerState.Unknown;
+        if (!HasValidLocalProcessMarker(owner)) return OwnerState.Unverifiable;
         try
         {
             using var process = Process.GetProcessById(owner.Pid);
@@ -496,10 +525,13 @@ internal sealed class GeneratedOutputLock : IDisposable
             host.LinuxPidNamespace,
             DateTime.UtcNow);
         var root = ProcessMarkerRoot();
-        Directory.CreateDirectory(root);
+        EnsureMarkerAncestors(root);
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(root);
+        else Directory.CreateDirectory(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         EnsureDirectory(root, "generated output process marker root");
+        EnsurePrivateMarkerRoot(root);
         var path = Path.Combine(root, token + ".json");
-        WriteDurableJson(path, marker);
+        WriteDurableJson(path, marker, privateFile: true);
         var registration = new ProcessMarkerRegistration(path, marker);
         AppDomain.CurrentDomain.ProcessExit += (_, _) => CleanupProcessMarkerAtExit(registration);
         return registration;
@@ -530,7 +562,13 @@ internal sealed class GeneratedOutputLock : IDisposable
     {
         try
         {
-            var markerRoot = ProcessMarkerRoot();
+            // Never follow a path supplied by owner.json. Legacy evidence is accepted
+            // only beneath this process's own temp root, not a removed Worker's root.
+            var markerRoot = new[] { ProcessMarkerRoot(), LegacyProcessMarkerRoot() }
+                .FirstOrDefault(root => PathsEqual(owner.ProcessMarkerPath, Path.Combine(root, owner.ProcessMarkerToken + ".json")));
+            if (markerRoot is null) return false;
+            EnsureMarkerAncestors(markerRoot);
+            if (PathsEqual(markerRoot, ProcessMarkerRoot())) EnsurePrivateMarkerRoot(markerRoot);
             var rootAttributes = File.GetAttributes(markerRoot);
             if ((rootAttributes & FileAttributes.Directory) == 0 || (rootAttributes & FileAttributes.ReparsePoint) != 0) return false;
             var expectedPath = Path.Combine(markerRoot, owner.ProcessMarkerToken + ".json");
@@ -563,7 +601,42 @@ internal sealed class GeneratedOutputLock : IDisposable
     }
 
     private static string ProcessMarkerRoot()
+    {
+        // UserProfile, unlike TMP/TEMP/TMPDIR, survives Builder Worker replacement.
+        // Keep this location identical to package-tool's homedir() based location.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
+            throw new IOException("Could not establish a private user profile for generated output locking.");
+        return NormalizePath(Path.Combine(home, ".sunder", "generated-output", "processes"));
+    }
+
+    private static string LegacyProcessMarkerRoot()
         => NormalizePath(Path.Combine(Path.GetTempPath(), ProcessMarkerDirectory));
+
+    private static void EnsureMarkerAncestors(string path)
+    {
+        // Check afresh: lock evidence must not use the build snapshot's cached ancestors.
+        for (var current = NormalizePath(path); current is not null; current = Path.GetDirectoryName(current))
+        {
+            if (!PathExists(current)) continue;
+            EnsureDirectory(current, "generated output process marker ancestor");
+        }
+    }
+
+    private static void EnsurePrivateMarkerRoot(string root)
+    {
+        if (OperatingSystem.IsWindows()) return; // The user profile inherits the user's ACL.
+        var mode = File.GetUnixFileMode(root);
+        if ((mode & (UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                     | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute)) != 0)
+            throw new IOException($"Generated output process marker root '{root}' must be private to the current user (mode 0700).");
+        for (var current = Path.GetDirectoryName(root); current is not null; current = Path.GetDirectoryName(current))
+        {
+            if ((File.GetUnixFileMode(current) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
+                throw new IOException($"Generated output process marker ancestor '{current}' must not be writable by other users.");
+            if (PathsEqual(current, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))) break;
+        }
+    }
 
     private static string CurrentPlatform()
         => OperatingSystem.IsLinux() ? "linux"
@@ -706,9 +779,12 @@ internal sealed class GeneratedOutputLock : IDisposable
         }
     }
 
-    private static void WriteDurableJson<T>(string path, T value)
+    private static void WriteDurableJson<T>(string path, T value, bool privateFile = false)
     {
-        using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read, 4096, FileOptions.WriteThrough);
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write,
+            Share = FileShare.Read, Options = FileOptions.WriteThrough };
+        if (privateFile && !OperatingSystem.IsWindows()) options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        using var stream = new FileStream(path, options);
         JsonSerializer.Serialize(stream, value, JsonOptions);
         stream.WriteByte((byte)'\n');
         stream.Flush(flushToDisk: true);
@@ -751,6 +827,17 @@ internal sealed class GeneratedOutputLock : IDisposable
         }
     }
 
+    private static void CheckUnverifiableOwner(OwnerState state, ref Stopwatch? elapsed, DateTime deadline, TimeSpan timeout, string path)
+    {
+        if (state != OwnerState.Unverifiable) { elapsed = null; return; }
+        elapsed ??= Stopwatch.StartNew();
+        ThrowIfTimedOut(deadline, timeout, path);
+        if (elapsed.Elapsed < UnverifiableOwnerTimeout) return;
+        throw new IOException($"Generated output lock '{path}' has unverifiable ownership evidence (possibly a legacy Worker temp marker). "
+            + "The lock was preserved; PID or age alone is not safe recovery authority. Inspect its owner.json and independently confirm "
+            + "that no producer uses this output before moving only this lock directory aside and retrying. Do not remove the generated output.");
+    }
+
     private static StringComparer PathComparer
         => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -786,6 +873,7 @@ internal sealed class GeneratedOutputLock : IDisposable
         Alive,
         Dead,
         Unknown,
+        Unverifiable,
     }
 
     private sealed record LockOwner(

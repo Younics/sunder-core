@@ -34,6 +34,10 @@ internal static class SunderPackageCompositionPlanner
         if (authHandlers.Length > 1)
             foreach (var type in authHandlers)
                 Add("auth-handler-duplicate", "A package may declare only one Worker authentication handler.", type.Locations.FirstOrDefault() ?? Location.None);
+        var migrationProviders = sourceTypes.Where(type => !type.IsAbstract && SunderPackageDependencyDiscovery.IsStorageMigrationProvider(type)).ToArray();
+        if (migrationProviders.Length > 1)
+            foreach (var type in migrationProviders)
+                Add("storage-migration-provider-duplicate", "A package may declare only one Worker storage migration plan provider.", type.Locations.FirstOrDefault() ?? Location.None);
         var worker = ForRole(SunderPackageRoleMembership.Worker);
         var app = ForRole(SunderPackageRoleMembership.App);
         return new(worker, app, diagnostics.Distinct().OrderBy(value => value.Path, StringComparer.Ordinal)
@@ -52,6 +56,8 @@ internal static class SunderPackageCompositionPlanner
                     .Concat(sourceTypes.Where(type => !type.IsAbstract && (SunderPackageDependencyDiscovery.IsLifecycle(type)
                         || SunderPackageDependencyDiscovery.IsActivation(type)
                         || SunderPackageDependencyDiscovery.IsCallbackHandler(type)
+                        || SunderPackageDependencyDiscovery.IsStorageMigrationProvider(type)
+                        || SunderPackageDependencyDiscovery.IsStorageMigrationPreparation(type)
                         || SunderPackageDependencyDiscovery.IsSettingsSchemaProvider(type))))
                 : sourceTypes.Where(type => transient.Contains(Name(type)));
             // All exposed default Worker APIs must be resolvable, even when only
@@ -201,12 +207,20 @@ internal static class SunderPackageCompositionPlanner
     }
 
     private static bool IsHostService(INamedTypeSymbol type, SunderPackageRoleMembership role)
-        => (type.ToDisplayString() is "Sunder.Sdk.Abstractions.IPackageContext" or "Sunder.Sdk.Rpc.ISunderRpcClient"
-                || role == SunderPackageRoleMembership.App && type.ToDisplayString() is "Sunder.Sdk.Notifications.IPackageNotificationService"
+    {
+        // Nullable source annotations do not change the Host service identity.
+        // Otherwise an optional nullable dependency silently receives its null
+        // default even when the owning Host registered the exact SDK service.
+        var name = type.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString();
+        return (name is "Sunder.Sdk.Abstractions.IPackageContext" or "Sunder.Sdk.Rpc.ISunderRpcClient"
+                || role == SunderPackageRoleMembership.App && name is "Sunder.Sdk.Notifications.IPackageNotificationService"
                     or "Sunder.Sdk.Abstractions.IBackgroundProcessQueue" or "Sunder.Sdk.Abstractions.IPackageSettingsNavigationService"
-                    or "Sunder.Sdk.Abstractions.IPackageShellViewService")
+                    or "Sunder.Sdk.Abstractions.IPackageShellViewService"
+                    or "Sunder.Sdk.Abstractions.IPackageDevelopmentService" or "Sunder.Sdk.Abstractions.IPackageLogNavigationService"
+                    or "Sunder.Sdk.Abstractions.IPackageAppStateUpdates" or "Sunder.Sdk.Abstractions.IPackageWorkerExecutionObservations")
             && type.ContainingAssembly.Identity.Name == "Sunder.Sdk"
             && type.ContainingAssembly.Identity.Version == typeof(Sunder.Sdk.Abstractions.IPackageContext).Assembly.GetName().Version;
+    }
 
     private static bool IsProviderCatalog(INamedTypeSymbol type)
         => type.MetadataName == "IServiceProviders`1" && type.ContainingNamespace.ToDisplayString() == "Sunder.Sdk.Services"

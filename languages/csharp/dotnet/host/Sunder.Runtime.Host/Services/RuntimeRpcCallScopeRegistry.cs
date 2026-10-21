@@ -63,12 +63,12 @@ internal sealed class RuntimeRpcCallScopeRegistry
         {
             if (_scopes.Values.Count(item => ReferenceEquals(item.Caller, caller)) >= _maxScopesPerCaller)
             {
-                _ = scope.Revoke();
+                _ = TeardownAsync(scope, discardBeforeRevoke: false);
                 return Outcome.CallerLimitReached;
             }
             if (!_scopes.TryAdd(scope.Id, scope))
             {
-                _ = scope.Revoke();
+                _ = TeardownAsync(scope, discardBeforeRevoke: false);
                 return Outcome.AllocationFailed;
             }
         }
@@ -209,27 +209,26 @@ internal sealed class RuntimeRpcCallScopeRegistry
             return;
         }
 
-        if (discardBeforeRevoke)
-        {
-            try
-            {
-                _discardContentAuthority?.Invoke(scope.ContentAuthority);
-            }
-            finally
-            {
-                await scope.Revoke().ConfigureAwait(false);
-            }
-            return;
-        }
-
-        var revocation = scope.Revoke();
         try
         {
-            _discardContentAuthority?.Invoke(scope.ContentAuthority);
+            if (discardBeforeRevoke)
+            {
+                try { _discardContentAuthority?.Invoke(scope.ContentAuthority); }
+                finally { await scope.Revoke().ConfigureAwait(false); }
+                return;
+            }
+            var revocation = scope.Revoke();
+            try { _discardContentAuthority?.Invoke(scope.ContentAuthority); }
+            finally { await revocation.ConfigureAwait(false); }
+        }
+        catch (Exception error)
+        {
+            (scope.Caller as RuntimeRpcAppCallerSession)?.Authority?.RecordCleanupFailure(error);
+            throw;
         }
         finally
         {
-            await revocation.ConfigureAwait(false);
+            scope.CompleteTeardown();
         }
     }
 }
@@ -238,11 +237,13 @@ internal sealed class RuntimeRpcCallerScopeState
 {
     private readonly object _gate = new();
     private readonly CancellationTokenSource _revocation;
+    private readonly CancellationToken _revocationToken;
     private readonly TaskCompletionSource _revocationCompleted = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private ITimer? _deadlineTimer;
     private int _revoked;
     private int _teardownClaimed;
+    private IDisposable? _activationLifetime;
 
     public RuntimeRpcCallerScopeState(
         string id,
@@ -271,6 +272,9 @@ internal sealed class RuntimeRpcCallerScopeState
                 generationRetirement,
                 hostStopping,
             ]);
+        _revocationToken = _revocation.Token;
+        try { _activationLifetime = (caller as RuntimeRpcAppCallerSession)?.Authority?.Acquire(); }
+        catch { _revocation.Dispose(); throw; }
     }
 
     public string Id { get; }
@@ -281,12 +285,16 @@ internal sealed class RuntimeRpcCallerScopeState
     public RuntimeRpcCallFrame? ParentFrame { get; }
     public bool RequirePermission { get; }
     public RuntimeRpcContentAuthority ContentAuthority { get; }
-    public CancellationToken RevocationToken => _revocation.Token;
+    // Acquisition may already hold this scope when concurrent teardown disposes
+    // its source. Keep the exact cancelled token, never a replacement authority.
+    public CancellationToken RevocationToken => _revocationToken;
     public Task RevocationCompletion => _revocationCompleted.Task;
     public bool IsRevoked => Volatile.Read(ref _revoked) != 0 || _revocation.IsCancellationRequested;
 
     public bool TryClaimTeardown()
         => Interlocked.CompareExchange(ref _teardownClaimed, 1, 0) == 0;
+
+    internal void CompleteTeardown() => Interlocked.Exchange(ref _activationLifetime, null)?.Dispose();
 
     public void ArmDeadline(
         TimeProvider timeProvider,

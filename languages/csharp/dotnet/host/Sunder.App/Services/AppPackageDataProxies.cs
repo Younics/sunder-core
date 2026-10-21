@@ -34,8 +34,7 @@ internal sealed class AppRuntimePackageStateStore(
     {
         AppPackageStorageGuards.Key(key, nameof(key));
         AppPackageStorageGuards.Value(value, nameof(value));
-        publication.RequirePublished("package state mutation");
-        return client.SetStateAsync(packageId, key, value, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.SetStateAsync(packageId, key, value, cancellationToken), cancellationToken);
     }
 
     public async Task<bool> ContainsKeyAsync(string key, CancellationToken cancellationToken = default)
@@ -49,8 +48,7 @@ internal sealed class AppRuntimePackageStateStore(
     public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
     {
         AppPackageStorageGuards.Key(key, nameof(key));
-        publication.RequirePublished("package state mutation");
-        return client.DeleteStateAsync(packageId, key, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.DeleteStateAsync(packageId, key, cancellationToken), cancellationToken);
     }
 
     public Task<IReadOnlyList<string>> ListKeysAsync(
@@ -94,15 +92,13 @@ internal sealed class AppRuntimePackageSettings(
     {
         AppPackageStorageGuards.Key(key, nameof(key));
         AppPackageStorageGuards.Value(value, nameof(value));
-        publication.RequirePublished("package settings mutation");
-        return client.SetSettingAsync(packageId, key, value, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.SetSettingAsync(packageId, key, value, cancellationToken), cancellationToken);
     }
 
     public Task DeleteValueAsync(string key, CancellationToken cancellationToken = default)
     {
         AppPackageStorageGuards.Key(key, nameof(key));
-        publication.RequirePublished("package settings mutation");
-        return client.DeleteSettingAsync(packageId, key, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.DeleteSettingAsync(packageId, key, cancellationToken), cancellationToken);
     }
 
     private async Task<Sunder.Runtime.Contracts.PackageSettingValueResponse?> GetSettingAsync(
@@ -134,15 +130,13 @@ internal sealed class AppRuntimePackageSecrets(
     {
         AppPackageStorageGuards.Key(key, nameof(key));
         AppPackageStorageGuards.Value(value, nameof(value));
-        publication.RequirePublished("package secret mutation");
-        return client.SetSecretAsync(packageId, key, value, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.SetSecretAsync(packageId, key, value, cancellationToken), cancellationToken);
     }
 
     public Task DeleteSecretAsync(string key, CancellationToken cancellationToken = default)
     {
         AppPackageStorageGuards.Key(key, nameof(key));
-        publication.RequirePublished("package secret mutation");
-        return client.DeleteSecretAsync(packageId, key, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.DeleteSecretAsync(packageId, key, cancellationToken), cancellationToken);
     }
 }
 
@@ -171,15 +165,13 @@ internal sealed class AppRuntimePackageFileStore(
     {
         AppPackageStorageGuards.RelativePath(relativePath, nameof(relativePath));
         AppPackageStorageGuards.FileLength(contents.Length, nameof(contents));
-        publication.RequirePublished("package file mutation");
-        return client.WriteFileAsync(packageId, relativePath, contents, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.WriteFileAsync(packageId, relativePath, contents, cancellationToken), cancellationToken);
     }
 
     public Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default)
     {
         AppPackageStorageGuards.RelativePath(relativePath, nameof(relativePath));
-        publication.RequirePublished("package file mutation");
-        return client.DeleteFileAsync(packageId, relativePath, cancellationToken);
+        return publication.RunDataMutationAsync(() => client.DeleteFileAsync(packageId, relativePath, cancellationToken), cancellationToken);
     }
 }
 

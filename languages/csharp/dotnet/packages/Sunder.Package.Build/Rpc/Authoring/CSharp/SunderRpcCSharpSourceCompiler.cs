@@ -46,6 +46,9 @@ internal sealed record SunderRpcCSharpCompilerInput(
     bool GenerateServiceInterfaces = false,
     IReadOnlyList<SunderRpcCSharpPackageApiSurface>? ImportedPackageApis = null)
 {
+    // Strict passes share metadata from captured bytes within a single planning
+    // operation. The task freshly verifies those bytes before returning its plan.
+    internal IReadOnlyDictionary<string, PortableExecutableReference>? ReferenceSnapshots { get; init; }
     internal IReadOnlyDictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection> ServiceReferenceTargets { get; init; }
         = new Dictionary<string, Sunder.Package.Format.SunderRpcServiceReferenceProjection>(StringComparer.Ordinal);
     internal IReadOnlyDictionary<INamedTypeSymbol, SunderRpcCSharpImportedModel> ImportedModels { get; init; }
@@ -75,6 +78,7 @@ internal sealed record SunderRpcCSharpProviderModel(
     string ServiceId,
     INamedTypeSymbol SourceType)
 {
+    internal bool IsAutomaticId { get; init; }
     internal string BindingSuffix { get; init; } = string.Empty;
     internal string RegistrationFactory => "CreateSunderRpcProviderRegistration" + BindingSuffix;
     internal string ServicesFactory => "CreateSunderRpcProviderRegistrationForServices" + BindingSuffix;
@@ -123,6 +127,8 @@ internal sealed record SunderRpcCSharpSourceTypeModel(
     IReadOnlyList<SunderRpcCSharpSourcePropertyModel> Properties)
 {
     internal string DefinitionReference { get; init; } = string.Empty;
+
+    internal string? PublicName { get; init; }
 
     internal bool TransparentValueAcceptsNull { get; init; }
 
@@ -263,7 +269,9 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         {
             foreach (var path in input.ReferencePaths.Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                references.Add(MetadataReference.CreateFromFile(Path.GetFullPath(path)));
+                var fullPath = Path.GetFullPath(path);
+                references.Add(input.ReferenceSnapshots is { } snapshots && snapshots.TryGetValue(fullPath, out var reference)
+                    ? reference : MetadataReference.CreateFromFile(fullPath));
             }
         }
         catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
@@ -368,6 +376,13 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 var surface = group.Single();
                 var canonical = compilation.GetTypeByMetadataName(SunderRpcCSharpImportPrepass.NaturalProviderInterface(surface.Contract));
                 if (canonical is not null) importedSurfaces.TryAdd(canonical, surface);
+                // A single-service contract can also bind its canonical service
+                // directly, including inherited and explicit implementations.
+                if (surface.Contract.NaturalServices.Count == 1)
+                {
+                    var service = compilation.GetTypeByMetadataName(surface.Contract.NaturalServices[0].InterfaceMetadataName);
+                    if (service is not null) importedSurfaces.TryAdd(service, surface);
+                }
             }
             foreach (var sourceType in sourceTypes)
             {
@@ -881,7 +896,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                         ? SunderServiceAudience.Owner
                         : SunderServiceAudience.Public,
                     serviceId,
-                    service),
+                    service) { IsAutomaticId = true },
             ];
         }
         return new(
@@ -1128,7 +1143,8 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                  ?? SourceLocation(providerType)]);
         }
 
-        var providerId = GetNamedString(attribute, nameof(SunderServiceProviderAttribute.ProviderId)) ?? $"{contractId}.provider";
+        var authoredProviderId = GetNamedString(attribute, nameof(SunderServiceProviderAttribute.ProviderId));
+        var providerId = authoredProviderId ?? $"{contractId}.provider";
         if (providerId.Length > MaximumIdentityCharacters)
         {
             throw Failure(
@@ -1147,7 +1163,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             providerId,
             audience,
             serviceId,
-            providerType);
+            providerType) { IsAutomaticId = authoredProviderId is null };
     }
 
     private static void ValidateStandaloneProvider(
@@ -1802,6 +1818,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                 properties)
             {
                 DefinitionReference = $"#/$defs/{definitionName}",
+                PublicName = GetNamedString(definitionAttribute, nameof(SunderValueAttribute.PublicName)),
                 EnumMembers = enumMembers,
                 Union = sourceUnion,
                 SyntheticTag = _taggedVariants.GetValueOrDefault(named),

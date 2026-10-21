@@ -25,8 +25,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
     {
         try
         {
-            if (ContractOperation is not ("Check" or "Accept" or "Freeze" or "MigratePrivate"))
-                throw new InvalidDataException("ContractOperation must be Check, Accept, Freeze or MigratePrivate. Publication evidence cannot be manufactured offline.");
+            if (ContractOperation is not ("Check" or "Accept" or "Freeze"))
+                throw new InvalidDataException("ContractOperation must be Check, Accept or Freeze. Publication evidence cannot be manufactured offline.");
             var batchReview = ContractReviewPath.Length != 0;
             var proposeReview = ContractReviewOutputPath.Length != 0;
             if (batchReview && (ContractOperation != "Accept" || string.IsNullOrWhiteSpace(ContractReviewPath))
@@ -77,16 +77,13 @@ public sealed partial class GenerateSunderRpcBindingsTask
                 return true;
             }
 
-            if (ContractOperation == "MigratePrivate" && baseline is null) return true;
             if (baseline is null && candidate.Contracts.All(contract => contract.Exposure == Sunder.Sdk.Services.SunderServiceExposure.Package))
             {
                 candidate.Inputs.Verify(); VerifyExpectedBaseline(projectDirectory, path, null);
                 Log.LogMessage(MessageImportance.High, "Private services use the effective package version; there are no public contracts to accept/freeze.");
                 return true;
             }
-            var proposal = ContractOperation == "MigratePrivate"
-                ? SunderRpcAuthoringDocuments.PlanPrivateBaselineRetirement(candidate.Baseline, candidate.Contracts, Optional(ContractKey))
-                : ContractOperation == "Accept"
+            var proposal = ContractOperation == "Accept"
                 ? review is not null
                     ? SunderRpcAuthoringDocuments.PlanOwnedBaselineBatchAcceptance(candidate.Baseline, candidate.Contracts, review,
                         PackageVersion.Trim(), candidate.InputFingerprint, candidate.LockSha256)
@@ -94,7 +91,6 @@ public sealed partial class GenerateSunderRpcBindingsTask
                         Optional(ContractKey), Optional(ContractCurrentVersion), Optional(ContractNextVersion), AcknowledgeBreakingChange)
                 : SunderRpcAuthoringDocuments.PlanOwnedBaselineFreeze(candidate.Baseline, candidate.Contracts, PackageVersion.Trim(), Optional(ContractKey));
             var proposedBaseline = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(proposal);
-            if (ContractOperation == "MigratePrivate") SunderRpcAuthoringDocuments.ValidatePublicCompiledContracts(candidate.Baseline, candidate.Contracts);
             // Acceptance can allocate new contract versions. Compile their generated bindings and
             // registrations too, rather than committing a baseline that the next Build cannot use.
             if (ContractOperation == "Accept")
@@ -201,8 +197,13 @@ public sealed partial class GenerateSunderRpcBindingsTask
     internal static bool CommitOwnedBaseline(
         string projectDirectory, string path, byte[]? expected, byte[] proposal, SunderRpcInputSnapshot inputs, Action? beforeCommit = null)
     {
-        if (expected is not null) SunderRpcAuthoringDocuments.ValidatePrivateArchiveTransition(
-            SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(expected), SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(proposal));
+        if (expected is not null)
+        {
+            var before = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(expected);
+            var after = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(proposal);
+            SunderRpcAuthoringDocuments.ValidatePrivateArchiveTransition(before, after);
+            SunderRpcAuthoringDocuments.ValidateImmutableProjectionReviews(before.Contracts, after.Contracts);
+        }
         return CommitOwnedBaselineCore(projectDirectory, path, expected, proposal,
             bytes => SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(bytes).ExactBytes,
             baselinePath => SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath).ExactBytes,
@@ -257,6 +258,7 @@ public sealed partial class GenerateSunderRpcBindingsTask
                 .AsSpan().SequenceEqual(proposal))
                 throw new IOException("The staged owned-contract baseline changed during input verification.");
             cancellationToken.ThrowIfCancellationRequested();
+            baselineLock.VerifyHeld();
             File.Move(stage, path, overwrite: expected is not null);
             created = false;
             return true;

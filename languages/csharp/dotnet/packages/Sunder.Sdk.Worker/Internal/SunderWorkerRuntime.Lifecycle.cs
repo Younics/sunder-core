@@ -219,6 +219,7 @@ internal sealed partial class SunderWorkerRuntime
         writer.WriteBoolean("candidateLifecycle", Configuration.OnCandidateStarted is not null);
         writer.WriteBoolean("generationLifecycle", Configuration.OnGenerationCommitted is not null);
         writer.WriteBoolean("migrationPreparationLifecycle", true);
+        if (_environment.OperationalOutcomesV1) writer.WriteBoolean("operationalOutcomesV1", true);
         writer.WriteEndObject();
     }
 
@@ -277,6 +278,7 @@ internal sealed partial class SunderWorkerRuntime
     private void BeginStartCandidate(JsonElement root)
     {
         WorkerJson.RequireOnlyProperties(root, "type");
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (Gate)
         {
             if (_phase != RuntimePhase.Ready)
@@ -284,8 +286,9 @@ internal sealed partial class SunderWorkerRuntime
                 throw new WorkerProtocolException("host.start-candidate is duplicate or out of order.");
             }
             _phase = RuntimePhase.CandidateStarting;
+            _candidateStartOperation = completion.Task;
         }
-        _candidateStartOperation = CompleteCandidateStartAsync();
+        _ = RunLifecycleOperationAsync(completion, CompleteCandidateStartAsync);
     }
 
     private async Task CompleteCandidateStartAsync()
@@ -320,7 +323,7 @@ internal sealed partial class SunderWorkerRuntime
         }
         catch (Exception exception)
         {
-            Fail(exception is WorkerProtocolException
+            StopAfterLifecycleFailure(exception is WorkerProtocolException
                 ? exception
                 : new WorkerProtocolException("The worker candidate-start callback failed.", exception));
         }
@@ -337,6 +340,7 @@ internal sealed partial class SunderWorkerRuntime
         }
 
         var invokeCallback = false;
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         lock (Gate)
         {
             if (_phase == RuntimePhase.Committed && _sessionGeneration == sessionGeneration)
@@ -360,11 +364,12 @@ internal sealed partial class SunderWorkerRuntime
             {
                 throw new WorkerProtocolException("host.commit-generation is duplicate, conflicting, or out of order.");
             }
+            _generationCommitOperation = completion.Task;
         }
-        _generationCommitOperation = CompleteGenerationCommitAsync(
+        _ = RunLifecycleOperationAsync(completion, () => CompleteGenerationCommitAsync(
             activationId,
             sessionGeneration,
-            invokeCallback);
+            invokeCallback));
     }
 
     private async Task CompleteGenerationCommitAsync(
@@ -418,7 +423,7 @@ internal sealed partial class SunderWorkerRuntime
         }
         catch (Exception exception)
         {
-            Fail(exception is WorkerProtocolException
+            StopAfterLifecycleFailure(exception is WorkerProtocolException
                 ? exception
                 : new WorkerProtocolException("The worker generation-commit callback failed.", exception));
         }
@@ -426,6 +431,7 @@ internal sealed partial class SunderWorkerRuntime
 
     private void BeginStorageMigrationPreparation(JsonElement root)
     {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         WorkerJson.RequireOnlyProperties(root, "type", "activationId", "sessionGeneration");
         var activationId = WorkerJson.RequiredSafeId(root, "activationId", 64);
         var sessionGeneration = WorkerJson.RequiredNonNegativeInt64(root, "sessionGeneration");
@@ -443,10 +449,11 @@ internal sealed partial class SunderWorkerRuntime
                     "host.prepare-storage-migrations is duplicate, conflicting, or out of order.");
             }
             _phase = RuntimePhase.PreparingStorageMigrations;
+            _migrationPreparationOperation = completion.Task;
         }
-        _migrationPreparationOperation = CompleteStorageMigrationPreparationAsync(
+        _ = RunLifecycleOperationAsync(completion, () => CompleteStorageMigrationPreparationAsync(
             activationId,
-            sessionGeneration);
+            sessionGeneration));
     }
 
     private async Task CompleteStorageMigrationPreparationAsync(
@@ -492,7 +499,7 @@ internal sealed partial class SunderWorkerRuntime
         }
         catch (Exception exception)
         {
-            Fail(exception is WorkerProtocolException
+            StopAfterLifecycleFailure(exception is WorkerProtocolException
                 ? exception
                 : new WorkerProtocolException(
                     "The worker storage-migration preparation callback failed.",
@@ -502,6 +509,7 @@ internal sealed partial class SunderWorkerRuntime
 
     private ValueTask HandleActivateAsync(JsonElement root)
     {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         WorkerJson.RequireOnlyProperties(root, "type", "sessionGeneration", "workspaceRootPath");
         var sessionGeneration = WorkerJson.RequiredNonNegativeInt64(root, "sessionGeneration");
         var workspaceRootPath = WorkerJson.RequiredString(root, "workspaceRootPath", 4096);
@@ -514,8 +522,9 @@ internal sealed partial class SunderWorkerRuntime
             }
             _client.RoleLocalWorkspace.Bind(workspaceRootPath, _environment);
             _phase = RuntimePhase.Activating;
+            _activationOperation = completion.Task;
         }
-        _activationOperation = CompleteActivationAsync(sessionGeneration);
+        _ = RunLifecycleOperationAsync(completion, () => CompleteActivationAsync(sessionGeneration));
         return ValueTask.CompletedTask;
     }
 
@@ -538,11 +547,6 @@ internal sealed partial class SunderWorkerRuntime
                 }
                 _phase = RuntimePhase.Active;
             }
-            if (Configuration.Composition?.Completion is { IsCompletedSuccessfully: false } completion)
-            {
-                _generationHealthOperation = MonitorCompositionAsync(completion);
-            }
-
             var body = WorkerJson.Serialize(_limits, writer =>
             {
                 writer.WriteStartObject();
@@ -551,6 +555,9 @@ internal sealed partial class SunderWorkerRuntime
                 writer.WriteEndObject();
             });
             await _output.WriteAsync(body).ConfigureAwait(false);
+            // A generation-fault report must never overtake worker.activated.
+            if (Configuration.Composition?.Completion is { IsCompletedSuccessfully: false } completion)
+                _generationHealthOperation = MonitorCompositionAsync(completion);
         }
         catch (OperationCanceledException) when (_workStop.IsCancellationRequested && IsStopping())
         {
@@ -563,7 +570,7 @@ internal sealed partial class SunderWorkerRuntime
         }
         catch (Exception exception)
         {
-            Fail(exception is WorkerProtocolException
+            StopAfterLifecycleFailure(exception is WorkerProtocolException
                 ? exception
                 : new WorkerProtocolException("The worker activation callback failed.", exception));
         }
@@ -580,25 +587,17 @@ internal sealed partial class SunderWorkerRuntime
         }
         catch (Exception exception)
         {
-            try
-            {
-                if (Configuration.Composition is not null)
-                {
-                    await Configuration.Composition.ShutdownAsync(
-                        new SunderWorkerShutdownContext("lifecycle-faulted"),
-                        CancellationToken.None).ConfigureAwait(false);
-                }
-            }
-            catch (Exception cleanupException)
-            {
-                exception = new AggregateException(
-                    "A package-owned lifecycle service and composition cleanup both failed.",
-                    exception,
-                    cleanupException);
-            }
-            Fail(new WorkerProtocolException(
+            StopAfterLifecycleFailure(new WorkerProtocolException(
                 "A package-owned worker lifecycle service faulted.",
                 exception));
         }
+    }
+
+    private async Task RunLifecycleOperationAsync(TaskCompletionSource completion, Func<Task> operation)
+    {
+        await Task.Yield();
+        try { await operation().ConfigureAwait(false); }
+        catch (Exception exception) { Fail(exception); }
+        finally { completion.TrySetResult(); }
     }
 }

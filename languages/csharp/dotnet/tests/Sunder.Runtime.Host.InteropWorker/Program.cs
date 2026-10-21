@@ -10,6 +10,7 @@ await SunderWorker.RunAsync(context =>
 {
     var descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(
         Path.Combine(context.ContentRootPath, "contracts", "example.rpc.json")));
+    if (context.PackageId == "sunder.interop.lifecycle") return LifecycleFaultFixture.Configure(context, descriptor);
     return new SunderWorkerOptions(context.PackageId is
         "sunder.interop.dotnet.caller" or
         "sunder.interop.dotnet.self.caller" or

@@ -1,0 +1,1 @@
+{"schemaVersion":3,"id":"compatibility.node.ts","name":"Compatibility TypeScript probe","version":"1.0.0","workerCapabilities":[],"services":{"module":"src/services.ts"}}

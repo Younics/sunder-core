@@ -53,7 +53,8 @@ internal sealed partial class PackageSessionLifecycleService
 
     public async Task ReleaseAppDevPackageOwnerAsync(
         string ownerId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool unplannedWithdrawal = false)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
@@ -74,7 +75,8 @@ internal sealed partial class PackageSessionLifecycleService
             [],
             operationToken,
             sources,
-            allowPackageErrors: true);
+            allowPackageErrors: true,
+            unplannedWithdrawal: unplannedWithdrawal);
         if (!result.Success)
         {
             throw new RuntimePackageValidationException(

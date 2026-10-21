@@ -18,7 +18,8 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     private const string Key = "greeting";
     private const string ReleaseVersion = "9.8.7";
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Original = new(() => Compile(Source));
-    private static readonly Lazy<SunderRpcCSharpCompiledContract> AddedMethod = new(() => Compile(AddMethod(Source, "Search")));
+    // A new unused error declaration is source-compatible; a required provider method is not.
+    private static readonly Lazy<SunderRpcCSharpCompiledContract> AddedError = new(() => AddError(Original.Value, "example.added"));
     private static readonly Lazy<SunderRpcCSharpCompiledContract> RenamedMethod = new(() => Compile(Source.Replace("ReadAsync", "FetchAsync", StringComparison.Ordinal)));
 
     [Fact]
@@ -26,7 +27,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     {
         var baseline = Baseline(Snapshot(Original.Value, "release-frozen"));
         var error = Assert.Throws<InvalidDataException>(() =>
-            SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, [AddedMethod.Value]));
+            SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, [AddedError.Value]));
 
         Assert.Contains("rpc-authoring.baseline-drift", error.Message, StringComparison.Ordinal);
         Assert.Contains("classified Minor", error.Message, StringComparison.Ordinal);
@@ -69,8 +70,8 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void ReadWrite_RetainsCurrentHistoryAndEveryReleaseAndPublicationField()
     {
         var published = Snapshot(AtVersion(Original.Value, "1.0.0"), "published", "3.4.5");
-        var frozen = Snapshot(AtVersion(AddedMethod.Value, "1.1.0"), "release-frozen", "6.7.8");
-        var draft = Snapshot(AtVersion(AddedMethod.Value, "2.0.0") with { Exposure = SunderServiceExposure.Public });
+        var frozen = Snapshot(AtVersion(AddedError.Value, "1.1.0"), "release-frozen", "6.7.8");
+        var draft = Snapshot(AtVersion(AddedError.Value, "2.0.0") with { Exposure = SunderServiceExposure.Public });
         var baseline = Baseline(draft, published, frozen);
         var bytes = SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(baseline);
 
@@ -110,7 +111,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void Write_SortsKeysButNeverReordersHistoryOrRepairsInvalidSnapshotModels()
     {
         var first = Snapshot(Original.Value, "published");
-        var second = Snapshot(AtVersion(AddedMethod.Value, "1.1.0"), "release-frozen");
+        var second = Snapshot(AtVersion(AddedError.Value, "1.1.0"), "release-frozen");
         var baseline = Baseline(null, first, second);
         var other = ChangeDescriptor(Original.Value with { ContractKey = "other" }, root => root["contractId"] = Owner + ".other");
         var contracts = new Dictionary<string, SunderRpcOwnedContractBaseline>(StringComparer.Ordinal)
@@ -187,7 +188,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void Accept_UnissuedDraftReplacementRetainsItsVersionWithoutInventingHistory()
     {
         var baseline = Baseline(Snapshot(AtVersion(Original.Value, "3.2.1")));
-        var candidate = AtVersion(AddedMethod.Value, "3.2.1");
+        var candidate = AtVersion(AddedError.Value, "3.2.1");
 
         var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [candidate]));
 
@@ -219,14 +220,14 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     {
         var baseline = Baseline(Snapshot(Original.Value, state));
         var before = baseline.Contracts[Key].Current!;
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value], Key, "1.0.0"));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value], Key, next: "1.1.0"));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value], Key, "0.9.0", "1.1.0"));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value], Key, "1.0.0", "1.0.1"));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value], Key, "1.0.0"));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value], Key, next: "1.1.0"));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value], Key, "0.9.0", "1.1.0"));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value], Key, "1.0.0", "1.0.1"));
 
-        var bytes = Accept(baseline, [AddedMethod.Value]);
-        Assert.Equal(bytes, Accept(baseline, [AddedMethod.Value], Key));
-        Assert.Equal(bytes, Accept(baseline, [AddedMethod.Value], Key, "1.0.0", "1.1.0"));
+        var bytes = Accept(baseline, [AddedError.Value]);
+        Assert.Equal(bytes, Accept(baseline, [AddedError.Value], Key));
+        Assert.Equal(bytes, Accept(baseline, [AddedError.Value], Key, "1.0.0", "1.1.0"));
         var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(bytes);
 
         AssertSnapshotEqual(before, Assert.Single(result.Contracts[Key].History));
@@ -271,18 +272,18 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
             }));
         var annotated = ChangeDescriptor(other, root => root["$defs"]!.AsObject().First().Value!["description"] = "Reviewed batch annotation");
 
-        var bytes = Accept(baseline, [annotated, AddedMethod.Value]);
+        var bytes = Accept(baseline, [annotated, AddedError.Value]);
         var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(bytes);
 
-        Assert.Equal(bytes, Accept(baseline, [AddedMethod.Value, annotated]));
+        Assert.Equal(bytes, Accept(baseline, [AddedError.Value, annotated]));
         Assert.Equal("1.1.0", result.Contracts[Key].Current!.Descriptor.Version);
         Assert.Equal("4.5.7", result.Contracts[other.ContractKey].Current!.Descriptor.Version);
         AssertSnapshotEqual(published, Assert.Single(result.Contracts[Key].History));
         AssertSnapshotEqual(frozen, Assert.Single(result.Contracts[other.ContractKey].History));
         Assert.All(result.Contracts.Values, contract => Assert.Equal("draft", contract.Current!.State));
-        Assert.Equal(bytes, Accept(result, [AtVersion(AddedMethod.Value, "1.1.0"), AtVersion(annotated, "4.5.7")]));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value, annotated], expected: "1.0.0", next: "1.1.0"));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value, annotated with { Exposure = SunderServiceExposure.Package }]));
+        Assert.Equal(bytes, Accept(result, [AtVersion(AddedError.Value, "1.1.0"), AtVersion(annotated, "4.5.7")]));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value, annotated], expected: "1.0.0", next: "1.1.0"));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value, annotated with { Exposure = SunderServiceExposure.Package }]));
         Assert.Equal(baseline.ExactBytes, SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(baseline));
         Assert.Empty(baseline.Contracts[Key].History);
         Assert.Empty(baseline.Contracts[other.ContractKey].History);
@@ -295,7 +296,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void Accept_AutomaticHistoryFloorsAreAnchoredToEachSnapshotRatherThanRebasedOnHighest(string currentVersion, string expectedVersion)
     {
         var older = Snapshot(Original.Value, "published");
-        var current = AtVersion(AddedMethod.Value, currentVersion);
+        var current = AtVersion(AddedError.Value, currentVersion);
         var baseline = Baseline(Snapshot(current, "release-frozen"), older);
         var candidate = ChangeDescriptor(current, root => root["$defs"]!.AsObject().First().Value!["description"] = "Reviewed annotation");
 
@@ -317,7 +318,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     {
         var history = Snapshot(AtVersion(Original.Value, "1.0.5"), "published");
         var baseline = Baseline(Snapshot(AtVersion(Original.Value, plannedVersion)), history);
-        var candidate = AtVersion(AddedMethod.Value, plannedVersion);
+        var candidate = AtVersion(AddedError.Value, plannedVersion);
 
         var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [candidate]));
 
@@ -348,7 +349,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
         Assert.Equal(256, previousVersion.Length);
         var previous = AtVersion(Original.Value, previousVersion);
         var baseline = Baseline(Snapshot(previous, "published"));
-        var candidate = overflow == "minor" ? AtVersion(AddedMethod.Value, previousVersion)
+        var candidate = overflow == "minor" ? AtVersion(AddedError.Value, previousVersion)
             : ChangeDescriptor(previous, root => root["$defs"]!.AsObject().First().Value!["description"] = "Reviewed annotation");
 
         var explicitBytes = Accept(baseline, [candidate], Key, previousVersion, expectedVersion);
@@ -383,7 +384,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     {
         var previous = AtVersion(Original.Value, "1.0.0+issued");
         var baseline = Baseline(Snapshot(previous, "published"));
-        var candidate = AtVersion(AddedMethod.Value, previous.Descriptor.Version);
+        var candidate = AtVersion(AddedError.Value, previous.Descriptor.Version);
         Assert.Throws<InvalidDataException>(() => Accept(baseline, [candidate], Key, "1.0.0", "1.1.0"));
 
         var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [candidate], Key, "1.0.0+issued", "1.1.0"));
@@ -395,7 +396,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     [Fact]
     public void Accept_DraftMustSatisfyAllSameMajorImmutableHistoryNotOnlyHighest()
     {
-        var older = Snapshot(AddedMethod.Value, "published");
+        var older = Snapshot(AddedError.Value, "published");
         var highest = Snapshot(AtVersion(Original.Value, "1.1.0"), "release-frozen");
         var baseline = Baseline(Snapshot(AtVersion(Original.Value, "1.2.0")), older, highest);
         var candidate = AtVersion(Compile(AddMethod(Source, "List")), "1.2.0");
@@ -426,8 +427,8 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void Accept_CompatibleDraftWithHistoryKeepsItsAlreadySufficientVersion()
     {
         var history = Snapshot(Original.Value, "published");
-        var baseline = Baseline(Snapshot(AtVersion(AddedMethod.Value, "1.1.0")), history);
-        var candidate = AtVersion(Compile(AddMethod(AddMethod(Source, "Search"), "List")), "1.1.0");
+        var baseline = Baseline(Snapshot(AtVersion(AddedError.Value, "1.1.0")), history);
+        var candidate = AtVersion(AddError(AddedError.Value, "example.second"), "1.1.0");
 
         var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [candidate]));
 
@@ -471,19 +472,13 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     [InlineData(true)]
     public void Accept_ExposureChangeIsConservativelyMajorInBothDirections(bool initiallyPublic)
     {
-        // Public evidence remains explicitly governed. A legacy private-only
-        // predecessor is archived before a separately reviewed public successor.
+        // Public evidence remains explicitly governed; active private baselines are unsupported.
         var previous = Original.Value with { Exposure = initiallyPublic ? SunderServiceExposure.Public : SunderServiceExposure.Package };
         var candidate = previous with { Exposure = initiallyPublic ? SunderServiceExposure.Package : SunderServiceExposure.Public };
         var baseline = Baseline(Snapshot(previous, "release-frozen"));
         if (!initiallyPublic)
         {
-            Assert.Contains("private-baseline-migration-required", Assert.Throws<InvalidDataException>(() => Accept(baseline, [candidate])).Message, StringComparison.Ordinal);
-            var retired = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(SunderRpcAuthoringDocuments.PlanPrivateBaselineRetirement(baseline, [previous], Key));
-            var successor = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(retired, [candidate], Key, next: "2.0.0"));
-            Assert.Equal("2.0.0", successor.Contracts[Key].Current!.Descriptor.Version);
-            Assert.Empty(successor.Contracts[Key].History);
-            AssertSnapshotEqual(baseline.Contracts[Key].Current!, successor.RetiredPrivateContracts[Key].Current!);
+            Assert.Contains("private-baseline-unsupported", Assert.Throws<InvalidDataException>(() => Accept(baseline, [candidate])).Message, StringComparison.Ordinal);
             return;
         }
         Assert.Throws<InvalidDataException>(() => Accept(baseline, [candidate], Key, "1.0.0", "2.0.0"));
@@ -526,8 +521,8 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     {
         var history = Snapshot(Original.Value, "published");
         var baseline = issuedHistory
-            ? Baseline(Snapshot(AtVersion(AddedMethod.Value, "1.1.0")), history)
-            : Baseline(Snapshot(AtVersion(AddedMethod.Value, "1.1.0")));
+            ? Baseline(Snapshot(AtVersion(AddedError.Value, "1.1.0")), history)
+            : Baseline(Snapshot(AtVersion(AddedError.Value, "1.1.0")));
         Assert.Throws<InvalidDataException>(() => Accept(baseline, []));
         Assert.Throws<InvalidDataException>(() => Accept(baseline, [], Key, acknowledge: true));
 
@@ -545,11 +540,11 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void Accept_ReintroducingRemovedKeyUsesRetainedIdentityAndHistoryRatherThanVersionOne()
     {
         var baseline = Baseline(null, Snapshot(Original.Value, "published"));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value], Key, "1.0.0", "1.0.0"));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value], Key, "1.0.0", "1.0.0"));
 
-        var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [AddedMethod.Value]));
+        var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [AddedError.Value]));
 
-        Assert.Equal(result.ExactBytes, Accept(baseline, [AddedMethod.Value], Key, "1.0.0", "1.1.0"));
+        Assert.Equal(result.ExactBytes, Accept(baseline, [AddedError.Value], Key, "1.0.0", "1.1.0"));
         Assert.Equal("1.1.0", result.Contracts[Key].Current!.Descriptor.Version);
         AssertSnapshotEqual(baseline.Contracts[Key].History[0], Assert.Single(result.Contracts[Key].History));
     }
@@ -574,15 +569,15 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
         var other = Compile(Source + OtherService);
         var baseline = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(EmptyBaseline(), [other, Original.Value]));
         Assert.Equal(Accept(EmptyBaseline(), [Original.Value, other]), baseline.ExactBytes);
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value], Key));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedMethod.Value, other with { Exposure = SunderServiceExposure.Package }], Key));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value], Key));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AddedError.Value, other with { Exposure = SunderServiceExposure.Package }], Key));
         Assert.Throws<InvalidDataException>(() => Accept(baseline, [RenamedMethod.Value, other], acknowledge: true));
         Assert.Throws<InvalidDataException>(() => Accept(baseline, [RenamedMethod.Value, other], expected: "1.0.0", next: "2.0.0", acknowledge: true));
 
-        var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [AddedMethod.Value, other], Key));
+        var result = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(Accept(baseline, [AddedError.Value, other], Key));
 
         AssertSnapshotEqual(baseline.Contracts[other.ContractKey].Current!, result.Contracts[other.ContractKey].Current!);
-        Assert.Equal(AddedMethod.Value.Descriptor.GetCanonicalUtf8(), result.Contracts[Key].Current!.Descriptor.GetCanonicalUtf8());
+        Assert.Equal(AddedError.Value.Descriptor.GetCanonicalUtf8(), result.Contracts[Key].Current!.Descriptor.GetCanonicalUtf8());
     }
 
     [Fact]
@@ -618,7 +613,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
         var annotation = ChangeDescriptor(Original.Value, root => root["$defs"]!.AsObject().First().Value!["title"] = "Different annotation");
         foreach (var candidates in new SunderRpcCSharpCompiledContract[][]
         {
-            [], [Original.Value, Original.Value], [AddedMethod.Value], [annotation],
+            [], [Original.Value, Original.Value], [AddedError.Value], [annotation],
             [AtVersion(Original.Value, "1.0.1")], [Original.Value with { Exposure = SunderServiceExposure.Package }],
             [Original.Value with { ContractKey = "Greeting" }],
         })
@@ -662,7 +657,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
         var frozen = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(frozenBytes);
 
         Assert.Throws<InvalidDataException>(() => Accept(frozen, [RenamedMethod.Value]));
-        Assert.Throws<InvalidDataException>(() => Freeze(frozen, [AddedMethod.Value], "9.8.8"));
+        Assert.Throws<InvalidDataException>(() => Freeze(frozen, [AddedError.Value], "9.8.8"));
 
         Assert.Equal("release-frozen", frozen.Contracts[Key].Current!.State);
         Assert.False(frozen.Contracts[Key].Current!.SnapshotJson.TryGetProperty("publication", out _));
@@ -702,12 +697,12 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     {
         var prerelease = AtVersion(Original.Value, "1.0.0-preview.1");
         var baseline = Baseline(Snapshot(prerelease, "published"));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AtVersion(AddedMethod.Value, prerelease.Descriptor.Version)]));
-        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AtVersion(AddedMethod.Value, prerelease.Descriptor.Version)], Key, prerelease.Descriptor.Version, "1.1.0", acknowledge: true));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AtVersion(AddedError.Value, prerelease.Descriptor.Version)]));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [AtVersion(AddedError.Value, prerelease.Descriptor.Version)], Key, prerelease.Descriptor.Version, "1.1.0", acknowledge: true));
         Assert.Throws<InvalidDataException>(() => Accept(EmptyBaseline(), [Original.Value], Key, next: "1.0.0-preview.1"));
         var draft = Baseline(Snapshot(Original.Value), Snapshot(prerelease, "published"));
-        Assert.Throws<InvalidDataException>(() => Accept(draft, [AddedMethod.Value]));
-        Assert.Throws<InvalidDataException>(() => Accept(draft, [AddedMethod.Value], Key, "1.0.0", "1.1.0", acknowledge: true));
+        Assert.Throws<InvalidDataException>(() => Accept(draft, [AddedError.Value]));
+        Assert.Throws<InvalidDataException>(() => Accept(draft, [AddedError.Value], Key, "1.0.0", "1.1.0", acknowledge: true));
         Assert.Throws<InvalidDataException>(() => Freeze(draft, [Original.Value]));
         Assert.Equal(draft.ExactBytes, Accept(draft, [Original.Value]));
         Assert.Equal(baseline.ExactBytes, Accept(baseline, [prerelease]));
@@ -733,7 +728,7 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     public void Publication_ConfirmsFrozenHistoryWithoutPromotingOrChangingTheCurrentDraft()
     {
         var frozen = Snapshot(Original.Value, "release-frozen");
-        var draft = Snapshot(AtVersion(AddedMethod.Value, "1.1.0"));
+        var draft = Snapshot(AtVersion(AddedError.Value, "1.1.0"));
         var baseline = Baseline(draft, frozen);
         var evidence = new SunderRpcVerifiedPackagePublication("https://registry.example/", Owner, ReleaseVersion, new string('a', 64), "2026-09-17T12:34:56.1234000+00:00",
             [new(frozen.Descriptor.ContractId, frozen.Descriptor.Version, frozen.Descriptor.Sha256, frozen.Descriptor.AbiSha256, frozen.Exposure)]);
@@ -809,7 +804,12 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
             ["registryOrigin"] = "https://registry.example/", ["packageId"] = Owner, ["packageVersion"] = release,
             ["packageContentIdentity"] = new string('a', 64), ["publishedAtUtc"] = "2026-09-11T12:34:56.123456789Z", ["etag"] = "\"" + descriptor.Sha256 + "\"",
         };
-        return new(state, exposure, descriptor, JsonSerializer.SerializeToElement(json));
+        // Synthetic evolution fixtures have their exact source in this test. Frozen
+        // historical files above remain projection-less and still round-trip verbatim.
+        return new(state, exposure, descriptor, JsonSerializer.SerializeToElement(json))
+        {
+            ProjectionReview = SunderRpcAuthoringDocuments.CreateProjectionReview(descriptor, candidate.ModelProjection, candidate.MethodPolicies),
+        };
     }
 
     private static SunderRpcCSharpCompiledContract AtVersion(SunderRpcCSharpCompiledContract candidate, string version)
@@ -838,6 +838,9 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     private static string AddMethod(string source, string name)
         => source.Insert(source.IndexOf("[SunderMethod]", StringComparison.Ordinal), "[SunderMethod]\n    public ValueTask<Response> " + name
             + "Async(Request request) => throw new System.NotImplementedException();\n    ");
+
+    private static SunderRpcCSharpCompiledContract AddError(SunderRpcCSharpCompiledContract source, string code)
+        => ChangeDescriptor(source, root => root["errors"]![code] = new JsonObject());
 
     private static void AssertSnapshotEqual(SunderRpcOwnedContractSnapshot expected, SunderRpcOwnedContractSnapshot actual)
     {

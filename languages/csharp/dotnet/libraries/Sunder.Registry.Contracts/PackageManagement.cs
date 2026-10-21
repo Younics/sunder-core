@@ -1,6 +1,6 @@
 namespace Sunder.Registry.Contracts;
 
-/// <summary>Required preconditions for checkpoint-backed management and authority mutations.</summary>
+/// <summary>Required database policy concurrency preconditions for management and authority mutations.</summary>
 public static class RegistryPolicyMutationHeaders
 {
     public const string IdempotencyKey = "X-Sunder-Idempotency-Key";

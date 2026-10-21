@@ -27,6 +27,12 @@ internal static class SunderPackageDependencyDiscovery
     internal static bool IsSettingsSchemaProvider(INamedTypeSymbol type)
         => IsWorkerContract(type, "Sunder.Sdk.Worker.ISunderWorkerSettingsSchemaProvider");
 
+    internal static bool IsStorageMigrationProvider(INamedTypeSymbol type)
+        => IsWorkerContract(type, "Sunder.Sdk.Worker.ISunderWorkerStorageMigrationProvider");
+
+    internal static bool IsStorageMigrationPreparation(INamedTypeSymbol type)
+        => IsWorkerContract(type, "Sunder.Sdk.Worker.ISunderWorkerStorageMigrationPreparation");
+
     internal static bool IsAuthHandler(INamedTypeSymbol type)
         => IsSdkContract(type, "Sunder.Sdk.Abstractions.IPackageAuthHandler");
 

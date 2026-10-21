@@ -7,7 +7,7 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class DevPackageOwnerLeaseService
+internal sealed partial class DevPackageOwnerLeaseService
 {
     private readonly PackageSessionLifecycleService _sessions;
     private readonly RuntimeSessionOwner _runtimeSession;
@@ -71,7 +71,7 @@ internal sealed class DevPackageOwnerLeaseService
                     Authenticate(existing, request.OwnerToken);
                     if (existing.ExpiresAtUtc <= now)
                     {
-                        await ReleaseCoreAsync(ownerId, cancellationToken).ConfigureAwait(false);
+                        await ReleaseCoreAsync(ownerId, cancellationToken, unplannedWithdrawal: true).ConfigureAwait(false);
                         throw new RuntimeAuthenticationException("The dev package owner lease has expired.");
                     }
                     if (request.Revision == existing.Revision
@@ -161,7 +161,7 @@ internal sealed class DevPackageOwnerLeaseService
             var lease = GetAuthenticated(ownerId, request.OwnerToken);
             if (lease.ExpiresAtUtc <= _timeProvider.GetUtcNow())
             {
-                await ReleaseCoreAsync(ownerId, cancellationToken).ConfigureAwait(false);
+                await ReleaseCoreAsync(ownerId, cancellationToken, unplannedWithdrawal: true).ConfigureAwait(false);
                 throw new RuntimeAuthenticationException("The dev package owner lease has expired.");
             }
 
@@ -211,7 +211,7 @@ internal sealed class DevPackageOwnerLeaseService
             {
                 try
                 {
-                    await ReleaseCoreAsync(lease.OwnerId, cancellationToken).ConfigureAwait(false);
+                    await ReleaseCoreAsync(lease.OwnerId, cancellationToken, unplannedWithdrawal: true).ConfigureAwait(false);
                     _logger.LogInformation("Released expired dev package owner {OwnerId}", lease.OwnerId);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
@@ -238,9 +238,9 @@ internal sealed class DevPackageOwnerLeaseService
         }
     }
 
-    private async Task ReleaseCoreAsync(string ownerId, CancellationToken cancellationToken)
+    private async Task ReleaseCoreAsync(string ownerId, CancellationToken cancellationToken, bool unplannedWithdrawal = false)
     {
-        await _sessions.ReleaseAppDevPackageOwnerAsync(ownerId, cancellationToken).ConfigureAwait(false);
+        await _sessions.ReleaseAppDevPackageOwnerAsync(ownerId, cancellationToken, unplannedWithdrawal).ConfigureAwait(false);
         _owners.Remove(ownerId);
         await _watcher.SynchronizeAsync(_sessions.GetDevWatchTargets(), cancellationToken).ConfigureAwait(false);
     }
@@ -278,7 +278,10 @@ internal sealed class DevPackageOwnerLeaseService
             lease.Revision,
             lease.ExpiresAtUtc,
             _sessions.Generation,
-            lease.Packages);
+            lease.Packages.Select(package => package with
+            {
+                EffectiveWatch = _sessions.GetDevWatchTargets().Any(target => target.PackageId == package.PackageId),
+            }).ToArray());
 
     private void ValidateRuntimeInstance(Guid runtimeInstanceId)
     {

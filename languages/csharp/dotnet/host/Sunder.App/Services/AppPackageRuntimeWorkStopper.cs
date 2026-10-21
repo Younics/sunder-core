@@ -2,10 +2,16 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageRuntimeWorkStopper(
     BackgroundProcessQueueService backgroundProcessQueue,
-    Guid? ownerId = null)
+    Guid? ownerId = null,
+    Func<string, CancellationToken, Task?>? retainedPackageStopper = null)
 {
     public async Task StopPackageWorkAsync(string packageId, CancellationToken cancellationToken)
     {
+        if (retainedPackageStopper?.Invoke(packageId, cancellationToken) is { } retained)
+        {
+            await retained.ConfigureAwait(false);
+            return;
+        }
         if (ownerId is { } generationOwnerId)
         {
             await backgroundProcessQueue

@@ -142,12 +142,10 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         try
         {
             await host.InitializeAsync();
-            var nodeCaller = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
+            var nodeCaller = await CurrentRidRuntimeHostTestSupport.CreateNodeCallerAsync(
+                node,
                 leafPath,
-                Path.Combine(root, "node-caller"),
-                nodeCallerPackageId,
-                includeProviders: false,
-                consumePublicContracts: true);
+                Path.Combine(root, "node-caller"));
             var dotnetProvider = GetInteropWorkerDevPackage();
             await host.GrantRuntimeRpcPermissionsAsync(nodeCaller);
             var load = await host.LoadStartupDevPackagesAsync([dotnetProvider, nodeCaller]);

@@ -392,7 +392,7 @@ internal sealed class PlatformContractSourceOperations
         var runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
         string[] names = ["System.Private.CoreLib", "System.Runtime", "System.Runtime.Extensions", "System.Collections",
             "System.Linq", "System.ObjectModel", "System.Threading", "System.Threading.Tasks", "System.Memory",
-            "System.Text.Json", "System.Net.Http"];
+            "System.Text.Json", "System.Net.Http", "System.ComponentModel", "System.Runtime.Numerics"];
         return names.Select(name => Path.Combine(runtime, name + ".dll"))
             .Append(typeof(SunderServiceAttribute).Assembly.Location)
             .Select(GeneratedOutputPathSafety.NormalizeTrustedSystemAliases).ToArray();

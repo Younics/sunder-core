@@ -64,7 +64,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
                     ObservedAtUtc = observedAt,
                     ValidUntilUtc = observedAt.AddHours(24),
                     PackagePolicy = plan?.PackagePolicy ?? new(1, ActivePolicyTestContext.Hash("package-policy-1")),
-                    Checkpoint = plan?.PolicyCheckpoint ?? new(1, ActivePolicyTestContext.Hash("checkpoint-1"), 1, ActivePolicyTestContext.Hash("topology")),
                 };
                 return new(HttpStatusCode.OK) { Content = JsonContent.Create(response, options: RegistryActivePolicyClient.Json) };
             }
@@ -73,12 +72,10 @@ public sealed partial class RegistryRuntimeArchitectureTests
             if (result.Content is JsonContent { Value: RegistryResolveInstallPlanResponse { Success: true } planResult })
             {
                 var policy = planResult.PackagePolicy ?? new RegistryPolicyIdentity(1, ActivePolicyTestContext.Hash("package-policy-1"));
-                var checkpoint = planResult.PolicyCheckpoint ?? new RegistryPolicyCheckpointIdentity(1, ActivePolicyTestContext.Hash("checkpoint-1"), 1, ActivePolicyTestContext.Hash("topology"));
                 var updated = planResult with
                 {
                     PackagePolicy = policy,
-                    PolicyCheckpoint = checkpoint,
-                    ResolutionPolicy = planResult.ResolutionPolicy ?? new(policy, checkpoint, [], [], [], []),
+                    ResolutionPolicy = planResult.ResolutionPolicy ?? new(policy, [], [], [], []),
                 };
                 _plans[origin] = updated;
                 result.Content.Dispose();

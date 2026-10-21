@@ -65,6 +65,21 @@ Evidence binds:
 - Every canonical leaf file, including manifest and content index, by path, size and
   SHA-256. Both the independently validated index and qualification must match.
 
+Restore-input qualification accepts NuGet `project.assets.json` formats **3 and 4**
+only. [NuGet's V4 alias format](https://github.com/NuGet/Home/blob/dev/accepted/2025/Multiple-Equivalent-Framework-Support-TFM-As-Aliases.md)
+is emitted by SDK-aware restore at `SDKAnalysisLevel` 10.0.300 and later (including
+.NET SDK 10.0.402). V3 keys targets by effective TFM; V4 keys them by the evaluated
+target alias and records the effective TFM in `project.frameworks[alias].framework`.
+Qualification selects the exact alias and RID, never another alias sharing its TFM.
+Equivalent V3/V4 selections normalize that representation difference while retaining
+the alias, effective TFM, complete selected compile/runtime/native/build asset metadata,
+package content hashes and runtime-identifier graph content. Unknown versions,
+inconsistent aliases, missing RID/library evidence and restore errors are rejected.
+Qualification and role dependency projection share this format/alias validation.
+Generated role assets retain the input format and selected alias; original restore
+files are never rewritten or downgraded. Inputs from different SDK/toolset versions
+remain separately bound and are not made interchangeable by format compatibility.
+
 Source membership includes `.cs`, project/props/targets, JSON/configuration,
 XAML/Avalonia, resx/ruleset/editorconfig files. Explicit resources bind their bytes
 regardless of extension. The complete `SunderPackageAssetsDirectory` tree (default

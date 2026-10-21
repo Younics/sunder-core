@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Callbacks;
+using Sunder.Sdk.Logging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Storage;
 using Sunder.Sdk.Worker.Internal;
@@ -475,28 +476,322 @@ public sealed class WorkerV1RuntimeTests
         await worker.ShutdownAsync();
     }
 
-    [Fact]
-    public async Task WorkerV1_CompositionGenerationFaultFaultsSupervisedWorker()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkerV1_CompositionGenerationFaultFaultsSupervisedWorker(bool hostShutdownFirst)
     {
         var events = new List<string>();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handlerFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new TestRpcHandler
+        {
+            Unary = async (_, _, _, request, token) =>
+            {
+                entered.TrySetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                    return request.Clone();
+                }
+                finally
+                {
+                    cancelled.TrySetResult();
+                    await releaseCleanup.Task;
+                    events.Add("handler-drained");
+                    handlerFinished.TrySetResult();
+                }
+            },
+        };
         var lifecycle = new RecordingMonitoredLifecycleService("faulting", events);
         var composition = new SunderWorkerComposition(
             new RecordingServiceProvider(events),
             [lifecycle]);
         await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
-            [WorkerHarness.Registration(new TestRpcHandler())])
+            [WorkerHarness.Registration(handler)])
         {
             Composition = composition,
         });
         await worker.HandshakeAndActivateAsync();
+        await worker.SendInvocationAsync("fault-active-call", "unary", "echo");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        lifecycle.Fail(new InvalidOperationException("lifecycle failed"));
+        try
+        {
+            if (hostShutdownFirst)
+            {
+                await worker.SendAsync(new { type = "host.shutdown", shutdownId = "fault-stop", reason = "test" });
+                await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            lifecycle.Fail(new InvalidOperationException("lifecycle failed"));
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            using (var report = await worker.ReadAsync())
+            {
+                Assert.Equal("worker.generation-fault", report.RootElement.GetProperty("type").GetString());
+                Assert.Equal(WorkerHarness.ActivationId, report.RootElement.GetProperty("activationId").GetString());
+                var diagnostic = report.RootElement.GetProperty("message").GetString()!;
+                Assert.Contains(nameof(InvalidOperationException), diagnostic, StringComparison.Ordinal);
+                Assert.DoesNotContain("lifecycle failed", diagnostic, StringComparison.Ordinal);
+            }
+            // A request written before the Host saw the fault may cross the report.
+            // It must never enter the package or abort its ongoing cleanup.
+            await worker.SendInvocationAsync("crossed-fault-call", "unary", "echo");
+            await worker.SendAsync(new { type = "host.cancel", id = "crossed-fault-call" });
+            if (!hostShutdownFirst)
+                await worker.SendAsync(new { type = "host.shutdown", shutdownId = "fault-stop", reason = "test" });
+            Assert.DoesNotContain("shutdown:faulting", events);
+            Assert.DoesNotContain("dispose:services", events);
+            Assert.False(worker.RunTask.IsCompleted);
+        }
+        finally
+        {
+            releaseCleanup.TrySetResult();
+            await handlerFinished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
 
         var failure = await Assert.ThrowsAsync<WorkerProtocolException>(async () =>
             await worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.Contains("lifecycle service faulted", failure.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("shutdown:faulting", events);
-        Assert.Contains("dispose:services", events);
+        Assert.True(failure.Message.Contains("lifecycle service faulted", StringComparison.OrdinalIgnoreCase), failure.ToString());
+        await composition.DisposeAsync();
+        Assert.Equal(
+            ["prepare:faulting", "commit:faulting:7", "activate:faulting", "handler-drained", "shutdown:faulting", "dispose:services"],
+            events);
+    }
+
+    [Theory]
+    [InlineData("candidate", true)]
+    [InlineData("commit", true)]
+    [InlineData("migration", true)]
+    [InlineData("activation", true)]
+    [InlineData("activation", false)]
+    public async Task WorkerV1_StartupFailureRunsTheShutdownOwnerExactlyOnce(string stage, bool withComposition)
+    {
+        var events = new List<string>();
+        var shutdownCount = 0;
+        var composition = new SunderWorkerComposition(new RecordingServiceProvider(events),
+            [new RecordingWorkerLifecycleService("startup", events)]);
+        ValueTask Step(string current) => current == stage
+            ? ValueTask.FromException(new InvalidOperationException("startup failure: " + stage))
+            : ValueTask.CompletedTask;
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            Composition = withComposition ? composition : null,
+            OnCandidateStarted = _ => Step("candidate"),
+            OnGenerationCommitted = (_, _) => Step("commit"),
+            OnBeforeStorageMigrations = (_, _) => Step("migration"),
+            OnActivated = (_, _) => Step("activation"),
+            OnShutdown = (_, _) =>
+            {
+                Interlocked.Increment(ref shutdownCount);
+                events.Add("shutdown-owner");
+                return ValueTask.CompletedTask;
+            },
+        });
+        await worker.HandshakeAsync();
+        await worker.SendAsync(new { type = "host.start-candidate" });
+        if (stage != "candidate")
+        {
+            using var started = await worker.ReadAsync();
+            Assert.Equal("worker.candidate-started", started.RootElement.GetProperty("type").GetString());
+            await worker.SendAsync(new { type = "host.commit-generation", activationId = WorkerHarness.ActivationId, sessionGeneration = 7 });
+            if (stage != "commit")
+            {
+                using var committed = await worker.ReadAsync();
+                Assert.Equal("worker.generation-committed", committed.RootElement.GetProperty("type").GetString());
+                await worker.SendAsync(new { type = "host.prepare-storage-migrations", activationId = WorkerHarness.ActivationId, sessionGeneration = 7 });
+                if (stage != "migration")
+                {
+                    using var prepared = await worker.ReadAsync();
+                    Assert.Equal("worker.storage-migrations-prepared", prepared.RootElement.GetProperty("type").GetString());
+                    await worker.ActivateAsync();
+                }
+            }
+        }
+        var failure = await Assert.ThrowsAsync<WorkerProtocolException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("startup failure: " + stage, failure.ToString(), StringComparison.Ordinal);
+        Assert.Equal(1, shutdownCount);
+        if (withComposition)
+        {
+            await composition.DisposeAsync();
+            Assert.Equal(["shutdown-owner", "shutdown:startup", "dispose:services"], events.TakeLast(3));
+            Assert.Single(events, value => value == "dispose:services");
+        }
+    }
+
+    [Fact]
+    public async Task WorkerV1_FaultDrainTimeoutDoesNotDisposeDependenciesUnderNoncooperativeWork()
+    {
+        var events = new List<string>();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lifecycle = new RecordingMonitoredLifecycleService("faulting", events);
+        var composition = new SunderWorkerComposition(new RecordingServiceProvider(events), [lifecycle]);
+        var handler = new TestRpcHandler
+        {
+            Unary = async (_, _, _, request, _) =>
+            {
+                entered.TrySetResult();
+                await release.Task;
+                finished.TrySetResult();
+                return request;
+            },
+        };
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions([WorkerHarness.Registration(handler)])
+        {
+            Composition = composition,
+        }, WorkerLimits.Default with { ShutdownDrainTimeout = TimeSpan.FromMilliseconds(150) });
+        await worker.HandshakeAndActivateAsync();
+        await worker.SendInvocationAsync("noncooperative", "unary", "echo");
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            lifecycle.Fail(new InvalidOperationException("original lifecycle failure"));
+            var failure = await Assert.ThrowsAsync<WorkerProtocolException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Contains("original lifecycle failure", failure.ToString(), StringComparison.Ordinal);
+            Assert.Contains("deadline", failure.ToString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("shutdown:faulting", events);
+            Assert.DoesNotContain("dispose:services", events);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await composition.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WorkerV1_LifecycleAndShutdownFailuresRetainBothCausesAndDisposeOnce()
+    {
+        var events = new List<string>();
+        var lifecycle = new RecordingMonitoredLifecycleService("faulting", events);
+        var composition = new SunderWorkerComposition(new RecordingServiceProvider(events), [lifecycle]);
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            Composition = composition,
+            OnShutdown = (_, _) => ValueTask.FromException(new InvalidOperationException("shutdown failure")),
+        });
+        await worker.HandshakeAndActivateAsync();
+        lifecycle.Fail(new InvalidOperationException("original lifecycle failure"));
+        using (var report = await worker.ReadAsync())
+            Assert.Equal("worker.generation-fault", report.RootElement.GetProperty("type").GetString());
+        var failure = await Assert.ThrowsAsync<WorkerProtocolException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("original lifecycle failure", failure.ToString(), StringComparison.Ordinal);
+        Assert.Contains("shutdown failure", failure.ToString(), StringComparison.Ordinal);
+        await composition.DisposeAsync();
+        Assert.Single(events, value => value == "dispose:services");
+    }
+
+    [Fact]
+    public async Task WorkerV1_CallerCancellationDoesNotEraseShutdownFailure()
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            OnShutdown = async (_, token) =>
+            {
+                started.TrySetResult();
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+                finally { throw new IOException("Cleanup failed after cancellation."); }
+            },
+        });
+        await worker.HandshakeAndActivateAsync();
+        await worker.SendAsync(new { type = "host.shutdown", shutdownId = "cancel-failure", reason = "test" });
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        worker.Cancel();
+        var failure = await Assert.ThrowsAsync<WorkerProtocolException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains("Cleanup failed after cancellation.", failure.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task WorkerV1_SynchronousActivationPrefixDoesNotBlockShutdownOrHideItsDrain()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var shutdown = false;
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
+            [WorkerHarness.Registration(new TestRpcHandler())])
+        {
+            OnActivated = (_, token) =>
+            {
+                using var registration = token.Register(() => cancelled.TrySetResult());
+                entered.TrySetResult();
+                release.Wait(TimeSpan.FromSeconds(5));
+                token.ThrowIfCancellationRequested();
+                return ValueTask.CompletedTask;
+            },
+            OnShutdown = (_, _) => { shutdown = true; return ValueTask.CompletedTask; },
+        });
+        await worker.HandshakeAsync();
+        await worker.StartCandidateAndCommitAsync();
+        await worker.PrepareStorageMigrationsAsync();
+        await worker.ActivateAsync();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            await worker.SendAsync(new { type = "host.shutdown", shutdownId = "sync-stop", reason = "test" });
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(shutdown);
+        }
+        finally { release.Set(); }
+        using var acknowledgement = await worker.ReadAsync();
+        Assert.Equal("worker.shutdown-ack", acknowledgement.RootElement.GetProperty("type").GetString());
+        await worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(shutdown);
+    }
+
+    [Fact]
+    public async Task WorkerV1_CallerAbortRejectsShutdownLoggingWithoutStrandingAnOutboundCall()
+    {
+        SunderWorkerContext? context = null;
+        var shutdown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var worker = new WorkerHarness(candidate =>
+        {
+            context = candidate;
+            return new SunderWorkerOptions([WorkerHarness.Registration(new TestRpcHandler())])
+            {
+                OnShutdown = async (_, _) =>
+                {
+                    var failure = await Assert.ThrowsAsync<SunderRpcException>(() =>
+                        context.Logging.Events.InformationAsync("worker.stopping", "Stopping").AsTask());
+                    Assert.Equal("rpc.worker.not-active", failure.Error.Code);
+                    shutdown.TrySetResult();
+                },
+            };
+        });
+        await worker.HandshakeAndActivateAsync();
+        worker.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(shutdown.Task.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task WorkerV1_CompositionPublishesDisposalBeforeReentrantServiceCleanup()
+    {
+        var events = new List<string>();
+        Task? reentrant = null;
+        SunderWorkerComposition? composition = null;
+        var attempts = 0;
+        var services = new RecordingServiceProvider(events)
+        {
+            OnDispose = () =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                    reentrant = composition!.DisposeAsync().AsTask();
+            },
+        };
+        composition = new SunderWorkerComposition(services);
+        await composition.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5));
+        await reentrant!.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, attempts);
+        Assert.Equal(["dispose:services"], events);
     }
 
     [Fact]
@@ -555,15 +850,18 @@ public sealed class WorkerV1RuntimeTests
             await worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
-    [Fact]
-    public async Task WorkerV1_CallbackCatalogAndCancellationAreExactGenerationBound()
+    [Theory]
+    [InlineData("cancel")]
+    [InlineData("cancel-after-churn")]
+    [InlineData("invoke-with-live-callback-id")]
+    public async Task WorkerV1_CallbackCatalogAndCancellationAreExactGenerationBound(string scenario)
     {
         var handler = new BlockingCallbackHandler();
         await using var worker = new WorkerHarness(_ => new SunderWorkerOptions(
-            [WorkerHarness.Registration(new TestRpcHandler())])
+            [WorkerHarness.Registration(new TestRpcHandler { Unary = static (_, _, _, request, _) => ValueTask.FromResult(request.Clone()) })])
         {
             CallbackHandlers = [handler],
-        });
+        }, WorkerLimits.Default with { MaximumRememberedHostIds = 2 });
         await worker.HandshakeAndActivateAsync(sessionGeneration: 23);
 
         var contributions = worker.ReadyContributions!.Value;
@@ -577,6 +875,7 @@ public sealed class WorkerV1RuntimeTests
                 "candidateLifecycle",
                 "generationLifecycle",
                 "migrationPreparationLifecycle",
+                "operationalOutcomesV1",
             ],
             contributions.EnumerateObject().Select(static property => property.Name));
         Assert.Equal(
@@ -601,6 +900,22 @@ public sealed class WorkerV1RuntimeTests
             },
         });
         await handler.Started.WaitAsync(TimeSpan.FromSeconds(5));
+        if (scenario == "invoke-with-live-callback-id")
+        {
+            await worker.SendInvocationAsync("callback-call-1", "unary", "echo", sessionGeneration: 23);
+            await Assert.ThrowsAsync<WorkerProtocolException>(() => worker.RunTask.WaitAsync(TimeSpan.FromSeconds(5)));
+            return;
+        }
+        if (scenario == "cancel-after-churn")
+        {
+            for (var index = 0; index < 3; index++)
+            {
+                var id = "churn" + index;
+                await worker.SendInvocationAsync(id, "unary", "echo", sessionGeneration: 23);
+                using var response = await worker.ReadAsync();
+                Assert.Equal(id, response.RootElement.GetProperty("id").GetString());
+            }
+        }
         await worker.SendAsync(new
         {
             type = "host.contribution-cancel",
@@ -621,6 +936,11 @@ public sealed class WorkerV1RuntimeTests
                 root.GetProperty("error").GetProperty("code").GetString());
         }
         await handler.Cancelled.WaitAsync(TimeSpan.FromSeconds(5));
+        await worker.SendAsync(new
+        {
+            type = "host.contribution-cancel", id = "callback-call-1",
+            activationId = WorkerHarness.ActivationId, sessionGeneration = 23,
+        });
         await worker.ShutdownAsync();
     }
 
@@ -2139,11 +2459,13 @@ public sealed class WorkerV1RuntimeTests
 
     private sealed class RecordingServiceProvider(List<string> events) : IServiceProvider, IAsyncDisposable
     {
+        public Action? OnDispose { get; init; }
         public object? GetService(Type serviceType) => null;
 
         public ValueTask DisposeAsync()
         {
             events.Add("dispose:services");
+            OnDispose?.Invoke();
             return ValueTask.CompletedTask;
         }
     }

@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Sunder.Core.Tests;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -14,9 +15,9 @@ namespace Sunder.Runtime.Host.Tests;
 [Collection(RuntimeProcessIntegrationCollection.Name)]
 public sealed class AgentPackageReleaseSmokeTests
 {
-    private const string AgentPackageId = "sunder.package.agent";
-    private const string SemanticMemoryPackageId = "sunder.package.agent.memory.semantic";
-    private const string ShellPackageId = "sunder.package.agent.tools.shell";
+    private const string AgentPackageId = "younics.ai.agent";
+    private const string SemanticMemoryPackageId = "younics.ai.agent.memory.semantic";
+    private const string ShellPackageId = "younics.ai.agent.tools.shell";
     private static readonly string[] ShellProviderIds =
     [
         "shell.permissions",
@@ -34,7 +35,9 @@ public sealed class AgentPackageReleaseSmokeTests
         var archives = Directory.GetFiles(Path.GetFullPath(archiveDirectory!), "*.sunderpkg")
             .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(15, archives.Length);
+        var baseline = AgentCurrentBaseline.Load();
+        Assert.Equal(baseline.Packages.Select(package => package.PackageId).Order(StringComparer.Ordinal),
+            archives.Select(baseline.VerifyArchive).Order(StringComparer.Ordinal));
 
         var root = Path.Combine(Path.GetTempPath(), "sunder-agent-release-smoke", Guid.NewGuid().ToString("N"));
         var paths = new RuntimePackagePaths(root);
@@ -73,13 +76,15 @@ public sealed class AgentPackageReleaseSmokeTests
             var initialWorkerProcessIds = GetWorkerProcessIds(host);
             Assert.Equal(archives.Length, initialWorkerProcessIds.Length);
             observedWorkerProcessIds.UnionWith(initialWorkerProcessIds);
-            Assert.Contains(host.GetActivePackageUiSnapshots(), snapshot => snapshot.PackageId == AgentPackageId);
+            Assert.Equal(baseline.AppPackageIds, host.GetActivePackageUiSnapshots().Select(snapshot => snapshot.PackageId).Order(StringComparer.Ordinal));
+            baseline.VerifyProviders(host.RpcCatalog.GetSnapshot().Providers);
 
             var agentCatalogProvider = Assert.Single(
                 host.RpcCatalog.GetSnapshot().Providers,
                 provider => provider.PackageId == AgentPackageId
                             && provider.ProviderId == "agent.runtime.catalog");
-            Assert.Equal("sunder.agent.runtime.catalog", agentCatalogProvider.ContractId);
+            Assert.Equal("younics.ai.agent.runtime.catalog", agentCatalogProvider.ContractId);
+            Assert.Equal("1.0.0", agentCatalogProvider.ContractVersion);
             Assert.Equal(SunderRpcProviderState.Active, agentCatalogProvider.State);
 
             var shell = Assert.Single(host.GetActivePackages(), package => package.PackageId == ShellPackageId);
@@ -110,7 +115,8 @@ public sealed class AgentPackageReleaseSmokeTests
             Assert.Equal(archives.Length, reloadedWorkerProcessIds.Length);
             observedWorkerProcessIds.UnionWith(reloadedWorkerProcessIds);
 
-            await ExportAppSnapshotAsync(host);
+            baseline.VerifyProviders(host.RpcCatalog.GetSnapshot().Providers);
+            await ExportAppSnapshotAsync(host, baseline);
 
             logger.Clear();
             var reinstall = await host.ApplyPackageStoreMutationsAsync(installed
@@ -130,6 +136,7 @@ public sealed class AgentPackageReleaseSmokeTests
             var reinstalledWorkerProcessIds = GetWorkerProcessIds(host);
             Assert.Equal(archives.Length, reinstalledWorkerProcessIds.Length);
             observedWorkerProcessIds.UnionWith(reinstalledWorkerProcessIds);
+            baseline.VerifyProviders(host.RpcCatalog.GetSnapshot().Providers);
         }
         finally
         {
@@ -258,7 +265,7 @@ public sealed class AgentPackageReleaseSmokeTests
         }
     }
 
-    private static async Task ExportAppSnapshotAsync(RuntimePackageSessionTestHost host)
+    private static async Task ExportAppSnapshotAsync(RuntimePackageSessionTestHost host, AgentCurrentBaseline baseline)
     {
         var outputDirectory = Environment.GetEnvironmentVariable("SUNDER_AGENT_UI_SNAPSHOT_DIR");
         if (string.IsNullOrWhiteSpace(outputDirectory)) return;
@@ -274,7 +281,7 @@ public sealed class AgentPackageReleaseSmokeTests
         Assert.NotNull(lease);
         Assert.Equal(snapshot.ContentHash, lease.ContentHash);
 
-        var snapshotPath = Path.Combine(outputDirectory, "sunder.package.agent.snapshot");
+        var snapshotPath = Path.Combine(outputDirectory, "younics.ai.agent.snapshot");
         await using (var destination = new FileStream(snapshotPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
             await lease.Stream.CopyToAsync(destination);
@@ -284,13 +291,15 @@ public sealed class AgentPackageReleaseSmokeTests
         await File.WriteAllTextAsync(
             metadataPath,
             JsonSerializer.Serialize(
-                new AgentAppSnapshotMetadata(package, snapshot),
+                new AgentAppSnapshotMetadata(package, snapshot, baseline.InventorySha256, baseline.ContractsSha256),
                 new JsonSerializerOptions(JsonSerializerDefaults.Web)));
     }
 
     private sealed record AgentAppSnapshotMetadata(
         ActivePackageDescriptor Package,
-        PackageUiSnapshotDescriptor Snapshot);
+        PackageUiSnapshotDescriptor Snapshot,
+        string InventorySha256,
+        string ContractsSha256);
 
     private sealed class ReleaseSmokeLogger : ILogger<RuntimePackageSessionTestHost>
     {

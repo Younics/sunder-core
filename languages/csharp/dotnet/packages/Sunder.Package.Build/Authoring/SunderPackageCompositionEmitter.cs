@@ -117,6 +117,22 @@ internal static class SunderPackageCompositionEmitter
         if (settings is not null)
             output.Append("            SettingsSchema = ((global::Sunder.Sdk.Worker.ISunderWorkerSettingsSchemaProvider)provider.GetRequiredService<")
                 .Append(Type(settings.Type)).AppendLine(">()).SettingsSchema,");
+        var migrations = analysis.Composition.Worker.SingleOrDefault(entry => SunderPackageDependencyDiscovery.IsStorageMigrationProvider(entry.Type));
+        if (migrations is not null)
+        {
+            foreach (var property in new[] { "StateMigrations", "SecretMigrations" })
+                output.Append("            ").Append(property).Append(" = ((global::Sunder.Sdk.Worker.ISunderWorkerStorageMigrationProvider)provider.GetRequiredService<")
+                    .Append(Type(migrations.Type)).Append(">()).").Append(property).AppendLine(",");
+        }
+        var preparations = analysis.Composition.Worker.Where(entry => SunderPackageDependencyDiscovery.IsStorageMigrationPreparation(entry.Type)).ToArray();
+        if (preparations.Length != 0)
+        {
+            output.AppendLine("            OnBeforeStorageMigrations = async (preparation, token) => {");
+            foreach (var preparation in preparations)
+                output.Append("                token.ThrowIfCancellationRequested(); await ((global::Sunder.Sdk.Worker.ISunderWorkerStorageMigrationPreparation)provider.GetRequiredService<")
+                    .Append(Type(preparation.Type)).AppendLine(">()).PrepareStorageMigrationsAsync(preparation, token).ConfigureAwait(false);");
+            output.AppendLine("            },");
+        }
         var auth = analysis.Composition.Worker.SingleOrDefault(entry => SunderPackageDependencyDiscovery.IsAuthHandler(entry.Type));
         var callbacks = analysis.Composition.Worker.Where(entry => SunderPackageDependencyDiscovery.IsCallbackHandler(entry.Type)
             && !SunderPackageDependencyDiscovery.IsAuthHandler(entry.Type)).ToArray();

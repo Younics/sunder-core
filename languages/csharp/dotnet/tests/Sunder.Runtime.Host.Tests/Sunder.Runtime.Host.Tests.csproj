@@ -13,6 +13,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
+    <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
     <None Update="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="SyntheticExecutionRuntimeLauncher.cs" />
     <None Include="SyntheticExecutionRuntimeLauncher.cs" />

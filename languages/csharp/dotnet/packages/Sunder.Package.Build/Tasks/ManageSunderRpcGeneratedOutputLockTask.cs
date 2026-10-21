@@ -35,12 +35,21 @@ public sealed class ManageSunderRpcGeneratedOutputLockTask : Microsoft.Build.Uti
                 }
 
                 var paths = ResolvePaths(ProjectDirectory, OutputDirectories);
+                var reportedWait = false;
                 var outputLock = GeneratedOutputLock.Acquire(
                     paths.Select(static path => GeneratedOutputLock.TargetLeafDiscoveryKey(
                         path.DiscoveryRoot,
                         path.OutputDirectory)),
                     paths.Select(static path => path.OutputDirectory),
-                    waitBeforeRetry: WaitBeforeRetry);
+                    waitBeforeRetry: WaitBeforeRetry,
+                    waitingForOutput: path =>
+                    {
+                        reportedWait = true;
+                        Log.LogMessage(MessageImportance.High,
+                            "package-build.output-lock.waiting: Waiting for generated output lock '{0}'; checking ownership or waiting for another build.", path);
+                    });
+                if (reportedWait)
+                    Log.LogMessage(MessageImportance.High, "package-build.output-lock.acquired: Generated output locks acquired; continuing the command.");
                 var lease = new Lease(outputLock, paths.Select(static path => path.OutputDirectory));
                 var leaseId = Guid.NewGuid().ToString("N");
                 try

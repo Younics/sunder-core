@@ -11,4 +11,6 @@ internal sealed class AppPackageActivationState
     public AppPackageLoadContext? LoadContext { get; set; }
 
     public IAsyncDisposable? TargetLifetime { get; set; }
+
+    public AppPackageLoadAdmission? LoadAdmission { get; set; }
 }

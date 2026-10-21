@@ -11,28 +11,39 @@ namespace Sunder.Package.Build.Tests;
 public sealed partial class SunderRpcCSharpImportPrepassTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task NaturalProviderContextFreeExplicitAndInheritedBindingsRemainValid(bool explicitImplementation)
+    [InlineData("explicit")]
+    [InlineData("inherited-source")]
+    [InlineData("inherited-interface")]
+    [InlineData("inherited-explicit")]
+    public async Task NaturalProviderContextFreeExplicitAndInheritedBindingsRemainValid(string binding)
     {
         var imports = SunderRpcCSharpImportPrepass.Prepare(WithProvider(_lock), _root);
         var source = """
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
-            """ + (explicitImplementation ? """
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal;
+            """ + (binding == "explicit" ? """
             [SunderServiceProvider(typeof(IExampleService))]
             public sealed partial class Provider : IExampleService
             {
                 public int Calls { get; private set; }
                 ValueTask IExampleService.PingAsync(CancellationToken token) { Calls++; return ValueTask.CompletedTask; }
             }
-            """ : """
+            """ : binding == "inherited-source" ? """
             public class BaseProvider
             {
                 public int Calls { get; private set; }
                 public Task PingAsync() { Calls++; return Task.CompletedTask; }
+            }
+            [SunderServiceProvider(typeof(IExampleService))]
+            public sealed partial class Provider : BaseProvider;
+            """ : $$"""
+            public class BaseProvider : IExampleService
+            {
+                public int Calls { get; private set; }
+                {{(binding == "inherited-explicit" ? "ValueTask IExampleService." : "public ValueTask ")}}PingAsync(CancellationToken token)
+                { Calls++; return ValueTask.CompletedTask; }
             }
             [SunderServiceProvider(typeof(IExampleService))]
             public sealed partial class Provider : BaseProvider;
@@ -43,7 +54,9 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         var load = new AssemblyLoadContext("natural-context-free", isCollectible: true);
         try
         {
-            var instance = Activator.CreateInstance(load.LoadFromStream(bytes).GetType("Provider", true)!)!;
+            var assembly = load.LoadFromStream(bytes);
+            var instance = Activator.CreateInstance(assembly.GetType("Provider", true)!)!;
+            Assert.False(assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IContractServices", true)!.IsInstanceOfType(instance));
             var registration = (SunderWorkerProviderRegistration)instance.GetType().GetMethod("CreateSunderRpcProviderRegistration")!.Invoke(instance, null)!;
             var output = await registration.Handler.InvokeUnaryAsync(null!, "example", "ping", JsonSerializer.SerializeToElement(new { }));
             Assert.Empty(output.EnumerateObject());
@@ -59,7 +72,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         const string source = """
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal;
             public class BaseProvider { public Task PingAsync() => Task.CompletedTask; }
             [SunderServiceProvider(typeof(IExampleService))]
             public sealed partial class Provider : BaseProvider { public new Task<int> PingAsync() => Task.FromResult(1); }
@@ -82,7 +95,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         {
             var assembly = load.LoadFromStream(bytes);
             var type = assembly.GetType("ContextualProvider", true)!;
-            var api = assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.IContextualService", true)!;
+            var api = assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Contextual.IContextualService", true)!;
             Assert.False(api.IsAssignableFrom(type)); // Deliberately not a C# interface implementation.
             var instance = Activator.CreateInstance(type)!;
             var registration = (SunderWorkerProviderRegistration)type.GetMethod("CreateSunderRpcProviderRegistration")!.Invoke(instance, null)!;
@@ -206,7 +219,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         using System.Threading.Tasks;
         using Sunder.Sdk.Rpc;
         using Sunder.Sdk.Services;
-        using Sunder.Generated.Packages.Example_Dependency_Services;
+        using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Contextual;
         [SunderServiceProvider(typeof(IContextualService))]
         public sealed partial class ContextualProvider
         {

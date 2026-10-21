@@ -66,7 +66,7 @@ public sealed class RegistryActivePolicyClientTests
                 "missing" => response with { Packages = [] },
                 "extra" => response with { Packages = [.. response.Packages, response.Packages[0] with { Package = Package with { Version = "2.0.0" } }] },
                 "revision" => response with { PackagePolicy = response.PackagePolicy with { Revision = 0 } },
-                "hash" => response with { Checkpoint = response.Checkpoint with { Digest = "bad" } },
+                "hash" => response with { PackagePolicy = response.PackagePolicy with { Fingerprint = "bad" } },
                 "platform-omission" => response with { PlatformCatalogs = [] },
                 "package-contradiction" => response with { Packages = [response.Packages[0] with { VersionAvailability = "SecurityBlocked" }] },
                 "platform-contradiction" => response with { PlatformCatalogs = [response.PlatformCatalogs[0] with { LifecycleState = "Revoked" }] },
@@ -78,12 +78,30 @@ public sealed class RegistryActivePolicyClientTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CachedPolicyIdentityRejectsOlderRevisionOrSameRevisionFingerprintConflict(bool conflictingFingerprint)
+    {
+        using var context = new ActivePolicyTestContext();
+        context.Response = request => Allowed(request, 2);
+        await context.RefreshAsync();
+        var before = await File.ReadAllBytesAsync(context.Cache.FilePath(Origin));
+        context.Response = request => conflictingFingerprint
+            ? Allowed(request, 2) with { PackagePolicy = new(2, Hash("different-policy")) }
+            : Allowed(request, 1);
+        await Assert.ThrowsAsync<InvalidDataException>(() => context.RefreshAsync());
+        Assert.Equal(before, await File.ReadAllBytesAsync(context.Cache.FilePath(Origin)));
+        context.Require();
+    }
+
+    [Theory]
     [InlineData("unknown")]
     [InlineData("duplicate")]
     [InlineData("missing")]
     [InlineData("null")]
     [InlineData("number")]
     [InlineData("case")]
+    [InlineData("removed-authority")]
     public async Task JsonBoundaryRejectsMalformedShape(string mutation)
     {
         using var context = new ActivePolicyTestContext();
@@ -98,6 +116,7 @@ public sealed class RegistryActivePolicyClientTests
                 case "null": json["packagePolicy"] = null; break;
                 case "number": json["packagePolicy"] = "1"; break;
                 case "case": json["Nonce"] = json["nonce"]!.DeepClone(); json.Remove("nonce"); break;
+                case "removed-authority": json["checkpoint"] = null; break;
             }
             var bytes = json.ToJsonString();
             if (mutation == "duplicate") bytes = bytes.Insert(1, "\"nonce\":\"duplicate\",");

@@ -10,6 +10,7 @@ import {
   parseRpcContractDescriptor,
 } from "@sunder/sdk";
 import { readProjectDescriptorFile } from "./descriptor-files";
+import { assertBaselineFreeEvidence } from "./rpc-baseline-store";
 import type { RegistryOriginOptions } from "./rpc-contract-lock";
 import { MODEL_PROJECTION_PATH, projectionDocumentBytes } from "./rpc-model-projection";
 import {
@@ -25,6 +26,7 @@ import {
   markerPath,
   stageGeneratedDirectory,
   withOutputLocks,
+  withOutputLeases,
 } from "./output";
 
 const RPC_BINDINGS_MARKER = "Sunder TypeScript RPC bindings generated output v1\n";
@@ -64,8 +66,65 @@ export async function withRpcBindingsOutputLock<T>(projectRoot: string, operatio
   }
 }
 
+/** Metadata qualification must precede recovery/cleanup: wildcard sweeps could otherwise erase unproven history. */
+export async function withPrivateMetadataOutputLease<T>(projectRoot: string, operation: () => Promise<T>): Promise<T> {
+  const root = resolve(projectRoot); const output = rpcBindingsOutputRoot(root);
+  await assertSafeGeneratedOutputParents(root, output);
+  return withOutputLeases([output], async () => {
+    for (const entry of await readdir(dirname(output))) {
+      if (entry.startsWith("rpc.stage-") || entry.startsWith("rpc.backup-") || entry.startsWith("rpc.sunder-output-transaction.json")
+        || entry.startsWith("rpc.sunder-generated-output.stage-") || entry.startsWith("rpc.sunder-generated-output.backup-"))
+        throw new Error("metadata.history: Interrupted or unproven generated output must be recovered under its original metadata before an ID edit.");
+    }
+    return operation();
+  });
+}
+
 export function rpcBindingsOutputRoot(projectRoot: string): string {
   return resolve(projectRoot, ...RPC_BINDINGS_OUTPUT_PATH.split("/"));
+}
+
+/** Qualify the complete old private generated tree before a metadata edit. Caller holds the RPC output lock.
+ * Old receipts are never relabeled. Only the verified generated tree is invalidated; authored baselines/locks stay outside the transaction.
+ */
+export async function preparePrivateMetadataInvalidationLocked(project: LoadedProject): Promise<() => Promise<void>> {
+  const owned = project.ownedRpc;
+  if (!owned || owned.baselineInput.baseline || owned.contracts.some(contract => !contract.imported && contract.exposure !== "package"))
+    throw new Error("metadata.history: ID editing requires baseline-free private service source.");
+  await owned.revalidate();
+  const output = rpcBindingsOutputRoot(project.root);
+  await assertSafeGeneratedOutputParents(project.root, output);
+  const present = await tryLstat(output); const marker = await tryLstat(markerPath(output));
+  if (!present && !marker) return async () => { await owned.revalidate(); };
+  await assertReplaceableGeneratedDirectory(output);
+  if (!present || !marker || (await readProjectDescriptorFile(project.root, markerPath(output), "RPC output marker")).toString() !== RPC_BINDINGS_MARKER)
+    throw new Error("metadata.history: Unproven RPC output ownership; restore the original source/evidence.");
+  const expected = new Map(owned.files);
+  for (const name of ["authoring-receipt.v1.json", "app-authoring-receipt.v1.json", "package-export.v1.json"]) {
+    if (!expected.has(name)) continue;
+    const bytes = await readProjectDescriptorFile(project.root, resolve(output, name), "Prior metadata evidence", 67_108_864);
+    assertBaselineFreeEvidence(bytes, name, project.config.id, name === "package-export.v1.json" ? "export" : "receipt");
+    // Producer/source byte fingerprints can change between tool releases or a name-only edit.
+    // All identity, ownership, descriptor, projection, import and role-use evidence must still match.
+    const before = JSON.parse(bytes.toString()) as Record<string, unknown>;
+    const after = JSON.parse(expected.get(name)!) as Record<string, unknown>;
+    delete before.inputFingerprint; delete after.inputFingerprint;
+    if (JSON.stringify(before) !== JSON.stringify(after)) throw new Error("metadata.history: Prior private generation differs from current service evidence. Build under the original ID before editing metadata.");
+    expected.set(name, bytes.toString());
+  }
+  const plans = [...expected].map(([outputFile, source]) => ({ outputFile, source }));
+  if (!await generatedSetMatches(output, plans)) throw new Error("metadata.history: Unknown or changed generated files cannot be discarded by a metadata edit. Build under the original ID first.");
+  return async () => {
+    await owned.revalidate(); await assertSafeGeneratedOutputParents(project.root, output);
+    if (!await generatedSetMatches(output, plans)) throw new Error("metadata.conflict: Generated output changed after metadata planning.");
+    const staged = await stageGeneratedDirectory(output, RPC_BINDINGS_MARKER, async directory => {
+      // This is an absence marker, not a new-owner receipt. Generation must produce fresh authority evidence.
+      await writeFile(resolve(directory, "owned-baseline.sha256"), "absent\n");
+    });
+    const outputs = [staged.output, staged.marker];
+    try { await owned.revalidate(); await commitStagedOutputs(outputs); }
+    finally { await cleanupStagedOutputs(outputs); }
+  };
 }
 
 export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedProject): Promise<void> {

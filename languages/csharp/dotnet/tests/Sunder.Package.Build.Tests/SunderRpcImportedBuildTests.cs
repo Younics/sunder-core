@@ -319,6 +319,10 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
                 ["abiSha256"] = descriptor.AbiSha256,
             },
             ["history"] = new JsonArray(),
+            // This temporary draft has exact compiled source; review it explicitly
+            // rather than treating descriptor-only evidence as a source API review.
+            ["projectionReviews"] = new JsonArray(JsonNode.Parse(SunderRpcAuthoringDocuments
+                .CreateProjectionReview(descriptor, owned.ModelProjection, owned.MethodPolicies).ReviewJson.GetRawText())),
         };
         WriteJson(baselinePath, baselineDocument);
         var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath);
@@ -582,7 +586,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
             {
                 public void ConfigureAppServices(IServiceCollection services, IPackageContext context) { }
                 public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services) { }
-                public Type OwnedClientType => typeof(Sunder.Generated.Packages.Example_Generated_Services.IGreetingService);
+                public Type OwnedClientType => typeof(Sunder.Generated.Packages.Example_Generated_Services.CExample_Generated_Greeting.IGreetingService);
             }
             """);
         var app = CreateGeneration("ProjectImport", "app", producer.PackageProjectExports);

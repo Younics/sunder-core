@@ -75,7 +75,7 @@ source. Ordinary Build generates separate implementation assemblies below
 The App receives role-local generated clients. No combined implementation DLL is emitted.
 
 Ordinary generated APIs live in package-specific namespaces: package ID
-`sunder.package.agent` produces `Sunder.Generated.Packages.Sunder_Package_Agent_Services`.
+`younics.ai.agent` produces `Sunder.Generated.Packages.Younics_Ai_Agent_Services`.
 Canonical ID segments are initial-capitalized and joined with underscores; an ID
 starting with a digit receives a leading underscore. Own and imported interface names
 derive from the service ID: `embedding-provider` exposes `IEmbeddingProviderService`.
@@ -129,10 +129,9 @@ Ambiguous overloads, mismatched values/nullability, duplicate contexts and autho
 method-ID overrides fail against the locked descriptor. Source implementations may
 use `Task` or `ValueTask` for the same unary result; streams remain `IAsyncEnumerable<T>`.
 
-Existing explicitly composed families use a canonical executable Worker project with
-`SunderPackagePrimaryProject=true` and an optional `SunderPackageAppProject`. That App
-is a build-only input; the outer-only project-reference example below restores it
-without making it a Worker compile input.
+Canonical packages use one authored Library project with `SunderPackageProject=true`.
+Role planning creates isolated Worker/App outputs; authors do not wire a second App
+project into the build graph.
 
 Associated Apps receive required uses of package-private services by default.
 Concrete public services default to optional owning-App use; declaration-only public
@@ -157,11 +156,12 @@ An imported provider can declare a narrower Runtime use of a canonical service
 already present in its pinned materialization closure:
 
 ```csharp
-using AgentServices = Sunder.Generated.Packages.Sunder_Package_Agent_Services;
+using IToolSourceService = Sunder.Generated.Packages.Younics_Ai_Agent_Services.CYounics_Ai_Agent_Tool_Source.IToolSourceService;
+using IExecutionTargetService = Sunder.Generated.Packages.Younics_Ai_Agent_Services.CYounics_Ai_Agent_Execution_Target.IExecutionTargetService;
 
-[SunderServiceProvider(typeof(AgentServices.IToolSourceService))]
-[SunderRuntimeUse(typeof(AgentServices.IExecutionTargetService), Actions = ["discover"])]
-public sealed partial class ToolSourceProvider : AgentServices.IToolSourceService
+[SunderServiceProvider(typeof(IToolSourceService))]
+[SunderRuntimeUse(typeof(IExecutionTargetService), Actions = ["discover"])]
+public sealed partial class ToolSourceProvider : IToolSourceService
 {
     // Implement the selected provider's ordinary service methods.
 }
@@ -185,25 +185,6 @@ activation gate, without constructing the provider. This supports workers that m
 commit startup before resolving persistent services. The gate validates the later
 instance registration's complete identity/error tuple and owns waiting, cancellation
 and retirement. Owned, imported and semantic platform bindings share this path.
-
-```xml
-<PropertyGroup>
-  <OutputType>Exe</OutputType>
-  <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
-  <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
-  <SunderPackagePrimaryProject>true</SunderPackagePrimaryProject>
-  <SunderPackageAppProject Condition="Exists('MyPackage.App/MyPackage.App.csproj')">MyPackage.App/MyPackage.App.csproj</SunderPackageAppProject>
-</PropertyGroup>
-
-<ItemGroup>
-  <ProjectReference Include="$(SunderPackageAppProject)"
-                    Condition="'$(SunderPackageAppProject)' != '' and '$(SunderPackageInnerBuild)' != 'true'"
-                    ReferenceOutputAssembly="false"
-                    Private="false"
-                    BuildReference="false"
-                    PrivateAssets="all" />
-</ItemGroup>
-```
 
 The package's transitive build props establish the fixed Worker profile before .NET SDK publish defaults are evaluated: `SelfContained=false`, `UseAppHost=false`, `PublishSingleFile=false`, and `PublishTrimmed=false`. Package projects do not author runtime-profile overrides; incompatible values are rejected during manifest generation.
 
@@ -533,7 +514,11 @@ Compatibility metadata is inferred automatically from authored assemblies, inclu
 
 `SunderSdkPackageVersion` is available as a verification-only override: it must match the informational/package version on the resolved `Sunder.Sdk` reference. The resolved version is emitted as `sdkVersion` on every inferred C# target.
 
-Explicit target items replace the inferred App role/RID matrix. Runtime authoring requires one explicit exact-RID worker item:
+### Internal Leaf And Transport Metadata
+
+The following lower-level items describe explicit producer/test leaves, not the
+ordinary single-project authoring workflow. Canonical packages generate them from
+source, role plans and reviewed locks. Explicit targets replace inferred targets:
 
 ```xml
 <ItemGroup>
@@ -541,7 +526,7 @@ Explicit target items replace the inferred App role/RID matrix. Runtime authorin
                        Role="runtime"
                        Rid="linux-x64"
                        Kind="worker"
-                       EntryPoint="lib/MyPackage" />
+                       EntryPoint="lib/MyPackage.dll" />
 </ItemGroup>
 ```
 
@@ -549,7 +534,9 @@ An isolated .NET worker declares exactly one `runtime/<RID>` target with `Kind="
 
 For platform signing, append a project target to `SunderPackageWorkerSigningTargets`. That target receives a private copied instance of the Worker publish closure, after generated XML documentation companions are removed, as `@(SunderPackageWorkerSigningFile)` and the official managed-module relative path as `$(SunderPackageWorkerEntryPointRelativePath)`. It runs after `ComputeFilesToPublish` without exposing NuGet or runtime-pack cache files to mutation, and before Sunder copies, indexes, and validates the leaf. Sign applicable supplied files in place and fail closed; later byte changes fail pack validation because packing never regenerates the established content index. Platform binary signatures do not constitute a Sunder package signature or publisher attestation.
 
-Schema-first RPC metadata is authored with strict MSBuild items. Every imported or provided contract must have a local bundle, so validation never depends on another installed package:
+The generated transport boundary uses strict MSBuild items. Every imported or
+provided contract has a local bundle, so validation never depends on another installed
+package. These items are not a recipe for hand-maintaining package contracts:
 
 ```xml
 <ItemGroup>

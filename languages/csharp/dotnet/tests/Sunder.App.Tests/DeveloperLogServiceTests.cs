@@ -93,4 +93,35 @@ public sealed class DeveloperLogServiceTests
 
     private static DeveloperLogFilterOptionViewModel FindFilter(DeveloperLogWindowViewModel viewModel, string key)
         => viewModel.FilterOptions.Single(option => string.Equals(option.Key, key, StringComparison.Ordinal));
+
+    [Fact]
+    public void ExactPackageNavigationSurvivesEmptyResetAndRefreshAndClearsStaleSearch()
+    {
+        var packageId = $"empty.package.{Guid.NewGuid():N}";
+        using var logs = new DeveloperLogService();
+        using var model = new DeveloperLogWindowViewModel(logs, new ImmediateDispatcher());
+        // Reproduce a bound ComboBox resetting SelectedItem as its options change.
+        model.FilterOptions.CollectionChanged += (_, _) => model.SelectedFilter = null;
+        model.SearchText = "stale search";
+        model.SelectPackage(packageId);
+        Assert.Empty(model.FilteredEntries);
+        Assert.Empty(model.SearchText);
+        AppSessionLog.WriteInfo("Force a nonempty initial log replay.");
+        logs.Enable(); // Initial replay raises Reset, with no entries for this package.
+        Assert.Equal(packageId, model.SelectedFilter!.PackageId);
+        logs.WritePackageLog(PackageLogLevel.Information, packageId + ".other", "not this package");
+        Assert.Empty(model.FilteredEntries);
+        Assert.Equal(packageId, model.SelectedFilter.PackageId);
+        logs.WritePackageLog(PackageLogLevel.Information, packageId, "first exact entry");
+        Assert.Equal("first exact entry", Assert.Single(model.FilteredEntries).Message);
+    }
+
+    private sealed class ImmediateDispatcher : IUiDispatcher
+    {
+        public bool CheckAccess() => true;
+        public Task InvokeAsync(Action action) { action(); return Task.CompletedTask; }
+        public Task InvokeAsync(Func<Task> action) => action();
+        public Task<T> InvokeAsync<T>(Func<T> action) => Task.FromResult(action());
+        public Task<T> InvokeAsync<T>(Func<Task<T>> action) => action();
+    }
 }

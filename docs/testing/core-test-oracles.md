@@ -105,17 +105,52 @@ skip, unknown result, missing report, missing project/lane owner, omitted select
 zero tests fails evidence generation. Raw TRX/JUnit artifacts retain individual
 outcomes and durations for diagnosis.
 
-`.github/workflows/sunder-test-oracles.yml` is a scheduled or manually dispatched
-complete-report audit. Pull-request lanes produce the same compact evidence for
-their selected partition. Race-sensitive process and output-lock tests remain
-serialized.
+`.github/workflows/sunder-ci.yml` owns PR/main checks and the scheduled, manually
+dispatched and SDK-release complete-report audit. Native/process and App packaging
+checks use the reusable `sunder-host-validation.yml`. All selected partitions
+produce the same compact evidence. Project tests run sequentially, with ordinary
+parallel MSBuild inside each build; race-sensitive test collections retain their
+own serialization. Node artifact cleanup completes before Node outputs are rebuilt
+for .NET interop.
 
-The compact Core compatibility ledger and API snapshots remain separate frozen
-candidate inputs. `core-public-packages.json`, the npm artifact checks, and
+The historical Core/Stack migration ledgers are inert preserved archives; the
+separate current candidate remains UNFROZEN / UNRELEASED. Current API snapshots
+and independently retained supported-release references keep their own gates.
+`core-public-packages.json`, the npm artifact checks, and
 `CorePublicPackageContractTests` continue to protect public/package contracts.
 The separate `Sunder.Sdk.PublicApi.Tests/ApiFidelity/Sunder.Package.Build.txt`
 test-only snapshot records accessor visibility and functional MSBuild
 `[Required]` and `[Output]` attributes, with mutation probes for both dimensions.
+
+### Current Agent consumers
+
+The Runtime/App `AgentPackageReleaseSmokeTests` link `tests/AgentCurrentBaseline.cs`
+and `tests/AgentCurrentInputs.cs`. Workspace harnesses link the same test-only input
+reader, without adding a public SDK surface. It reads two independent Agent-owned inputs: `compatibility/agent-current-inventory.json`
+(15 exact package/project pairs, 12 App roles, 18 public / 13 private APIs and 62
+providers) and `compatibility/agent-current-contracts.json` (reviewed canonical
+descriptor/ABI records bound to the exact inventory bytes). Missing records fail
+the selected artifact lane; tests never generate them from the output under test.
+
+The default location is the sibling `sunder-agent-package` checkout. Standalone
+Core consumers can select the reviewed checkout with `SUNDER_AGENT_CURRENT_BASELINE_ROOT`.
+The existing `SUNDER_REQUIRE_AGENT_PACKAGE_RELEASE` and
+`SUNDER_REQUIRE_AGENT_UI_SNAPSHOT` required-input gates remain. Universal archives
+must have the exact six-RID roles and current dependencies; their descriptor bytes
+and runtime provider tuples are checked against the reviewed current input through
+install/reload/reinstall. App snapshot metadata binds both current-input hashes to
+the runtime-produced snapshot. Stale snapshots must be recollected, not relabeled.
+Existing SQLite native loading, Worker exit and App activation coverage remains.
+
+The Agent owner has supplied the reviewed 31-record input after local current-RID
+qualification. `AgentCurrentInputsTests` selects that scope explicitly with
+`SUNDER_REQUIRE_AGENT_CURRENT_INPUTS=1`, `SUNDER_AGENT_CURRENT_BASELINE_ROOT` and
+`SUNDER_AGENT_PACKAGE_ARCHIVE_DIR`. It checks all fifteen current-RID archives and
+independent input/ABI/tamper boundaries; it also proves those archives cannot satisfy
+the separate universal-release helper. Current local consumer qualification passed
+these four checks and real selected .NET/Node interoperability. The universal-release
+activation/App snapshot cases retain their required inputs; current-RID evidence does
+not qualify universal six-RID native behavior, cold inputs or releases.
 
 ## Cross-language contracts
 
@@ -201,10 +236,8 @@ harnesses.
 
 ## Delay audit
 
-Phase 3 replaced 39 fixed synchronization waits in targeted Core tests: 31 C#
-`Task.Delay` calls and eight Node delay calls. Replacements observe lock-entry,
-worker lifecycle, file publication, navigation, retirement, process readiness,
-and output-swap checkpoints before relying on a diagnostic watchdog.
+Observe lock-entry, Worker lifecycle, file publication, navigation, retirement,
+process readiness and output-swap checkpoints before relying on a diagnostic watchdog.
 
 Retained delays fall into separate categories: infinite cancellation sentinels,
 intentional fake-backend latency, retry-loop backoff inside the bounded

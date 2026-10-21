@@ -18,11 +18,6 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" />
   </ItemGroup>
 
-  <!-- Explicit, credential-free check of reviewed migration input; never part of an ordinary build. -->
-  <Target Name="CheckSunderPlatformCatalogMigrationInput" DependsOnTargets="Build">
-    <Exec Command="dotnet &quot;$(TargetPath)&quot; check-platform-catalog-migration --descriptor &quot;$(MSBuildProjectDirectory)/../../packages/Sunder.Sdk.Stacks/Contracts/sunder.stack.contributor.rpc.json&quot;" />
-  </Target>
-
   <!-- Core-only source validation. Acceptance/freeze/payload remain explicit CLI operations, never build hooks. -->
   <Target Name="CheckSunderPlatformContracts" DependsOnTargets="Build">
     <Exec Command="dotnet &quot;$(TargetPath)&quot; platform-contracts check --core-root &quot;$(MSBuildProjectDirectory)/../../../../..&quot;" />

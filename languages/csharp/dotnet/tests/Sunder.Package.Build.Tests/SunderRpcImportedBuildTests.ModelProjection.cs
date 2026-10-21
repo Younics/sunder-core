@@ -31,39 +31,43 @@ public sealed partial class SunderRpcImportedBuildTests
             Assert.Single(receipt.RootElement.GetProperty("packageArtifacts").EnumerateArray()).GetProperty("modelProjectionSha256").GetString());
     }
 
-    [Fact]
-    public async Task ModelProjectionPins_RequireExplicitReviewedReselectionOfPriorLock()
+    [Theory]
+    [InlineData("modelProjectionBytes")]
+    [InlineData("modelProjectionSha256")]
+    [InlineData("both")]
+    public async Task ModelProjectionPins_MissingEvidenceRejectsAllReadersWithoutChangingInputs(string missing)
     {
         var archive = await CreateLockedCandidateAsync();
+        var generated = Generate();
+        var outputs = Snapshot(generated.IntermediateOutputPath);
+        var sourcePath = Path.Combine(_root, "Consumer.cs");
+        var source = File.ReadAllBytes(sourcePath);
         var before = ReadJson(LockPath);
         var artifact = before["packageArtifacts"]![DependencyId]!.AsObject();
-        artifact.Remove("modelProjectionBytes"); artifact.Remove("modelProjectionSha256"); artifact.Remove("registryOrigin");
+        if (missing is "modelProjectionBytes" or "both") artifact.Remove("modelProjectionBytes");
+        if (missing is "modelProjectionSha256" or "both") artifact.Remove("modelProjectionSha256");
         WriteJson(LockPath, before);
         var prior = File.ReadAllBytes(LockPath);
-        Assert.Contains("reselection-required", Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ReadContractLock(LockPath)).Message);
-        using var http = new HttpClient(new RestoreHandler(_ => throw new InvalidOperationException("Local reselection cannot use HTTP.")));
+        Assert.Contains("model-projection-invalid", Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ReadContractLock(LockPath)).Message);
+        using var handler = new RestoreHandler(_ => throw new InvalidOperationException("Invalid lock must fail before HTTP."));
+        using var http = new HttpClient(handler);
         var restore = new SunderRpcContractRestore(http);
         var commands = new SunderRpcPackageApiCommands(restore);
-        var cache = Path.Combine(_root, "projection-reselection-cache");
+        var cache = Path.Combine(_root, "invalid-projection-cache");
         await Assert.ThrowsAsync<InvalidDataException>(() => restore.RestoreAsync(LockPath, cache, [archive]));
-        await Assert.ThrowsAsync<InvalidDataException>(() => commands.ExecuteAsync(LockPath, cache, new("Add", DependencyId, Candidate: archive)));
-        Assert.False(Directory.Exists(cache)); Assert.Equal(prior, File.ReadAllBytes(LockPath));
-        var validatedCurrentInputs = false;
-        var request = new SunderRpcPackageApiRequest("Update", DependencyId, Candidate: archive);
-        var result = await commands.ExecuteAsync(LockPath, cache, request, (old, current, stage) =>
+        foreach (var request in new SunderRpcPackageApiRequest[]
         {
-            Assert.Equal(0, old.PackageArtifacts[DependencyId].ModelProjectionBytes);
-            Assert.True(current.PackageArtifacts[DependencyId].ModelProjectionBytes > 0);
-            CreatePackageApiTask("Update").ValidateSource(old, stage, cache, request);
-            validatedCurrentInputs = true;
-        });
-        Assert.True(validatedCurrentInputs); Assert.True(result.Changed);
-        var selected = SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId];
-        Assert.Null(selected.RegistryOrigin);
-        var resolved = SunderRpcContractCache.Resolve(result.ContractLock, cache);
-        Assert.Single(resolved.ModelProjectionsByContractId);
-        Assert.Equal(selected.ModelProjectionSha256, Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(
-            SunderRpcContractCache.GetModelProjectionPath(cache, selected.ModelProjectionSha256)))));
+            new("Add", DependencyId, Candidate: archive), new("Update", DependencyId, Candidate: archive), new("Update"), new("List"),
+        })
+            await Assert.ThrowsAsync<InvalidDataException>(() => commands.ExecuteAsync(LockPath, cache, request,
+                (_, _, _) => throw new InvalidOperationException("Invalid lock must fail before source validation.")));
+        Assert.False(CreateGeneration().Execute());
+        Assert.Equal(0, handler.Requests);
+        Assert.False(Directory.Exists(cache));
+        Assert.Equal(prior, File.ReadAllBytes(LockPath));
+        Assert.Equal(source, File.ReadAllBytes(sourcePath));
+        Assert.Equal(outputs, Snapshot(generated.IntermediateOutputPath));
+        Assert.Empty(Directory.GetFiles(_root, "*.stage-*"));
     }
 
     [Theory]

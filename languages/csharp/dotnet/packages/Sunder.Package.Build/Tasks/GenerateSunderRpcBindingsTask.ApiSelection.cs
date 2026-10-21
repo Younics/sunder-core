@@ -43,11 +43,10 @@ public sealed partial class GenerateSunderRpcBindingsTask
             return;
         }
         var plan = BuildSourceAuthoringPlan(projectDirectory, generatedDirectory, baseline,
-            allowBootstrap: baseline is null, validateBaseline: operation != "MigrateConsumerRoles", forceAuthoring: true, inputSnapshot: inputs,
+            allowBootstrap: baseline is null, validateBaseline: true, forceAuthoring: true, inputSnapshot: inputs,
             allowUnboundImportedProviderKeys: providerKey is null ? null : new HashSet<string>(StringComparer.Ordinal) { providerKey },
             validateSelection: compilation =>
             {
-                if (operation == "MigrateConsumerRoles" && baseline is not null) SunderRpcAuthoringDocuments.ValidatePublicCompiledContracts(baseline, compilation.Contracts);
                 if (operation == "Unimplement" && compilation.ImportedProviders.Any(provider => provider.Surface.Key == providerKey))
                     throw new InvalidDataException("package-api.remove-still-referenced: Remove local provider bindings before unimplementing this contract.");
             });
@@ -88,42 +87,65 @@ public sealed partial class GenerateSunderRpcBindingsTask
         // allow a deleted baseline to re-bootstrap by selecting another build frame.
         var roots = new[] { projectDirectory, Path.GetDirectoryName(generatedDirectory)! }.Distinct(PathComparer);
         var visited = new HashSet<string>(PathComparer);
-        var pending = new Stack<(string Path, int Depth)>(roots.Select(root => (root, 0)));
+        var pending = new Stack<(string Path, int Depth, SunderRetainedCompileEvidence? Compile, bool Complete)>(roots.Select(root => (root, 0, (SunderRetainedCompileEvidence?)null, false)));
+        var compileProofs = new List<SunderRetainedCompileEvidence>();
         var count = 0;
-        while (pending.TryPop(out var directory))
+        try
         {
-            if (!visited.Add(directory.Path) || !Directory.Exists(directory.Path)) continue;
-            beforeDirectoryRead?.Invoke(directory.Path);
-            string[] entries;
-            try
+            while (pending.TryPop(out var directory))
             {
-                GeneratedOutputPathSafety.EnsureRegularDirectory(directory.Path, "initial authoring evidence root");
-                entries = Directory.EnumerateFileSystemEntries(directory.Path).Take(32_769 - count).ToArray();
+                if (directory.Complete) { directory.Compile!.ReleaseInventory(); continue; }
+                if (!visited.Add(directory.Path) || !Directory.Exists(directory.Path)) continue;
+                beforeDirectoryRead?.Invoke(directory.Path);
+                try
+                {
+                    GeneratedOutputPathSafety.EnsureRegularDirectory(directory.Path, "initial authoring evidence root");
+                    var compile = directory.Compile;
+                    if (compile is null && SunderRetainedCompileEvidence.TryRead(directory.Path) is { } proof)
+                    {
+                        compile = proof;
+                        compileProofs.Add(proof);
+                        pending.Push((directory.Path, directory.Depth, proof, true));
+                    }
+                    foreach (var entry in Directory.EnumerateFileSystemEntries(directory.Path))
+                    {
+                        // Immutable compiler copies have their own existing role-input
+                        // bounds. Only exact, currently verified .cs leaves are discounted;
+                        // every directory, receipt and unknown member is still discovered.
+                        compile?.CountEntry();
+                        if (directory.Depth > 32) throw EvidenceDiscoveryLimit();
+                        var name = Path.GetFileName(entry);
+                        if ((name is SunderRpcAuthoringDocuments.AuthoringReceiptFileName or SunderRpcAuthoringDocuments.PackageExportFileName
+                            || name == GeneratedDirectoryName + ValidateSunderDevOutputPathTask.MarkerFileName)
+                            && (!publicOnly || HasPublicOrUnknownEvidence(entry)))
+                            return true;
+                        FileAttributes attributes;
+                        try { attributes = File.GetAttributes(entry); }
+                        catch (IOException) when (!GeneratedOutputPathSafety.PathExists(entry)) { continue; }
+                        if (compile?.VerifyFile(entry, attributes) == true) continue;
+                        if (++count > 32_768) throw EvidenceDiscoveryLimit();
+                        if ((attributes & FileAttributes.Directory) != 0 && (attributes & FileAttributes.ReparsePoint) == 0 && name is not (".git" or "node_modules"))
+                            pending.Push((entry, directory.Depth + 1, compile, false));
+                    }
+                }
+                catch (IOException) when (!GeneratedOutputPathSafety.PathExists(directory.Path))
+                {
+                    // Output-lock transition candidates and cleanable directories may
+                    // disappear after discovery. Existing/replaced/unsafe paths still fail.
+                    continue;
+                }
             }
-            catch (IOException) when (!GeneratedOutputPathSafety.PathExists(directory.Path))
-            {
-                // Output-lock transition candidates and cleanable directories may
-                // disappear after discovery. Existing/replaced/unsafe paths still fail.
-                continue;
-            }
-            foreach (var entry in entries)
-            {
-                if (++count > 32_768 || directory.Depth > 32)
-                    throw new InvalidDataException("rpc-authoring.source-limit-exceeded: Initial authoring evidence discovery exceeds its bound.");
-                var name = Path.GetFileName(entry);
-                if ((name is SunderRpcAuthoringDocuments.AuthoringReceiptFileName or SunderRpcAuthoringDocuments.PackageExportFileName
-                    || name == GeneratedDirectoryName + ValidateSunderDevOutputPathTask.MarkerFileName)
-                    && (!publicOnly || HasPublicOrUnknownEvidence(entry)))
-                    return true;
-                FileAttributes attributes;
-                try { attributes = File.GetAttributes(entry); }
-                catch (IOException) when (!GeneratedOutputPathSafety.PathExists(entry)) { continue; }
-                if ((attributes & FileAttributes.Directory) != 0 && (attributes & FileAttributes.ReparsePoint) == 0 && name is not (".git" or "node_modules"))
-                    pending.Push((entry, directory.Depth + 1));
-            }
+            foreach (var proof in compileProofs) proof.Verify(beforeDirectoryRead);
+            return false;
         }
-        return false;
+        finally
+        {
+            for (var index = compileProofs.Count - 1; index >= 0; index--) compileProofs[index].Dispose();
+        }
     }
+
+    private static InvalidDataException EvidenceDiscoveryLimit()
+        => new("rpc-authoring.source-limit-exceeded: Initial authoring evidence discovery exceeds its bound.");
 
     private static bool HasPublicOrUnknownEvidence(string path)
     {

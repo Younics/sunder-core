@@ -27,7 +27,7 @@ internal sealed partial class SunderWorkerRuntime
         lock (Gate)
         {
             ThrowIfFaultedUnderGate();
-            if (_phase != RuntimePhase.Active
+            if ((_phase != RuntimePhase.Active && !IsLifecycleStoppingUnderGate)
                 || _sessionGeneration != generation
                 || !string.Equals(activationId, _environment.ActivationId, StringComparison.Ordinal))
             {
@@ -41,10 +41,17 @@ internal sealed partial class SunderWorkerRuntime
                 throw new WorkerProtocolException(
                     $"Host reused contribution call id '{id}'.");
             }
-            if (_invocations.Count + _contributions.Count >= _limits.MaximumInboundCalls)
+            var finiteInvocations = _environment.OperationalOutcomesV1
+                ? _invocations.Values.Count(value => value.Kind == InboundInvocationKind.Unary) : _invocations.Count;
+            if (finiteInvocations + _contributions.Count >= _limits.MaximumInboundCalls)
             {
                 throw new WorkerProtocolException(
                     "Host exceeded the worker inbound call limit.");
+            }
+            if (IsLifecycleStoppingUnderGate)
+            {
+                RememberHostId(id);
+                return;
             }
             contribution = new InboundContribution(
                 id,
@@ -54,7 +61,40 @@ internal sealed partial class SunderWorkerRuntime
                 CancellationTokenSource.CreateLinkedTokenSource(_workStop.Token));
             _contributions.Add(id, contribution);
         }
-        contribution.Operation = ExecuteContributionAsync(contribution);
+        _ = RunContributionAsync(contribution);
+    }
+
+    private async Task RunContributionAsync(InboundContribution contribution)
+    {
+        // Contribution callbacks may synchronously wait for Host-mediated work.
+        await Task.Yield();
+        try
+        {
+            await ExecuteContributionAsync(contribution).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_protocolStop.IsCancellationRequested) { }
+        catch (Exception exception)
+        {
+            Fail(exception is WorkerProtocolException ? exception
+                : new WorkerProtocolException("Worker contribution response transport failed.", exception));
+        }
+        finally
+        {
+            Task cancellation;
+            lock (Gate)
+            {
+                contribution.CancellationSealed = true;
+                cancellation = contribution.CancellationOperation ?? Task.CompletedTask;
+            }
+            await cancellation.ConfigureAwait(false);
+            contribution.Cancellation.Dispose();
+            lock (Gate)
+            {
+                _contributions.Remove(contribution.Id);
+                RememberHostId(contribution.Id);
+            }
+            contribution.Completion.TrySetResult();
+        }
     }
 
     private async Task ExecuteContributionAsync(InboundContribution contribution)
@@ -107,15 +147,6 @@ internal sealed partial class SunderWorkerRuntime
                 contribution,
                 "worker.contribution-fault",
                 "The worker contribution handler failed.").ConfigureAwait(false);
-        }
-        finally
-        {
-            lock (Gate)
-            {
-                _contributions.Remove(contribution.Id);
-                RememberHostId(contribution.Id);
-            }
-            contribution.Cancellation.Dispose();
         }
     }
 
@@ -425,28 +456,17 @@ internal sealed partial class SunderWorkerRuntime
             ? string.Empty
             : WorkerDiagnosticSink.Sanitize(value, maximumLength);
 
-    private void CancelContribution(InboundContribution contribution)
+    private Task CancelContributionAsync(InboundContribution contribution)
     {
-        try
-        {
-            contribution.Cancellation.Cancel();
-        }
-        catch (AggregateException exception)
-        {
-            _diagnostics.Write("Contribution cancellation callback failed", exception);
-        }
-        catch (ObjectDisposedException)
-        {
-        }
+        lock (Gate) return contribution.CancellationSealed
+            ? contribution.CancellationOperation ?? Task.CompletedTask
+            : contribution.CancellationOperation ??= SignalCancellationAsync(contribution.Cancellation);
     }
+
+    private void CancelContribution(InboundContribution contribution) => _ = CancelContributionAsync(contribution);
 
     private InboundContribution[] GetContributionsUnderGate()
         => _contributions.Values.ToArray();
-
-    private void CancelContributions(IEnumerable<InboundContribution> contributions)
-    {
-        foreach (var contribution in contributions) CancelContribution(contribution);
-    }
 
     private sealed class InboundContribution(
         string id,
@@ -460,7 +480,10 @@ internal sealed partial class SunderWorkerRuntime
         public long SessionGeneration { get; } = sessionGeneration;
         public JsonElement Value { get; } = value;
         public CancellationTokenSource Cancellation { get; } = cancellation;
-        public Task Operation { get; set; } = Task.CompletedTask;
+        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Operation => Completion.Task;
+        public Task? CancellationOperation { get; set; }
+        public bool CancellationSealed { get; set; }
         public bool HostCancelled { get; set; }
     }
 }

@@ -16,6 +16,11 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ViewsV1,
         SunderSdkCapabilities.SettingsViewsV1,
         SunderSdkCapabilities.SettingsNavigationV1,
+        SunderSdkCapabilities.PackageDevelopmentV1,
+        SunderSdkCapabilities.PackageDevelopmentRevisionsV1,
+        SunderSdkCapabilities.WorkerExecutionObservationsV1,
+        SunderSdkCapabilities.PackageLogNavigationV1,
+        SunderSdkCapabilities.AppStateUpdatesV1,
         SunderSdkCapabilities.BackgroundServicesV1,
         SunderSdkCapabilities.RuntimeGenerationsV1,
         SunderSdkCapabilities.BackgroundProcessesV1,
@@ -50,6 +55,11 @@ internal static class SunderSdkCompatibilityProfile
             [SunderSdkCapabilities.ViewsV1] = false,
             [SunderSdkCapabilities.SettingsViewsV1] = false,
             [SunderSdkCapabilities.SettingsNavigationV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentRevisionsV1] = false,
+            [SunderSdkCapabilities.WorkerExecutionObservationsV1] = false,
+            [SunderSdkCapabilities.PackageLogNavigationV1] = false,
+            [SunderSdkCapabilities.AppStateUpdatesV1] = false,
             [SunderSdkCapabilities.BackgroundServicesV1] = true,
             [SunderSdkCapabilities.RuntimeGenerationsV1] = true,
             [SunderSdkCapabilities.BackgroundProcessesV1] = false,
@@ -120,6 +130,13 @@ internal static class SunderSdkCompatibilityProfile
             if (!SupportedCapabilities.Contains(capability))
             {
                 errors.Add($"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but this Host does not support it.");
+            }
+            else if ((capability is SunderSdkCapabilities.WorkerExecutionObservationsV1 or SunderSdkCapabilities.PackageDevelopmentRevisionsV1)
+                && (targetKey.Role != SunderPackageFormat.AppHostRole || targetKind != SunderPackageFormat.AvaloniaTargetKind)
+                && !(targetKey.Role == SunderPackageFormat.RuntimeHostRole && targetKind == SunderPackageFormat.WorkerTargetKind
+                    && requiredHostCapabilities?.Contains(SunderWorkerProtocol.V1Capability, StringComparer.Ordinal) == true))
+            {
+                errors.Add($"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but it is implemented only by the managed App.");
             }
         }
 

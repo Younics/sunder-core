@@ -18,6 +18,8 @@ public partial class App : Application
     private readonly AppPackageResourceAssemblyRegistry _packageResourceAssemblyRegistry = new();
     private readonly OwnedTaskObserver _tasks = new("Sunder application");
     private readonly AppShutdownCoordinator _shutdown;
+    private readonly Action<Action> _postShutdownCompletion;
+    private readonly Action<IClassicDesktopStyleApplicationLifetime, int> _shutdownDesktop;
     private ServiceProvider? _serviceProvider;
     private ShellSession? _session;
     private IClassicDesktopStyleApplicationLifetime? _desktopLifetime;
@@ -27,9 +29,19 @@ public partial class App : Application
     private bool _allowWindowClose;
     private bool _allowDesktopShutdown;
 
-    public App()
+    public App() : this(
+        action => Dispatcher.UIThread.Post(action),
+        (desktop, exitCode) => desktop.Shutdown(exitCode))
+    {
+    }
+
+    internal App(
+        Action<Action> postShutdownCompletion,
+        Action<IClassicDesktopStyleApplicationLifetime, int> shutdownDesktop)
     {
         _shutdown = new AppShutdownCoordinator(_tasks);
+        _postShutdownCompletion = postShutdownCompletion;
+        _shutdownDesktop = shutdownDesktop;
     }
 
     public override void Initialize()
@@ -421,6 +433,16 @@ public partial class App : Application
         }
     }
 
+    internal void RequestPolicyShutdown()
+    {
+        if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
+        {
+            // Drain the same owners as a user-requested exit. Policy supervision
+            // remains armed independently while that ordered cleanup runs.
+            RequestDesktopShutdown(desktop, exitCode: 1);
+        }
+    }
+
     private void RequestDesktopShutdown(
         IClassicDesktopStyleApplicationLifetime desktop,
         int exitCode = 0
@@ -439,7 +461,7 @@ public partial class App : Application
 
         shutdownTask.ContinueWith(
             completed =>
-                Dispatcher.UIThread.Post(() => CompleteDesktopShutdown(desktop, completed)),
+                _postShutdownCompletion(() => CompleteDesktopShutdown(desktop, completed)),
             CancellationToken.None,
             TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default
@@ -460,7 +482,7 @@ public partial class App : Application
 
         _allowDesktopShutdown = true;
         _allowWindowClose = true;
-        desktop.Shutdown(exitCode);
+        _shutdownDesktop(desktop, exitCode);
     }
 
     private async Task ShutdownCoreAsync()

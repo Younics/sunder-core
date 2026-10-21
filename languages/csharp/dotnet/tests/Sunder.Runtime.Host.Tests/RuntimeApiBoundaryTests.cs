@@ -172,6 +172,7 @@ public sealed class RuntimeApiBoundaryTests
         var reference = Assert.IsType<PackageUiProjectionReferenceDescriptor>(descriptor.ProjectionReference);
         Assert.Equal("app", reference.ConsumerRole);
         Assert.Equal(descriptor.ContentHash, reference.CacheKey);
+        Assert.Equal(reference.SourceContentIdentity, descriptor.SourceContentIdentity);
         var json = JsonSerializer.Serialize(descriptor, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.DoesNotContain(root, json, StringComparison.OrdinalIgnoreCase);
         var leaseRoot = Path.Combine(

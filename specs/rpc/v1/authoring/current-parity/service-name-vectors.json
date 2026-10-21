@@ -1,0 +1,17 @@
+{
+  "formatVersion": 1,
+  "clientServiceNameVectors": [
+    { "serviceId": "1.foo", "symbol": "S1_2efoo" },
+    { "serviceId": "example", "symbol": "SExample" },
+    { "serviceId": "weather--forecast", "symbol": "SWeather_2d_2dforecast" },
+    { "serviceId": "weather-forecast", "symbol": "SWeather_2dforecast" },
+    { "serviceId": "weather..forecast", "symbol": "SWeather_2e_2eforecast" },
+    { "serviceId": "weather.forecast", "symbol": "SWeather_2eforecast" },
+    { "serviceId": "weather_2dforecast", "symbol": "SWeather_5f2dforecast" },
+    { "serviceId": "weather_2eforecast", "symbol": "SWeather_5f2eforecast" },
+    { "serviceId": "weather_5fforecast", "symbol": "SWeather_5f5fforecast" },
+    { "serviceId": "weather__forecast", "symbol": "SWeather_5f_5fforecast" },
+    { "serviceId": "weather_forecast", "symbol": "SWeather_5fforecast" },
+    { "serviceId": "weatherforecast", "symbol": "SWeatherforecast" }
+  ]
+}

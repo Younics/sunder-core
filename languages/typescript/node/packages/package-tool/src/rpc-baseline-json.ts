@@ -27,8 +27,9 @@ export function outerBytes(value: Outer): Buffer {
 }
 export const MAX_BASELINE_BYTES = 268_435_456;
 // Maximum valid baseline: 128 families * (256 history + 1 current), each with
-// 11 snapshot fields, 2 release fields and 6 publication fields. Count BOTH keys
-// and values, plus containers; this bound admits that entire valid maximum.
+// 11 snapshot fields, 2 release fields, 6 publication fields, and one six-field
+// projection review companion. Embedded projection JSON is an opaque string with
+// its own bounded parse. Count BOTH keys/values plus containers at this layer.
 const MAX_VALUES_AND_PROPERTIES = 2_097_152;
 export function parseOuter(bytes: Buffer, limits: { readonly bytes: number; readonly values: number } = { bytes: MAX_BASELINE_BYTES, values: MAX_VALUES_AND_PROPERTIES }): OuterObject {
   if (!bytes.length || bytes.length > limits.bytes) invalid("outer byte limit exceeded");

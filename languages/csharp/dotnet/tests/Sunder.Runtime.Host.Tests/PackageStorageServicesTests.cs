@@ -14,10 +14,6 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class PackageStorageServicesTests
 {
-    private const string ChildLockPathEnvironmentVariable = "SUNDER_STORAGE_TEST_CHILD_LOCK";
-    private const string ChildReadyPathEnvironmentVariable = "SUNDER_STORAGE_TEST_CHILD_READY";
-    private const string ChildReleasePathEnvironmentVariable = "SUNDER_STORAGE_TEST_CHILD_RELEASE";
-
     [Fact]
     public void LocalPackageFileStore_ResolvePath_RejectsParentTraversal()
     {
@@ -616,13 +612,24 @@ public sealed class PackageStorageServicesTests
     {
         var tempDirectory = CreateTempDirectory();
         var statePath = Path.Combine(tempDirectory, "state.json");
-        var readyPath = Path.Combine(tempDirectory, "ready");
-        var releasePath = Path.Combine(tempDirectory, "release");
-        using var child = StartLockChildProcess($"{statePath}.lock", readyPath, releasePath);
+        // Run the existing minimal lock fixture directly on the exact loaded
+        // runtime. Recursive `dotnet vstest` unnecessarily requires an SDK and
+        // can conflict with global.json when the testhost uses another runtime.
+        var startInfo = TestWorkerFixture.CreateProcessStartInfo(tempDirectory);
+        startInfo.ArgumentList.Add("--sunder-test-hold-file-lock");
+        startInfo.ArgumentList.Add("exclusive");
+        startInfo.ArgumentList.Add($"{statePath}.lock");
+        using var child = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start storage-lock child process.");
 
         try
         {
-            await WaitForFileAsync(readyPath, child, TimeSpan.FromSeconds(20));
+            var ready = await child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(20));
+            if (ready != "ready")
+            {
+                var error = child.HasExited ? await child.StandardError.ReadToEndAsync() : "The child is still running.";
+                Assert.Fail("Storage-lock child did not become ready: " + error);
+            }
             using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(150));
             var store = new JsonPackageKeyValueStore(statePath);
 
@@ -631,35 +638,19 @@ public sealed class PackageStorageServicesTests
         }
         finally
         {
-            File.WriteAllText(releasePath, "release");
-            Assert.True(child.WaitForExit(20_000), "The storage-lock child process did not exit.");
+            if (!child.HasExited)
+            {
+                await child.StandardInput.WriteLineAsync("release");
+                if (!child.WaitForExit(20_000))
+                {
+                    child.Kill(entireProcessTree: true);
+                    await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+                    Assert.Fail("The storage-lock child process did not exit after release.");
+                }
+            }
         }
 
         Assert.Equal(0, child.ExitCode);
-    }
-
-    [Fact]
-    public void JsonPackageKeyValueStore_ChildProcessLockHolder()
-    {
-        var lockPath = Environment.GetEnvironmentVariable(ChildLockPathEnvironmentVariable);
-        if (string.IsNullOrWhiteSpace(lockPath))
-        {
-            return;
-        }
-
-        var readyPath = Environment.GetEnvironmentVariable(ChildReadyPathEnvironmentVariable)!;
-        var releasePath = Environment.GetEnvironmentVariable(ChildReleasePathEnvironmentVariable)!;
-        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
-        using var lockHandle = new FileStream(
-            lockPath,
-            FileMode.OpenOrCreate,
-            FileAccess.ReadWrite,
-            FileShare.None);
-        File.WriteAllText(readyPath, "ready");
-
-        Assert.True(
-            SpinWait.SpinUntil(() => File.Exists(releasePath), TimeSpan.FromSeconds(20)),
-            "The parent process did not release the storage lock child.");
     }
 
     [Fact]
@@ -1819,43 +1810,6 @@ public sealed class PackageStorageServicesTests
             Assert.Equal(
                 quarantineProtection,
                 marker.RootElement.GetProperty("quarantineProtection").GetString());
-        }
-    }
-
-    private static Process StartLockChildProcess(string lockPath, string readyPath, string releasePath)
-    {
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        startInfo.ArgumentList.Add("vstest");
-        startInfo.ArgumentList.Add(typeof(PackageStorageServicesTests).Assembly.Location);
-        startInfo.ArgumentList.Add(
-            "--Tests:Sunder.Runtime.Host.Tests.PackageStorageServicesTests.JsonPackageKeyValueStore_ChildProcessLockHolder");
-        startInfo.ArgumentList.Add("--Logger:console;Verbosity=minimal");
-        startInfo.Environment[ChildLockPathEnvironmentVariable] = lockPath;
-        startInfo.Environment[ChildReadyPathEnvironmentVariable] = readyPath;
-        startInfo.Environment[ChildReleasePathEnvironmentVariable] = releasePath;
-        return Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start storage-lock child process.");
-    }
-
-    private static async Task WaitForFileAsync(string path, Process child, TimeSpan timeout)
-    {
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (!File.Exists(path) && DateTimeOffset.UtcNow < deadline && !child.HasExited)
-        {
-            await Task.Delay(25);
-        }
-
-        if (!File.Exists(path))
-        {
-            var output = await child.StandardOutput.ReadToEndAsync();
-            var error = await child.StandardError.ReadToEndAsync();
-            throw new Xunit.Sdk.XunitException(
-                $"Storage-lock child did not become ready. Exit={child.ExitCode}; Output={output}; Error={error}");
         }
     }
 

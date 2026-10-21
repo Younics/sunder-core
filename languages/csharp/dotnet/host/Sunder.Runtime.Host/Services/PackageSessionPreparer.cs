@@ -138,7 +138,11 @@ internal sealed class PackageSessionPreparer
             }
             else
             {
-                if (imports is not null) prepared = prepared with { Source = prepared.Source with { DevelopmentImports = imports } };
+                prepared = prepared with { Source = prepared.Source with
+                {
+                    DevelopmentImports = imports,
+                    DevelopmentWorkerContentIdentity = DevelopmentWorkerContentIdentity.Create(validation.ContentIndex),
+                } };
                 _logger.LogInformation(
                     "Prepared {PackageSourceKind} package {PackageId} in {ElapsedMilliseconds} ms",
                     PackageSourceKind.Dev,

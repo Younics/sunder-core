@@ -198,7 +198,7 @@
     "packageOwnedContract": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 3,
+      "maxProperties": 4,
       "required": [
         "contractId",
         "history"
@@ -218,6 +218,9 @@
           "items": {
             "$ref": "#/$defs/packageImmutableSnapshot"
           }
+        },
+        "projectionReviews": {
+          "$ref": "#/$defs/projectionReviews"
         }
       },
       "allOf": [
@@ -249,7 +252,7 @@
     "platformOwnedContract": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 3,
+      "maxProperties": 4,
       "required": [
         "contractId",
         "history"
@@ -269,6 +272,9 @@
           "items": {
             "$ref": "#/$defs/platformImmutableSnapshot"
           }
+        },
+        "projectionReviews": {
+          "$ref": "#/$defs/projectionReviews"
         }
       },
       "allOf": [
@@ -296,6 +302,51 @@
           }
         }
       ]
+    },
+    "projectionReviews": {
+      "description": "Version-ordered companion reviews. Each entry binds one exact current/history descriptor and ABI; absence is unknown historical source metadata, never an empty projection. Immutable snapshot JSON is unchanged.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 257,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "contractVersion",
+          "descriptorSha256",
+          "abiSha256",
+          "reviewKind",
+          "canonicalProjection",
+          "projectionSha256"
+        ],
+        "properties": {
+          "contractVersion": {
+            "$ref": "#/$defs/semanticVersion"
+          },
+          "descriptorSha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "abiSha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "reviewKind": {
+            "enum": [
+              "accepted-source",
+              "initial-source"
+            ]
+          },
+          "canonicalProjection": {
+            "description": "Strict UTF-8 deterministic two-space JSON with one terminal LF, maximum 4,194,304 UTF-8 bytes. Closed modelProjection plus optional nonempty methodPolicies, validated against the exact descriptor; same projection/policy grammar as the public sidecar.",
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 4194304
+          },
+          "projectionSha256": {
+            "$ref": "#/$defs/sha256"
+          }
+        }
+      }
     },
     "packageSnapshot": {
       "type": "object",

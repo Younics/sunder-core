@@ -1,15 +1,13 @@
 # V1 policy, installation and process-supervision contracts
 
-This Phase 1 handoff freezes the dependency-free Registry and Runtime policy DTOs for
-their Phase 2/3 consumers. The DTOs contain no database implementation, storage key,
-artifact root, process handle or bearer credential. The owning service must implement
-the corresponding admission/recovery rules before exposing an operation.
+This reference describes dependency-free Registry/Runtime policy DTOs and their
+admission/recovery rules. DTOs contain no database implementation, storage key,
+artifact root, process handle or bearer credential.
 
 ## Wire validation and corpus
 
-`specs/policy/v1/contracts.schema.json` defines every policy payload in this handoff.
-`conformance.json` maps all 45 reviewed JSON goldens to their required schema definitions
-(the original Phase 1 set of 44 plus immutable publication readback evidence).
+`specs/policy/v1/contracts.schema.json` defines policy payloads. `conformance.json`
+owns the current reviewed golden-vector inventory and required schema definitions.
 The C# contract suite and the independent Node/Ajv Draft 2020-12 oracle execute the same
 corpus, including required/expired/stale/conflicting/clock-invalid leases, terminal
 denials, unknown subjects, denied load permits, process exit, and provider Problem Details.
@@ -36,21 +34,26 @@ small golden values do not prove lossless parsing of large policy watermarks.
 returns one `RegistryPolicySynchronizationResponse`. Each list contains at most 128
 subjects, sorted ordinally by the complete exact identity and with no duplicates.
 Packages use package/version/content; platform catalogs use authority/release/catalog
-SHA; runtimes use runtime/version/packaging revision/RID/ABI plus manifest/artifact SHA.
+SHA. Official execution runtimes are not Registry policy subjects.
 At least one subject is required. Cross-origin data is never mixed in a response.
 
 `nonce` is 16 cryptographically random bytes encoded as 32 lowercase hexadecimal
 characters. The response must echo the outstanding request nonce and configured canonical
 HTTPS Registry origin, and supply exactly one decision for every requested subject,
 without extras. An unknown subject receives an explicit PolicyRequired denial; omission
-is not permission. Positive policy revisions/checkpoint sequence use checked Int64 and
+is not permission. Positive policy revisions use checked Int64 and
 must be handled losslessly by every consumer. Fingerprints are exact lowercase SHA-256.
-Request rollback floors may be absent only as explicit null initial values; zero runtime
-revision means no prior observation. Same revision with different fingerprint/overlapping
+The request's `minimumPackagePolicy` is explicit null before a cached observation exists.
+Same revision with different fingerprint/overlapping
 decision is a conflict; lower state cannot replace a retained watermark.
 
-The response carries package and runtime policy watermarks, platform trust generation/
-identity, and non-secret checkpoint sequence/digest/topology identity. `observedAtUtc`
+PostgreSQL is the Registry policy authority. The revision/fingerprint floor detects
+responses older than or inconsistent with this client's retained observations; it does
+not independently prove that the database has not rolled back. S3 replication is an
+infrastructure concern and supplies no application policy authority or wire identity.
+
+The response carries the database package-policy identity plus complete
+package/platform decisions. `observedAtUtc`
 and `validUntilUtc` are UTC and differ by exactly 24 hours. The Host binds the local
 deadline to its earlier request-start continuous-clock tick; network time and failures
 never extend the lease. No policy response or range selection creates use grants.
@@ -59,8 +62,7 @@ Package identity state is Active, SecurityBlocked or Unknown. Version availabili
 Listed, Yanked, SecurityBlocked or Unknown. Disposition is Allowed, Denied or PolicyRequired.
 Yanked excludes new selection but preserves an existing exact binding and repair; either
 security block is terminal and denies install/update/repair/activation. Platform lifecycle
-uses Supported/Revoked/Unknown. Runtime lifecycle uses the existing lowercase runtime
-states, with explicit PolicyRequired for unavailable evidence. Every referenced platform
+uses Supported/Revoked/Unknown. Every referenced platform
 dependency receives a complete corresponding platform decision. Terminal denial cannot
 be broadened by later snapshots or offline state.
 
@@ -82,9 +84,9 @@ do not hide independently authorized providers. All included versions must satis
 all reviewed ranges and exact RPC tuples. Required wins compatible coalescing, while
 unreviewed transitive authority ranges and conflicting tuples fail closed.
 
-Checkpoint-backed `RegistryResolveInstallPlanResponse` and `RegistryResolveUpdatesResponse`
-also expose `PackagePolicy` and `PolicyCheckpoint`. These identities participate in plan
-fingerprint fencing. Their absence in an unsuccessful or unverified result conveys no
+`RegistryResolveInstallPlanResponse` and `RegistryResolveUpdatesResponse`
+also expose `PackagePolicy`. This identity participates in plan
+fingerprint fencing. Its absence in an unsuccessful or unverified result conveys no
 policy authorization; consumers must not infer a default current revision.
 
 The required package API/provider Registry consumer now populates `ResolutionPolicy`
@@ -94,8 +96,8 @@ sorted package requirements for `contract-authority.release-conflict`. Collectio
 detached snapshots. Missing `ResolutionPolicy` is not proof of compatible imported
 content. A selected artifact not yet accepted by Registry is
 `package-api.candidate-authority-unconfirmed` (HTTP 409). Platform decisions and optional
-branch dispositions now come from the implemented Registry consumers. Host enforcement
-and final generated-tooling integration remain separate phase gates.
+branch dispositions come from the Registry consumers. Host admission enforces this
+evidence against the actual package graph and acquired targets.
 
 Installed target acquisition is recorded separately from the complete source manifest.
 Removing a target from the acquired set does not remove package-wide import provenance,
@@ -120,7 +122,7 @@ tag; non-null target must name the same package and remain Listed. Requests cann
 contain SecurityBlocked, owner transfer or independently successful suboperations.
 The service validates the entire proposed graph and resulting tag maps before commit.
 
-The committed result contains canonical request SHA, exact policy/checkpoint, audit time,
+The committed result contains canonical request SHA, exact database policy identity, audit time,
 the complete version transition and prior/resulting tag maps. Exact owner/idempotency/
 request retries return the original result before checking the now-stale expected
 revision. Conflicting key reuse fails. Validation failures use Problem Details, so the
@@ -172,6 +174,20 @@ display/audit data only. Required, expired and uncertain-continuity states fail 
 The immutable timing contract is 24-hour lease, five-minute refresh with up to 30 seconds
 jitter, 15-second request deadline and retry delay capped at 15 minutes.
 
+`RuntimePolicyWatermark` contains only Registry origin and package-policy revision/
+fingerprint. The current pre-V1 private policy-cache schema is rebaselined at version 1:
+origin snapshots, retained installed/journal snapshots and compatibility evidence use
+the same database-only identities. There are no external checkpoint/topology members,
+null placeholders or old-field readers. Strict codecs reject those obsolete members.
+This is a coordinated fresh baseline, not a new migration or user-data reset step.
+The local durable generation, intent recovery copy and continuous-clock high-water
+remain consistency/lease mechanisms; they do not establish independent Registry authority.
+
+A configured Registry with an initialized empty database is ready. Catalog and authority
+requirements are enforced by their consuming operations, independently of service health.
+This contract surface has no Registry-wide startup/status/recovery payload. See
+[Registry availability and operation errors](REGISTRY-AVAILABILITY.md).
+
 `RuntimePlatformPolicyStatus` separately names the exact authority/release/catalog SHA
 and effective disposition, revocation audit time and local lease. An expired lease
 cannot broaden a retained terminal platform denial.
@@ -192,8 +208,8 @@ process-policy controller nor its control-session identifiers.
 The load request carries `snapshotId` and copies the snapshot's `policySubject` into
 `package`. This names full published/source package content, not the UI projection hash. A missing,
 retired or mismatched snapshot cannot authorize loading. Production permits carry a
-valid lease; an explicit development permit has `development=true` and a null lease,
-and cannot authorize an installed package. Recording the same bytes in development
+valid lease; an explicit development permit has `development=true` and a null lease
+unless it requires published platform policy, and cannot authorize an installed package. Recording the same bytes in development
 does not authorize a later installed/origin context.
 
 Heartbeat loss has a five-second grace; a changed Host instance triggers fail-fast.
@@ -205,10 +221,86 @@ Replacement code stays denied while exit is unproven. The DTOs distinguish activ
 shutdown-requested, termination-required, exit-proven and closed state. Package APIs
 receive no supervision control or termination override.
 
+Window inactivity is not supervision loss. The App renews policy on a dedicated
+background thread with bounded synchronous local HTTP/1.1 exchanges, independent
+of the UI dispatcher, package RPC, managed timer callbacks and the HTTP connection
+pool's shared worker queue. Credentials, OS-peer identity, Runtime/session identity,
+protocol compatibility and negotiated payload bounds still apply; the private
+channel never falls back to TCP. The gateway channel permits local IPC or literal
+HTTP loopback only, without DNS, proxies or redirects. On macOS, a scoped process
+activity keeps this required supervision eligible while the window is inactive;
+it does not prevent display or system sleep. The independent suspend-aware watchdog
+and the fixed grace above are unchanged, not renewed by scheduling activity alone.
+
 Loaded package/platform subjects remain in Host-owned synchronization after uninstall,
 snapshot retirement or UI generation replacement until process exit is proven. Permit,
 status, heartbeat and App RPC gates recheck the process's loaded policy; one denied
 loaded package blocks further permits and RPC before the periodic enforcement pass.
+
+Required-provider loss is an availability failure, not a security denial or a reason
+to terminate the desktop. The Host fences only affected tracked App activations and
+returns their exact retirement requirements through heartbeat/status. Their shell
+cleanup and Host acknowledgement remain required, including after the provider has
+recovered; a fenced activation cannot be revived. Legacy untracked callers fail
+package-local availability checks. Unrelated package RPC and permits remain usable.
+Security/package/platform denial and missing process-supervision proof retain the
+independent process-containment rules above.
+
+### Acknowledged App activation retirement
+
+Managed and web App loads supply `appActivationId` (the actual activation owner, not
+the presentation generation) and the exact `appTarget` with their snapshot request.
+The Host durably binds its returned `permitId` to the process policy session, activation,
+package content and target. App RPC open supplies that activation as `appGenerationId`
+and the issued `loadPermitId`; missing, mismatched and retired authority fails closed.
+An untracked legacy load retains conservative process-lifetime provider obligations.
+
+After local view/DI/RPC cleanup succeeds, the shell posts
+`RuntimeAppActivationRetirementRequest(Session, AppActivationId, LoadPermitId)` to
+`/api/v1/app-policy-sessions/{sessionId}/activations/{activationId}/retire` over the
+private process-authenticated transport. Any permit issued to that actual activation
+is a valid anchor, including an older permit retained through a transport replacement.
+The Host fences reopening, revokes all associated callers/scopes/content authority,
+and waits for opening callers, discovery/watch/invocation/subscription work, content
+registrations, reads and resource teardown. Cancellation or stream disposal alone
+does not prove completion of cancellation-ignoring work. The drain wait is bounded
+to five seconds; failure leaves retirement fenced and unacknowledged, and may be
+queried again with the same identity. A cleanup failure cannot produce success.
+
+Only the exact typed result with `state="retired"` ends that activation's required-provider
+liveness. Transport close ends only its opaque caller handle. Candidate discard of a
+retained activation closes the candidate replacement, while final activation retirement
+covers all its old/new permits. Retirement neither removes durable `loadedPackages`
+nor proves OS exit, and never reverses a denial or restarts its five-second shutdown clock.
+
+### Staged development-owner withdrawal and reload
+
+`DevPackageOwnerSession.ReleaseStagedAsync` prepares the prospective merged source
+graph, calls the shell's retirement callback, then commits authenticated owner withdrawal.
+The callback receives `PackageLifecycleStageResult.BaseStamp` and exact `Retirements`.
+Owner heartbeat remains live during cleanup. The returned snapshot is a checked server
+acknowledgement; null means there is no owned lease. Cleanup/timeout/conflict failures
+propagate. Ambiguous commit responses keep their exact control identity for an explicit
+receipt retry and suppress automatic owner reacquisition; no service RPC is replayed.
+
+The Host uses the existing lifecycle-stage expiry, discard and terminal status machinery.
+Stage/commit requests bind Runtime instance, owner credentials and lease revision; commit
+also checks the owner's mutation identity, all-owner source revision and base generation.
+Every source ownership change advances its revision even if the effective graph and
+generation stay unchanged. Last-owner withdrawal retires affected live App activations;
+non-last co-owners retain the effective Worker, and installed fallback is evaluated as
+the actual prospective graph. Fresh incompatible permits block commit. An admission fence
+covers final liveness validation through publication; withdrawn Workers are then quiesced
+and disposed by the ordinary lifecycle.
+
+Watched/manual stages publish retirement requirements through process policy status and
+heartbeat as well as the stage result, so stopped ordinary SSE cannot strand the handshake.
+The old source graph stays active until acknowledgement. Shell cleanup runs outside its
+heartbeat/generation locks; after acknowledgement it waits for terminal `StageId` status
+before reconciliation, including reconciliation of the same generation after failure or
+discard. Expired/lost-owner withdrawal without acknowledgement fences and requests
+retirement of affected App activations without terminating the process. An
+unproven cleanup remains quarantined; recovery requires fresh activation authority.
 
 The authenticated shell uses `POST /api/v1/app-policy-sessions` to open a session,
 `GET /api/v1/app-policy-sessions/{sessionId}` for status, and `POST` on the session's
@@ -228,5 +320,5 @@ operation may succeed; it never authorizes replaying a non-idempotent RPC call.
 operation-specific `details`: provider selection for not-found/ambiguous, unsatisfied
 predicates, or cycle predicates/package IDs. Not-found is HTTP 404 with zero matches;
 ambiguous is HTTP 409 with at least two. Both required-provider graph errors are HTTP
-409. Standard Registry availability errors retain their existing shared 503 contract;
-execution-runtime conflicts use the existing execution-runtime catalog.
+409. Registry operation errors use the shared Problem Details envelope and the relevant
+operation's status/code; execution-runtime conflicts use the existing execution-runtime catalog.

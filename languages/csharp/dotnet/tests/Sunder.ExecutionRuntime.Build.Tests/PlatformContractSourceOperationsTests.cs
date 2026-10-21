@@ -695,6 +695,8 @@ public sealed class PlatformContractSourceOperationsTests
             public class ContextProbe
             {
                 public static IEnumerable<string> Names() => Array.Empty<string>();
+                public static IServiceProvider? Services { get; set; }
+                public static System.Numerics.BigInteger Count => System.Numerics.BigInteger.Zero;
             }
             """);
         await tree.Bootstrap();
@@ -866,6 +868,7 @@ public sealed class PlatformContractSourceOperationsTests
             [], ["publish"], ["check", "--key", Key], ["check", "--next-version", "2.0.0"],
             ["check", "--acknowledge-breaking-change", "false"], ["check", "--core-root", "a", "--core-root", "b"],
             ["accept", "--key"], ["accept", "--key", ""], ["accept", "--acknowledge-breaking-change", "yes"],
+            ["accept", "--adopt-initial-source-projection", "true"],
             ["accept", "--current-version", "2.0.0"], ["accept", "--next-version", "2.0.0"],
             ["accept", "--key", Key, "--current-version", "v2", "--next-version", "3.0.0"],
             ["accept", "--key", Key, "--next-version", "2.0.0", "--acknowledge-breaking-change", "true"],
@@ -905,7 +908,9 @@ public sealed class PlatformContractSourceOperationsTests
     [InlineData("inspect")]
     [InlineData("validate-native-output")]
     [InlineData("validate-release-set")]
-    public async Task RealCli_RejectsRetiredRuntimeCommandsBeforeAnyInputOrStateAccess(string command)
+    [InlineData("identity-migration")]
+    [InlineData("check-platform-catalog-migration")]
+    public async Task RealCli_RejectsRetiredCommandsBeforeAnyInputOrStateAccess(string command)
     {
         var result = await Invoke([command, "--state-root", "missing", "--lock", "missing"]);
         Assert.Equal(2, result.Code);

@@ -4,6 +4,23 @@
     "identity": "sunder.worker.v1",
     "version": 1
   },
+  "operationalOutcomes": [
+    {
+      "code": "resource-exhausted",
+      "hostCode": "rpc.provider.resource-exhausted",
+      "hostMessage": "The provider could not complete the RPC operation because resources are exhausted."
+    },
+    {
+      "code": "unavailable",
+      "hostCode": "rpc.provider.unavailable",
+      "hostMessage": "The provider could not complete the RPC operation because a required service is unavailable."
+    },
+    {
+      "code": "deadline-exceeded",
+      "hostCode": "rpc.provider.deadline-exceeded",
+      "hostMessage": "The provider could not complete the RPC operation before a required deadline."
+    }
+  ],
   "envelopePropertySets": {
     "host.activate": ["type", "sessionGeneration", "workspaceRootPath"],
     "worker.generation-committed": ["type", "activationId", "sessionGeneration"],

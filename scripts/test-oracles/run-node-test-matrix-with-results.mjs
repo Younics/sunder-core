@@ -15,6 +15,7 @@ for (const packageName of ["sdk", "package-tool", "create-sunder-package"]) {
 }
 
 runNodeReport("node-core-oracles", [
+  ...testFiles(resolve(repositoryRoot, "scripts/compatibility"), ".test.mjs"),
   ...testFiles(resolve(repositoryRoot, "scripts/test/release"), ".test.mjs"),
   ...testFiles(resolve(repositoryRoot, "scripts/test-oracles"), ".test.mjs"),
 ]);

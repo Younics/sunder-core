@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 from urllib.parse import quote, urlsplit
 
 REPOSITORY = "Younics/sunder-core"
@@ -174,11 +175,23 @@ def evidence_descendant(source, evidence):
     require(comparison["ahead_by"] == 1 and comparison["behind_by"] == 0 and comparison["total_commits"] == 1,
             "Publication evidence ancestry differs")
     files = comparison["files"]
-    require(files and len(files) < 300 and all(item["filename"] == BASELINE or re.fullmatch(
+    compatibility_manifest = "eng/compatibility/supported-releases.json"
+    require(files and len(files) < 300 and all(item["filename"] in (BASELINE, compatibility_manifest) or re.fullmatch(
         r"eng/release/publication-evidence/[a-z0-9][a-z0-9.-]*\.json", item["filename"]) for item in files),
         "Publication evidence commit changes artifact inputs outside the evidence allowlist")
     require(all(item["status"] in ("added", "modified") for item in files), "Evidence files cannot be deleted or renamed")
-    require(any(item["filename"] == BASELINE for item in files), "Evidence commit must record the catalog publication")
+    has_catalog = any(item["filename"] == BASELINE for item in files)
+    has_compatibility = any(item["filename"] == compatibility_manifest for item in files)
+    require(has_catalog or has_compatibility, "Evidence commit must confirm catalog or SDK compatibility publication")
+    if has_compatibility:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "compatibility"))
+        import sdk_release_compatibility as compatibility
+        require(any(item["filename"] == compatibility.PUBLICATION for item in files), "Compatibility confirmation requires its publication evidence")
+        compatibility.verify_publication_evidence(decode(source_file(evidence, compatibility.PUBLICATION)),
+            decode(source_file(source, compatibility_manifest)), decode(source_file(evidence, compatibility_manifest)), source)
+    if not has_catalog:
+        return dict(parentCommit=source, publicationEvidenceCommit=evidence,
+                    changedPaths=sorted(item["filename"] for item in files), baselineChange="verified-compatibility-publication-only")
     before, after = (decode(source_file(commit, BASELINE)) for commit in (source, evidence))
     require(set(before["contracts"]) == set(after["contracts"]), "Publication changed the owned inventory")
     for key, contract in before["contracts"].items():

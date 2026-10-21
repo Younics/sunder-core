@@ -22,7 +22,7 @@ claims cannot assign a Registry principal ID, credential grants, or administrato
 authority. Maintainer requests identify an existing principal and do not create it.
 
 This identity contract does not establish package reservations, first-publication
-claims, contract-family authority, policy epochs, or rollback-safe checkpoints.
+claims, contract-family authority, or database policy revisions.
 Those are separate Registry operations and remain subject to their owning phase
 gates. Principal creation grants none of those permissions.
 

@@ -128,6 +128,7 @@ internal static class RuntimeHostComposition
             provider.GetRequiredService<RuntimePackageRecoveryCoordinator>());
         services.AddSingleton<RuntimeRpcAppSessionManager>();
         services.AddSingleton<RuntimeRpcBroker>();
+        services.AddSingleton<PackageWorkerExecutionObservationService>();
         services.AddSingleton<RuntimeRpcPermissionService>();
         services.AddSingleton<RuntimeSnapshotService>();
         services.AddSingleton(provider => new PackageSessionLoadService(

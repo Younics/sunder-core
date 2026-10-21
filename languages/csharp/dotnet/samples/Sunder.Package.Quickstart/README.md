@@ -49,6 +49,6 @@ model types.
 The current private API is the explicit **package 1.1.0 successor**. Its descriptor
 version is 1.1.0 and evolves with the package; normal Build/Pack requires no Accept
 or Freeze. The earlier release-frozen private 2.0.0 record remains losslessly under
-`retiredPrivateContracts` after the explicit `MigratePrivateSunderContracts` command.
-Historical descriptor/ABI oracle files are unchanged and are checked separately
-from the current natural-signature API. Normal builds never rewrite that archive.
+`retiredPrivateContracts` as inert retained evidence.
+Historical descriptor/ABI oracle files remain inert. Current source and artifact
+tests validate the natural-signature API directly. Normal builds never rewrite that archive.

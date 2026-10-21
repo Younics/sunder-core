@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -139,6 +139,101 @@ export const second=defineService({echo(value:Box<string>):Box<string>{return va
   } finally { await c.dispose(); }
 });
 
+function publicNameSource(extension: "ts" | "js", sourceName: string, names: {name?: string; publicName?: string}) {
+  return `import {defineService} from "@sunder/sdk";
+${extension === "ts" ? `export type ${sourceName} = {message:string};` : `/** @typedef {{message:string}} ${sourceName} */`}
+export const echo = defineService({
+/** @param {${sourceName}} value @returns {${sourceName}} */
+echo(value${extension === "ts" ? `:${sourceName}` : ""}) {return value;}
+}, {exposure:"public", values:${JSON.stringify({[sourceName]: names})}});`;
+}
+
+test("explicit public model names preserve descriptor, ABI and exported projection across TS/checkJs source renames", async () => {
+  let expected: Buffer | undefined;
+  for (const extension of ["ts", "js"] as const) {
+    const names = {name:"WireGreeting", publicName:"HTTPGreeting"};
+    const c = await fixture(extension, publicNameSource(extension, "ImplementationValue", names));
+    try {
+      const before = await c.load();
+      await writeFile(join(c.root, `src/services.${extension}`), publicNameSource(extension, "RenamedValue", names));
+      const after = await c.load();
+      assert.deepEqual(after.contracts[0]!.canonicalBytes, before.contracts[0]!.canonicalBytes);
+      assert.equal(after.contracts[0]!.abiSha256, before.contracts[0]!.abiSha256);
+      assert.deepEqual({...after.contracts[0]!.modelProjection.models}, {WireGreeting:"HTTPGreeting"});
+      const projection = Buffer.from(after.ownedRpc!.files.get(MODEL_PROJECTION_PATH)!);
+      assert.deepEqual(projection, Buffer.from(before.ownedRpc!.files.get(MODEL_PROJECTION_PATH)!));
+      if (expected) assert.deepEqual(projection, expected); else expected = projection;
+      for (const path of ["api.d.ts", "owned/echo.d.ts"])
+        assert.equal(after.ownedRpc!.files.get(path), before.ownedRpc!.files.get(path), path);
+      assert.match(after.ownedRpc!.files.get("api.d.ts")!, /type HTTPGreeting = \$binding\d+\.WireGreeting/);
+      // Owning Self aliases still resolve the actual source method's value type.
+      assert.match(after.ownedRpc!.files.get("api.ts")!, /export type HTTPGreeting = Exclude<Parameters<NonNullable<typeof import/);
+      assert.match(after.ownedRpc!.files.get("owned/echo.ts")!, /type WireGreeting = Exclude<Parameters/);
+
+      await writeFile(join(c.root, `src/services.${extension}`), publicNameSource(extension, "RenamedValue", {...names, publicName:"_Greeting2"}));
+      const changed = await c.load();
+      assert.deepEqual(changed.contracts[0]!.canonicalBytes, before.contracts[0]!.canonicalBytes);
+      assert.equal(changed.contracts[0]!.abiSha256, before.contracts[0]!.abiSha256);
+      assert.equal(changed.contracts[0]!.modelProjection.models.WireGreeting, "_Greeting2");
+    } finally { await c.dispose(); }
+  }
+});
+
+test("explicit public model names reject nonportable spellings before TS/checkJs publication", async () => {
+  for (const extension of ["ts", "js"] as const) {
+    const c = await fixture(extension);
+    try {
+      for (const publicName of ["", "bad.name", "bad-name", "9Name", "class", "héllo", " Name", "A".repeat(129)]) {
+        await writeFile(join(c.root, `src/services.${extension}`), publicNameSource(extension, "ImplementationValue", {name:"WireGreeting", publicName}));
+        await assert.rejects(c.load(), /model-projection-invalid:.*services\.[jt]s:\d+:\d+:.*publicName/);
+      }
+      for (const publicName of ["A".repeat(128), "lower_name", "Class"]) {
+        await writeFile(join(c.root, `src/services.${extension}`), publicNameSource(extension, "ImplementationValue", {publicName}));
+        const project = await c.load();
+        assert.deepEqual({...project.contracts[0]!.modelProjection.models}, {ImplementationValue:publicName});
+      }
+      await writeFile(join(c.root, `src/services.${extension}`), publicNameSource(extension, "ImplementationValue", {name:"WireGreeting"}));
+      assert.deepEqual({...((await c.load()).contracts[0]!.modelProjection.models)}, {WireGreeting:"ImplementationValue"});
+    } finally { await c.dispose(); }
+  }
+});
+
+test("explicit public model names reject duplicate, inconsistent, ambiguous and unused source metadata", async () => {
+  for (const extension of ["ts", "js"] as const) {
+    const first = publicNameSource(extension, "FirstValue", {name:"FirstWire", publicName:"SharedValue"});
+    const c = await fixture(extension, first);
+    try {
+      for (const publicName of ["SharedValue", "sharedvalue"]) {
+        const second = publicNameSource(extension, "SecondValue", {name:"SecondWire", publicName})
+          .replace('import {defineService} from "@sunder/sdk";', "").replace("export const echo", "export const second");
+        await writeFile(join(c.root, `src/services.${extension}`), first + second);
+        await assert.rejects(c.load(), /identity-collision:.*Model '.*'.*distinct source declaration.*services\.[jt]s/s);
+      }
+      const inconsistent = `export const second = defineService({
+/** @param {FirstValue} value @returns {FirstValue} */
+echo(value${extension === "ts" ? ":FirstValue" : ""}) {return value;}
+}, {values:{FirstValue:{publicName:"OtherValue"}}});`;
+      await writeFile(join(c.root, `src/services.${extension}`), first + inconsistent);
+      await assert.rejects(c.load(), /identity-collision:.*same publicName in every owning service/);
+      await writeFile(join(c.root, `src/services.${extension}`), first.replace('"FirstValue":{', '"Typo":{'));
+      await assert.rejects(c.load(), /model-projection-invalid:.*'Typo'.*reachable named source value/);
+      await writeFile(join(c.root, `src/services.${extension}`), publicNameSource(extension, "FirstValue", {name:"bad/name", publicName:"ValidName"}));
+      await assert.rejects(c.load(), /value-invalid:.*wire definition name/);
+      for (const file of ["a", "b"]) await writeFile(join(c.root, `src/${file}.${extension}`), extension === "ts"
+        ? "export type Value = {message:string};" : "/** @typedef {{message:string}} Value */\nexport {};");
+      await writeFile(join(c.root, `src/services.${extension}`), `import {defineService} from "@sunder/sdk";
+${extension === "ts" ? 'import type {Value as A} from "./a.js"; import type {Value as B} from "./b.js";' : ""}
+export const echo = defineService({
+/** @param {import("./a.js").Value} value */
+first(value${extension === "ts" ? ":A" : ""}) {return value;},
+/** @param {import("./b.js").Value} value */
+second(value${extension === "ts" ? ":B" : ""}) {return value;}
+}, {values:{Value:{name:"WireValue",publicName:"SharedValue"}}});`);
+      await assert.rejects(c.load(), /identity-collision:.*Value naming key 'Value'.*distinct source declarations/);
+    } finally { await c.dispose(); }
+  }
+});
+
 test("strict sidecars reject tampering, numeric-key reordering, stale linkage and incompatible complete model closures", async () => {
   const c = await fixture("ts");
   try {
@@ -257,7 +352,7 @@ ${extension === "ts" ? 'import type {WorkerContext} from "@sunder/sdk";' : ''}
 export function configure(context${extension === "ts" ? ':WorkerContext' : ''}) {
   /** @type {import("#sunder/api").DependencyModels.Item} */
   const value${extension === "ts" ? ':import("#sunder/api").DependencyModels.Item' : ''}={name:"ok",detail:{count:1n}};
-  return {async onActivated(){await context.api(Dependency).exampleModelsFirst.first.echo(value);}};
+  return {async onActivated(){await context.api(Dependency).example_Models_First.first.echo(value);}};
 }`);
       try {
         const config = JSON.parse(await readFile(join(consumer.root,"sunder.package.json"),"utf8")); config.id="example.consumer";
@@ -404,8 +499,9 @@ test("authoring acquisition inspects canonical candidates, pins sidecars, reuses
     // The mock is only the existing Format subprocess boundary. Descriptors and
     // model metadata come from a real TS compilation, never hand-copied schemas.
     await writeFile(executable,`const fs=require("node:fs"),p=require("node:path");const data=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));const args=process.argv.slice(3);const out=args[args.indexOf("--api-output")+1];fs.mkdirSync(out);fs.writeFileSync(p.join(out,"inspection.json"),JSON.stringify(data.receipt));for(const [name,text] of Object.entries(data.files))fs.writeFileSync(p.join(out,name),text);`);
-    const spawn = childProcess.spawn;
+    const spawn = childProcess.spawn; let inspections = 0;
     t.mock.method(childProcess,"spawn",((command:string,args:readonly string[],options:childProcess.SpawnOptions) => {
+      inspections++;
       assert.equal(command,process.env.SUNDER_CLI??"sunder"); assert.deepEqual(args.slice(0,3),["dev","package","validate"]);
       return spawn(process.execPath,[executable,recipePath,...args],options);
     }) as typeof childProcess.spawn);
@@ -437,9 +533,16 @@ test("authoring acquisition inspects canonical candidates, pins sidecars, reuses
       const old = JSON.parse(selection.lock.exactBytes.toString()); delete old.packageArtifacts[project.config.id].modelProjectionBytes; delete old.packageArtifacts[project.config.id].modelProjectionSha256;
       const oldBytes=Buffer.from(JSON.stringify(old,null,2)+"\n"); await writeFile(join(consumer.root,"sunder-contracts.lock.json"),oldBytes);
       assert.throws(()=>parseContractLock(oldBytes),/missing/);
+      const lockPath=join(consumer.root,"sunder-contracts.lock.json"), oldTime=(await stat(lockPath)).mtimeMs, beforeInspections=inspections;
+      await assert.rejects(packageApiCommand(consumer.root,{operation:"update",packageId:project.config.id,candidate:path,cacheRoot:cache}),/missing/);
+      assert.equal(inspections,beforeInspections); assert.deepEqual(await readFile(lockPath),oldBytes); assert.equal((await stat(lockPath)).mtimeMs,oldTime);
+      // A complete current selection can still be checked against the canonical
+      // candidate; Update never manufactures missing pins from that candidate.
+      await writeFile(lockPath,selection.lock.exactBytes); const currentTime=(await stat(lockPath)).mtimeMs;
       const updated = await packageApiCommand(consumer.root,{operation:"update",packageId:project.config.id,candidate:path,cacheRoot:cache});
-      assert.equal(updated.changed,true); assert.equal(updated.lock.packageArtifacts.get(project.config.id)!.modelProjectionSha256,hashBytes(selection.body));
+      assert.equal(updated.changed,false); assert.equal(updated.lock.packageArtifacts.get(project.config.id)!.modelProjectionSha256,hashBytes(selection.body));
       assert.deepEqual(updated.lock.exactBytes,selection.lock.exactBytes);
+      assert.deepEqual(await readFile(lockPath),selection.lock.exactBytes); assert.equal((await stat(lockPath)).mtimeMs,currentTime);
     } finally { await consumer.dispose(); }
     for (const mutation of ["missing","extra","hash","private"] as const) {
       const changed = structuredClone(recipe);

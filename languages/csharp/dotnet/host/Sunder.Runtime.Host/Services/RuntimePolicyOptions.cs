@@ -106,6 +106,8 @@ internal sealed record RuntimeRpcPolicyOptions
     public int MaxInlineDecodedBytes { get; init; } = RuntimeResourcePolicies.Standard.MaximumInlineDecodedBytes;
     public int MaxConcurrentCallsPerCaller { get; init; } = 32;
     public int MaxConcurrentCallsPerCallee { get; init; } = 64;
+    public int MaxConcurrentObservationsPerCaller { get; init; } = 32;
+    public int MaxConcurrentObservationsPerCallee { get; init; } = 64;
     public int MaxNestedCallDepth { get; init; } = 8;
     public int MaxStreamEvents { get; init; } = 100_000;
     public int MaxStreamEventsPerSecond { get; init; } = 1000;
@@ -133,7 +135,9 @@ internal sealed record RuntimeProcessPolicyOptions
     public int MaxHeaderBytes { get; init; } = 8 * 1024;
     public RuntimeResourcePolicy? EffectiveResourcePolicy { get; init; }
     public int MaxOutstandingHostCalls { get; init; } = 64;
+    public int MaxOutstandingHostStreams { get; init; } = 64;
     public int MaxOutstandingWorkerCalls { get; init; } = 32;
+    public int MaxOutstandingWorkerStreams { get; init; } = 32;
     public int MaxOutstandingWorkerLoggingCalls { get; init; } = 32;
     public int MaxOutstandingWorkerCallScopes { get; init; } = 64;
     public int MaxMaterializedWorkerContentHandles { get; init; } = 128;

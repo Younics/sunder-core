@@ -6,6 +6,7 @@ internal sealed class AppWebPendingRequest : IDisposable
 {
     private readonly CancellationTokenSource _deadline;
     private readonly CancellationTokenSource _cancellation = new();
+    private readonly CancellationToken _token;
     private CancellationTokenRegistration _requestRegistration;
     private CancellationTokenRegistration _lifetimeRegistration;
     private CancellationTokenRegistration _deadlineRegistration;
@@ -22,6 +23,7 @@ internal sealed class AppWebPendingRequest : IDisposable
         CancellationTokenSource deadline)
     {
         DocumentGeneration = documentGeneration;
+        _token = _cancellation.Token;
         // The bridge creates the deadline source; this request only observes and disposes it.
         _deadline = deadline;
         _requestRegistration = request.Register(
@@ -37,7 +39,9 @@ internal sealed class AppWebPendingRequest : IDisposable
 
     public long DocumentGeneration { get; }
 
-    public CancellationToken Token => _cancellation.Token;
+    // Late native completions still use this token in the bridge's cancellation
+    // filter after retirement disposed the source. Preserve its original state.
+    public CancellationToken Token => _token;
 
     public bool TimedOut => Volatile.Read(ref _cancellationReason) == (int)CancellationReason.Deadline;
 

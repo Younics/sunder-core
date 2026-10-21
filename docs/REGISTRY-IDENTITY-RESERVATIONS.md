@@ -43,8 +43,8 @@ occupied/stale/quota conflicts 409. Availability errors retain the shared 503 Pr
 Details contract. Both browser and interactive CLI actors are supported; CLI identity
 is revalidated inside the global policy transaction. Publish tokens grant no access.
 
-All mutations use typed external checkpoints and deterministic replay. The Production
-public-ready gate requires verified catalog and complete first-party bootstrap state.
+All mutations use atomic database policy transactions. An empty Registry is ready;
+first-party provisioning and catalog imports are not prerequisites for ordinary reservations.
 [Package publication](REGISTRY-PACKAGE-PUBLICATION.md) atomically
 claims its reservation and public contract authorities with the immutable version.
 These lease routes do not provide an independent claim operation.

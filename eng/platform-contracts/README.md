@@ -5,14 +5,18 @@ and value-model source in `Sunder.Sdk.Stacks` defines the contract; the baseline
 retains reviewed descriptor/ABI bytes and immutable compatibility history. Package
 authoring commands cannot read this baseline as package authority.
 
-The current Stack source derives all 48 definitions and six methods of the shipped
+The non-public `languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build` executable
+owns these commands and Stack transport generation. Its historical project name is
+part of the build graph; execution runtime acquisition belongs to Host vendor sources.
+
+The current Stack source derives all 48 definitions and six methods of the reviewed
 `sunder.stack.contributor` `2.0.0` tuple without reading the descriptor JSON. The
-hashes remain unchanged. SDK source builds now generate an SDK-only handler and the
+current owning baseline supplies descriptor/ABI expectations. SDK source builds generate an SDK-only handler and the
 adapter's required partial `CreateSunderRpcServiceHandler` factory; missing generation
 fails compilation. The thin Stack wrapper retains only routing-error semantics, not
 handwritten public-DTO JSON conversion. The embedded descriptor/props distribution
-and public DTO/client bridge remain migration surfaces; generated transport does not
-retire them or authorize platform imports.
+and retained provider/DTO helpers remain lower-level SDK surfaces; generated transport
+does not retire those assets or authorize platform imports.
 
 ## Explicit Commands
 
@@ -28,8 +32,9 @@ dotnet "$tool" platform-contracts freeze --core-root . --catalog-release 1.1.0
 ```
 
 Only when the baseline is absent, bootstrap requires the exact reviewed Stack key
-and version. Compilation must match the frozen migration descriptor and ABI hashes;
-edited source cannot be silently assigned the issued version:
+and version. Current source is reviewed through the owning lifecycle; the protected
+migration descriptor/ABI archive is inert and is not a bootstrap or build input.
+Existing frozen/published versions retain their ordinary immutability rules:
 
 ```sh
 dotnet "$tool" platform-contracts accept --core-root . --key stack-contributor-rpc-service-adapter --next-version 2.0.0
@@ -156,3 +161,15 @@ before rename.
 No-op acceptance/freezing preserves timestamps; failed or stale plans preserve the
 existing baseline/output. Only an invocation's still byte-identical regular stage
 is eligible for cleanup; unrelated or replaced files are retained.
+
+## Stack Transport Source Generation
+
+SDK builds use `core-stack-transport generate`; Host builds use `generate-host`.
+Both consume `--core-root`, `--request`, `--request-sha256` and `--request-stamp`.
+They revalidate evaluated source/references and publish immutable configuration/SHA-
+keyed `obj` content without introducing a Worker/Build-tool runtime dependency.
+
+Use `platform-contracts check --core-root <root>` to validate actual source against
+the current reviewed baseline. Historical Stack migration records remain byte-for-byte
+evidence, excluded from active baseline regeneration. Current source parity and public
+package artifact tests own descriptor/ABI and distribution checks.

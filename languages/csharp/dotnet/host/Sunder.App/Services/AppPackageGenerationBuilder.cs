@@ -28,7 +28,9 @@ internal sealed class AppPackageGenerationBuilder(
     BackgroundProcessQueueService? backgroundProcessQueue,
     Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
     IUiDispatcher uiDispatcher,
-    IAppPackagePolicy? packagePolicy = null)
+    IAppPackagePolicy? packagePolicy = null,
+    IAppPackageDevelopmentBackend? developerServices = null,
+    Action<AppPackageGeneration, Task>? registerActivation = null)
 {
     public AppPackageGeneration CreateInitialGeneration(
         AppPackageViewRegistry viewRegistry,
@@ -106,8 +108,33 @@ internal sealed class AppPackageGenerationBuilder(
             var activeByPackageId = activePackages.ToDictionary(
                 static package => package.PackageId,
                 StringComparer.OrdinalIgnoreCase);
+            foreach (var group in currentGeneration.ActivationGroups)
+            {
+                var ownedIds = group.OwnedActivationIds;
+                if (ownedIds.Count == 0 || !group.Composition.CanRetainActivations || !ownedIds.All(id =>
+                        !disabledPackageIds.Contains(id) && !retryPackageIds.Contains(id)
+                        && !currentGeneration.State.IsPackageDisabled(id)
+                        && activeByPackageId.TryGetValue(id, out var active)
+                        && sourcesByPackageId.TryGetValue(id, out var source)
+                        && currentGeneration.State.GetLoadedPackage(id) is { } handle && CanRetain(handle, active, source))) continue;
+                foreach (var id in ownedIds)
+                {
+                    var source = sourcesByPackageId[id];
+                    var handle = group.State.GetLoadedPackage(id)
+                        ?? throw new InvalidOperationException($"Retained App activation '{id}' retired during preparation.");
+                    if (handle.TargetLifetime is AppPackageManagedRpcClient rpc)
+                        candidate.AddRpcReplacement(await rpc.PrepareAsync(source, cancellationToken).ConfigureAwait(false));
+                    else
+                        await (packagePolicy ?? UnavailableAppPackagePolicy.Instance).RequireLoadAsync(source, cancellationToken).ConfigureAwait(false);
+                    candidate.State.StageRetainedSource(activeByPackageId[id], source);
+                }
+                // Every exact new source has a permit and a prepared caller session.
+                // Retain the original publication/owner, never a reconstructed provider.
+                candidate.RetainGroup(group);
+            }
+            await candidate.PrepareDataHandoffsAsync(currentGeneration, cancellationToken).ConfigureAwait(false);
             var materializations = packageSources
-                .Where(source => activeByPackageId.ContainsKey(source.PackageId))
+                .Where(source => activeByPackageId.ContainsKey(source.PackageId) && !candidate.Composition.IsRetainedPackage(source.PackageId))
                 .Select(async source =>
                 {
                     try
@@ -208,11 +235,28 @@ internal sealed class AppPackageGenerationBuilder(
                     visibleInDeveloperLog: false);
                 try
                 {
-                    await candidate.Composition.ActivatePackageAsync(
-                        preparedPackage.Package,
-                        preparedPackage.Source,
-                        preparedPackage.PreparedSource,
-                        cancellationToken).ConfigureAwait(false);
+                    var activation = CreateGeneration(generationId, folder: null, [preparedPackage.Package],
+                        new AppPackageViewRegistry(generationId, uiDispatcher), new AppPackageHostState([], [], []),
+                        sharedAssemblyRegistry: null, activationOwnerId: Guid.NewGuid());
+                    activation.ShareDirectory(candidate);
+                    activation.State.SetPackageContentHash(package.PackageId, preparedPackage.Source.ContentHash);
+                    var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    registerActivation?.Invoke(activation, ready.Task);
+                    try
+                    {
+                        await activation.Composition.ActivatePackageAsync(
+                            preparedPackage.Package, preparedPackage.Source, preparedPackage.PreparedSource,
+                            cancellationToken).ConfigureAwait(false);
+                        activation.SealActivations();
+                        candidate.RetainGroup(activation, existingActivation: false);
+                    }
+                    finally
+                    {
+                        // On success the candidate now owns this same live activation.
+                        // On failure this releases only its partially prepared resources.
+                        try { await activation.DisposeAsync().ConfigureAwait(false); }
+                        finally { ready.TrySetResult(); }
+                    }
                     startupTrace?.Complete();
                     AppSessionLog.WriteInfo(
                         $"App package module load completed for '{preparedPackage.Package.PackageId}' in {Stopwatch.GetElapsedTime(activationStartedTimestamp).TotalMilliseconds:0.0} ms.",
@@ -241,6 +285,7 @@ internal sealed class AppPackageGenerationBuilder(
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            candidate.SealActivations();
             return candidate;
         }
         catch
@@ -270,13 +315,41 @@ internal sealed class AppPackageGenerationBuilder(
             })
             .ToArray();
 
+    // A Host-issued development fingerprint can exclude this package's Worker
+    // payload, but the App projection still matches byte-for-byte. This is only
+    // reuse eligibility: BuildAsync requires the exact fresh policy/snapshot permit
+    // and stages a new caller session before retaining the activation.
+    internal static bool CanRetain(AppLoadedPackageHandle handle, ActivePackageDescriptor active, PackageUiSnapshotDescriptor source)
+        => handle.Source.ActivationFingerprint is { Length: 64 } fingerprint
+            && fingerprint == source.ActivationFingerprint
+            && handle.Source.SourceKind == source.SourceKind
+            && handle.Source.ContentHash == source.ContentHash
+            && (handle.Source.PolicySubject == source.PolicySubject
+                || source.SourceKind == PackageSourceKind.Dev
+                    && handle.Source.PolicySubject is { } previous && source.PolicySubject is { } next
+                    && previous.PackageId == next.PackageId && next.PackageId == active.PackageId
+                    && previous.Version == next.Version && next.Version == active.Version)
+            && handle.Source.Target.Kind == Sunder.Package.Format.SunderPackageFormat.AvaloniaTargetKind
+            && SameTarget(handle.Source.Target, source.Target)
+            && handle.Package.Version == active.Version && handle.Package.HostRoles == active.HostRoles
+            && handle.Package.IsEnabled == active.IsEnabled && handle.Package.Readiness == active.Readiness
+            && (handle.TargetLifetime is AppPackageManagedRpcClient
+                || handle.TargetLifetime is null && AppProcessPolicySupervisor.GetImplementedObservationCapabilities(source.Target) is null);
+
+    private static bool SameTarget(PackageTargetDescriptor left, PackageTargetDescriptor right)
+        => left.Role == right.Role && left.Rid == right.Rid && left.Kind == right.Kind && left.EntryPoint == right.EntryPoint
+            && left.TargetFramework == right.TargetFramework && left.SdkVersion == right.SdkVersion
+            && left.RequiredHostCapabilities.SequenceEqual(right.RequiredHostCapabilities, StringComparer.Ordinal)
+            && left.Views.SequenceEqual(right.Views);
+
     private AppPackageGeneration CreateGeneration(
         Guid generationId,
         string? folder,
         IReadOnlyList<ActivePackageDescriptor> activePackages,
         AppPackageViewRegistry viewRegistry,
         AppPackageHostState state,
-        AppSharedAssemblyRegistry? sharedAssemblyRegistry)
+        AppSharedAssemblyRegistry? sharedAssemblyRegistry,
+        Guid? activationOwnerId = null)
     {
         var composition = new AppPackageHostComposition(
             eventSender,
@@ -298,7 +371,9 @@ internal sealed class AppPackageGenerationBuilder(
             webRpcClientFactory: getRuntimeConnectionInfo is null
                 ? null
                 : new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo),
-            packagePolicy: packagePolicy);
+            packagePolicy: packagePolicy,
+            developerServices: developerServices,
+            activationOwnerId: activationOwnerId);
         return new AppPackageGeneration(
             generationId,
             folder,

@@ -14,7 +14,8 @@ internal sealed class AppPackageServiceProviderFactory(
     NotificationCenterService? notificationCenter,
     BackgroundProcessQueueService backgroundProcessQueue,
     AppPackageGenerationPublication publication,
-    Guid? ownerId = null)
+    Guid? ownerId = null,
+    IAppPackageDevelopmentBackend? developerServices = null)
 {
     private static readonly Type[] ReservedServiceTypes =
     [
@@ -25,6 +26,10 @@ internal sealed class AppPackageServiceProviderFactory(
         typeof(ISunderRpcClient),
         typeof(IPackageShellViewService),
         typeof(IPackageSettingsNavigationService),
+        typeof(IPackageDevelopmentService),
+        typeof(IPackageLogNavigationService),
+        typeof(IPackageAppStateUpdates),
+        typeof(IPackageWorkerExecutionObservations),
         typeof(IBackgroundProcessQueue),
         typeof(IPackageNotificationService),
     ];
@@ -49,6 +54,11 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton(rpcClient);
         services.AddSingleton<IPackageShellViewService>(shellViewService ?? DisabledPackageShellViewService.Instance);
         services.AddSingleton<IPackageSettingsNavigationService>(settingsNavigationService ?? NullPackageSettingsNavigationService.Instance);
+        services.AddSingleton(_ => new AppPackageDevelopmentService(developerServices, publication, Guid.NewGuid()));
+        services.AddSingleton<IPackageDevelopmentService>(provider => provider.GetRequiredService<AppPackageDevelopmentService>());
+        services.AddSingleton<IPackageLogNavigationService>(provider => provider.GetRequiredService<AppPackageDevelopmentService>());
+        services.AddSingleton<IPackageAppStateUpdates>(new AppPackageStateUpdates(publication));
+        services.AddSingleton<IPackageWorkerExecutionObservations>(new AppPackageWorkerExecutionObservations(rpcClient, publication));
         services.AddSingleton<IBackgroundProcessQueue>(_ =>
         {
             var packageBackgroundProcessQueue = new AppPackageBackgroundProcessQueue(

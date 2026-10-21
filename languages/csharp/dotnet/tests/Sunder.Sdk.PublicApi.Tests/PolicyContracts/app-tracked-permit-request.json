@@ -1,0 +1,26 @@
+{
+  "session": {
+    "sessionId": "0123456789abcdef0123456789abcdef",
+    "appGenerationId": "11111111-2222-4333-8444-555555555555",
+    "runtimeInstanceId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+  },
+  "package": {
+    "packageId": "example.agent",
+    "version": "2.0.0",
+    "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "snapshotId": "0123456789abcdef0123456789abcdef",
+  "appActivationId": "22222222-3333-4444-8555-666666666666",
+  "appTarget": {
+    "role": "app",
+    "rid": "osx-arm64",
+    "kind": "web",
+    "entryPoint": "index.html",
+    "targetFramework": null,
+    "sdkVersion": "1.1.0",
+    "executionRuntime": null,
+    "executionRuntimeBinding": null,
+    "requiredHostCapabilities": [],
+    "views": []
+  }
+}

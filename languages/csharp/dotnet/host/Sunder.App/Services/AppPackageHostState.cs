@@ -13,6 +13,20 @@ internal sealed class AppPackageHostState(
     private readonly List<AppPackageLoadContext> _loadContexts = loadContexts.ToList();
     private readonly List<object> _ownedDisposables = ownedDisposables.ToList();
     private readonly object _syncRoot = new();
+    private readonly Dictionary<string, AppPackageHostState> _retained = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (ActivePackageDescriptor Package, PackageUiSnapshotDescriptor Source)> _retainedSources = new(StringComparer.OrdinalIgnoreCase);
+    internal void RetainPackage(string packageId, AppPackageHostState owner)
+    {
+        lock (_syncRoot) { _retained.Add(packageId, owner); _activatedPackageIds.Add(packageId); }
+    }
+    internal void DetachRetainedPackages() { lock (_syncRoot) { _retained.Clear(); _retainedSources.Clear(); } }
+    // Candidate-local source metadata is published/rolled back with its generation.
+    // The birth owner keeps the original bytes, provider, lease and caller lifetime.
+    internal void StageRetainedSource(ActivePackageDescriptor package, PackageUiSnapshotDescriptor source)
+    {
+        lock (_syncRoot) _retainedSources.Add(package.PackageId, (package, source));
+    }
+    internal string[] SnapshotOwnedPackageIds() { lock (_syncRoot) return _loadedPackages.Keys.ToArray(); }
 
     public int LoadedPackageCount
     {
@@ -20,7 +34,7 @@ internal sealed class AppPackageHostState(
         {
             lock (_syncRoot)
             {
-                return _loadedPackages.Count;
+                return _loadedPackages.Count + _retained.Count(pair => pair.Value.GetLoadedPackage(pair.Key) is not null);
             }
         }
     }
@@ -31,7 +45,7 @@ internal sealed class AppPackageHostState(
         {
             lock (_syncRoot)
             {
-                return _ownedDisposables.Count;
+                return _ownedDisposables.Count + _retained.Count(pair => pair.Value.GetLoadedPackage(pair.Key)?.ServiceProvider is not null);
             }
         }
     }
@@ -42,7 +56,7 @@ internal sealed class AppPackageHostState(
         {
             lock (_syncRoot)
             {
-                return _loadContexts.Count;
+                return _loadContexts.Count + _retained.Count(pair => pair.Value.GetLoadedPackage(pair.Key)?.LoadContext is not null);
             }
         }
     }
@@ -52,7 +66,7 @@ internal sealed class AppPackageHostState(
         lock (_syncRoot)
         {
             return activePackages
-                .Where(package => !disabledPackageIds.Contains(package.PackageId))
+                .Where(package => !IsPackageDisabled(package.PackageId))
                 .ToArray();
         }
     }
@@ -61,7 +75,7 @@ internal sealed class AppPackageHostState(
     {
         lock (_syncRoot)
         {
-            return new HashSet<string>(disabledPackageIds, StringComparer.OrdinalIgnoreCase);
+            return disabledPackageIds.Concat(_retained.Where(pair => pair.Value.IsPackageDisabled(pair.Key)).Select(pair => pair.Key)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         }
     }
 
@@ -69,7 +83,7 @@ internal sealed class AppPackageHostState(
     {
         lock (_syncRoot)
         {
-            return _loadedPackages.Keys.ToArray();
+            return _loadedPackages.Keys.Concat(_retained.Keys).ToArray();
         }
     }
 
@@ -77,7 +91,7 @@ internal sealed class AppPackageHostState(
     {
         lock (_syncRoot)
         {
-            return _loadedPackages.Keys.Where(predicate).ToArray();
+            return SnapshotLoadedPackageIds().Where(predicate).ToArray();
         }
     }
 
@@ -85,7 +99,10 @@ internal sealed class AppPackageHostState(
     {
         lock (_syncRoot)
         {
-            return _loadedPackages.TryGetValue(packageId, out var loadedPackage) ? loadedPackage : null;
+            if (_loadedPackages.TryGetValue(packageId, out var loadedPackage)) return loadedPackage;
+            var retained = _retained.GetValueOrDefault(packageId)?.GetLoadedPackage(packageId);
+            return retained is not null && _retainedSources.TryGetValue(packageId, out var current)
+                ? retained with { Package = current.Package, Source = current.Source } : retained;
         }
     }
 
@@ -147,7 +164,7 @@ internal sealed class AppPackageHostState(
     {
         lock (_syncRoot)
         {
-            return disabledPackageIds.Contains(packageId);
+            return disabledPackageIds.Contains(packageId) || _retained.GetValueOrDefault(packageId)?.IsPackageDisabled(packageId) == true;
         }
     }
 
@@ -203,7 +220,8 @@ internal sealed class AppPackageHostState(
     {
         lock (_syncRoot)
         {
-            return _loadContexts.Select(loadContext => new WeakReference(loadContext)).ToArray();
+            return _loadContexts.Select(loadContext => new WeakReference(loadContext))
+                .Concat(_retained.Select(pair => pair.Value.GetLoadedPackage(pair.Key)?.LoadContext).OfType<AppPackageLoadContext>().Select(context => new WeakReference(context))).ToArray();
         }
     }
 }

@@ -9,6 +9,7 @@ import { JSDOM } from "jsdom";
 import type { JsonValue } from "@sunder/sdk";
 import { currentRid } from "../src/model";
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
+import { liveCatalogWatch } from "./service-fixtures";
 
 const exec = promisify(execFile);
 type Use = {role:string;contractId:string;contractVersion:string;required:boolean;actions:string[]};
@@ -71,7 +72,8 @@ globalThis.teardown=()=>{root.unmount();context.dispose();};
           if (!(manifest.usesContracts as Use[]).some(use=>use.role===role&&use.contractId===expected.contractId&&use.actions.includes(action)))
             throw new Error("rpc.permission-denied");
         };
-        const provider = {...manifest.provides[0],packageId:manifest.id,packageVersion:manifest.version,state:"active",providerHandle:"packed-owner",catalogRevision:1,faultCode:null};
+        const provider = {...manifest.provides[0],packageId:manifest.id,packageVersion:manifest.version,state:"active",providerHandle:"packed-owner",endpointReference:"packed-owner-endpoint",
+          descriptorSha256:previous.contracts[0].descriptorSha256,activationId:"11223344556677889900aabbccddeeff",activationEpoch:1,sessionGeneration:1,catalogRevision:1,faultCode:null};
         const rpc = {
           async discover(id:string) {allow("app","discover");assert.equal(id,expected.contractId);return {revision:1,sequence:1,resetRequired:false,providers:[provider]};},
           async invoke(target:string,service:string,method:string,request:JsonValue,options?:{signal?:AbortSignal}) {
@@ -79,6 +81,7 @@ globalThis.teardown=()=>{root.unmount();context.dispose();};
             return invokeUnary(method,request);
           },
           async *subscribe() {throw new Error("Unexpected UI stream");},
+          watch:liveCatalogWatch,
         };
         Object.defineProperty(dom.window,"sunder",{value:Object.freeze({protocol:"sunder.bridge.v1",version:1,signal:lifetime.signal,rpc}),writable:false,configurable:false});
         let observer: MutationObserver | undefined; let timer: ReturnType<typeof setTimeout> | undefined;

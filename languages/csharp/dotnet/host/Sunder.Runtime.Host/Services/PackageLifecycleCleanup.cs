@@ -8,7 +8,7 @@ internal sealed partial class PackageSessionLifecycleService
         {
             cancellationToken.ThrowIfCancellationRequested();
             await _publisher.DiscardAsync(stage.Candidate);
-            if (stage.Candidate.StageId is { } stageId) _sessions.MarkStageDiscarded(stageId);
+            if (stage.Candidate.StageId is { } stageId) { _appPolicies?.ForgetRetirementStage(stageId); _sessions.MarkStageDiscarded(stageId); }
         }
     }
 
@@ -24,6 +24,7 @@ internal sealed partial class PackageSessionLifecycleService
         {
             await _publisher.DiscardAsync(stage.Candidate);
             if (stage.Candidate.StageId is not { } stageId) continue;
+            _appPolicies?.ForgetRetirementStage(stageId);
             _sessions.MarkStageFailed(
                 stageId,
                 stage.ExpiresAtUtc <= now

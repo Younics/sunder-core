@@ -11,7 +11,7 @@ using Sunder.Sdk.Stacks;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class RuntimeRpcBroker
+internal sealed partial class RuntimeRpcBroker
 {
     internal const string InvariantViolationFaultCode = "rpc.provider.invariant-violation";
     private static readonly AsyncLocal<RuntimeRpcCallFrame?> CurrentCall = new();
@@ -104,7 +104,7 @@ internal sealed class RuntimeRpcBroker
     internal void RequirePackagePolicy(RuntimePackageSource source)
     {
         try { _packagePolicy?.Require(source); }
-        catch (PackagePolicyDeniedException error) { throw Unavailable(error.Code, "Current package policy does not permit execution."); }
+        catch (PackagePolicyDeniedException error) { throw RuntimeRpcPolicyDenials.ToException(error); }
     }
 
     private void RequireCallerPolicy(IRuntimeRpcCallerActivation caller)
@@ -1076,15 +1076,18 @@ internal sealed class RuntimeRpcBroker
             ThrowAcquisitionFailure(frameResult.Failure);
             var frame = frameResult.Frame!;
             var now = frameResult.AcquiredAtUtc!.Value;
+            var observation = expectedKind == SunderRpcMethodKind.ServerStream;
             var callerLeaseResult = RuntimeRpcCallAcquisitionPolicy.ValidateLeaseAcquisition(
                 RuntimeRpcCallLeaseKind.Caller,
-                caller.TryAcquireCaller(_policy.MaxConcurrentCallsPerCaller, out callerLease)
+                caller.TryAcquireCaller(observation ? _policy.MaxConcurrentObservationsPerCaller : _policy.MaxConcurrentCallsPerCaller,
+                    out callerLease, observation)
                 && callerLease is not null);
             ThrowAcquisitionFailure(callerLeaseResult.Failure);
             var acquiredCallerLease = callerLease!;
             var calleeLeaseResult = RuntimeRpcCallAcquisitionPolicy.ValidateLeaseAcquisition(
                 RuntimeRpcCallLeaseKind.Provider,
-                acquiredProvider.TryAcquireCallee(_policy.MaxConcurrentCallsPerCallee, out calleeLease)
+                acquiredProvider.TryAcquireCallee(observation ? _policy.MaxConcurrentObservationsPerCallee : _policy.MaxConcurrentCallsPerCallee,
+                    out calleeLease, observation)
                 && calleeLease is not null);
             ThrowAcquisitionFailure(calleeLeaseResult.Failure);
             var acquiredCalleeLease = calleeLease!;
@@ -1123,7 +1126,8 @@ internal sealed class RuntimeRpcBroker
                     ownsContentAuthority: scope is null,
                     linked.Token,
                     acquiredProvider.Owner,
-                    _timeProvider);
+                    _timeProvider,
+                    (caller as RuntimeRpcAppCallerSession)?.Authority);
             }
             return new RuntimeRpcCallLease(
                 sessionLease,
@@ -1225,6 +1229,7 @@ internal sealed class RuntimeRpcBroker
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        using var operation = (scope.Caller as RuntimeRpcAppCallerSession)?.Authority?.Acquire();
         await using var source = new FileStream(
             Path.GetFullPath(filePath),
             FileMode.Open,
@@ -1275,26 +1280,33 @@ internal sealed class RuntimeRpcBroker
             ?? throw NotFound(
                 "rpc.content.unavailable",
                 "The RPC content reference is stale, exhausted, or unavailable to this call scope.");
+        IDisposable? streamLifetime = null;
         var readCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             scope.RevocationToken,
             provider.Owner.RetirementToken);
         try
         {
+            var authority = (scope.Caller as RuntimeRpcAppCallerSession)?.Authority;
+            streamLifetime = authority?.Acquire();
             Stream stream = new RuntimeRpcContentReadStream(
                 lease.Content,
                 () =>
                 {
                     store.ReleaseRpcContent(lease);
                     readCancellation.Dispose();
+                    streamLifetime?.Dispose();
                 },
                 readCancellation.Token,
-                () => ValidateActiveContentProvider(scope.Caller, provider, providerEndpoint));
+                () => ValidateActiveContentProvider(scope.Caller, provider, providerEndpoint),
+                authority is null ? null : authority.Acquire,
+                authority is null ? null : authority.RecordCleanupFailure);
             return ValueTask.FromResult(stream);
         }
         catch
         {
             readCancellation.Dispose();
             store.ReleaseRpcContent(lease);
+            streamLifetime?.Dispose();
             throw;
         }
     }
@@ -1387,6 +1399,17 @@ internal sealed class RuntimeRpcBroker
 
     private PackageSessionLease AcquireSessionLease(IRuntimeRpcCallerActivation caller)
     {
+        if (caller is RuntimeRpcAppCallerSession { Authority: { } authority })
+        {
+            var operation = authority.Acquire();
+            try
+            {
+                var appLease = _sessions.AcquireLease();
+                appLease.Own(operation);
+                return appLease;
+            }
+            catch { operation.Dispose(); throw; }
+        }
         if (caller is RuntimeRpcPackageActivation { AllowsPrePublicationLease: true } candidate)
         {
             return _sessions.AcquirePackageActivationLease(
@@ -1396,7 +1419,10 @@ internal sealed class RuntimeRpcBroker
                     candidate.ActivationGeneration));
         }
 
-        var lease = _sessions.AcquireLease();
+        var lease = caller is RuntimeRpcPackageActivation runtime
+            ? _sessions.AcquireRpcLease(runtime)
+              ?? throw Unavailable("rpc.session.transitioning", "The continuing package Runtime session is being published.")
+            : _sessions.AcquireLease();
         if (caller is RuntimeRpcPackageActivation package)
         {
             _ = _sessions.GetLoadedPackage(lease, package.PackageId);
@@ -1439,11 +1465,11 @@ internal sealed class RuntimeRpcBroker
     }
 
     private RuntimeRpcActivationLease AcquireCallerLease(IRuntimeRpcCallerActivation caller)
-        => caller.TryAcquireCaller(_policy.MaxConcurrentCallsPerCaller, out var lease) && lease is not null
+        => caller.TryAcquireCaller(_policy.MaxConcurrentObservationsPerCaller, out var lease, observation: true) && lease is not null
             ? lease
             : throw ResourceExhausted(
-                "rpc.caller.concurrency-limit",
-                "The caller RPC concurrency limit was reached.");
+                "rpc.caller.observation-limit",
+                "The caller RPC observation limit was reached.");
 
     private void EnsureCurrent(
         IRuntimeRpcCallerActivation caller,

@@ -30,34 +30,6 @@ internal static class ModelProjectionTestEvidence
             new SunderRpcModelProjectionContract(contract.ContractId, contract.ResolvedContractVersion,
                 contract.DescriptorSha256, contract.AbiSha256, SunderRpcModelProjection.Empty)).ToArray());
 
-    internal static JsonElement CurrentImportReceiptExpectation(JsonElement historical, SunderRpcContractLock contractLock)
-    {
-        // Preserve frozen source/descriptor/ABI vectors. The current receipt adds
-        // mandatory projection evidence and the coordinated C# namespace cut.
-        var expected = JsonNode.Parse(historical.GetRawText())!;
-        foreach (var contract in expected["contracts"]!.AsArray()) contract!["modelProjection"] = SunderRpcModelProjection.Empty.ToJson();
-        foreach (var artifact in expected["packageArtifacts"]!.AsArray())
-        {
-            var selected = contractLock.PackageArtifacts[artifact!["packageId"]!.GetValue<string>()];
-            var projection = EmptySourceProjection(selected);
-            artifact["modelProjectionBytes"] = projection.ModelProjectionBytes;
-            artifact["modelProjectionSha256"] = projection.ModelProjectionSha256;
-        }
-        foreach (var binding in expected["generatedBindings"]!.AsArray())
-        {
-            var id = binding!["contractKey"]!.GetValue<string>();
-            var origin = contractLock.PackageArtifacts.Values.SelectMany(artifact => artifact.Contracts.Values).First(contract => contract.ContractId == id);
-            binding["logicalName"] = Sunder.Package.Build.Editor.GeneratedPackageNames.Transport(origin.AuthorityId, id);
-        }
-        foreach (var facade in expected["generatedPackageFacades"]!.AsArray())
-        {
-            var local = facade!["localName"]!.GetValue<string>();
-            facade["logicalName"] = Sunder.Package.Build.Editor.GeneratedPackageNames.Internal(facade["packageId"]!.GetValue<string>())
-                + "." + char.ToUpperInvariant(local[0]) + local[1..] + "PackageApi";
-        }
-        return JsonSerializer.SerializeToElement(expected);
-    }
-
     internal static SunderRpcModelProjectionDocument PinEmptySourceProjection(string packageId, JsonNode artifact)
     {
         var document = new SunderRpcModelProjectionDocument(1, packageId, artifact["selectedPackageVersion"]!.GetValue<string>(),

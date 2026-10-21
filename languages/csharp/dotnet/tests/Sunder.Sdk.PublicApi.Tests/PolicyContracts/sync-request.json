@@ -4,12 +4,6 @@
     "revision": 42,
     "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
-  "minimumCheckpoint": {
-    "sequence": 99,
-    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "topologyGeneration": 1,
-    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-  },
   "packages": [
     {
       "packageId": "example.agent",

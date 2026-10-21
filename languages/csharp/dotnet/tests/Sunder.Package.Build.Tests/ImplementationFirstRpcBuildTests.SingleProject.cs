@@ -22,6 +22,18 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var root = ResolvePhysicalTemporaryPath(scope.GetPath("fixture"));
         var project = await CreateSingleProjectFixtureAsync(root, immutableTasks);
         var sourcePath = Path.Combine(root, "Mixed.cs");
+        await File.WriteAllTextAsync(Path.Combine(root, "StorageMigrations.cs"), """
+            using Sunder.Sdk.Storage;
+            using Sunder.Sdk.Worker;
+            namespace Example;
+            public sealed class StorageMigrations : ISunderWorkerStorageMigrationProvider, ISunderWorkerStorageMigrationPreparation
+            {
+                public IReadOnlyList<PackageStorageKeyMigration> StateMigrations { get; } =
+                    [PackageStorageKeyMigration.Exact("legacy.value", "current.value")];
+                public ValueTask PrepareStorageMigrationsAsync(SunderWorkerMigrationPreparationContext context,
+                    CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+            }
+            """);
         AssertSuccess(await Build());
         var worker = Path.Combine(root, "bin/Debug/net10.0/sunder-roles/worker", RuntimeInformation.RuntimeIdentifier, "SingleProject.dll");
         var app = Path.Combine(root, "bin/Debug/net10.0/sunder-roles/app", RuntimeInformation.RuntimeIdentifier, "SingleProject.App.dll");
@@ -36,8 +48,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
             var metadata = provider.GetMetadataReader();
             Assert.Contains(sourcePath, metadata.Documents.Select(handle => metadata.GetString(metadata.GetDocument(handle).Name)));
         }
-        AssertRole(worker, ["GreetingService", "WorkerEntryPoint", "BackendFormatter", "GreetingLifecycle"], ["GreetingView", "GreetingViewModel", "AppModule"], ["Avalonia.Base", "Avalonia.Controls", "Sunder.Sdk.Avalonia"]);
-        AssertRole(app, ["GreetingView", "GreetingViewModel", "AppModule"], ["GreetingService", "WorkerEntryPoint", "BackendFormatter", "GreetingLifecycle"], ["Sunder.Sdk.Worker", "SingleProject"]);
+        AssertRole(worker, ["GreetingService", "WorkerEntryPoint", "BackendFormatter", "GreetingLifecycle", "StorageMigrations"], ["GreetingView", "GreetingViewModel", "AppModule"], ["Avalonia.Base", "Avalonia.Controls", "Sunder.Sdk.Avalonia"]);
+        AssertRole(app, ["GreetingView", "GreetingViewModel", "AppModule"], ["GreetingService", "WorkerEntryPoint", "BackendFormatter", "GreetingLifecycle", "StorageMigrations"], ["Sunder.Sdk.Worker", "SingleProject"]);
         Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(app)!, "Sunder.Sdk.Worker.dll")));
         Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(worker)!, "Avalonia.Controls.dll")));
         Assert.DoesNotContain("Sunder.Sdk.Worker", await File.ReadAllTextAsync(Path.ChangeExtension(app, ".deps.json")), StringComparison.Ordinal);
@@ -46,6 +58,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(dev);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
         Assert.Equal(2, validation.Manifest!.Targets!.Count);
+        Assert.Contains("storage.key-migration.v1", Assert.Single(validation.Manifest.Targets, target => target!.Role == "runtime")!.RequiredHostCapabilities!);
         Assert.Equal("runtime", Assert.Single(validation.Manifest.Provides!)!.Role);
         var use = Assert.Single(validation.Manifest.UsesContracts!);
         Assert.Equal("app", use!.Role); Assert.True(use.Required);
@@ -100,13 +113,12 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Task<ProcessResult> Build() => RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]);
     }
 
-    private static async Task<string> CreateSingleProjectFixtureAsync(string root, bool immutableTasks, bool legacyBaseline = false)
+    private static async Task<string> CreateSingleProjectFixtureAsync(string root, bool immutableTasks)
     {
         Directory.CreateDirectory(root);
         var repository = FindRepositoryRoot();
         var existing = Path.Combine(repository, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ImplementationFirstRpc");
         File.Copy(Path.Combine(existing, "sunder-contracts.lock.json"), Path.Combine(root, "sunder-contracts.lock.json"));
-        if (legacyBaseline) File.Copy(Path.Combine(existing, "History/implementation-first-private.owned.json"), Path.Combine(root, "sunder-contracts.owned.json"));
         await File.WriteAllTextAsync(Path.Combine(root, "Mixed.cs"), SingleProjectSource);
         // Repository generated-file policy must retain the authored nullable context.
         await File.WriteAllTextAsync(Path.Combine(root, ".editorconfig"), "root = true\n\n[*.cs]\ngenerated_code = false\n\n[**/obj/**/*.cs]\ngenerated_code = true\n");

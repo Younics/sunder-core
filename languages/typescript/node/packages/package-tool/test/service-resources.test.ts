@@ -440,8 +440,8 @@ for(const extension of ["ts","js"] as const)test(`${extension} selected public b
 export const relay=defineService({
 /** @param {import("#sunder/api").LibraryModels.Reply} request @returns {import("#sunder/api").LibraryModels.Reply} */
 roundtrip(request/*:LibraryModels.Reply*/)/*:LibraryModels.Reply*/{return request;},
-/** @param {import("@sunder/sdk").ServiceReference<typeof Services.Library.exampleResourcesRunner.runner>} reference @returns {Promise<string>} */
-async run(reference/*:ServiceReference<typeof Services.Library.exampleResourcesRunner.runner>*/)/*:Promise<string>*/{return await reference.Service.run({name:"relay"});}
+/** @param {import("@sunder/sdk").ServiceReference<typeof Services.Library.example_Resources_Runner.runner>} reference @returns {Promise<string>} */
+async run(reference/*:ServiceReference<typeof Services.Library.example_Resources_Runner.runner>*/)/*:Promise<string>*/{return await reference.Service.run({name:"relay"});}
 });`;
     await writeFile(join(consumer.root,`src/services.${extension}`),fixtureSource(source,extension));
     const loaded=await loadProjectWithOwnedFrame(consumer.root,{contractCacheRoot:cache});await generateRpcBindingsForLoadedProject(loaded);
@@ -450,7 +450,7 @@ async run(reference/*:ServiceReference<typeof Services.Library.exampleResourcesR
     assert.deepEqual({...loaded.contracts.find(value=>value.descriptor.contractId==="example.resources.documents")!.modelProjection.optionalServiceReferenceMembers},{Reply:["maybe"]});
     assert.match(loaded.ownedRpc!.files.get("imported/example.resources.documents.ts")!,/SunderContent/);
     host=await runtime(producer,project,consumer.root);const api=host.consumer.api(host.api.Consumer.Library);
-    const reply=await api.exampleResourcesDocuments.documents.get({});assert.deepEqual(await bytes(reply.content[0]),[1,2,3]);await reply.content[0].dispose();
+    const reply=await api.example_Resources_Documents.documents.get({});assert.deepEqual(await bytes(reply.content[0]),[1,2,3]);await reply.content[0].dispose();
     assert.equal(await reply.runner.Service.run({name:"imported"}),"run:imported");await host.consumer.disposeAsync();assert.throws(()=>reply.runner.Service,/retired/);
     assert.equal(await host.client.runner.run("owner"),"run:owner");
   }finally{await host?.dispose();await consumer.dispose();await producer.dispose();}

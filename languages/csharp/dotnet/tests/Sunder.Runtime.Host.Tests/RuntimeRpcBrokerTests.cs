@@ -417,9 +417,9 @@ public sealed partial class RuntimeRpcBrokerTests
         await using var fixture = new RpcFixture();
         var activation = await fixture.PublishAsync(
             new TestHandler(),
-            callerPackageId: "sunder.package.agent",
+            callerPackageId: "younics.ai.agent",
             healthyHandler: new TestHandler());
-        await fixture.GrantAsync("sunder.package.agent", SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync("younics.ai.agent", SunderRpcProtocol.DiscoverAction);
         var client = fixture.CreateClient(activation.Caller);
         var providers = (await client.DiscoverAsync("example.rpc")).Providers;
         var failing = Assert.Single(providers, static provider => provider.PackageId == "provider.package");
@@ -463,10 +463,10 @@ public sealed partial class RuntimeRpcBrokerTests
         };
         var activation = await fixture.PublishAsync(
             new TestHandler(),
-            callerPackageId: "sunder.package.agent",
+            callerPackageId: "younics.ai.agent",
             healthyHandler: healthyHandler);
-        await fixture.GrantAsync("sunder.package.agent", SunderRpcProtocol.DiscoverAction);
-        await fixture.GrantAsync("sunder.package.agent", SunderRpcProtocol.SubscribeAction);
+        await fixture.GrantAsync("younics.ai.agent", SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync("younics.ai.agent", SunderRpcProtocol.SubscribeAction);
         var client = fixture.CreateClient(activation.Caller);
         var providers = (await client.DiscoverAsync("example.rpc")).Providers;
         var failing = Assert.Single(providers, provider => provider.PackageId == "provider.package");
@@ -574,14 +574,14 @@ public sealed partial class RuntimeRpcBrokerTests
         await using var fixture = new RpcFixture();
         var first = await fixture.PublishAsync(
             new TestHandler(),
-            callerPackageId: "sunder.package.agent");
-        await fixture.GrantAsync("sunder.package.agent", SunderRpcProtocol.DiscoverAction);
+            callerPackageId: "younics.ai.agent");
+        await fixture.GrantAsync("younics.ai.agent", SunderRpcProtocol.DiscoverAction);
         var staleEndpoint = Assert.Single((await fixture.CreateClient(first.Caller)
             .DiscoverAsync("example.rpc")).Providers).Endpoint;
 
         var replacement = await fixture.PublishAsync(
             new TestHandler(),
-            callerPackageId: "sunder.package.agent");
+            callerPackageId: "younics.ai.agent");
         var replacementClient = fixture.CreateClient(replacement.Caller);
 
         Assert.False(await replacementClient.TryReportInvariantViolationAsync(
@@ -631,7 +631,7 @@ public sealed partial class RuntimeRpcBrokerTests
         await using var fixture = new RpcFixture();
         var activation = await fixture.PublishAsync(
             new TestHandler(),
-            callerPackageId: "sunder.package.agent");
+            callerPackageId: "younics.ai.agent");
         var endpoint = Assert.Single(fixture.Catalog.GetSnapshot().Providers).Endpoint;
 
         Assert.False(await fixture.CreateClient(activation.Caller).TryReportInvariantViolationAsync(
@@ -647,10 +647,10 @@ public sealed partial class RuntimeRpcBrokerTests
         await fixture.PublishAsync(
             new TestHandler(),
             webCaller: true,
-            callerPackageId: "sunder.package.agent");
-        var app = await fixture.OpenAppCallerAsync("sunder.package.agent");
+            callerPackageId: "younics.ai.agent");
+        var app = await fixture.OpenAppCallerAsync("younics.ai.agent");
         await fixture.GrantAsync(
-            "sunder.package.agent",
+            "younics.ai.agent",
             app.ManifestSha256,
             SunderRpcProtocol.DiscoverAction,
             SunderPackageFormat.AppHostRole);
@@ -673,8 +673,8 @@ public sealed partial class RuntimeRpcBrokerTests
         await using var fixture = new RpcFixture();
         var activation = await fixture.PublishAsync(
             new TestHandler(),
-            callerPackageId: "sunder.package.agent");
-        await fixture.GrantAsync("sunder.package.agent", SunderRpcProtocol.DiscoverAction);
+            callerPackageId: "younics.ai.agent");
+        await fixture.GrantAsync("younics.ai.agent", SunderRpcProtocol.DiscoverAction);
         var client = fixture.CreateClient(activation.Caller);
         var endpoint = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers).Endpoint;
         using var start = new ManualResetEventSlim();
@@ -2004,11 +2004,12 @@ public sealed partial class RuntimeRpcBrokerTests
     }
 
     [Fact]
-    public async Task CatalogWatch_ConsumesAndReleasesCallerConcurrencyBudget()
+    public async Task CatalogWatch_ConsumesOnlyItsBoundedObservationBudgetAndReleasesIt()
     {
         await using var fixture = new RpcFixture(new RuntimeRpcPolicyOptions
         {
             MaxConcurrentCallsPerCaller = 1,
+            MaxConcurrentObservationsPerCaller = 1,
         });
         var activation = await fixture.PublishAsync(new TestHandler());
         await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
@@ -2023,14 +2024,16 @@ public sealed partial class RuntimeRpcBrokerTests
         {
             Assert.True(await watch.MoveNextAsync());
             Assert.Equal(SunderRpcCatalogEventKind.ResetRequired, watch.Current.Kind);
-            var limited = await Assert.ThrowsAsync<SunderRpcException>(async () =>
-                await client.InvokeAsync(
-                    endpoint,
-                    "messages",
-                    "send",
-                    JsonSerializer.SerializeToElement(new { message = "blocked" })));
+            await using var excess = client.WatchAsync(snapshot.Revision + 1, snapshot.Sequence).GetAsyncEnumerator();
+            var limited = await Assert.ThrowsAsync<SunderRpcException>(() => excess.MoveNextAsync().AsTask());
             Assert.Equal(SunderRpcErrorKind.ResourceExhausted, limited.Error.Kind);
+            Assert.Equal("rpc.caller.observation-limit", limited.Error.Code);
+            Assert.True((await client.InvokeAsync(endpoint, "messages", "send",
+                JsonSerializer.SerializeToElement(new { message = "finite-headroom" }))).GetProperty("accepted").GetBoolean());
         }
+
+        await using var replacement = client.WatchAsync(snapshot.Revision + 1, snapshot.Sequence).GetAsyncEnumerator();
+        Assert.True(await replacement.MoveNextAsync());
 
         var response = await client.InvokeAsync(
             endpoint,
@@ -2038,6 +2041,45 @@ public sealed partial class RuntimeRpcBrokerTests
             "send",
             JsonSerializer.SerializeToElement(new { message = "released" }));
         Assert.True(response.GetProperty("accepted").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ServerStreamsDoNotConsumeFiniteCallerOrProviderCapacity(bool appCaller)
+    {
+        await using var fixture = new RpcFixture(new RuntimeRpcPolicyOptions
+        {
+            MaxConcurrentCallsPerCaller = 1, MaxConcurrentCallsPerCallee = 1,
+            MaxConcurrentObservationsPerCaller = 1, MaxConcurrentObservationsPerCallee = 1,
+        });
+        var activation = await fixture.PublishAsync(new TestHandler(), webCaller: appCaller, callerSourceKind: PackageSourceKind.Dev);
+        var client = fixture.CreateClient(activation.Caller);
+        var appSession = appCaller ? (await fixture.OpenAppCallerAsync()).Session.SessionId : null;
+        var snapshot = appSession is null ? await client.DiscoverAsync("example.rpc")
+            : await fixture.Broker.DiscoverAppAsync(appSession, "example.rpc", default);
+        var endpoint = Assert.Single(snapshot.Providers).Endpoint;
+        var request = JsonSerializer.SerializeToElement(new { message = "ordinary workload" });
+        IAsyncEnumerable<JsonElement> Subscribe() => appSession is null
+            ? client.SubscribeAsync(endpoint, "messages", "watch", request)
+            : fixture.Broker.SubscribeAppAsync(appSession, endpoint, "messages", "watch", request, null, default);
+        ValueTask<JsonElement> Invoke() => appSession is null
+            ? client.InvokeAsync(endpoint, "messages", "send", request)
+            : fixture.Broker.InvokeAppAsync(appSession, endpoint, "messages", "send", request, null, default);
+
+        await using (var stream = Subscribe().GetAsyncEnumerator())
+        {
+            Assert.True(await stream.MoveNextAsync());
+            Assert.True((await Invoke()).GetProperty("accepted").GetBoolean());
+            await using var excess = Subscribe().GetAsyncEnumerator();
+            var pressure = await Assert.ThrowsAsync<SunderRpcException>(() => excess.MoveNextAsync().AsTask());
+            Assert.Equal(SunderRpcErrorKind.ResourceExhausted, pressure.Error.Kind);
+            Assert.Equal(SunderRpcDispatchState.NotDispatched, pressure.Error.DispatchState);
+        }
+        await using var replacement = Subscribe().GetAsyncEnumerator();
+        Assert.True(await replacement.MoveNextAsync());
+        Assert.True((await Invoke()).GetProperty("accepted").GetBoolean());
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
     }
 
     [Fact]
@@ -2938,6 +2980,64 @@ public sealed partial class RuntimeRpcBrokerTests
         }
     }
 
+    [Fact]
+    public async Task CallScope_CloseDuringInvocationAcquisitionRetainsCancelledTokenWithoutRevivingAuthority()
+    {
+        var clock = new ManualTimeProvider();
+        await using var fixture = new RpcFixture(timeProvider: clock);
+        var mutations = 0;
+        var observedCancellation = false;
+        await fixture.PublishAsync(new TestHandler
+        {
+            Unary = (_, token) =>
+            {
+                observedCancellation |= token.IsCancellationRequested;
+                token.ThrowIfCancellationRequested();
+                mutations++;
+                return ValueTask.FromResult(JsonSerializer.SerializeToElement(new { accepted = true }));
+            },
+        }, webCaller: true);
+        var app = await fixture.OpenAppCallerAsync();
+        foreach (var action in new[] { SunderRpcProtocol.DiscoverAction, SunderRpcProtocol.InvokeAction })
+            await fixture.GrantAsync("caller.package", app.ManifestSha256, action, SunderPackageFormat.AppHostRole);
+        var endpoint = Assert.Single((await fixture.Broker.DiscoverAppAsync(
+            app.Session.SessionId, "example.rpc", CancellationToken.None)).Providers).Endpoint;
+        var scope = fixture.Broker.CreateAppCallScope(app.Session.SessionId, null, CancellationToken.None);
+        var originalToken = scope.RevocationToken;
+        clock.OnTimerCreated = () =>
+        {
+            // The invocation deadline timer is allocated after initial scope
+            // validation, immediately before the broker links its revocation token.
+            clock.OnTimerCreated = null;
+            fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, scope.Id).AsTask().GetAwaiter().GetResult();
+        };
+
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(async () => await fixture.Broker.InvokeScopeAsync(
+            scope, endpoint, "messages", "send", JsonSerializer.SerializeToElement(new { message = "race" }), null, CancellationToken.None));
+
+        Assert.Equal(SunderRpcErrorKind.Cancelled, failure.Error.Kind);
+        Assert.Equal("rpc.call.cancelled", failure.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, failure.Error.RetrySafety);
+        Assert.True(observedCancellation);
+        Assert.Equal(0, mutations);
+        Assert.Equal(originalToken, scope.RevocationToken);
+        Assert.True(scope.RevocationToken.IsCancellationRequested);
+        Assert.True(scope.IsRevoked);
+        Assert.True(scope.ContentAuthority.IsRevoked);
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+
+        var replacement = fixture.Broker.CreateAppCallScope(app.Session.SessionId, null, CancellationToken.None);
+        Assert.NotEqual(originalToken, replacement.RevocationToken);
+        Assert.False(replacement.RevocationToken.IsCancellationRequested);
+        var response = await fixture.Broker.InvokeScopeAsync(replacement, endpoint, "messages", "send",
+            JsonSerializer.SerializeToElement(new { message = "fresh" }), null, CancellationToken.None);
+        Assert.True(response.GetProperty("accepted").GetBoolean());
+        Assert.Equal(1, mutations);
+        await fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, replacement.Id);
+        Assert.Equal(0, clock.ActiveTimerCount);
+    }
+
     [Theory]
     [InlineData("retirement", false)]
     [InlineData("deadline", true)]
@@ -2996,6 +3096,7 @@ public sealed partial class RuntimeRpcBrokerTests
             out var registeredScope);
         Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, registration);
         var scope = Assert.IsType<RuntimeRpcCallerScopeState>(registeredScope);
+        var originalRevocation = scope.RevocationToken;
         using var callbackRelease = new ManualResetEventSlim();
         var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         CancellationTokenRegistration callbackRegistration = default;
@@ -3052,6 +3153,13 @@ public sealed partial class RuntimeRpcBrokerTests
             if (replacement is not null) await registry.CloseAsync(replacement);
         }
 
+        Assert.Equal(originalRevocation, scope.RevocationToken);
+        Assert.True(scope.RevocationToken.IsCancellationRequested);
+        Assert.True(scope.IsRevoked);
+        using var lateLinked = CancellationTokenSource.CreateLinkedTokenSource(scope.RevocationToken);
+        Assert.True(lateLinked.IsCancellationRequested);
+        Assert.Equal(path == "deadline" ? RuntimeRpcCallScopeRegistry.Outcome.DeadlineExceeded : RuntimeRpcCallScopeRegistry.Outcome.Unavailable,
+            registry.Validate(scope, caller, 7, generationIdentity));
         Assert.Equal(2, discardCount);
         Assert.Equal(0, clock.ActiveTimerCount);
     }

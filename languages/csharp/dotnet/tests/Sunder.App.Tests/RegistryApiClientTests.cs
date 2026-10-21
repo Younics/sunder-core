@@ -15,8 +15,8 @@ public sealed class RegistryApiClientTests
     public async Task SearchAsync_UsesInjectedHttpClientAndRegistryUrl()
     {
         var package = new RegistryPackageSummary(
-            "sunder.package.agent",
-            "Sunder Agent",
+            "younics.ai.agent",
+            "AI Agent",
             "Adds local agents.",
             "1.0.0",
             IconUrl: null,
@@ -32,7 +32,7 @@ public sealed class RegistryApiClientTests
 
         var results = await registryClient.SearchAsync(" agent package ", skip: 10, take: 20);
 
-        Assert.Collection(results, result => Assert.Equal("sunder.package.agent", result.PackageId));
+        Assert.Collection(results, result => Assert.Equal("younics.ai.agent", result.PackageId));
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Get, request.Method);
         Assert.Equal(new Uri("https://registry.example/api/v1/packages?skip=10&take=20&sort=downloads&query=agent%20package"), request.RequestUri);
@@ -58,12 +58,12 @@ public sealed class RegistryApiClientTests
         using var httpClient = new HttpClient(handler);
         using var registryClient = new RegistryApiClient(new Uri("https://registry.example/"), httpClient);
 
-        var result = await registryClient.GetVersionAsync("sunder.package.agent", "2.0.0");
+        var result = await registryClient.GetVersionAsync("younics.ai.agent", "2.0.0");
 
         Assert.Null(result);
         var request = Assert.Single(handler.Requests);
         Assert.Equal(
-            new Uri("https://registry.example/api/v1/packages/sunder.package.agent/versions/2.0.0"),
+            new Uri("https://registry.example/api/v1/packages/younics.ai.agent/versions/2.0.0"),
             request.RequestUri);
         Assert.Equal(string.Empty, request.RequestUri?.Query);
     }

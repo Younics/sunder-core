@@ -812,6 +812,151 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
     }
 
+    [Theory]
+    [InlineData("resource-exhausted", SunderRpcErrorKind.ResourceExhausted, false)]
+    [InlineData("resource-exhausted", SunderRpcErrorKind.ResourceExhausted, true)]
+    [InlineData("unavailable", SunderRpcErrorKind.Unavailable, false)]
+    [InlineData("deadline-exceeded", SunderRpcErrorKind.DeadlineExceeded, false)]
+    public async Task Broker_ProcessOperationalOutcomeIsHostOwnedAndDoesNotAuthorizeMutationReplay(
+        string outcome, SunderRpcErrorKind kind, bool stream)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("operational-" + outcome);
+        var activation = await fixture.PublishBrokerSessionAsync();
+        var request = JsonSerializer.SerializeToElement(new { message = "overloaded" });
+        SunderRpcException failure;
+        if (stream)
+        {
+            await fixture.SetSubscribePermissionAsync(RuntimeRpcPermissionState.Granted);
+            await using var events = activation.Client.SubscribeAsync(activation.Endpoint, "messages", "watch", request).GetAsyncEnumerator();
+            failure = await Assert.ThrowsAsync<SunderRpcException>(() => events.MoveNextAsync().AsTask());
+        }
+        else
+        {
+            failure = await Assert.ThrowsAsync<SunderRpcException>(() => activation.Client.InvokeAsync(
+                activation.Endpoint, "messages", "send", request).AsTask());
+        }
+        Assert.True(failure.IsHostAuthenticated);
+        Assert.Equal(kind, failure.Error.Kind);
+        using var corpus = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "WorkerV1Conformance", "corpus.json")));
+        var expected = Assert.Single(corpus.RootElement.GetProperty("operationalOutcomes").EnumerateArray(),
+            item => item.GetProperty("code").GetString() == outcome);
+        Assert.Equal(expected.GetProperty("hostCode").GetString(), failure.Error.Code);
+        Assert.Equal(expected.GetProperty("hostMessage").GetString(), failure.Error.Message);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, failure.Error.RetrySafety);
+        Assert.Null(failure.Error.Details);
+        Assert.DoesNotContain("worker-secret", failure.ToString(), StringComparison.Ordinal);
+        Assert.False(RuntimeRpcFailureContextStore.TryGet(failure, out _));
+        var healthy = await activation.Client.InvokeAsync(activation.Endpoint, "messages", "send",
+            JsonSerializer.SerializeToElement(new { message = "healthy" }));
+        Assert.True(healthy.GetProperty("accepted").GetBoolean());
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+        Assert.Equal(PackageReadinessState.Ready, fixture.Owner.State.GetSessionPackage("process.test")!.Readiness);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData("permission-denied")]
+    [InlineData("details")]
+    [InlineData("dispatch")]
+    public async Task ProcessWorker_OperationalOutcomeDoesNotAcceptUnknownKindsDetailsOrDispatchClaims(string outcome)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("operational-" + outcome);
+        await fixture.StartAndActivateAsync();
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.Worker.InvokeUnaryAsync("example.provider",
+            fixture.InvocationContext(), "messages", "send", JsonSerializer.SerializeToElement(new { message = "overloaded" }),
+            CancellationToken.None).AsTask());
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
+    public async Task WorkerV1_HostAdmissionPressureIsCallLocalAndObservationsLeaveFiniteHeadroom()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("admission-probe", new RuntimeProcessPolicyOptions
+        {
+            MaxOutstandingWorkerCalls = 1,
+            MaxOutstandingWorkerStreams = 1,
+            MaxWorkerPayloadHandles = 1,
+        });
+        var activation = await fixture.PublishBrokerSessionAsync();
+        var result = await activation.Client.InvokeAsync(activation.Endpoint, "messages", "send",
+            JsonSerializer.SerializeToElement(new { message = "overloaded" }));
+        Assert.True(result.GetProperty("accepted").GetBoolean());
+        using var probe = await fixture.WaitForWorkerStatusAsync("admission-probe.json");
+        foreach (var (id, code) in new[] { ("admissionRejected", "rpc.worker.call-limit"),
+                     ("admissionRejectedWatch", "rpc.worker.stream-limit"), ("admissionRejectedPayload", "rpc.worker.call-limit") })
+        {
+            var error = probe.RootElement.GetProperty(id);
+            Assert.Equal("resource-exhausted", error.GetProperty("kind").GetString());
+            Assert.Equal(code, error.GetProperty("code").GetString());
+            Assert.Equal("not-dispatched", error.GetProperty("dispatchState").GetString());
+            Assert.Equal("safe", error.GetProperty("retrySafety").GetString());
+        }
+        Assert.True(probe.RootElement.GetProperty("payloadReleased").GetBoolean());
+        Assert.Null(await fixture.Context.Storage.State.GetValueAsync("rejected"));
+        var healthy = await activation.Client.InvokeAsync(activation.Endpoint, "messages", "send",
+            JsonSerializer.SerializeToElement(new { message = "healthy" }));
+        Assert.True(healthy.GetProperty("accepted").GetBoolean());
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkerV1_HostToProviderObservationsSplitOnlyAfterExactWorkerAcknowledgement(bool negotiated)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(negotiated ? "normal" : "legacy-budgets", new RuntimeProcessPolicyOptions
+        {
+            MaxOutstandingHostCalls = 1,
+            MaxOutstandingHostStreams = 1,
+        });
+        await fixture.StartAndActivateAsync();
+        using var cancellation = new CancellationTokenSource();
+        await using var stream = fixture.Worker.InvokeServerStreamAsync("example.provider", fixture.InvocationContext(),
+            "messages", "wait", JsonSerializer.SerializeToElement(new { message = "held" }), cancellation.Token).GetAsyncEnumerator();
+        var waiting = stream.MoveNextAsync().AsTask();
+        using var entered = await fixture.WaitForWorkerStatusAsync("host-invoke-wait-entered.json");
+        if (negotiated)
+        {
+            var result = await fixture.Worker.InvokeUnaryAsync("example.provider", fixture.InvocationContext(),
+                "messages", "send", JsonSerializer.SerializeToElement(new { message = "healthy" }), CancellationToken.None);
+            Assert.True(result.GetProperty("accepted").GetBoolean());
+        }
+        else
+        {
+            var limited = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Worker.InvokeUnaryAsync("example.provider", fixture.InvocationContext(),
+                "messages", "send", JsonSerializer.SerializeToElement(new { message = "not-dispatched" }), CancellationToken.None).AsTask());
+            Assert.Equal("rpc.worker.host-call-limit", limited.Error.Code);
+            Assert.Equal(SunderRpcDispatchState.NotDispatched, limited.Error.DispatchState);
+        }
+        await using var extra = fixture.Worker.InvokeServerStreamAsync("example.provider", fixture.InvocationContext(),
+            "messages", "wait", JsonSerializer.SerializeToElement(new { message = "rejected" }), CancellationToken.None).GetAsyncEnumerator();
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => extra.MoveNextAsync().AsTask());
+        Assert.Equal(negotiated ? "rpc.worker.host-stream-limit" : "rpc.worker.host-call-limit", failure.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.NotDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Safe, failure.Error.RetrySafety);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+        Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+    }
+
+    [Fact]
+    public async Task WorkerV1_AdmissionPressureDoesNotHideMalformedRequestEnvelopes()
+    {
+        await using var fixture = await WorkerFixture.CreateAsync("admission-malformed", new RuntimeProcessPolicyOptions
+        {
+            MaxOutstandingWorkerCalls = 1,
+            MaxOutstandingWorkerStreams = 1,
+        });
+        var activation = await fixture.PublishBrokerSessionAsync();
+        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => activation.Client.InvokeAsync(
+            activation.Endpoint, "messages", "send", JsonSerializer.SerializeToElement(new { message = "overloaded" })).AsTask());
+        Assert.Equal(SunderRpcErrorKind.ProviderFaulted, failure.Error.Kind);
+        Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
+        await Assert.ThrowsAnyAsync<Exception>(() => fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
     [Fact]
     public async Task Worker_PreCancelledInvocationIsOrderedBeforeCancellation()
     {
@@ -1508,10 +1653,14 @@ public sealed class ProcessRuntimeWorkerTests
         Assert.Contains(logger.Messages, message => message.Contains("activation acknowledged", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task WorkerV1_ReportedGenerationFaultFaultsOnlyItsExactGenerationCompletion()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkerV1_ReportedGenerationFaultFaultsOnlyItsExactGenerationCompletion(bool hostShutdownFirst)
     {
-        await using var fixture = await WorkerFixture.CreateAsync("v1-generation-fault");
+        var logger = new CapturingLogger();
+        await using var fixture = await WorkerFixture.CreateAsync(
+            hostShutdownFirst ? "v1-generation-fault-on-shutdown" : "v1-generation-fault", logger: logger);
         ProcessRuntimeGenerationFaultException? activationFault = null;
         try
         {
@@ -1527,6 +1676,7 @@ public sealed class ProcessRuntimeWorkerTests
             activationFault = (ProcessRuntimeGenerationFaultException)exception.InnerException;
         }
 
+        var stop = hostShutdownFirst ? fixture.Worker.StopAsync() : Task.CompletedTask;
         var fault = await Assert.ThrowsAsync<ProcessRuntimeGenerationFaultException>(async () =>
             await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
 
@@ -1536,6 +1686,12 @@ public sealed class ProcessRuntimeWorkerTests
         }
         Assert.Equal("worker.test-fault", fault.Code);
         Assert.Contains("bounded fault", fault.Message, StringComparison.Ordinal);
+        await stop.WaitAsync(TimeSpan.FromSeconds(5));
+        await fixture.Worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        var logs = await Task.WhenAll(Directory.GetFiles(fixture.Context.Storage.LogsRootPath, "*.log")
+            .Select(path => File.ReadAllTextAsync(path)));
+        Assert.Contains("Worker stopping", string.Join(Environment.NewLine, logs), StringComparison.Ordinal);
+        Assert.DoesNotContain(logger.Messages, message => message.Contains("did not acknowledge shutdown", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1749,11 +1905,12 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Fact]
-    public async Task WorkerV1_ContentReleaseUsesControlLaneWhenRpcLaneIsFull()
+    public async Task WorkerV1_ContentReleaseUsesControlLaneWhenObservationLaneIsFull()
     {
         var policy = new RuntimeProcessPolicyOptions
         {
             MaxOutstandingWorkerCalls = 1,
+            MaxOutstandingWorkerStreams = 1,
         };
         await using var fixture = await WorkerFixture.CreateAsync(
             "content-control-lane",
@@ -2026,6 +2183,7 @@ public sealed class ProcessRuntimeWorkerTests
         var root = status.RootElement;
         Assert.Equal(Path.GetFullPath(fixture.Prepared.ShadowFolder), root.GetProperty("contentRoot").GetString());
         Assert.Equal(fixture.Worker.WorkerTemporaryPath, root.GetProperty("temporaryRoot").GetString());
+        Assert.Equal("1", root.GetProperty("operationalOutcomes").GetString());
         Assert.Equal(
             fixture.Context.Storage.RoleLocalWorkspace.WorkspaceRootPath,
             root.GetProperty("workspaceRoot").GetString());
@@ -2047,6 +2205,7 @@ public sealed class ProcessRuntimeWorkerTests
             "SUNDER_PACKAGE_ID",
             "SUNDER_PACKAGE_VERSION",
             "SUNDER_SESSION_ID",
+            "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1",
             "SUNDER_WORKER_PROTOCOL",
             "SUNDER_WORKER_TEMP_ROOT",
             "TEMP",
@@ -2076,6 +2235,7 @@ public sealed class ProcessRuntimeWorkerTests
     [InlineData("crash")]
     [InlineData("caller-spoof")]
     [InlineData("content-spoof")]
+    [InlineData("unknown-worker-cancel")]
     public async Task Worker_ProtocolViolationCrashAndCallerSpoofFaultExactGeneration(string mode)
     {
         await using var fixture = await WorkerFixture.CreateAsync(mode);
@@ -2110,22 +2270,36 @@ public sealed class ProcessRuntimeWorkerTests
             await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
-    [Fact]
-    public async Task Worker_IgnoresCancellationThatCrossesACompletedHostResponse()
+    [Theory]
+    [InlineData("late-worker-cancel")]
+    [InlineData("late-worker-cancel-history")]
+    public async Task Worker_IgnoresCancellationThatCrossesACompletedHostResponse(string mode)
     {
-        await using var fixture = await WorkerFixture.CreateAsync("late-worker-cancel");
-        await fixture.StartAndActivateAsync();
+        await using var fixture = await WorkerFixture.CreateAsync(mode, new() { MaxRememberedMessageIds = 2 });
+        var activation = await fixture.PublishBrokerSessionAsync();
 
-        var result = await fixture.Worker.InvokeUnaryAsync(
-            "example.provider",
-            fixture.InvocationContext(),
+        var result = await activation.Client.InvokeAsync(
+            activation.Endpoint,
             "messages",
             "send",
             JsonSerializer.SerializeToElement(new { message = "hello" }),
-            CancellationToken.None);
+            cancellationToken: CancellationToken.None);
 
         Assert.True(result.GetProperty("accepted").GetBoolean());
         Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
+    }
+
+    [Theory]
+    [InlineData("duplicate-active-after-history", "duplicate message id")]
+    [InlineData("completed-id-expired-history", "unsolicited cancellation")]
+    public async Task Worker_RejectsUnownedIdAfterCompletionHistoryChurn(string mode, string expectedError)
+    {
+        await using var fixture = await WorkerFixture.CreateAsync(mode, new() { MaxRememberedMessageIds = 2 });
+        var activation = await fixture.PublishBrokerSessionAsync();
+        await Assert.ThrowsAnyAsync<Exception>(() => activation.Client.InvokeAsync(activation.Endpoint, "messages", "send",
+            JsonSerializer.SerializeToElement(new { message = "hello" })).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        var error = await Assert.ThrowsAnyAsync<Exception>(() => fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Contains(expectedError, error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

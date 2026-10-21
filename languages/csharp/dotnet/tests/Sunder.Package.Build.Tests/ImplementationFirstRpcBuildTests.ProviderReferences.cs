@@ -80,7 +80,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
     [Fact]
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
-    public async Task ProviderOnlyUpdate_StagesLegacyPinsThenRequiresExplicitTypedDiscovery()
+    public async Task ProviderOnlyUpdate_RequiresCompletePinsAndExplicitTypedDiscovery()
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-provider-reference-update");
         var root = ResolvePhysicalTemporaryPath(scope.CreateDirectory("consumer"));
@@ -92,7 +92,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             using Sunder.Sdk.Packaging;
             using Sunder.Sdk.Services;
             using Sunder.Generated.Packages.Example_Models_Models;
-            using Sunder.Generated.Packages.Example_Models_Services;
+            using Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Holder;
             [assembly: SunderPackage(Id = "example.consumer", Name = "Provider-only consumer")]
             [SunderServiceProvider(typeof(IHolderService), ProviderId = "example.consumer.holder")]
             public sealed partial class HolderProvider : IHolderService
@@ -105,13 +105,24 @@ public sealed partial class ImplementationFirstRpcBuildTests
         AssertSuccess(await Select("Implement", candidate, "-p:SunderPackageVersionRange=>=1.0.0 <3.0.0", "-p:SunderContractId=example.models.holder", "-p:SunderPackageApiLocalName=holder"));
         AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
         var lockPath = Path.Combine(root, SunderRpcAuthoringDocuments.ContractLockFileName);
-        var legacy = JsonNode.Parse(await File.ReadAllBytesAsync(lockPath))!;
-        var artifact = legacy["packageArtifacts"]!["example.models"]!.AsObject();
+        var reviewedLock = await File.ReadAllBytesAsync(lockPath);
+        var incomplete = JsonNode.Parse(reviewedLock)!;
+        var artifact = incomplete["packageArtifacts"]!["example.models"]!.AsObject();
         artifact.Remove("modelProjectionBytes"); artifact.Remove("modelProjectionSha256");
-        await File.WriteAllBytesAsync(lockPath, SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(legacy)));
-        var before = await File.ReadAllBytesAsync(lockPath);
+        var incompleteLock = SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(incomplete));
+        await File.WriteAllBytesAsync(lockPath, incompleteLock);
         var source = await File.ReadAllBytesAsync(Path.Combine(root, "Consumer.cs"));
         var dev = Path.Combine(root, "bin/Debug/net10.0/sunder-dev"); var devHash = HashTree(dev);
+        var rejected = await Select("Update", next);
+        Assert.NotEqual(0, rejected.ExitCode);
+        Assert.Contains("package-api.model-projection-invalid", rejected.StandardOutput + rejected.StandardError, StringComparison.Ordinal);
+        Assert.Equal(incompleteLock, await File.ReadAllBytesAsync(lockPath));
+        Assert.Equal(source, await File.ReadAllBytesAsync(Path.Combine(root, "Consumer.cs")));
+        Assert.Equal(devHash, HashTree(dev));
+        Assert.Empty(Directory.GetFiles(root, "sunder-contracts.lock.json.stage-*"));
+
+        // Restore authentic reviewed inputs before exercising a normal candidate update.
+        await File.WriteAllBytesAsync(lockPath, reviewedLock);
         var update = await Select("Update", next);
         Assert.NotEqual(0, update.ExitCode);
         var output = update.StandardOutput + update.StandardError;
@@ -119,17 +130,17 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.Contains("example.models.target", output, StringComparison.Ordinal);
         Assert.DoesNotContain("service target must resolve exactly once", output, StringComparison.Ordinal);
         Assert.DoesNotContain("CS0246", output, StringComparison.Ordinal);
-        Assert.Equal(before, await File.ReadAllBytesAsync(lockPath));
+        Assert.Equal(reviewedLock, await File.ReadAllBytesAsync(lockPath));
         Assert.Equal(source, await File.ReadAllBytesAsync(Path.Combine(root, "Consumer.cs")));
         Assert.Equal(devHash, HashTree(dev));
         Assert.Empty(Directory.GetFiles(root, "sunder-contracts.lock.json.stage-*"));
 
-        // The only migration edit is the real provider's explicit discovery
-        // declaration. Target is newly materialized by the staged candidate;
+        // The provider explicitly declares discovery for the new reference target.
+        // Target is newly materialized by the staged candidate;
         // the old provider-only lock deliberately cannot resolve it yet.
         var sourcePath = Path.Combine(root, "Consumer.cs");
         await File.WriteAllTextAsync(sourcePath, System.Text.Encoding.UTF8.GetString(source).Replace(
-            "[SunderServiceProvider", "[SunderRuntimeUse(typeof(ITargetService), Actions = [\"discover\"])]\n[SunderServiceProvider", StringComparison.Ordinal));
+            "[SunderServiceProvider", "[SunderRuntimeUse(typeof(Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Target.ITargetService), Actions = [\"discover\"])]\n[SunderServiceProvider", StringComparison.Ordinal));
         var intendedSource = await File.ReadAllBytesAsync(sourcePath);
         AssertSuccess(await Select("Update", next));
         var selected = SunderRpcAuthoringDocuments.ReadContractLock(lockPath);

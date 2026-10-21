@@ -2,6 +2,7 @@ import type { ContractUseConfig, LoadedContract, PackageRole, ProviderConfig } f
 import { isPackageId, isSemanticVersion, parseRpcContractDescriptor, canonicalRpcDescriptorBytes, canonicalRpcAbiProjectionBytes, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR } from "@sunder/sdk";
 import { createHash } from "node:crypto";
 import { fields, object, outerBytes, type Outer, type OuterObject } from "./rpc-baseline-json";
+import { contractSymbol } from "./rpc-package-imports";
 
 export interface SourceRoleUse {
   readonly role:"runtime"; readonly contractId:string; readonly contractVersion:string;
@@ -9,11 +10,11 @@ export interface SourceRoleUse {
   readonly required:boolean; readonly actions:ContractUseConfig["actions"];
 }
 /** Canonical shared projection identity, independent of Node aliases/source paths. */
-export function canonicalServiceType(authorityId:string,serviceId:string):string{
+export function canonicalServiceType(authorityId:string,contractId:string,serviceId:string):string{
   let stem=authorityId.split(".").map(value=>value[0]!.toUpperCase()+value.slice(1)).join("_");if(/^[0-9]/u.test(stem))stem="_"+stem;
   let service=serviceId.split(/[^A-Za-z0-9]+/u).map(value=>value?value[0]!.toUpperCase()+value.slice(1):"").join("")||"Value";
   if(/^[0-9]/u.test(service))service="_"+service;
-  return `Sunder.Generated.Packages.${stem}_Services.I${service}${service.endsWith("Service")?"":"Service"}`;
+  return `Sunder.Generated.Packages.${stem}_Services.${contractSymbol(contractId)}.I${service}${service.endsWith("Service")?"":"Service"}`;
 }
 export function roleUsesOuter(uses:readonly SourceRoleUse[]):OuterObject{
   return uses.length?{roleUses:[...uses].sort((a,b)=>ordinal(a.contractId,b.contractId)||ordinal(a.serviceId,b.serviceId)).map(use=>({
@@ -54,7 +55,7 @@ export function importedRuntimeUses(uses:readonly SourceRoleUse[],contracts:read
   for(const use of uses){const contract=contracts.find(contract=>contract.descriptor.contractId===use.contractId);
     if(!contract?.imported||contract.imported.authorityKind!=="package"||contract.exposure!=="public"||contract.descriptor.version!==use.contractVersion
       ||contract.descriptorSha256!==use.descriptorSha256||contract.abiSha256!==use.abiSha256||!Object.hasOwn(contract.descriptor.services,use.serviceId)
-      ||canonicalServiceType(contract.imported.authorityId,use.serviceId)!==use.serviceType||use.actions.some(action=>!applicableUseActions(contract).includes(action)))
+      ||canonicalServiceType(contract.imported.authorityId,use.contractId,use.serviceId)!==use.serviceType||use.actions.some(action=>!applicableUseActions(contract).includes(action)))
       throw new Error("rpc-authoring.evidence-mismatch: Source role intent differs from its exact public imported service tuple.");
     const previous=existing.find(value=>value.role==="runtime"&&value.contractId===use.contractId)??result.get(use.contractId);
     if(previous&&(previous.required!==use.required||JSON.stringify(previous.actions)!==JSON.stringify(use.actions)))throw new Error("rpc-authoring.runtime-use-invalid: Conflicting Runtime policy for one contract.");
@@ -81,7 +82,7 @@ export function validateRoleUseEvidence(root:OuterObject,kind:"receipt"|"export"
     const contract=contracts.find(item=>item.contractKey===use.contractId),bundle=bundles.find(item=>item.contractKey===use.contractId);
     if(!contract||!bundle||bundle.source!=="imported"||bundle.authorityKind!=="package"||typeof bundle.authorityId!=="string"
       ||contract.exposure!=="public"||contract.contractId!==use.contractId||contract.contractVersion!==use.contractVersion||contract.descriptorSha256!==use.descriptorSha256||contract.abiSha256!==use.abiSha256
-      ||use.serviceType!==canonicalServiceType(bundle.authorityId,use.serviceId)||typeof contract.canonicalDescriptor!=="string")return bad();
+      ||use.serviceType!==canonicalServiceType(bundle.authorityId,use.contractId,use.serviceId)||typeof contract.canonicalDescriptor!=="string")return bad();
     const descriptor=parseRpcContractDescriptor(contract.canonicalDescriptor),bytes=Buffer.from(canonicalRpcDescriptorBytes(descriptor));
     if(descriptor.contractId!==use.contractId||descriptor.version!==use.contractVersion||bytes.toString()!==contract.canonicalDescriptor||bytes.length!==contract.descriptorBytes
       ||createHash("sha256").update(bytes).digest("hex")!==use.descriptorSha256

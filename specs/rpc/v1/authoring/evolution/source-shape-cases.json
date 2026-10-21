@@ -1,0 +1,44 @@
+{
+  "descriptor": {
+    "descriptorVersion": 1,
+    "contractId": "example.source.shape",
+    "version": "1.0.0",
+    "schemaProfile": "sunder.rpc.values.v1",
+    "$defs": {
+      "Choice": { "type": "string", "enum": ["a", "b"] },
+      "Input": { "type": "object", "properties": { "value": { "type": "string", "maxLength": 10 } }, "required": ["value"], "additionalProperties": false },
+      "Nested": { "type": "object", "properties": { "keep": { "type": "string" }, "legacy": { "type": "string" } }, "required": ["keep"], "additionalProperties": false },
+      "Output": {
+        "type": "object",
+        "properties": { "choice": { "$ref": "#/$defs/Choice" }, "legacy": { "type": "string" }, "nested": { "$ref": "#/$defs/Nested" }, "value": { "type": "string" } },
+        "required": ["choice", "nested", "value"],
+        "additionalProperties": false
+      }
+    },
+    "errors": {},
+    "services": {
+      "example": {
+        "methods": {
+          "read": {
+            "kind": "unary", "idempotency": "idempotent", "errors": [],
+            "requestSchema": { "$ref": "#/$defs/Input" }, "responseSchema": { "$ref": "#/$defs/Output" }
+          }
+        }
+      }
+    }
+  },
+  "modelProjection": { "models": { "Choice": "Choice", "Input": "Input", "Output": "Output" }, "serviceReferences": {} },
+  "cases": [
+    { "name": "exact-reuse", "wire": "Unchanged", "source": "Unchanged", "changes": [] },
+    { "name": "annotation-only", "wire": "Patch", "source": "Unchanged", "changes": [{ "path": ["$defs", "Output", "description"], "value": "Reviewed annotation" }] },
+    { "name": "version-only", "wire": "Patch", "source": "Unchanged", "changes": [{ "path": ["version"], "value": "1.0.1" }] },
+    { "name": "required-provider-method-added", "wire": "Minor", "source": "Major", "changes": [{ "path": ["services", "example", "methods", "added"], "copyFrom": ["services", "example", "methods", "read"] }] },
+    { "name": "required-provider-service-added", "wire": "Minor", "source": "Major", "changes": [{ "path": ["services", "added"], "copyFrom": ["services", "example"] }] },
+    { "name": "projected-optional-output-member-removed", "wire": "Minor", "source": "Major", "changes": [{ "path": ["$defs", "Output", "properties", "legacy"], "remove": true }] },
+    { "name": "indirect-optional-output-member-removed", "wire": "Minor", "source": "Major", "changes": [{ "path": ["$defs", "Nested", "properties", "legacy"], "remove": true }] },
+    { "name": "request-presence-widened", "wire": "Minor", "source": "Major", "changes": [{ "path": ["$defs", "Input", "required"], "value": [] }] },
+    { "name": "request-bound-widened-conservative", "wire": "Minor", "source": "Major", "changes": [{ "path": ["$defs", "Input", "properties", "value", "maxLength"], "value": 20 }] },
+    { "name": "output-enum-member-removed", "wire": "Minor", "source": "Major", "changes": [{ "path": ["$defs", "Choice", "enum"], "value": ["a"] }] },
+    { "name": "additional-error-declaration", "wire": "Minor", "source": "Minor", "changes": [{ "path": ["errors", "example.extra"], "value": {} }] }
+  ]
+}

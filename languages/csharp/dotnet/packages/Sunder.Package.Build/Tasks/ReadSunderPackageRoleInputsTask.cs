@@ -92,6 +92,7 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
         ResourceItems = []; ExcludedGenerators = [];
         try
         {
+            using var reads = new SunderBuildReadSnapshot();
             if (Role is not ("app" or "worker")) throw new InvalidDataException("The package compilation role must be app or worker.");
             if (ExpectedSha256.Length != 64 || ExpectedSha256.Any(value => value is not (>= '0' and <= '9' or >= 'a' and <= 'f')))
                 throw new InvalidDataException("An exact lowercase role-plan SHA-256 is required.");
@@ -178,7 +179,21 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
                 ProjectAssetsFile = dependencies.AssetsFile; ProjectExtensionsPath = dependencies.ExtensionsPath;
                 CompileAssetPaths = dependencies.Compile; RuntimeAssetPaths = dependencies.Runtime; ExcludedProjectReferences = dependencies.ExcludedProjects;
             }
+            // Validate the complete current plan above even if this role's compiler can reuse
+            // its prior output. Receipt/projection evidence continues to use that full plan.
+            reads.Complete();
+            var compilationRoot = SunderRoleCompilationSnapshot.Publish(plan, root, Role);
+            if (compilationRoot != root)
+            {
+                CompileItems = CompileItems.Select(Remap).ToArray();
+                ResourceItems = ResourceItems.Select(Remap).ToArray();
+                if (ProjectAssetsFile.Length != 0) ProjectAssetsFile = RemapPath(ProjectAssetsFile);
+                if (ProjectExtensionsPath.Length != 0) ProjectExtensionsPath = RemapPath(ProjectExtensionsPath);
+            }
             return true;
+
+            string RemapPath(string value) => Path.Combine(compilationRoot, Path.GetRelativePath(root, value));
+            ITaskItem Remap(ITaskItem value) => new TaskItem(value) { ItemSpec = RemapPath(value.ItemSpec) };
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException)
         {

@@ -42,11 +42,7 @@ public sealed record RuntimePackagePolicySubject(
 public sealed record RuntimePolicyWatermark(
     [property: JsonRequired] string RegistryOrigin,
     [property: JsonRequired] long PackagePolicyRevision,
-    [property: JsonRequired] string PackagePolicyFingerprint,
-    [property: JsonRequired] long CheckpointSequence,
-    [property: JsonRequired] string CheckpointDigest,
-    [property: JsonRequired] long TopologyGeneration,
-    [property: JsonRequired] string TopologyFingerprint);
+    [property: JsonRequired] string PackagePolicyFingerprint);
 
 /// <summary>Continuous-clock evidence; wall UTC is display/audit data and never authorizes execution.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -133,6 +129,9 @@ public sealed record RuntimeAppPolicySessionStatus(
 {
     private IReadOnlyList<RuntimePackagePolicySubject> _loadedPackages = RuntimePolicyCollections.Freeze(LoadedPackages);
     [JsonRequired] public IReadOnlyList<RuntimePackagePolicySubject> LoadedPackages { get => _loadedPackages; init => _loadedPackages = RuntimePolicyCollections.Freeze(value); }
+
+    private IReadOnlyList<RuntimeAppActivationRetirementRequirement> _retirements = [];
+    public IReadOnlyList<RuntimeAppActivationRetirementRequirement> Retirements { get => _retirements; init => _retirements = RuntimePolicyCollections.Freeze(value); }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -142,6 +141,23 @@ public sealed record RuntimeAppPackageLoadPermitRequest(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SnapshotId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? AppActivationId { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PackageTargetDescriptor? AppTarget { get; init; }
+
+    private IReadOnlyList<string>? _appImplementedCapabilities;
+
+    /// <summary>App-implemented observation capabilities, supplied only when the selected managed App target requires them.</summary>
+    /// <remarks>Absent on older App requests. This reports the authenticated shell implementation, not package-selected grants.</remarks>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? AppImplementedCapabilities
+    {
+        get => _appImplementedCapabilities;
+        init => _appImplementedCapabilities = value is null ? null : RuntimePolicyCollections.Freeze(value);
+    }
 }
 
 /// <summary>A permit follows durable session registration of the exact package and current policy validation.</summary>
@@ -156,6 +172,33 @@ public sealed record RuntimeAppPackageLoadPermitResult(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
     public bool Development { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? AppActivationId { get; init; }
+}
+
+/// <summary>Shell-only activation control; retirement never removes loaded security subjects.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeAppActivationRetirementRequest(
+    [property: JsonRequired] RuntimeAppPolicySessionRequest Session,
+    [property: JsonRequired] Guid AppActivationId,
+    [property: JsonRequired] string LoadPermitId);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeAppActivationRetirementResult(
+    [property: JsonRequired] RuntimeAppPolicySessionRequest Session,
+    [property: JsonRequired] Guid AppActivationId,
+    [property: JsonRequired] string LoadPermitId,
+    [property: JsonRequired] string State);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeAppActivationRetirementRequirement(
+    [property: JsonRequired] string PolicySessionId,
+    [property: JsonRequired] Guid AppActivationId,
+    [property: JsonRequired] string LoadPermitId,
+    [property: JsonRequired] RuntimePackagePolicySubject Package)
+{
+    public string? StageId { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -223,6 +266,7 @@ public static partial class RuntimeApiRoutes
     public static string AppPolicyHeartbeat(string sessionId) => $"{AppPolicySession(sessionId)}/heartbeat";
     public static string AppPolicyLoadPermit(string sessionId) => $"{AppPolicySession(sessionId)}/load-permit";
     public static string AppPolicyShutdown(string sessionId) => $"{AppPolicySession(sessionId)}/shutdown";
+    public static string AppPolicyRetireActivation(string sessionId, Guid activationId) => $"{AppPolicySession(sessionId)}/activations/{activationId:D}/retire";
     public static string PackagePolicy(string packageId) => $"{Root}/packages/{Segment(packageId, nameof(packageId))}/policy";
 }
 

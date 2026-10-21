@@ -115,6 +115,9 @@ internal static class SunderPackageRolePlanner
                 Fix(node, SunderPackageRoleMembership.Worker, "Worker activation implementation");
             if (SunderPackageDependencyDiscovery.IsSettingsSchemaProvider(node.Type))
                 Fix(node, SunderPackageRoleMembership.Worker, "Worker settings schema");
+            if (SunderPackageDependencyDiscovery.IsStorageMigrationProvider(node.Type)
+                || SunderPackageDependencyDiscovery.IsStorageMigrationPreparation(node.Type))
+                Fix(node, SunderPackageRoleMembership.Worker, "Worker storage migration implementation");
             if (SunderPackageDependencyDiscovery.IsCallbackHandler(node.Type))
                 Fix(node, SunderPackageRoleMembership.Worker, "Worker authentication/callback implementation");
 

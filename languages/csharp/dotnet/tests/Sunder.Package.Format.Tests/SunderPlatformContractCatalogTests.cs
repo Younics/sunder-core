@@ -29,16 +29,17 @@ public sealed class SunderPlatformContractCatalogTests
     }
 
     [Fact]
-    public void Create_ActualSdkStackMigrationEvidenceRetainsItsIndependentDescriptorAndAbi()
+    public void Create_CurrentCoreStackBaselineRetainsItsIndependentDescriptorAndAbi()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Sunder.Core.slnx"))) directory = directory.Parent;
         Assert.NotNull(directory);
-        using var baseline = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory.FullName, "eng", "compatibility", "stack-contributor-rpc-migration-baseline.json")));
-        var bytes = Convert.FromBase64String(baseline.RootElement.GetProperty("canonicalDescriptorBase64").GetString()!);
+        using var baseline = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory.FullName, "eng", "platform-contracts", "sunder-contracts.owned.json")));
+        var snapshot = baseline.RootElement.GetProperty("contracts").GetProperty("stack-contributor-rpc-service-adapter").GetProperty("current");
+        var bytes = Encoding.UTF8.GetBytes(snapshot.GetProperty("canonicalDescriptor").GetString()!);
         var descriptor = SunderRpcContractDescriptor.Parse(bytes);
-        Assert.Equal("38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898", descriptor.Sha256);
-        Assert.Equal("6ca6d6385c720290548592de890f3e3ceb86f3d999167f4e80c6afb15f8a02d8", descriptor.AbiSha256);
+        Assert.Equal(snapshot.GetProperty("descriptorSha256").GetString(), descriptor.Sha256);
+        Assert.Equal(snapshot.GetProperty("abiSha256").GetString(), descriptor.AbiSha256);
         Assert.Equal(6, Assert.Single(descriptor.Services).Methods.Count);
         var catalog = SunderPlatformContractCatalog.Verify(SunderPlatformContractCatalog.Create("1.1.0", [descriptor]));
         var actual = Assert.Single(catalog.Contracts);

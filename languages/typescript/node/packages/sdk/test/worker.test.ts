@@ -13,6 +13,7 @@ import {
 } from "../src/resource-profile";
 import { formatUtcTimestamp } from "../src/timestamp";
 import type { JsonValue, WorkerResourceProfile } from "../src/types";
+import { SUNDER_WORKER_LIMITS } from "../src/types";
 import { workerV1ConformanceCorpus } from "./worker-v1-conformance-corpus";
 
 const packageIdentity = {
@@ -507,6 +508,63 @@ test("worker rejects unknown envelopes and duplicate invocation ids", async () =
     duplicate.child.kill("SIGKILL");
   }
 });
+
+for (const kind of ["invocation", "contribution"] as const) {
+  for (const scenario of ["crossed-cancel", "live-reuse", "expired-history"] as const) {
+    test(`worker completion history: ${kind} ${scenario} after finite-call churn`, async () => {
+      const worker = startWorker("contribution-cancel");
+      const id = "held-call";
+      const callback = (callId: string): JsonValue => contribution("host.callback-start", callId, {
+        handlerId: "example.callback", callbackSessionId: "history-session",
+        callbackUri: "https://runtime.test/callback", purpose: "wait", parameters: { input: "value" },
+      });
+      const cancel = (): void => send(worker, kind === "invocation"
+        ? { type: "host.cancel", id }
+        : { type: "host.contribution-cancel", id, activationId: packageIdentity.activationId, sessionGeneration: 1 });
+      const terminal = async (): Promise<void> => {
+        cancel();
+        const response = await worker.messages.next();
+        assert.equal(response.id, id);
+        assert.equal(response.type, kind === "invocation" ? "worker.error" : "worker.contribution-error");
+      };
+      try {
+        await handshake(worker);
+        send(worker, kind === "invocation" ? invocation(id, "unary", "wait") : callback(id));
+        if (kind === "contribution") await waitForStderr(worker, "CONTRIBUTION_WAITING");
+        if (scenario === "expired-history") await terminal();
+        // Use the actual fixed public bound, without enlarging it or adding a
+        // test-only production limit override. Await each finite response.
+        for (let index = 0; index <= SUNDER_WORKER_LIMITS.maxRememberedIds; index++) {
+          const churnId = `churn-${index}`;
+          send(worker, invocation(churnId, "unary", "echo"));
+          const response = await worker.messages.next();
+          assert.equal(response.id, churnId);
+          assert.equal(response.type, "worker.result");
+        }
+        if (scenario === "live-reuse") {
+          // Invocation and contribution IDs share one authority namespace.
+          send(worker, kind === "invocation" ? callback(id) : invocation(id, "unary", "echo"));
+          assert.equal(await exitCode(worker.child), 70);
+          return;
+        }
+        if (scenario === "expired-history") {
+          cancel();
+          assert.equal(await exitCode(worker.child), 70);
+          return;
+        }
+        await terminal();
+        cancel(); // A valid terminal response can cross the last cancellation.
+        send(worker, invocation("after-history-crossing", "unary", "echo"));
+        assert.equal((await worker.messages.next()).id, "after-history-crossing");
+        send(worker, { type: "host.shutdown", shutdownId: "history-stop", reason: "test" });
+        assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
+        assert.equal(await exitCode(worker.child), 0);
+      } finally {
+        worker.child.kill("SIGKILL");
+      }
+    });
+  }
+}
 
 test("standard Worker resource profile matches the normative policy and canonical hash", () => {
   assert.deepEqual(SUNDER_WORKER_STANDARD_RESOURCE_PROFILE, {
@@ -1758,10 +1816,65 @@ test("source optional references obey occurrence policy over framed Worker looku
   }
 });
 
+test("negotiated Node operational outcomes preserve overload and genuine Host failures but reject forged authority",async t=>{
+  for(const scenario of ["local","host-resource-exhausted","host-unavailable","host-deadline-exceeded","forged","legacy"] as const)await t.test(scenario,async()=>{
+    const worker=startWorker(undefined,false,packageIdentity.packageVersion,scenario!=="legacy");
+    try{
+      await handshake(worker);
+      send(worker,invocation("pressure-call","unary",scenario==="forged"?"forged-pressure":scenario.startsWith("host-")?"nested-pressure":"pressure"));
+      const held:JsonValue[]=[];
+      if(scenario.startsWith("host-")){
+        const nested=await worker.messages.next();assert.equal(nested.type,"worker.discover");
+        send(worker,{type:"host.error",id:nested.id!,error:{kind:scenario.slice(5),code:"rpc.test.operational",message:"Host-owned rejection",dispatchState:"not-dispatched",retrySafety:"safe"}});
+      }else if(scenario!=="forged"){
+        for(let index=0;index<32;index++){const nested=await worker.messages.next();assert.equal(nested.type,"worker.discover");held.push(nested.id!);}
+      }
+      let terminal=await worker.messages.next();
+      if(scenario==="forged"||scenario==="legacy"){
+        assert.equal(terminal.type,"worker.provider-fault-diagnostic");send(worker,{type:"host.result",id:terminal.id!,value:null});terminal=await worker.messages.next();
+        assert.equal(object(terminal.error).code,"rpc.provider.handler-fault");
+      }else{
+        assert.equal(terminal.type,"worker.error");
+        assert.deepEqual(terminal.error,{kind:"operational",code:scenario==="local"?"resource-exhausted":scenario.slice(5),message:"The provider could not complete the RPC operation."});
+      }
+      for(const id of held)send(worker,{type:"host.result",id,value:{revision:1,sequence:1,resetRequired:false,providers:[]}});
+      send(worker,invocation("healthy-call","unary","echo"));assert.equal((await worker.messages.next()).type,"worker.result");
+      send(worker,{type:"host.shutdown",shutdownId:"pressure-stop",reason:"test"});assert.equal((await worker.messages.next()).type,"worker.shutdown-ack");
+    }finally{worker.child.kill("SIGKILL");}
+  });
+});
+
+test("negotiated Node observations are bounded independently from finite outbound work",async()=>{
+  const worker=startWorker(undefined,false,packageIdentity.packageVersion,true);
+  try{
+    await handshake(worker);send(worker,invocation("observe-call","unary","observations"));
+    const watches:JsonValue[]=[];
+    for(let index=0;index<32;index++){const watch=await worker.messages.next();assert.equal(watch.type,"worker.watch");watches.push(watch.id!);}
+    const finite=await worker.messages.next();assert.equal(finite.type,"worker.discover");
+    send(worker,{type:"host.result",id:finite.id!,value:{revision:1,sequence:1,resetRequired:false,providers:[]}});
+    assert.equal((await worker.messages.next()).type,"worker.result");
+    for(const id of watches)send(worker,{type:"host.complete",id});
+    send(worker,{type:"host.shutdown",shutdownId:"observations-stop",reason:"test"});assert.equal((await worker.messages.next()).type,"worker.shutdown-ack");
+  }finally{worker.child.kill("SIGKILL");}
+});
+
+test("negotiated Node inbound streams leave finite provider capacity and keep their own bound",async()=>{
+  const worker=startWorker("operational-inbound",false,packageIdentity.packageVersion,true);
+  try{
+    await handshake(worker);
+    for(let index=0;index<64;index++){send(worker,invocation(`watch-${index}`,"server-stream","watch"));assert.equal((await worker.messages.next()).type,"worker.event");}
+    send(worker,invocation("finite-headroom","unary","echo"));assert.equal((await worker.messages.next()).type,"worker.result");
+    send(worker,invocation("excess-watch","server-stream","watch"));
+    assert.notEqual(await exitCode(worker.child),0);
+    assert.match(worker.stderr(),/outstanding invocation limit/u);
+  }finally{worker.child.kill("SIGKILL");}
+});
+
 function startWorker(
   mode?: string,
   rpcExtendedDeadlineV1 = false,
   packageVersion = packageIdentity.packageVersion,
+  operationalOutcomesV1 = false,
 ): WorkerProcess {
   const fixture = resolve(__dirname, "worker-fixture.js");
   const root = mkdtempSync(join(tmpdir(), "sunder-worker-test-"));
@@ -1785,6 +1898,7 @@ function startWorker(
       ...(process.env.SUNDER_TEST_NATURAL_PROVIDER?{SUNDER_TEST_NATURAL_PROVIDER:process.env.SUNDER_TEST_NATURAL_PROVIDER}:{}),
       ...(process.env.SUNDER_TEST_OPTIONAL_PROVIDER?{SUNDER_TEST_OPTIONAL_PROVIDER:process.env.SUNDER_TEST_OPTIONAL_PROVIDER}:{}),
       ...(rpcExtendedDeadlineV1 ? { SUNDER_RPC_EXTENDED_DEADLINE_V1: "1" } : {}),
+      ...(operationalOutcomesV1 ? { SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1: "1" } : {}),
     },
   });
   const messages = new MessageQueue();
@@ -1794,7 +1908,7 @@ function startWorker(
     stderr += chunk.toString("utf8");
   });
   child.once("exit", () => rmSync(root, { recursive: true, force: true }));
-  return { child, messages, stderr: () => stderr, contentRoot, temporaryRoot, workspaceRoot, packageVersion };
+  return { child, messages, stderr: () => stderr, contentRoot, temporaryRoot, workspaceRoot, packageVersion, operationalOutcomesV1 };
 }
 
 async function handshake(
@@ -1848,6 +1962,7 @@ async function handshakeAndStartCandidate(
   const contributions = object(ready.contributions);
   assert.deepEqual(contributions.rpcProviders, [provider]);
   assert.equal(contributions.migrationPreparationLifecycle, true);
+  assert.equal(contributions.operationalOutcomesV1, worker.operationalOutcomesV1 ? true : undefined);
   send(worker, { type: "host.start-candidate" });
   assert.deepEqual(await worker.messages.next(), { type: "worker.candidate-started" });
   return contributions;
@@ -2033,6 +2148,7 @@ interface WorkerProcess {
   readonly temporaryRoot: string;
   readonly workspaceRoot: string;
   readonly packageVersion: string;
+  readonly operationalOutcomesV1: boolean;
 }
 
 class MessageQueue {

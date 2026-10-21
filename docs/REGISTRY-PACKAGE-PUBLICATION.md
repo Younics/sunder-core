@@ -34,9 +34,9 @@ Success returns the existing `RegistryPublishPackageResponse`. Missing, occupied
 or cancelled required reservations produce HTTP 409 with `registry.v1.resource.conflict`;
 ownership/credential denial is 403. Duplicate immutable package versions and conflicting
 descriptor versions remain 409. Other validation failures are 400. Availability failures
-use the shared 503 Problem Details contract. A failed acknowledgement can leave a durable
-authorized intent: recovery completes that exact publication, and a later duplicate
-publish remains a conflict. Clients must query the resulting immutable version.
+use the shared 503 Problem Details contract. A failed acknowledgement may follow a
+committed database transaction; a later duplicate publish remains a conflict.
+Clients must query the resulting immutable version.
 
 ## Initially Yanked releases and exact publication readback
 
@@ -76,12 +76,12 @@ and artifact/ultimate-authority provenance. It includes no generated language cl
 private descriptor. Owned authority release/content equals the enclosing package.
 
 The existing V1 inventory codec/domain-separated hash is unchanged. The inventory is
-stored as immutable publication evidence and checked against the complete applied
-checkpoint and retained artifacts before readback. Profile edits and later releases
+stored as immutable publication evidence and checked against the committed database
+state and retained artifacts before readback. Profile edits and later releases
 cannot change this version's inventory. Package content identities remain restore/build
 integrity and provenance, while Compatible Installation uses reviewed ranges and exact
 RPC identities. This endpoint does not add installation pins or runtime use grants.
 
-The Production public-ready gate requires the complete verified Registry catalog and
-first-party bootstrap state. The publication service never treats a local
-development fixture or an uploaded archive as bootstrap approval.
+A configured Registry is ready with an initialized empty database. Publication checks
+the exact reservations, authorities and catalog releases needed by that artifact;
+an uploaded archive or local development fixture does not supply missing authority.

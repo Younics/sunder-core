@@ -1,24 +1,33 @@
-# Registry Availability Errors
+# Registry Availability and Operation Errors
 
-Registry V1 public-readiness denials use the existing Problem Details wire contract
-with HTTP 503, including `code`, `traceId`, `correlationId`, and `instance`.
-The `publicReady` extension is false. These errors do not authorize a client to
-bypass publication, installation, or local policy checks.
+A configured Registry with an initialized empty database is ready to serve requests.
+Readiness does not require a first-party package inventory or an imported Core catalog.
+Required ownership, reservations, exact catalog releases and package policy are checked
+by the operation that consumes them. Missing resources or incompatible dependencies
+do not create a global startup gate.
 
-The shared `RegistryV1ErrorCodes` constants define the current handoff:
+Registry operation failures use `RegistryProblemDetails`, including `code`, `traceId`,
+`correlationId`, and `instance`. Current `RegistryV1ErrorCodes` include:
 
 | Code | Meaning |
 | --- | --- |
-| `registry.bootstrap-required` | Required Registry initialization or administrator-published catalog/authority inventory is not complete. Operator bootstrap is required. |
-| `registry.policy-recovery-required` | External policy evidence and applied database state cannot currently be verified as aligned. Recovery or restoration of the required services is needed. |
-| `registry.policy-event-unsupported` | The requested mutation family has not been integrated into the required journaled policy path and remains unavailable. |
+| `registry.v1.resource.not_found` | The requested resource does not exist. |
+| `registry.v1.resource.conflict` | The requested mutation conflicts with current resource state. |
+| `registry.v1.package.requirement_unavailable` | A required package dependency is unavailable. |
+| `registry.v1.package.requirement_unsatisfied` | Available dependencies do not satisfy the requested package graph. |
+| `registry.v1.package.target_unavailable` | A requested package target is unavailable. |
+| `registry.v1.internal` | The Registry could not complete the operation because of an internal failure. |
 
-Clients may report the safe problem detail and retain trace/correlation identifiers.
-They must not automatically retry an artifact upload as though any of these codes
-were a transient content-transfer failure, invent a different owner, or fall back
-to unverified local authority. A status response or unsigned inventory is not a
-publication receipt.
+`PackagePolicyErrorCodes` and `PolicyErrorCatalog` retain operation-specific policy
+conflicts, security blocks, catalog revocation, authorization freshness and local lease
+errors. See [policy contracts](POLICY-CONTRACTS-V1.md). Ordinary HTTP/network availability
+failures remain failures and cannot renew a Host policy lease.
 
-The private Registry implementation owns initialization, checkpoint verification,
-replay, production readiness, and the separate internal diagnostics. Shared Core
-contracts contain no checkpoint-store credentials, object keys, or recovery commands.
+Clients report safe problem details and retain trace/correlation identifiers. An
+ambiguous upload requires exact immutable publication readback before retry; neither
+an availability response nor an unsigned inventory is a publication receipt.
+
+PostgreSQL is authoritative. The private Registry owns database transactions and service
+health; S3 replication is infrastructure-only. Core exposes no Registry-wide policy
+startup/status/recovery DTO or endpoint. Runtime package/platform policy status and
+App process-supervision status remain separate live contracts.

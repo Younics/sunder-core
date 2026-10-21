@@ -3,12 +3,6 @@
     "revision": 42,
     "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
-  "checkpoint": {
-    "sequence": 99,
-    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "topologyGeneration": 1,
-    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-  },
   "requirements": [
     {
       "packageId": "example.agent",

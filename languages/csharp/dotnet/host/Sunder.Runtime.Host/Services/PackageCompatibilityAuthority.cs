@@ -15,7 +15,6 @@ internal sealed record InstalledPackageCompatibilityRecord(RegistryPackageVersio
         RegistryActivePolicyClient.Require(Package == InstalledPackagePolicyRecord.Subject(package)
             && RegistryOrigin == RegistryActivePolicyClient.Origin(RegistryOrigin)
             && Resolution.PackagePolicy.Revision > 0 && RegistryActivePolicyClient.Hash(Resolution.PackagePolicy.Fingerprint)
-            && Resolution.Checkpoint.Sequence > 0 && RegistryActivePolicyClient.Hash(Resolution.Checkpoint.Digest)
             && Resolution.RestoreProvenance.Count <= 128 && Resolution.Requirements.Count <= 4096 && Resolution.OptionalPackages.Count <= 4096,
             "Installed compatibility evidence is invalid.");
         foreach (var provenance in Resolution.RestoreProvenance)

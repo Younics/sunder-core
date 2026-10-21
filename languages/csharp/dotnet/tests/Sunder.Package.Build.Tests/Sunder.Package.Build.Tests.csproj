@@ -40,23 +40,8 @@
     <None Include="..\..\..\..\..\eng\test-oracles\core-public-packages.json"
           Link="TestOracles\core-public-packages.json"
           CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\expectations.json"
-          Link="RpcAuthoringParity\expectations.json"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\naming-defaults.cs"
-          Link="RpcAuthoringParity\valid\naming-defaults.cs"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\provider-forms.cs"
-          Link="RpcAuthoringParity\valid\provider-forms.cs"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\identity-limits.cs"
-          Link="RpcAuthoringParity\valid\identity-limits.cs"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\valid\complete.cs"
-          Link="RpcAuthoringParity\valid\complete.cs"
-          CopyToOutputDirectory="PreserveNewest" />
-    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\parity\invalid\*.cs"
-          Link="RpcAuthoringParity\invalid\%(Filename)%(Extension)"
+    <None Include="..\..\..\..\..\specs\rpc\v1\authoring\current-parity\csharp\**\*"
+          Link="CurrentRpcAuthoring\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <Target Name="_CopyEditorAnalyzerForTests" AfterTargets="CopyFilesToOutputDirectory">

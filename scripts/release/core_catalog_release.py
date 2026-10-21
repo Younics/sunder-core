@@ -9,7 +9,7 @@ import sys
 
 sys.dont_write_bytecode = True
 import release_coordinates as c
-import retained_release_assets as assets
+import github_release as assets
 
 CATALOG = "sunder-platform-contracts.v1.json"
 RECEIPT = "sunder-platform-contracts.receipt.v1.json"
@@ -104,9 +104,8 @@ def retain(directory, release_id):
     c.require(exported["baselineSha256"] == c.digest(baseline) and exported["inventorySha256"] == catalog(data, c.decode(baseline), name[5:])
               and exported["catalogSha256"] == c.digest(data) and exported["catalogBytes"] == len(data), "Exported bytes changed before retention")
     remote = c.release(release_id, name, source)
-    environment = dict(os.environ, GH_REPO=c.REPOSITORY)
-    # These helpers reconcile an interrupted upload by exact bytes; they never replace an asset.
-    subprocess.run(["bash", str(assets.HELPERS / "upload-github-release-assets.sh"), str(release_id), name, str(directory / CATALOG)], env=environment, check=True)
+    store = assets.GitHubRelease(c.REPOSITORY, name)
+    store.upload(release_id, [directory / CATALOG])
     remote = c.release(release_id, name, source)
     old = [item for item in remote["assets"] if item["name"] == RECEIPT]
     if old:
@@ -126,7 +125,7 @@ def retain(directory, release_id):
                     registryOrigin=registry, baselineSha256=exported["baselineSha256"], inventorySha256=exported["inventorySha256"],
                     invocation=context, catalog=dict(assetName=CATALOG, assetId=item["id"], sha256=c.digest(data), size=len(data))))
         verify(directory, release_id, name, source, registry, baseline)
-    subprocess.run(["bash", str(assets.HELPERS / "upload-github-release-assets.sh"), str(release_id), name, str(directory / RECEIPT)], env=environment, check=True)
+    store.upload(release_id, [directory / RECEIPT])
     # A completion receipt is authoritative only at its exact numbered GitHub asset identity.
     receipt_asset = assets.asset(c.release(release_id, name, source), RECEIPT)
     c.require(c.gh("releases/assets/" + c.number(receipt_asset["id"]), binary=True) == c.read(directory / RECEIPT), "Catalog receipt differs after upload")

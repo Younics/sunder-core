@@ -12,6 +12,12 @@ public interface IDevPackageOwnerSession : IAsyncDisposable
         CancellationToken cancellationToken = default);
 
     Task ReleaseAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Prepare, await shell retirement, and commit exact owner withdrawal. Failures propagate; null means no owned lease.</summary>
+    Task<RuntimePackageSnapshot?> ReleaseStagedAsync(
+        Func<PackageLifecycleStageResult, CancellationToken, Task> retireActivations,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This owner session does not implement acknowledged release.");
 }
 
 public sealed class DevPackageOwnerSessionOptions
@@ -57,9 +63,17 @@ internal interface IDevPackageOwnerClient : IDisposable
         string ownerId,
         DevPackageOwnerReleaseRequest request,
         CancellationToken cancellationToken = default);
+
+    Task<PackageLifecycleStageResult> StageDevPackageOwnerReleaseAsync(
+        string ownerId, DevPackageOwnerReleaseStageRequest request, CancellationToken token = default)
+        => throw new NotSupportedException();
+
+    Task<DevPackageOwnerReleaseResult> CommitDevPackageOwnerReleaseAsync(
+        string ownerId, DevPackageOwnerReleaseCommitRequest request, CancellationToken token = default)
+        => throw new NotSupportedException();
 }
 
-public sealed class DevPackageOwnerSession : IDevPackageOwnerSession
+public sealed partial class DevPackageOwnerSession : IDevPackageOwnerSession
 {
     private static readonly StringComparer PathComparer = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -141,6 +155,10 @@ public sealed class DevPackageOwnerSession : IDevPackageOwnerSession
         try
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_releaseCommitPending || _pendingRetirementCallback is { IsCompleted: false })
+                throw new InvalidOperationException("Resolve the pending acknowledged owner release before acquiring another lease.");
+            _pendingRelease = null;
+            _retiredReleaseStage = null;
             using var client = _clients();
             var handshake = await client.GetRuntimeHandshakeAsync(cancellationToken).ConfigureAwait(false);
             ResetStaleRuntimeState(handshake.RuntimeInstanceId);
@@ -151,8 +169,20 @@ public sealed class DevPackageOwnerSession : IDevPackageOwnerSession
                 cancellationToken).ConfigureAwait(false);
             if (current is not null && FoldersEqual(GetDesiredFolders(), desiredFolders))
             {
-                EnsureHeartbeatStarted();
-                return current;
+                try
+                {
+                    // A caller observing an existing session needs Host evidence, not
+                    // a cached lease that may have expired while heartbeats were offline.
+                    var observed = await client.HeartbeatDevPackageOwnerAsync(OwnerId,
+                        new(handshake.RuntimeInstanceId, OwnerToken), cancellationToken).ConfigureAwait(false);
+                    ReconcileHeartbeat(observed, handshake.RuntimeInstanceId);
+                    EnsureHeartbeatStarted();
+                    return observed;
+                }
+                catch (RuntimeClientException exception) when (exception.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    ClearOwnershipState(handshake.RuntimeInstanceId);
+                }
             }
 
             current = GetLease(handshake.RuntimeInstanceId);
@@ -442,7 +472,7 @@ public sealed class DevPackageOwnerSession : IDevPackageOwnerSession
             DevPackageOwnerMutationRequest request;
             lock (_syncRoot)
             {
-                if (_releasing || !LeaseMatches(_lease, expectedLease))
+                if (_releasing || _pendingRelease is not null || !LeaseMatches(_lease, expectedLease))
                 {
                     return;
                 }

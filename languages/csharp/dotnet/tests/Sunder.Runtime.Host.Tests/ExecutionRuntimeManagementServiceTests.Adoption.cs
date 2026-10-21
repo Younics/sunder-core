@@ -28,11 +28,11 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
             "official-adoption", origin, original.PackageId, original.Version, original.Version,
             runtimeIdentifiers: [rid], roles: [SunderPackageFormat.RuntimeHostRole]);
         var registry = fixture.Provider.GetRequiredService<PackagePolicyHandler>();
-        var authority = ActivePolicyTestContext.Allowed(new("", [], [], null, null));
+        var authority = ActivePolicyTestContext.Allowed(new("", [], [], null));
         registry.Plan = new(true, [published.PlanItem], [], [], [], [], new('e', 64), Now.AddMinutes(5))
         {
-            PackagePolicy = authority.PackagePolicy, PolicyCheckpoint = authority.Checkpoint,
-            ResolutionPolicy = new(authority.PackagePolicy, authority.Checkpoint, [], [], [], []),
+            PackagePolicy = authority.PackagePolicy,
+            ResolutionPolicy = new(authority.PackagePolicy, [], [], [], []),
         };
         registry.Artifacts = published.ContentByUrl;
         fixture.Handler.Version = "10.0.2";

@@ -1,0 +1,24 @@
+{
+  "descriptorVersion": 1,
+  "contractId": "example.generated.greeting",
+  "version": "7.6.5",
+  "schemaProfile": "sunder.rpc.values.v1",
+  "services": {
+    "greeting": {
+      "methods": {
+        "greet": {
+          "kind": "unary",
+          "idempotency": "none",
+          "requestSchema": { "$ref": "#/$defs/GreetingRequest" },
+          "responseSchema": { "$ref": "#/$defs/GreetingResult" },
+          "errors": []
+        }
+      }
+    }
+  },
+  "errors": {},
+  "$defs": {
+    "GreetingRequest": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"], "additionalProperties": false },
+    "GreetingResult": { "type": "object", "properties": { "message": { "type": "string" } }, "required": ["message"], "additionalProperties": false }
+  }
+}

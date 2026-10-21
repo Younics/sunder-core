@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SDK pre-publication freeze qualification from the integrated tag run",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "repository", "sdkVersion", "artifactSourceCommit", "baseCommit", "baseManifestSha256", "supportedManifestSha256", "invocation", "reference", "packages"],
+  "properties": {
+    "schemaVersion": { "const": 2 },
+    "status": { "const": "freeze-qualified" },
+    "repository": { "const": "Younics/sunder-core" },
+    "sdkVersion": { "type": "string", "minLength": 5, "maxLength": 128 },
+    "artifactSourceCommit": { "$ref": "#/$defs/commit" },
+    "baseCommit": { "$ref": "#/$defs/commit" },
+    "baseManifestSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+    "supportedManifestSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+    "invocation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workflowPath", "workflowRef", "workflowSha", "runId", "runAttempt"],
+      "properties": {
+        "workflowPath": { "const": ".github/workflows/sunder-sdk-release.yml" },
+        "workflowRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "workflowSha": { "$ref": "#/$defs/commit" },
+        "runId": { "$ref": "#/$defs/number" },
+        "runAttempt": { "$ref": "#/$defs/number" }
+      }
+    },
+    "reference": { "$ref": "supported-releases.schema.json#/$defs/release" },
+    "packages": {
+      "type": "array", "minItems": 9, "maxItems": 9,
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["assetName", "artifactId"],
+        "properties": {
+          "assetName": { "$ref": "supported-releases.schema.json#/$defs/id" },
+          "artifactId": { "$ref": "supported-releases.schema.json#/$defs/id" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$", "maxLength": 40 },
+    "number": { "type": "string", "pattern": "^[1-9][0-9]{0,15}$", "maxLength": 16 }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "referenceId": "<reviewed-reference-id>",
+  "corpusId": "<reviewed-corpus-id>",
+  "kind": "old-package-new-host",
+  "owner": "Sunder.Runtime.Host.Tests",
+  "command": { "runner": "dotnet-test", "entryPoint": "languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj", "arguments": [] },
+  "reportFormat": "trx",
+  "requiredTests": ["Sunder.Runtime.Host.Tests.ReleasedSdkCorpusTests.RetainedDotNetWorkerCompletesRpcAndCancellation"],
+  "timeoutSeconds": 1800
+}

@@ -133,15 +133,10 @@ public sealed partial class ImplementationFirstRpcBuildTests
             StringComparison.Ordinal);
 
         Assert.False(File.Exists(Path.Combine(fixture, SunderRpcAuthoringDocuments.OwnedContractsFileName)));
-        // Keep the original private descriptor as historical shape evidence, not
-        // a live baseline prerequisite. Its current successor uses the package version.
-        var baseline = SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(
-            Path.Combine(fixture, "History/implementation-first-private.owned.json"));
         var lockSha256 = Convert.ToHexString(SHA256.HashData(await File.ReadAllBytesAsync(
             Path.Combine(fixture, SunderRpcAuthoringDocuments.ContractLockFileName)))).ToLowerInvariant();
-        var expected = System.Text.Json.Nodes.JsonNode.Parse(baseline.Contracts["greeting"].Current!.Descriptor.GetCanonicalUtf8())!;
-        expected["version"] = "7.6.5";
-        var accepted = Sunder.Sdk.Rpc.SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(expected));
+        var accepted = Sunder.Sdk.Rpc.SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(
+            Path.Combine(authoringSchemaRoot, "current-parity/csharp/build/greeting.rpc.json")));
         using (var export = JsonDocument.Parse(await File.ReadAllBytesAsync(exportPath)))
         {
             AssertMatchesSchema(

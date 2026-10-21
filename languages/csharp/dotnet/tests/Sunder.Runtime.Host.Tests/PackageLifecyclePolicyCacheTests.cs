@@ -17,6 +17,11 @@ public sealed class PackageLifecyclePolicyCacheTests
         var started = context.Clock.Value.Ticks;
         context.Response = request => { context.Clock.Advance(TimeSpan.FromSeconds(10)); return Allowed(request); };
         await context.RefreshAsync(platforms: [Platform]);
+        var persisted = JsonNode.Parse(await File.ReadAllTextAsync(context.Cache.FilePath(Origin)))!.AsObject();
+        Assert.Equal(1, persisted["schemaVersion"]!.GetValue<int>());
+        Assert.False(persisted.ContainsKey("checkpoint"));
+        var watermark = persisted["packages"]!.AsObject().Single().Value!["lease"]!["watermark"]!.AsObject();
+        Assert.Equal(["packagePolicyFingerprint", "packagePolicyRevision", "registryOrigin"], watermark.Select(pair => pair.Key).Order(StringComparer.Ordinal));
         context.Time.UtcNow = ObservedAt.AddYears(-10);
         context.Clock.Advance(TimeSpan.FromHours(23));
         var reloaded = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
@@ -169,6 +174,9 @@ public sealed class PackageLifecyclePolicyCacheTests
     [InlineData("missing")]
     [InlineData("corrupt")]
     [InlineData("watermark")]
+    [InlineData("fingerprint")]
+    [InlineData("removed-origin-authority")]
+    [InlineData("removed-lease-authority")]
     [InlineData("nonce")]
     [InlineData("clock")]
     public async Task BrokenDurableEvidenceCannotUsePreviouslyLoadedPermission(string failure)
@@ -184,6 +192,9 @@ public sealed class PackageLifecyclePolicyCacheTests
             default:
                 var entry = json["packages"]!.AsObject().First().Value!;
                 if (failure == "watermark") entry["lease"]!["watermark"]!["packagePolicyRevision"] = 0;
+                if (failure == "fingerprint") entry["lease"]!["watermark"]!["packagePolicyFingerprint"] = Hash("conflicting-policy");
+                if (failure == "removed-origin-authority") json["checkpoint"] = null;
+                if (failure == "removed-lease-authority") entry["lease"]!["watermark"]!["checkpointSequence"] = null;
                 if (failure == "nonce") entry["lease"]!["responseNonce"] = "bad";
                 if (failure == "clock") entry["lease"]!["clock"]!["deadlineTicks"] = long.MaxValue;
                 await File.WriteAllTextAsync(file, json.ToJsonString());

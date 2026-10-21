@@ -23,6 +23,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Frozen migration oracle source is retained byte-for-byte as inert history.
+         Current Stack checks belong to source parity, platform lifecycle and package artifact tests. -->
+    <Compile Remove="StackContributorRpcMigrationBaselineTests.cs" />
     <None Include="PublicApi\*.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="ApiFidelity\*.txt" CopyToOutputDirectory="PreserveNewest" />
     <None Include="RuntimeContracts\*.json" CopyToOutputDirectory="PreserveNewest" />
@@ -35,6 +38,7 @@
           Link="RpcV1Conformance\descriptor.schema.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\..\..\..\specs\rpc\v1\authoring\**\*"
+          Exclude="..\..\..\..\..\specs\rpc\v1\authoring\parity\**\*"
           Link="RpcV1Authoring\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\..\..\..\specs\rpc\v1\conformance\identifier-keywords.json"

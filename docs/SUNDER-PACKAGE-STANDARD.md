@@ -2,13 +2,11 @@
 
 This document is the normative archive format V1 and package manifest V1 contract implemented by `Sunder.Package.Build`, `Sunder.Package.Format`, the Sunder Hosts, and the Registry.
 
-> **RPC authoring transition:** C# package-authority import generation now joins
-> source compilation, verified receipts, and manifest projection. Generating a
-> structurally valid artifact does not authorize publication, installation, or
-> activation: Registry, Host, and Node admission still reject imports and optional
-> dependencies pending their cutovers. Remaining authored descriptors and Protocol
-> projects are pre-cutover inputs. See
-> [Implementation-First RPC Authoring](package-development/IMPLEMENTATION-FIRST-RPC.md).
+Source authoring and reviewed imports generate the manifest and contract evidence.
+Format validation establishes structural integrity; Registry/Host admission separately
+enforces publication, dependency, policy and activation authority. See
+[single-project authoring](package-development/SINGLE-PROJECT-AUTHORING.md) and
+[ordinary services](package-development/ORDINARY-SERVICES.md).
 
 The contract is independent of authoring language and UI framework. Manifest V1 permits only exact-RID `worker` Runtime targets whose entry-point modules are loaded by exact bound execution runtimes. App targets remain `avalonia` or `web`. Runtime `dotnet`, `process`, generic-RID targets, directly executable package entry points, and Worker V3 are invalid. React/Vite is one web template, not a format requirement. Future Python, Rust, Go, other worker toolchains, other .NET UI approaches, and other web frameworks may emit this format, but Hosts still reject target protocols or required capabilities they do not support.
 
@@ -245,7 +243,9 @@ Large content stays off the JSON control plane and uses Host-mediated content re
 
 Source-authored C# builds run the lock/cache-derived import prepass before semantic provider discovery and include generated imports in final compilation. `PackageContractBuilder` consumes the authoring receipt with its expected SHA-256, lock hash, and package identity; it validates descriptor snapshots and task-item agreement before projecting bundles, uses, providers, import groups, and dependencies. Generated source, owned/imported descriptor snapshots, and the applicable receipt/export outputs publish as one atomic marker-owned set. Neither receipt nor project export is package content.
 
-Descriptor-first `SunderContractBundle`, `SunderUsesContract`, and `SunderRpcProvider` inputs remain in pre-cutover projects. They cannot author imported authority metadata. `SunderRpcCSharpGenerator` remains the deterministic package-local binding backend, not a second contract authority.
+Lower-level bundle/use/provider items describe generated transport or explicit test
+leaves. They cannot author imported authority metadata. `SunderRpcCSharpGenerator`
+is the deterministic binding backend, not another contract authority or normal authoring recipe.
 
 ### Import Groups
 
@@ -292,15 +292,24 @@ Installed projection validation checks the whole manifest's metadata/import grap
 
 ## Build Outputs
 
-For a primary .NET package project, `dotnet build` emits one exact current-RID Worker leaf at `bin/<Configuration>/<TFM>/<RID>/sunder-dev` and a validated composed tree at `bin/<Configuration>/<TFM>/sunder-dev`. The optional App project is a build-only input and is built once. The canonical explicit archive target is `PackSunderPackage`, which builds all configured exact-RID Worker leaves sequentially, aggregates them, and emits a deterministic universal `.sunderpkg` beside the composed output; `dotnet publish` also invokes the pack task and places its archive in the publish directory.
+One authored .NET Library project with `SunderPackageProject=true` produces isolated
+Worker and optional App roles under `sunder-roles/<role>/<rid>`. Ordinary Build composes
+the current RID at `bin/<Configuration>/<TFM>/sunder-dev`. Direct `PackSunderPackage`
+builds the declared RIDs and emits one deterministic universal archive. No authored
+App/Worker/Protocol project or source manifest is required.
 
-The generated .NET template uses a root unsuffixed canonical Worker/package project plus optional App and Protocol projects; it has no separate Worker csproj or Aggregate wrapper. `SunderPackagePrimaryProject=true` opts the canonical project into composition. Each inner Worker build remains one framework-dependent exact-RID module leaf, and aggregation combines all six leaves into the universal package without carrying apphosts or language-runtime/framework-pack bytes. The non-packable package-local Protocol project contains bundled RPC V1 descriptors and generated bindings; role projects consume it through private project references. `--withHostDependency` adds only `[SunderPackageDependency]` metadata. C# projects may register `SunderPackageWorkerSigningTargets`; those targets mutate a private copy of the package-owned publish set before content indexing. Pack validates that established index unchanged, so later tampering fails. Signed prebuilt fan-in requires `SunderPackageUsePrebuiltLeaves=true` and `BuildProjectReferences=false`, runs no Worker/App build, and retains normal leaf validation.
-
-Import-bearing C# aggregation supports only canonical exact-RID .NET Worker leaves with identical package-wide import evidence, plus an associated App export containing only owned contracts. The App preserves the producer lock hash but inherits no external imports, external use grants, or providers. General role-aware import merging, direct platform imports, and non-RPC optional dependencies remain unsupported by aggregation. Existing descriptor-first template/Protocol projects still require their separate authoring migration.
+Role-aware aggregation retains exact package-wide contract/import evidence, scoped
+providers/uses and selected dependency/resource ownership. C# signing hooks operate
+on private package-owned publish files before indexing; Pack validates that index
+without rewriting it. Qualified prebuilt fan-in uses `SunderPackageUsePrebuiltLeaves`,
+`BuildProjectReferences=false` and exact reviewed role-input selection without a
+restore/build/generation fallback. See [prebuilt inputs](package-development/PREBUILT-ROLE-INPUTS.md).
 
 TypeScript Worker V1 packages use bundled CommonJS modules with `.cjs` entry points; `--template react-node` adds a Vite/React web App target. `@sunder/package-tool` emits exact-RID Manifest V1 target records bound to the separately trusted Node 24 execution runtime, then factors byte-identical module payloads into the shared Runtime layer during aggregation.
 
-Current Node output explicitly stamps owned package-authority bundles, required dependencies, and all four empty import groups. Its descriptor-first tooling does not generate or admit imported bundles, nonempty import groups, or optional dependencies.
+Node ordinary services and reviewed package/provider/platform selections produce the
+same canonical authority/import groups, including explicit optional dependency intent.
+Generation, validation and admission use the shared V1 format and parity corpus.
 
 ## Archive Safety
 

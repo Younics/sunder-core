@@ -24,45 +24,51 @@ internal sealed partial class PackageSessionLoadService
         var preparedCandidates = new List<PreparedRuntimePackage>();
         var sessionPackages = new Dictionary<string, SessionPackageDescriptor>(StringComparer.OrdinalIgnoreCase);
         var devPackageIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var index = 0;
+        var index = devFolders.Count;
         var retentionOwnershipTransferred = false;
 
         try
         {
-        foreach (var devFolder in devFolders)
+        var preparationResults = new DevPreparationResult?[devFolders.Count];
+        try
         {
-            ThrowIfCancellationRequested(cancellationToken, sessionFolder);
-            var packageTrace = startupTrace?.GetDevPackage(devFolder);
-            packageTrace?.BeginProjection();
-            try
-            {
-                var preparedPackage = await _preparer.PrepareDevPackageAsync(
-                    index++,
-                    devFolder,
-                    sessionFolder,
-                    errors,
-                    cancellationToken,
-                    packageTrace);
-                if (preparedPackage is null)
+            await Parallel.ForEachAsync(
+                Enumerable.Range(0, devFolders.Count),
+                new ParallelOptions
                 {
-                    packageTrace?.CompleteProjection("failed");
-                    continue;
-                }
+                    MaxDegreeOfParallelism = _concurrency.MaximumPreparationConcurrency,
+                    CancellationToken = cancellationToken,
+                },
+                async (devIndex, token) =>
+                {
+                    var devFolder = devFolders[devIndex];
+                    preparationResults[devIndex] = await PrepareDevCandidateAsync(
+                            devIndex,
+                            devFolder,
+                            sessionFolder,
+                            token,
+                            startupTrace?.GetDevPackage(devFolder))
+                        .ConfigureAwait(false);
+                }).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Parallel.ForEachAsync has drained every in-flight preparation before cleanup.
+            await DisposeExecutionRuntimeRetentionsAsync(
+                    preparationResults
+                        .Where(static result => result?.PreparedPackage is not null)
+                        .Select(static result => result!.PreparedPackage!))
+                .ConfigureAwait(false);
+            throw;
+        }
 
-                packageTrace?.SetPreparedIdentity(preparedPackage);
-                packageTrace?.CompleteProjection("succeeded");
+        foreach (var result in preparationResults.Select(static result => result!))
+        {
+            errors.AddRange(result.Errors);
+            if (result.PreparedPackage is { } preparedPackage)
+            {
                 preparedCandidates.Add(preparedPackage);
                 devPackageIds.Add(preparedPackage.PackageId);
-            }
-            catch (OperationCanceledException)
-            {
-                packageTrace?.CompleteProjection("canceled");
-                throw;
-            }
-            catch
-            {
-                packageTrace?.CompleteProjection("failed");
-                throw;
             }
         }
 
@@ -175,12 +181,64 @@ internal sealed partial class PackageSessionLoadService
             cancellationToken,
             startupTrace);
         }
+        catch
+        {
+            if (retentionOwnershipTransferred)
+            {
+                // LoadPreparedPackagesAsync has already released candidate retentions.
+                TryDeleteDirectory(sessionFolder);
+            }
+            throw;
+        }
         finally
         {
             if (!retentionOwnershipTransferred)
             {
                 await DisposeExecutionRuntimeRetentionsAsync(preparedCandidates).ConfigureAwait(false);
+                TryDeleteDirectory(sessionFolder);
             }
         }
     }
+
+    private async ValueTask<DevPreparationResult> PrepareDevCandidateAsync(
+        int index,
+        string devFolder,
+        string sessionFolder,
+        CancellationToken cancellationToken,
+        PackageSessionStartupTracePackage? packageTrace)
+    {
+        var errors = new List<string>();
+        packageTrace?.BeginProjection();
+        try
+        {
+            var preparedPackage = await _preparer.PrepareDevPackageAsync(
+                    index,
+                    devFolder,
+                    sessionFolder,
+                    errors,
+                    cancellationToken,
+                    packageTrace)
+                .ConfigureAwait(false);
+            if (preparedPackage is not null)
+            {
+                packageTrace?.SetPreparedIdentity(preparedPackage);
+            }
+            packageTrace?.CompleteProjection(preparedPackage is null ? "failed" : "succeeded");
+            return new DevPreparationResult(preparedPackage, errors);
+        }
+        catch (OperationCanceledException)
+        {
+            packageTrace?.CompleteProjection("canceled");
+            throw;
+        }
+        catch
+        {
+            packageTrace?.CompleteProjection("failed");
+            throw;
+        }
+    }
+
+    private sealed record DevPreparationResult(
+        PreparedRuntimePackage? PreparedPackage,
+        IReadOnlyList<string> Errors);
 }

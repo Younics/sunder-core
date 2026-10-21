@@ -57,6 +57,21 @@ sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker
 Normal generation/build/dev/pack is offline. It never chooses a Registry, refreshes
 dependencies, accepts API drift, freezes a release or rewrites tracked locks.
 
+### Development watch
+
+`dev --watch` coalesces saves and publishes a complete canonical dev tree only after
+the affected builds and RPC source validation succeed. React/TS/JS UI-only edits
+reuse the built Worker and its validated RPC snapshot. Worker-only edits reuse web
+assets when their inputs and consumed generated APIs are unchanged. Shared inputs,
+package/configuration changes and reviewed contract changes invalidate both roles;
+unknown inputs are handled conservatively.
+
+Syntax/build errors keep watch running and retain the last successful dev output.
+Fixing the source retries all pending edits, including edits made during a failed
+or superseded build. Generated `.sunder` and configured output directories are
+excluded from source feedback. Web assets remain staged Vite builds for the Host's
+embedded UI; watch does not start a Vite development server.
+
 ## Generated package APIs and ordinary tooling
 
 `#sunder/api` contains `Self`, selected-package tokens, generated `Errors`, imported
@@ -72,15 +87,27 @@ This is declaration-owned source policy, not permission inferred from public
 descriptors, types or call sites. Receipts and source-verified Pack carry that policy
 outside descriptor/ABI identity; Runtime broker use remains explicit.
 
-`Self` service properties follow source definition keys. A selected package with
-multiple public contracts scopes services under each full contract ID rendered in
-camel case, e.g. `context.api(Dependency).exampleDependencyFirst.messages.send({})`.
-A single-contract selection retains direct `.messages.send(request)` access. Same
+`Self` service properties follow source definition keys. Every selected package
+scopes services under each full contract ID, even with one public contract, e.g.
+`context.api(Dependency).example_Dependency_First.messages.send({})`. Scopes retain
+the canonical contract symbol's underscore separators and lower its initial letter
+(`example.messages` becomes `example_Messages`); a leading digit is escaped with `_`.
+`Services.Dependency.example_Dependency_First.messages` has the same scope, while
+the canonical token path is `Services.Contracts.CExample_Dependency_First.messages`.
+`Services.Self` retains the owned source keys. Same
 service names in different contracts are valid; normalized collisions within one
 scope fail explicitly. Imported signatures use descriptor request/result values,
 not reconstructed producer-language arguments. Runtime JS and `.d.ts` share this
 projection, and a local projection change retires the prior token generation
 without changing descriptor or ABI hashes.
+
+Imported provider handlers always use `camel(serviceId) + pascal(methodId)`:
+`messagesSend` implements `messages/send` with either one or several services.
+Normalized collisions in that contract's handler scope fail explicitly. Owned and
+local-declaration implementation methods keep their source spelling and arguments.
+Typed Runtime-use evidence names the canonical C# service projection as
+`Sunder.Generated.Packages.<Authority>_Services.<ContractSymbol>.<NaturalInterfaceName>`,
+including the contract scope independently of the selected package's size.
 
 Each token also exports a **type-only** models namespace. A named `Item` used by
 several owned services appears once as `SelfModels.Item`; selected package models
@@ -109,11 +136,9 @@ Package selections pin the sidecar's byte count and SHA-256 independently of the
 public inventory. Canonical CLI inspection exports it beside `inspection.json`
 and descriptor files (at most 130 files). Explicit online authoring selection and
 restore inspect the bounded canonical candidate; normal builds consume validated
-cache evidence offline. Old selections without projection pins require explicit
-reselection with the coordinated toolset (`api update`, using an explicit local
-candidate or the already pinned Registry). Only that explicit selection operation
-can read the old selection intent; its proposed lock must contain all required
-pins. Missing metadata never falls back to descriptor-derived model names.
+cache evidence offline. Every selection, including the input to `api update`, must
+contain complete projection pins. Missing metadata is rejected; restore the current
+reviewed lock. It never falls back to descriptor-derived model names.
 
 The immutable sidecar cache is
 `<contractCacheRoot>/model-projections/sha256/<sha>.json`, with adjacent
@@ -147,8 +172,8 @@ contract IDs, versions and hashes come from the validated import closure.
 Provider-only recursive reference closure stays inside each pinned artifact's
 public package-authority inventory and creates no uses or package API facade.
 Explicit Runtime intent then supplies the exact ordinary `usesContracts` subset.
-Missing discovery still fails, including an Update that is reseeding old missing
-projection pins. App receives neither the intent nor its grants.
+Missing discovery still fails during Update, including unchanged artifact selections.
+App receives neither the intent nor its grants.
 
 Optional generated export/receipt `roleUses` records are ordered by contract and
 service, use the shared nine-field evidence shape, and participate in source
@@ -211,18 +236,19 @@ switching configuration. New public prerelease allocation remains unsupported.
 Accept recompiles at allocated identities and commits only the baseline; the existing
 generation publisher owns outputs. Freeze does not manufacture publication evidence.
 
-Legacy private records require an explicit, lossless migration:
+Accept records the current source projection alongside descriptor/ABI identity.
+Model names, service-reference policy, method policy and exported source shapes
+participate in public version classification independently of wire compatibility.
+Missing historical projection evidence is unknown, not unchanged: restore the
+reviewed baseline or explicitly accept a new Major tuple. Current source cannot
+backfill an existing frozen or published tuple. Already-qualified projection reviews
+retain their original record meaning and exact bytes.
 
-```sh
-sunder-package contracts migrate-private [key] --project .
-```
-
-Eligible complete records move to `retiredPrivateContracts` under their original
-keys. Draft, release and publication history remains immutable archive evidence.
-Any public current/history or matching current public source stays in public review.
-Existing archived records cannot be overwritten, merged or enriched. Active plus
-archived entries share the 128-entry/32,896-snapshot bound and existing byte/depth/
-structural limits. Normal builds do not migrate.
+Active private-only baseline records are unsupported; private contracts use the
+package version. Any public current/history remains governed by public review.
+Retained `retiredPrivateContracts` is inert archive evidence: it cannot be extended,
+removed, overwritten or enriched. Active plus archived entries share the
+128-entry/32,896-snapshot bound and existing byte/depth/structural limits.
 
 After publication, `contracts publication import --project . --package <archive>
 --registry <origin>` verifies the retained archive and exact Registry publication.
@@ -263,17 +289,10 @@ coalesced independently within each role. App policy never supplies Worker grant
 authority dependencies supply no consumer grants. An App-only selection in a
 canonical package with no App fails instead of granting Runtime access.
 
-Final readers, including Restore, reject legacy missing role intent. Migrate explicitly:
-
-```sh
-sunder-package api migrate-consumer-roles --project .
-sunder-package api migrate-consumer-roles example.weather --consumer-roles app,runtime --project .
-```
-
-Omitted review preserves Runtime-only intent. Retained conflicting roles or
-unrepresentable narrowed actions fail rather than widening. Migration reports old/new
-sets, refreshes no artifact/authority, and atomically writes only the lock. No-op
-preserves bytes/mtime. The proposal and source/evidence are rechecked under the lease.
+All readers, including Restore and Update, require explicit valid role intent.
+Missing or malformed roles fail rather than implying Runtime access or widening
+grants. Selection commands atomically write only the reviewed lock; no-op preserves
+bytes/mtime. The proposal and source/evidence are rechecked under the lease.
 
 ## Extension and platform providers
 

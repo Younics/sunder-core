@@ -159,17 +159,84 @@ public sealed partial class RuntimeManagementClient
     public async Task<RuntimeRpcAppInvokeResponse> InvokeAppRpcAsync(
         RuntimeRpcAppInvokeRequest request,
         CancellationToken token = default)
+        => (await InvokeAppRpcWithDispatchMetadataAsync(request, token).ConfigureAwait(false)).Response;
+
+    // Presence belongs to this HTTP Invoke response, never to the neutral DTO's
+    // constructor defaults, equality, serialization or auxiliary RPC reads.
+    internal async Task<(RuntimeRpcAppInvokeResponse Response, bool HasExplicitValidDispatchMetadata)> InvokeAppRpcWithDispatchMetadataAsync(
+        RuntimeRpcAppInvokeRequest request,
+        CancellationToken token = default)
     {
         using var message = CreateRpcRequest("rpc/app/invoke", request);
         using var httpResponse = await _transport.SendAsync(message, cancellationToken: token).ConfigureAwait(false);
-        var result = await _responses.ReadRequiredJsonAsync<RuntimeRpcAppInvokeResponse>(httpResponse, token)
+        var payload = await _responses.ReadRequiredJsonAsync<JsonElement>(httpResponse, token)
             .ConfigureAwait(false);
+        var result = payload.Deserialize<RuntimeRpcAppInvokeResponse>(_transport.ResourceLimits.CreateJsonOptions())
+            // A JSON null is not a required response. Retain the HTTP status and
+            // correlation in its rejection without a second response-body read.
+            ?? throw new RuntimeClientException(httpResponse.StatusCode,
+                $"Runtime request failed with HTTP {(int)httpResponse.StatusCode}",
+                detail: null, errorCode: null,
+                correlationId: httpResponse.Headers.TryGetValues("X-Correlation-ID", out var values) ? values.FirstOrDefault() : null,
+                innerException: null);
         if (result.Value is { } value)
         {
             _transport.ResourceLimits.EnsureRpcValue(value, "Runtime RPC result value");
         }
         EnsureRpcErrorDetails(result.Error, "Runtime RPC invocation error details");
-        return result;
+        return (result, HasExplicitValidAppInvokeDispatchMetadata(payload, result));
+    }
+
+    private static bool HasExplicitValidAppInvokeDispatchMetadata(JsonElement payload, RuntimeRpcAppInvokeResponse response)
+    {
+        if (payload.ValueKind != JsonValueKind.Object || response.Error is not { } error || response.Value is not null) return false;
+
+        var errors = 0;
+        var values = 0;
+        JsonElement rawError = default;
+        foreach (var property in payload.EnumerateObject())
+        {
+            // The existing Web JSON reader is case-insensitive. Mixed-case
+            // aliases must count as duplicates too, not bypass presence checks.
+            if (property.Name.Equals("error", StringComparison.OrdinalIgnoreCase))
+            {
+                errors++;
+                rawError = property.Value;
+            }
+            else if (property.Name.Equals("value", StringComparison.OrdinalIgnoreCase))
+            {
+                values++;
+                if (property.Value.ValueKind != JsonValueKind.Null) return false;
+            }
+        }
+        if (errors != 1 || values > 1 || rawError.ValueKind != JsonValueKind.Object) return false;
+
+        var kinds = 0;
+        var codes = 0;
+        var dispatchStates = 0;
+        var retrySafeties = 0;
+        JsonElement kind = default;
+        JsonElement code = default;
+        JsonElement dispatch = default;
+        JsonElement retry = default;
+        foreach (var property in rawError.EnumerateObject())
+        {
+            if (property.Name.Equals("kind", StringComparison.OrdinalIgnoreCase)) { kinds++; kind = property.Value; }
+            else if (property.Name.Equals("code", StringComparison.OrdinalIgnoreCase)) { codes++; code = property.Value; }
+            else if (property.Name.Equals("dispatchState", StringComparison.OrdinalIgnoreCase)) { dispatchStates++; dispatch = property.Value; }
+            else if (property.Name.Equals("retrySafety", StringComparison.OrdinalIgnoreCase)) { retrySafeties++; retry = property.Value; }
+        }
+
+        // Do not tighten ordinary typed deserialization: omitted defaults,
+        // duplicate last-wins values and undefined enum values retain their old
+        // DTO behavior. They simply cannot authenticate an App operation.
+        return kinds == 1 && codes == 1 && dispatchStates == 1 && retrySafeties == 1
+            && kind.ValueKind == JsonValueKind.Number && kind.TryGetInt32(out var kindValue)
+            && dispatch.ValueKind == JsonValueKind.Number && dispatch.TryGetInt32(out var dispatchValue)
+            && retry.ValueKind == JsonValueKind.Number && retry.TryGetInt32(out var retryValue)
+            && Enum.IsDefined(error.Kind) && Enum.IsDefined(error.DispatchState) && Enum.IsDefined(error.RetrySafety)
+            && kindValue == (int)error.Kind && dispatchValue == (int)error.DispatchState && retryValue == (int)error.RetrySafety
+            && code.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(code.GetString()) && code.GetString() == error.Code;
     }
 
     public IAsyncEnumerable<RuntimeRpcAppCatalogFrame> WatchAppRpcAsync(

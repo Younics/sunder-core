@@ -78,6 +78,9 @@ internal static class GeneratedPackageNames
     internal static string ServiceInterface(string packageId, string serviceId)
         => Services(packageId) + "." + NaturalInterfaceName(serviceId);
 
+    internal static string ImportedServiceInterface(string packageId, string contractId, string serviceId)
+        => Services(packageId) + "." + ContractSymbol(contractId) + "." + NaturalInterfaceName(serviceId);
+
     internal static bool TryResolvePackageId(Compilation compilation, INamedTypeSymbol packageAttribute,
         string? supplied, out string packageId, out string? error)
     {

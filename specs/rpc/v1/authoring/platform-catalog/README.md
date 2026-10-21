@@ -107,8 +107,7 @@ and the [Registry read/publication contract](../../../../../docs/REGISTRY-PLATFO
 
 ## Scope
 
-This catalog model replaces the former catalog-specific Ed25519/trust-generation
-design. It does not change shared execution-runtime artifact signing or OS application
-signing. Package source/behavior migration, deployed Registry publication, supported-RID
-acceptance and performance qualification retain their separate implementation/release
-checkpoints.
+Registry establishes platform-catalog authority without separate catalog signatures.
+Execution runtimes use Host-verified official vendor downloads; OS application signing
+is a separate release boundary. Deployed publication, native and performance acceptance
+retain their owning release gates.

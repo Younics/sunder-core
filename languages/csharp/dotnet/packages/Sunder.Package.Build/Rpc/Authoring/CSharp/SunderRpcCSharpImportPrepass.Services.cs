@@ -57,22 +57,21 @@ internal static partial class SunderRpcCSharpImportPrepass
         var declarations = new StringBuilder(); var implementations = new StringBuilder();
         var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "IPackageApi", "PackageServices", "Dispose", "DisposeAsync" };
         var scopes = new SortedDictionary<string, (StringBuilder Properties, StringBuilder Creation)>(StringComparer.Ordinal);
-        var nested = selected.Count > 1;
         foreach (var contract in selected)
         {
             // Keep the canonical dot boundaries. Unlike concatenating Pascal
             // tokens this is injective, including numeric contract segments.
-            var scope = nested ? ContractName(contract.Descriptor.ContractId)[1..] : "";
-            if (scope.Length != 0 && char.IsAsciiDigit(scope[0])) scope = "_" + scope;
-            if (nested) scopes.Add(scope, (new(), new()));
+            var scope = ContractName(contract.Descriptor.ContractId)[1..];
+            if (char.IsAsciiDigit(scope[0])) scope = "_" + scope;
+            scopes.Add(scope, (new(), new()));
             var members = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var service in contract.NaturalServices)
             {
                 var member = SunderRpcCSharpSyntax.Identifier(service.ServiceId);
-                if (!(nested ? members : names).Add(member)) throw new InvalidDataException("rpc-authoring.generated-name-collision: Imported service member names collide.");
-                (nested ? scopes[scope].Properties : properties).Append("    public global::").Append(service.InterfaceMetadataName)
+                if (!members.Add(member)) throw new InvalidDataException("rpc-authoring.generated-name-collision: Imported service member names collide.");
+                scopes[scope].Properties.Append("    public global::").Append(service.InterfaceMetadataName)
                     .Append(' ').Append(member).AppendLine(" { get; }");
-                (nested ? scopes[scope].Creation : creation).Append("        ").Append(member).Append(" = Own(new global::")
+                scopes[scope].Creation.Append("        ").Append(member).Append(" = Own(new global::")
                     .Append(service.ClientMetadataName).Append("(rpc, ").Append(reviewedSelection).AppendLine(", services), clients);");
             }
         }

@@ -18,8 +18,8 @@ The exact-version V1 read handoff is:
   200 on success, 400 invalid input, 403 unauthorized owner/credential, 404 absent release,
   or 409 mismatched immutable content. Publish and interactive CLI tokens cannot call it.
 
-Reads are anonymous, exact stable semantic versions only, with 404 for absent versions
-and the shared Registry availability errors for uninitialized or inconsistent state.
+Reads are anonymous, exact stable semantic versions only, with 404 for absent versions,
+including on a ready empty Registry. Other failures use the shared Registry operation-error contract.
 The download URL is constructed from the configured Registry origin. A download is
 immutable content evidence. The user explicitly trusts the selected Registry for
 publication authority; clients verify its complete canonical descriptors, exact
@@ -28,8 +28,8 @@ or trust-generation fields and grants no runtime use actions.
 
 Only the configured administrator's non-HTTP import command can introduce a Core catalog.
 It accepts the Core-generated catalog and stores the
-entire release/authority/inventory atomically after immutable artifact and dual-journal
-readbacks. Exact same-release/same-catalog retry is idempotent; different bytes for an
+entire release/authority/inventory in an atomic database transaction after immutable artifact
+validation. Exact same-release/same-catalog retry is idempotent; different bytes for an
 existing release are rejected. Public package authorities cannot claim platform families,
 including the baseline-reserved `sunder.stack.contributor`. The actual frozen Stack
 contract remains version `2.0.0`; importing a catalog does not renumber it.
@@ -37,11 +37,10 @@ contract remains version `2.0.0`; importing a catalog does not renumber it.
 Revocation is terminal. Metadata reports `lifecycleState=Revoked` and the original
 `revokedAtUtc`; exact retries preserve that result. Original catalog bytes and descriptors
 remain immutable and readable for evidence. Revocation changes package policy, so older
-selection evidence becomes stale. Initialized readiness remains available to communicate
-revocation and allow replacement releases; a new bootstrap cannot choose a revoked catalog.
+selection evidence becomes stale. Registry readiness remains available to communicate
+revocation and allow replacement releases; a new selection cannot choose a revoked catalog.
 
-Recovery verifies catalog content, original administrator authorization, compatibility
-history and immutable checkpoint linkage. Historical verification never grants new
-admission. The administrator's non-HTTP
-first-party bootstrap command uses this import and atomically initializes the fixed
-package/contract inventory; public readiness requires that complete verified state.
+Catalog admission verifies content, administrator authorization, compatibility history
+and committed database policy records. Historical verification never grants new admission.
+An absent catalog does not block service readiness; operations needing that exact release
+must wait for its authorized import and enforce its current lifecycle state.

@@ -53,21 +53,17 @@ const rootScanFiles = [
 ];
 
 const ignoredGeneratedFiles = new Set([
-  // This checked candidate is byte-validated by its generator and is intentionally
-  // regenerated only after the coordinated source review.
+  // Protected migration captures are inert history, never regenerated or joined
+  // to current runtime/build checks. Current candidates are scanned normally.
   "eng/compatibility/core-compatibility-candidate.json",
+  "eng/compatibility/stack-contributor-rpc-migration-baseline.json",
+  "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/StackContributorRpcMigrationBaselineTests.cs",
 ]);
 
 const scannerFiles = new Set([
   "scripts/compatibility/check-v1-residue.mjs",
   "scripts/test-oracles/v1-residue.test.mjs",
 ]);
-
-const expectedPendingCutovers = [
-  "implementation-first-csharp-and-node-rpc-authoring",
-  "protocol-project-package-and-authored-descriptor-retirement",
-  "source-derived-signed-platform-contract-catalog",
-];
 
 const residueRules = [
   { id: "manifest-v3-v4", pattern: /manifestVersion\\?["']?\s*[:=]\s*\\?["']?[34]\b/u },
@@ -117,7 +113,7 @@ const exactFiles = new Map([
   ["docs/package-development/BUILD-PUBLISH-VERSIONING.md", [/complete self-contained publish closure/u]],
   ["docs/package-development/GETTING-STARTED.md", [/self-contained Worker leaves/u]],
   ["docs/package-development/PACKAGE-ANATOMY.md", [/complete self-contained executable closure/u]],
-  [".github/workflows/sunder-node-ci.yml", [
+  [".github/workflows/sunder-ci.yml", [
     ...activeNodeProfilePatterns,
     /NODE_SEA_BLOB/u,
     /postject/u,
@@ -211,14 +207,6 @@ export async function findV1Residue(repositoryRoot = scriptRoot) {
     }
   }
 
-  const candidatePath = resolve(repositoryRoot, "eng/compatibility/core-compatibility-candidate.json");
-  if (await exists(candidatePath)) {
-    const candidate = JSON.parse(await readFile(candidatePath, "utf8"));
-    if (!Array.isArray(candidate?.decisions?.pendingCutovers)
-        || JSON.stringify(candidate.decisions.pendingCutovers) !== JSON.stringify(expectedPendingCutovers)) {
-      failures.push("eng/compatibility/core-compatibility-candidate.json: pending cutovers differ from the Phase 0 implementation-first inventory");
-    }
-  }
   return failures.sort();
 }
 

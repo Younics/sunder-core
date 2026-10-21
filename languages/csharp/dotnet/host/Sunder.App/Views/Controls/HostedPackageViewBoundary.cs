@@ -69,6 +69,7 @@ internal sealed class HostedPackageViewBoundary : Panel,
     internal string PackageId => _packageId;
 
     internal string ViewId => _viewId;
+    internal Guid? ActivationOwnerId { get; init; }
 
     public bool IsFaulted => _faulted;
 

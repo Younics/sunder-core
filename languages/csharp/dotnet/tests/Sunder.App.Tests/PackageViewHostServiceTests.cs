@@ -18,7 +18,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class PackageViewHostServiceTests
+public sealed partial class PackageViewHostServiceTests
 {
     [Fact]
     public async Task MissingProcessPermitDoesNotLoadAPackageAssembly()

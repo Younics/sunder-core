@@ -135,7 +135,7 @@ internal interface IExecutionRuntimeProcessLease : IAsyncDisposable
     Task ReleaseAfterProcessTreeTerminationAsync(CancellationToken cancellationToken = default);
 }
 
-internal sealed class ExecutionRuntimeLeaseRegistry
+internal sealed partial class ExecutionRuntimeLeaseRegistry
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> StoreFences = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -152,7 +152,8 @@ internal sealed class ExecutionRuntimeLeaseRegistry
         TimeProvider timeProvider,
         IExecutionRuntimeProcessController? processes = null,
         IExecutionRuntimeProcessContainmentController? containment = null,
-        ExecutionRuntimePhaseTelemetry? telemetry = null)
+        ExecutionRuntimePhaseTelemetry? telemetry = null,
+        IExecutionRuntimeObservationDocuments? observationDocuments = null)
     {
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _hostInstanceId = hostInstanceId != Guid.Empty
@@ -162,6 +163,7 @@ internal sealed class ExecutionRuntimeLeaseRegistry
         _processes = processes ?? new SystemExecutionRuntimeProcessController();
         _containment = containment ?? new SystemExecutionRuntimeProcessContainmentController(_processes);
         _telemetry = telemetry ?? ExecutionRuntimePhaseTelemetry.Disabled;
+        _observationDocuments = observationDocuments ?? new DurableExecutionRuntimeObservationDocuments();
     }
 
     public Guid HostInstanceId => _hostInstanceId;
@@ -283,6 +285,7 @@ internal sealed class ExecutionRuntimeLeaseRegistry
             }
             if (!lease.HasContainment)
             {
+                RequireUnobservedReservationUnderFence(lease.LeaseId);
                 DurableJsonDocument.Delete(path);
                 DeletePayloadReportsUnderFence(lease.LeaseId);
                 continue;
@@ -312,6 +315,7 @@ internal sealed class ExecutionRuntimeLeaseRegistry
                         $"Worker containment for execution-runtime lease '{lease.LeaseId}' no longer matches its durable identity.");
                 }
 
+                await RecordObservedCleanupUnderFenceAsync(lease, cancellationToken).ConfigureAwait(false);
                 DurableJsonDocument.Delete(path);
                 DeletePayloadReportsUnderFence(lease.LeaseId);
                 continue;
@@ -617,6 +621,7 @@ internal sealed class ExecutionRuntimeLeaseRegistry
         {
             throw new IOException("Failed execution-runtime process containment could not be proven empty.");
         }
+        await RecordObservedCleanupUnderFenceAsync(current, CancellationToken.None).ConfigureAwait(false);
         DurableJsonDocument.Delete(path);
         DeletePayloadReportsUnderFence(reservation.LeaseId);
     }
@@ -642,6 +647,7 @@ internal sealed class ExecutionRuntimeLeaseRegistry
             throw new InvalidOperationException(
                 "A contained execution-runtime lease cannot be released without process-tree termination proof.");
         }
+        RequireUnobservedReservationUnderFence(current.LeaseId);
         DurableJsonDocument.Delete(path);
     }
 
@@ -680,6 +686,7 @@ internal sealed class ExecutionRuntimeLeaseRegistry
                     $"Worker containment for lease '{current.LeaseId}' still exists with an unexpected identity.");
             }
         }
+        await RecordObservedCleanupUnderFenceAsync(current, cancellationToken).ConfigureAwait(false);
         DurableJsonDocument.Delete(path);
         DeletePayloadReportsUnderFence(reservation.LeaseId);
     }

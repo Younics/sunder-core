@@ -1,12 +1,141 @@
 namespace Sunder.App.Services;
 
-internal sealed class AppPackageGenerationPublication
+internal sealed partial class AppPackageGenerationPublication
 {
     private readonly object _syncRoot = new();
     private readonly List<Action> _bufferedActions = [];
     private readonly AsyncLocal<RuntimePreparationAuthority?> _runtimePreparation = new();
     private readonly CancellationTokenSource _revocation = new();
     private PublicationState _state;
+    private int _dataMutations;
+    private int _dataHandoffs;
+    private TaskCompletionSource? _dataDrained;
+    private bool _dataSettlementFailed;
+
+    internal async Task RunDataMutationAsync(Func<Task> mutation, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_syncRoot)
+        {
+            if (_state != PublicationState.Published || _dataHandoffs != 0 && _stateUpdateAuthority.Value is not { IsActive: true })
+                throw new InvalidOperationException("Package data mutation requires an active App activation outside a state handoff.");
+            if (_dataMutations++ == 0) _dataDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        try { await mutation().ConfigureAwait(false); }
+        catch
+        {
+            // A failed/canceled transport is not proof that the Runtime never
+            // committed the write. Do not let replacement state race that write.
+            lock (_syncRoot) _dataSettlementFailed = true;
+            throw;
+        }
+        finally
+        {
+            TaskCompletionSource? drained = null;
+            lock (_syncRoot)
+            {
+                if (--_dataMutations == 0) { drained = _dataDrained; _dataDrained = null; }
+            }
+            drained?.TrySetResult();
+        }
+    }
+
+    // Closing admission and taking the drain snapshot are one atomic operation.
+    // An aborted candidate releases only this fence; it never republishes an
+    // independently revoked activation or grants disposal-time mutation rights.
+    internal DataHandoff BeginDataHandoff()
+    {
+        StateUpdate[] updates;
+        DataHandoff handoff;
+        lock (_syncRoot)
+        {
+            _dataHandoffs++;
+            updates = _activeStateUpdates.ToArray();
+            handoff = new(this, WaitForDataSettlementAsync(_stateUpdatesDrained?.Task ?? Task.CompletedTask));
+        }
+        // CancelAsync does not invoke package callbacks inline or under the admission lock.
+        foreach (var update in updates) update.RequestSettlement();
+        return handoff;
+    }
+
+    // Resource drain and successful persistence are different facts. Retirement
+    // must still dispose the provider after an acknowledged local request failure.
+    // The false result must not acknowledge state settlement to a replacement.
+    internal async Task<bool> CompleteDataMutationsAsync()
+    {
+        Task updates;
+        lock (_syncRoot) updates = _stateUpdatesDrained?.Task ?? Task.CompletedTask;
+        await WaitForLocalDataCompletionAsync(updates).ConfigureAwait(false);
+        lock (_syncRoot) return !_dataSettlementFailed && _latestStateUpdates.Values.All(update => update.Completion.Task.IsCompletedSuccessfully);
+    }
+
+    internal async Task<bool> SettleAndRevokeAsync()
+    {
+        using var handoff = BeginDataHandoff();
+        try
+        {
+            await handoff.Drained.WaitAsync(AppShutdownBudgets.GenerationRetirement).ConfigureAwait(false);
+            handoff.Commit();
+            return true;
+        }
+        catch (Exception error) when (AppPackageUiFaultPolicy.IsRecoverable(error))
+        {
+            AppSessionLog.WriteError("Accepted App state work did not confirm settlement before retirement.", error);
+            if (!handoff.Drained.IsCompleted)
+                AppCleanupQuarantine.Retain(handoff.Drained, "settling accepted App state work before retirement");
+            return false;
+        }
+        finally { Revoke(); }
+    }
+
+    private async Task WaitForDataSettlementAsync(Task updates)
+    {
+        await WaitForLocalDataCompletionAsync(updates).ConfigureAwait(false);
+        lock (_syncRoot)
+            if (_dataSettlementFailed || _latestStateUpdates.Values.Any(update => !update.Completion.Task.IsCompletedSuccessfully))
+                throw DataSettlementFailure();
+    }
+
+    private async Task WaitForLocalDataCompletionAsync(Task updates)
+    {
+        // Accepted callbacks can issue storage mutations while normal admission is
+        // closed. Take the storage-drain snapshot only after their authority ends.
+        await updates.ConfigureAwait(false);
+        Task drain;
+        lock (_syncRoot) drain = _dataDrained?.Task ?? Task.CompletedTask;
+        await drain.ConfigureAwait(false);
+    }
+
+    private static InvalidOperationException DataSettlementFailure()
+        => new("An App package data mutation has no successful settlement acknowledgement; replacement or retirement cannot be proven.");
+
+    internal sealed class DataHandoff(AppPackageGenerationPublication owner, Task drained) : IDisposable
+    {
+        private AppPackageGenerationPublication? _owner = owner;
+        internal Task Drained { get; } = drained;
+        internal void Commit()
+        {
+            if (!Drained.IsCompletedSuccessfully)
+                throw new InvalidOperationException("An App data handoff cannot commit without successful write settlement.");
+            var current = Interlocked.Exchange(ref _owner, null)
+                ?? throw new InvalidOperationException("The App data handoff has already been released.");
+            // Older queued presentations may still own resource references. Those
+            // references must not keep this exact predecessor's authority alive.
+            try { current.Revoke(); }
+            finally { Release(current); }
+        }
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _owner, null) is not { } current) return;
+            Release(current);
+        }
+        private static void Release(AppPackageGenerationPublication current)
+        {
+            lock (current._syncRoot) current._dataHandoffs--;
+        }
+    }
+
+    internal CancellationToken RevocationToken => _revocation.Token;
 
     public bool IsPublished
     {

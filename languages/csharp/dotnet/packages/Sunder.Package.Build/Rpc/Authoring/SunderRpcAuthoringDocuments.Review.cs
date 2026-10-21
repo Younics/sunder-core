@@ -7,7 +7,11 @@ namespace Sunder.Package.Build.Rpc.Authoring;
 
 internal sealed record SunderRpcOwnedContractReviewEntry(
     string ContractId, string ExpectedCurrentVersion, string ExpectedCurrentDescriptorSha256, string ExpectedCurrentAbiSha256,
-    string NextVersion, string ExpectedNextDescriptorSha256, string ExpectedNextAbiSha256, bool AcknowledgeBreakingChange);
+    string NextVersion, string ExpectedNextDescriptorSha256, string ExpectedNextAbiSha256, bool AcknowledgeBreakingChange)
+{
+    internal string? ExpectedCurrentProjectionSha256 { get; init; }
+    internal string? ExpectedNextProjectionSha256 { get; init; }
+}
 
 internal sealed record SunderRpcOwnedContractReview(
     string PackageId, string PackageVersion, string BaselineSha256, string InputFingerprint, string LockSha256,
@@ -30,14 +34,24 @@ internal static partial class SunderRpcAuthoringDocuments
         foreach (var property in map)
         {
             if (!IsPortableKey(property.Name)) throw ReviewError("A review key must be an exact portable source contract key.");
-            string[] fields = ["contractId", "expectedCurrentVersion", "expectedCurrentDescriptorSha256", "expectedCurrentAbiSha256",
+            string[] required = ["contractId", "expectedCurrentVersion", "expectedCurrentDescriptorSha256", "expectedCurrentAbiSha256",
                 "nextVersion", "expectedNextDescriptorSha256", "expectedNextAbiSha256", "acknowledgeBreakingChange"];
-            RequireObject(property.Value, label + " entry", fields, fields, []);
+            string[] fields = ["contractId", "expectedCurrentVersion", "expectedCurrentDescriptorSha256", "expectedCurrentAbiSha256", "expectedCurrentProjectionSha256",
+                "nextVersion", "expectedNextDescriptorSha256", "expectedNextAbiSha256", "expectedNextProjectionSha256", "acknowledgeBreakingChange"];
+            RequireObject(property.Value, label + " entry", fields, required, ["expectedCurrentProjectionSha256", "expectedNextProjectionSha256"]);
+            var currentProjection = property.Value.TryGetProperty("expectedCurrentProjectionSha256", out var current)
+                ? current.ValueKind == JsonValueKind.String && current.GetString() == "unreviewed" ? "unreviewed"
+                    : RequireSha256(property.Value, "expectedCurrentProjectionSha256", label) : null;
+            var nextProjection = property.Value.TryGetProperty("expectedNextProjectionSha256", out _)
+                ? RequireSha256(property.Value, "expectedNextProjectionSha256", label) : null;
             entries.Add(property.Name, new(RequirePackageId(property.Value, "contractId", label),
                 RequireSemanticVersion(property.Value, "expectedCurrentVersion", label), RequireSha256(property.Value, "expectedCurrentDescriptorSha256", label),
                 RequireSha256(property.Value, "expectedCurrentAbiSha256", label), RequireSemanticVersion(property.Value, "nextVersion", label),
                 RequireSha256(property.Value, "expectedNextDescriptorSha256", label), RequireSha256(property.Value, "expectedNextAbiSha256", label),
-                RequireBoolean(property.Value, "acknowledgeBreakingChange", label)));
+                RequireBoolean(property.Value, "acknowledgeBreakingChange", label))
+            {
+                ExpectedCurrentProjectionSha256 = currentProjection, ExpectedNextProjectionSha256 = nextProjection,
+            });
         }
         return new(RequirePackageId(root, "packageId", label), RequireSemanticVersion(root, "packageVersion", label),
             RequireSha256(root, "baselineSha256", label), RequireSha256(root, "inputFingerprint", label), RequireSha256(root, "lockSha256", label),
@@ -57,16 +71,19 @@ internal static partial class SunderRpcAuthoringDocuments
             var nextVersion = SelectOwnedCandidateVersion(current, current, candidate, ClassifyOwnedChange(current, candidate), history);
             RequireStableOwnedTransition(key, current.Descriptor.Version, nextVersion);
             var next = OwnedDescriptorAtVersion(candidate.Descriptor, nextVersion);
-            ValidateOwnedCandidateHistory(key, next, Exposure(candidate.Exposure), history, preserveUnchangedPrerelease: false);
+            ValidateOwnedCandidateHistory(key, next, Exposure(candidate.Exposure), history, preserveUnchangedPrerelease: false,
+                CreateProjectionReview(next, candidate.ModelProjection, candidate.MethodPolicies));
             entries.Add(key, new JsonObject
             {
                 ["contractId"] = contract.ContractId,
                 ["expectedCurrentVersion"] = current.Descriptor.Version,
                 ["expectedCurrentDescriptorSha256"] = current.Descriptor.Sha256,
                 ["expectedCurrentAbiSha256"] = current.Descriptor.AbiSha256,
+                ["expectedCurrentProjectionSha256"] = current.ProjectionReview?.ReviewJson.GetProperty("projectionSha256").GetString() ?? "unreviewed",
                 ["nextVersion"] = nextVersion,
                 ["expectedNextDescriptorSha256"] = next.Sha256,
                 ["expectedNextAbiSha256"] = next.AbiSha256,
+                ["expectedNextProjectionSha256"] = LowerSha256(ReviewedProjectionBytes(candidate.ModelProjection, candidate.MethodPolicies)),
                 ["acknowledgeBreakingChange"] = false,
             });
         }
@@ -100,6 +117,9 @@ internal static partial class SunderRpcAuthoringDocuments
             if (entry.ContractId != contract.ContractId || entry.ExpectedCurrentVersion != current.Descriptor.Version
                 || entry.ExpectedCurrentDescriptorSha256 != current.Descriptor.Sha256 || entry.ExpectedCurrentAbiSha256 != current.Descriptor.AbiSha256)
                 throw ReviewError($"Review '{key}' does not match its exact current contract identity/version/descriptor/ABI.");
+            if (entry.ExpectedCurrentProjectionSha256 != (current.ProjectionReview?.ReviewJson.GetProperty("projectionSha256").GetString() ?? "unreviewed")
+                || entry.ExpectedNextProjectionSha256 != LowerSha256(ReviewedProjectionBytes(source[key].ModelProjection, source[key].MethodPolicies)))
+                throw ReviewError($"Review '{key}' does not bind the exact current/next exported source projection. Regenerate the review proposal; historical descriptor-only reviews remain evidence, not projection authorization.");
             var next = OwnedDescriptorAtVersion(source[key].Descriptor, entry.NextVersion);
             if (entry.ExpectedNextDescriptorSha256 != next.Sha256 || entry.ExpectedNextAbiSha256 != next.AbiSha256)
                 throw ReviewError($"Review '{key}' does not match the compiled next descriptor/ABI at its reviewed next version.");

@@ -203,7 +203,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 || descriptor.Version != use.ContractVersion || descriptor.Sha256 != use.DescriptorSha256 || descriptor.AbiSha256 != use.AbiSha256
                 || descriptor.Services.All(service => service.ServiceId != use.ServiceId) || bundle.ValueKind != JsonValueKind.Object
                 || bundle.GetProperty("authorityKind").GetString() != "package"
-                || use.ServiceType != Editor.GeneratedPackageNames.ServiceInterface(bundle.GetProperty("authorityId").GetString()!, use.ServiceId)
+                || use.ServiceType != Editor.GeneratedPackageNames.ImportedServiceInterface(bundle.GetProperty("authorityId").GetString()!, use.ContractId, use.ServiceId)
                 || !SameUsePolicy(use.Policy, ValidateUsePolicy(descriptor, use.Policy.Required, use.Policy.Actions, use.Role)))
                 throw new InvalidDataException("rpc-authoring.evidence-mismatch: Source role intent differs from its exact public imported service tuple.");
         }

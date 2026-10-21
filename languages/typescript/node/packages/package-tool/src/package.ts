@@ -73,6 +73,7 @@ import {
   assertReplaceableGeneratedFile,
   cleanupStagedOutputs,
   commitStagedOutputs,
+  markerPath,
   stageGeneratedDirectory,
   targetLeafDiscoveryKey,
   withOutputLocks,
@@ -118,8 +119,17 @@ interface DevWatchSession {
   readonly workerNoticePath: string;
   webRoot?: string;
   readonly buildContext: BuildContext;
-  superseded: boolean;
+  workerInputs: ReadonlySet<string>;
+  webInputs?: WebBuildInputs;
 }
+
+interface WebBuildInputs {
+  readonly files: Set<string>;
+  readonly configFiles: Set<string>;
+  readonly publicDirectories: Set<string>;
+}
+
+class SupersededWatchBuild extends Error {}
 
 export interface LeafBuildInput {
   readonly project: PreparedProject;
@@ -247,14 +257,34 @@ function devBuildOptions(project: PreparedProject, bundlePath: string): BuildOpt
 
 async function watchDevPackage(projectRoot: string, rid: SunderRid, options: RegistryOriginOptions): Promise<void> {
   let activeSession: DevWatchSession | undefined;
-  const producerWatchers = new Map<string, FSWatcher>();
+  const inputWatchers = new Map<string, FSWatcher>();
+  let watchedInputs = new Set<string>();
+  let producerInputs = new Set<string>();
+  const realProjectRoot = await realpath(projectRoot);
+  const inputIdentity = (path: string): string => {
+    const part = relative(projectRoot, path);
+    return pathIdentity(part === "" || isInside(projectRoot, path) ? resolve(realProjectRoot, part) : path);
+  };
   let operationTail = Promise.resolve();
   let operationTimer: NodeJS.Timeout | undefined;
-  let pendingRestart = false;
+  // Keep the entire dirty set until publication succeeds. A web edit following a
+  // failed Worker build must not publish the old Worker with just the new web UI.
+  const changedPaths = new Set<string>();
+  let forceRestart = true;
+  let revision = 0;
   let stopping = false;
   const knownOutputRoots = new Set<string>();
 
+  // Optional, bounded presentation diagnostics for Builder. Not an output,
+  // reload, job-outcome or process-cleanup receipt; normal CLI output is unchanged.
+  const progress = (state: "source-changed" | "building" | "ready" | "failed"): void => {
+    if (process.env.SUNDER_BUILDER_WATCH_PROGRESS === "1")
+      process.stdout.write(`sunder.package.watch:${JSON.stringify({ schemaVersion: 1, state })}\n`);
+  };
+
   const report = (error: unknown): void => {
+    if (error instanceof SupersededWatchBuild) return;
+    progress("failed");
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   };
   const enqueue = (operation: () => Promise<void>): Promise<void> => {
@@ -264,49 +294,47 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
   };
   const disposeSession = async (session: DevWatchSession | undefined): Promise<void> => {
     if (session === undefined) return;
-    session.superseded = true;
     try {
       await session.buildContext.dispose();
     } finally {
       await rm(session.workRoot, { recursive: true, force: true });
     }
   };
-  const buildSessionLocked = async (session: DevWatchSession, rebuildWeb: boolean): Promise<void> => {
-    if (session.superseded || activeSession !== session || stopping) return;
-    const result = await session.buildContext.rebuild();
-    await writeWorkerNotice(session.project, session.bundlePath, result.metafile);
-    if (session.superseded || activeSession !== session || stopping) return;
-    if (session.project.config.app !== undefined && (rebuildWeb || session.webRoot === undefined)) {
-      session.webRoot = resolve(session.workRoot, "web");
-      await buildWebAssetsLocked(session.project, session.webRoot);
+  const updateInputWatchers = (session: DevWatchSession): void => {
+    producerInputs = new Set(session.project.ownedRpc?.producerFiles.map(inputIdentity) ?? []);
+    watchedInputs = new Set([...producerInputs, ...session.workerInputs,
+      ...(session.webInputs?.files ?? []), ...(session.webInputs?.configFiles ?? [])]);
+    const directories = new Set([...watchedInputs].filter(path => !isInside(realProjectRoot, path)
+      || relative(realProjectRoot, path).split(sep).includes("node_modules")).map(dirname));
+    for (const [directory, watcher] of inputWatchers) if (!directories.has(directory)) {
+      watcher.close();
+      inputWatchers.delete(directory);
     }
-    if (session.superseded || activeSession !== session || stopping) return;
-    await emitDevTree(session.project, rid, session.bundlePath, session.workerNoticePath, session.webRoot);
-    process.stdout.write(`Sunder dev package: ${resolve(session.project.outputRoot, "sunder-dev")}\n`);
-  };
-  const rebuildSession = async (session: DevWatchSession): Promise<void> => {
-    await withRpcBindingsOutputLock(projectRoot, async () => {
-      if (session.superseded || activeSession !== session || stopping) return;
-      await generateRpcBindingsForLoadedProjectLocked(session.project);
-      await buildSessionLocked(session, true);
-    });
-  };
-  const createSessionLocked = async (project: PreparedProject): Promise<DevWatchSession> => {
-    const producerFiles = new Set(project.ownedRpc?.producerFiles.map(pathIdentity) ?? []);
-    for (const directory of new Set((project.ownedRpc?.producerFiles ?? []).map(dirname))) if (!producerWatchers.has(directory)) {
+    for (const directory of directories) if (!inputWatchers.has(directory)) {
       const watcher = watchFiles(directory, (_event, name) => {
-        if (name === null || producerFiles.has(pathIdentity(resolve(directory, name.toString())))) scheduleOperation(true);
+        const path = name === null ? undefined : inputIdentity(resolve(directory, name.toString()));
+        if (path === undefined || watchedInputs.has(path)) scheduleOperation(path !== undefined && !producerInputs.has(path) ? path : undefined);
       });
       watcher.on("error", report);
-      producerWatchers.set(directory, watcher);
+      inputWatchers.set(directory, watcher);
     }
+  };
+  const createSessionLocked = async (project: PreparedProject): Promise<DevWatchSession> => {
+    knownOutputRoots.add(inputIdentity(project.outputRoot));
     const workRoot = resolve(project.outputRoot, `.sunder-dev-work.stage-${randomUUID()}`);
     await rm(workRoot, { recursive: true, force: true });
     await mkdir(workRoot, { recursive: true });
     const bundlePath = resolve(workRoot, "worker.cjs");
     let buildContext: BuildContext;
     try {
-      buildContext = await context(devBuildOptions(project, bundlePath));
+      buildContext = await context({
+        ...devBuildOptions(project, bundlePath),
+        // This plugin replays immutable, captured input bytes. These private
+        // intermediates cannot activate a package: emitDevTree revalidates the
+        // complete source/identity snapshot immediately before publication.
+        // Avoid repeating that full scan at both ends of an intermediate bundle.
+        plugins: project.ownedRpc === undefined ? [] : [project.ownedRpc.runtime.plugin(async () => {})],
+      });
     } catch (error) {
       await rm(workRoot, { recursive: true, force: true });
       throw error;
@@ -317,107 +345,180 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
       bundlePath,
       workerNoticePath: `${bundlePath}.third-party-notices.txt`,
       buildContext,
-      superseded: false,
+      workerInputs: new Set(),
     };
-    knownOutputRoots.add(pathIdentity(project.outputRoot));
     return session;
   };
-  const restartSession = async (): Promise<void> => {
-    const previous = activeSession;
-    activeSession = undefined;
-    await disposeSession(previous);
-    if (stopping) return;
+  const affectedTargets = (session: DevWatchSession): { worker: boolean; web: boolean; restart: boolean } => {
+    const { project } = session;
+    const structuralPaths = new Set([
+      project.configPath, resolve(project.root, "sunder-contracts.lock.json"), resolve(project.root, "sunder-contracts.owned.json"),
+      ...(project.ownedRpc === undefined ? project.contracts.map(contract => contract.sourcePath) : []),
+      ...(project.config.rpcBindings ?? []).map(binding => resolveInside(project.root, binding.path, "RPC binding")),
+      ...Object.values(project.config.nativeAssets ?? {}).flatMap(assets => assets.map(asset => resolveInside(project.root, asset.sourcePath, "native asset source"))),
+    ].map(inputIdentity));
+    const affects = (paths: Iterable<string>, changed: string): boolean => [...paths].some(path => path === changed || isInside(changed, path));
+    let worker = forceRestart;
+    let web = forceRestart;
+    let restart = forceRestart;
+    for (const path of changedPaths) {
+      // Resolution/configuration and reviewed identity inputs are always fresh.
+      // Unknown files outside the App root may change negative import probes.
+      if (affects(structuralPaths, path) || /^(?:package(?:-lock)?\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|tsconfig(?:\..+)?\.json|jsconfig(?:\..+)?\.json|vite\.config\..+|\.env(?:\..+)?)$/u.test(basename(path))
+        || affects(session.webInputs?.configFiles ?? [], path)) {
+        worker = web = restart = true;
+        continue;
+      }
+      const workerInput = affects(session.workerInputs, path);
+      const webInput = affects(session.webInputs?.files ?? [], path)
+        || [...(session.webInputs?.publicDirectories ?? [])].some(directory => path === directory || isInside(directory, path));
+      if (workerInput || webInput) {
+        worker ||= workerInput;
+        web ||= webInput;
+      } else if (project.ownedRpc !== undefined && project.config.app !== undefined && inputIdentity(resolveAppRoot(project)) !== inputIdentity(project.root)
+        && isInside(inputIdentity(resolveAppRoot(project)), path)) web = true;
+      else worker = web = restart = true;
+    }
+    return { worker, web, restart };
+  };
+  const rebuildSession = async (): Promise<void> => {
+    if (stopping || !forceRestart && changedPaths.size === 0) return;
+    progress("building");
+    const buildRevision = revision;
+    const assertCurrent = (): void => {
+      if (stopping || revision !== buildRevision) throw new SupersededWatchBuild();
+    };
     await withRpcBindingsOutputLock(projectRoot, async () => {
-      const project = await prepareProject(projectRoot, options);
-      await generateRpcBindingsForLoadedProjectLocked(project);
-      const session = await createSessionLocked(project);
-      activeSession = session;
+      assertCurrent();
+      const previous = activeSession;
+      const targets = previous === undefined ? { worker: true, web: true, restart: true } : affectedTargets(previous);
+      let project = previous?.project;
+      if (targets.restart || targets.worker && project?.ownedRpc !== undefined) project = undefined;
+      if (project !== undefined) {
+        try {
+          // Reuse only an independently revalidated immutable RPC snapshot. This
+          // also catches shared type-only inputs missing from bundler graphs.
+          await generateRpcBindingsForLoadedProjectLocked(project);
+        } catch {
+          project = undefined;
+          targets.worker = true;
+        }
+      }
+      if (project === undefined) {
+        project = await prepareProject(projectRoot, options);
+        assertCurrent();
+        await generateRpcBindingsForLoadedProjectLocked(project);
+      }
+      assertCurrent();
+      if (previous?.webInputs !== undefined && previous.project !== project) {
+        const generatedRoot = inputIdentity(resolve(project.root, ".sunder/generated/rpc"));
+        for (const path of previous.webInputs.files) if (isInside(generatedRoot, path)) {
+          const name = relative(generatedRoot, path).replaceAll("\\", "/");
+          if (previous.project.ownedRpc?.files.get(name) !== project.ownedRpc?.files.get(name)) targets.web = true;
+        }
+      }
+      const session = previous?.project === project && !targets.restart ? previous : await createSessionLocked(project);
       try {
-        await buildSessionLocked(session, true);
+        if (session !== previous && !targets.web && previous?.webRoot !== undefined) {
+          session.webRoot = resolve(session.workRoot, "web");
+          await copyDirectory(previous.webRoot, session.webRoot);
+          await copyFile(markerPath(previous.webRoot), markerPath(session.webRoot));
+          session.webInputs = previous.webInputs;
+        }
+        if (targets.worker || session !== previous) {
+          const result = await session.buildContext.rebuild();
+          await writeWorkerNotice(project, session.bundlePath, result.metafile);
+          session.workerInputs = new Set(Object.keys(result.metafile!.inputs)
+            .filter(path => !isVirtualBundlerModuleId(path)).map(path => inputIdentity(resolve(project.root, path))));
+        }
+        assertCurrent();
+        if (project.config.app !== undefined && (targets.web || session.webRoot === undefined)) {
+          session.webRoot = resolve(session.workRoot, "web");
+          session.webInputs = await buildWebAssetsLocked(project, session.webRoot, assertCurrent);
+          for (const paths of [session.webInputs.files, session.webInputs.configFiles, session.webInputs.publicDirectories]) {
+            const normalized = [...paths].map(inputIdentity);
+            paths.clear();
+            for (const path of normalized) paths.add(path);
+          }
+        }
+        assertCurrent();
+        // Install subscriptions before the canonical tree becomes observable.
+        // On macOS adding FSEvents paths can restart the native stream; doing it
+        // after publication could lose an immediate edit by an output consumer.
+        updateInputWatchers(session);
+        await emitDevTree(project, rid, session.bundlePath, session.workerNoticePath, session.webRoot, assertCurrent);
+        activeSession = session;
+        if (revision === buildRevision) {
+          changedPaths.clear();
+          forceRestart = false;
+        }
+        if (previous !== session) await disposeSession(previous);
+        process.stdout.write(`Sunder dev package: ${resolve(project.outputRoot, "sunder-dev")}\n`);
+        progress("ready");
       } catch (error) {
-        activeSession = undefined;
-        await disposeSession(session);
+        if (session !== activeSession) await disposeSession(session);
         throw error;
       }
     });
   };
-  const scheduleOperation = (restart: boolean): void => {
+  const scheduleOperation = (path?: string): void => {
     if (stopping) return;
-    if (restart) {
-      pendingRestart = true;
-      if (activeSession !== undefined) activeSession.superseded = true;
-    }
+    progress("source-changed");
+    revision++;
+    if (path === undefined) forceRestart = true;
+    else changedPaths.add(path);
     if (operationTimer !== undefined) clearTimeout(operationTimer);
     operationTimer = setTimeout(() => {
       operationTimer = undefined;
-      const shouldRestart = pendingRestart;
-      pendingRestart = false;
-      void enqueue(async () => {
-        if (stopping) return;
-        const session = activeSession;
-        if (shouldRestart || session === undefined || session.superseded) await restartSession();
-        else await rebuildSession(session);
-      }).catch(() => undefined);
+      void enqueue(rebuildSession).catch(() => undefined);
     }, 100);
   };
 
   const projectWatcher: FSWatcher = watchFiles(projectRoot, { recursive: true }, (_event, fileName) => {
     if (fileName === null) {
-      scheduleOperation(true);
+      scheduleOperation();
       return;
     }
     const relativeName = fileName.toString().replaceAll("\\", "/");
     if (/sunder-contracts\.owned\.json\.sunder-output\.lock(?:\.|\/|$)/u.test(relativeName)) return;
+    // Vite falls back to an adjacent bundled config when no writable
+    // node_modules/.vite-temp is available (for example a raw Worker fixture).
+    if (/(?:^|\/)vite\.config\.[cm]?[jt]s\.timestamp-\d+-[a-f0-9]+\.mjs$/u.test(relativeName)) return;
     const segments = relativeName.split("/");
     if (segments.some((segment) => segment === "node_modules"
+      || segment === ".vite-temp"
       || segment === ".git"
       || segment === ".sunder"
       || segment.startsWith(".sunder-"))) return;
     const changedPath = resolve(projectRoot, relativeName);
-    const changedIdentity = pathIdentity(changedPath);
+    const changedIdentity = inputIdentity(changedPath);
     if ([...knownOutputRoots].some((root) => root === changedIdentity || isInside(root, changedIdentity))) return;
-    const session = activeSession;
-    if (session === undefined || session.superseded) {
-      scheduleOperation(true);
-      return;
-    }
-    const structuralPaths = new Set([
-      session.project.configPath,
-      ...session.project.contracts.map((contract) => contract.sourcePath),
-      ...(session.project.config.rpcBindings ?? []).map((binding, index) => (
-        resolveInside(session.project.root, binding.path, `rpcBindings[${index}].path`)
-      )),
-      ...Object.values(session.project.config.nativeAssets ?? {}).flatMap((assets) => (
-        assets.map((asset) => resolveInside(session.project.root, asset.sourcePath, "native asset source"))
-      )),
-    ].map(pathIdentity));
-    scheduleOperation(session.project.ownedRpc !== undefined || [...structuralPaths].some((path) => path === changedIdentity || isInside(changedIdentity, path)));
+    scheduleOperation(changedIdentity);
   });
   projectWatcher.on("error", report);
+  let stopped!: () => void;
+  const stopRequested = new Promise<void>(resolvePromise => { stopped = resolvePromise; });
+  const stop = (): void => {
+    if (stopping) return;
+    stopping = true;
+    if (operationTimer !== undefined) clearTimeout(operationTimer);
+    stopped();
+  };
+  // Keep these listeners installed through asynchronous cleanup. Vite's
+  // signal-exit handler re-raises a signal when no application listener remains.
+  process.on("SIGINT", stop);
+  process.on("SIGTERM", stop);
   try {
-    await enqueue(restartSession);
-    process.stdout.write("Watching package sources. Sunder will drain and restart the exact package activation after each canonical dev output change.\n");
-    await new Promise<void>((resolvePromise) => {
-      const stop = (): void => {
-        if (stopping) return;
-        stopping = true;
-        process.off("SIGINT", stop);
-        process.off("SIGTERM", stop);
-        if (operationTimer !== undefined) clearTimeout(operationTimer);
-        projectWatcher.close();
-        for (const watcher of producerWatchers.values()) watcher.close();
-        const session = activeSession;
-        activeSession = undefined;
-        void enqueue(() => disposeSession(session)).finally(resolvePromise);
-      };
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
-    });
+    await enqueue(rebuildSession).catch(() => undefined);
+    process.stdout.write("Watching package sources. Successful builds publish complete dev output; failed builds retain the last good output.\n");
+    await stopRequested;
   } finally {
     projectWatcher.close();
-    for (const watcher of producerWatchers.values()) watcher.close();
-    await disposeSession(activeSession);
+    for (const watcher of inputWatchers.values()) watcher.close();
     await operationTail;
+    await disposeSession(activeSession);
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
   }
 }
 
@@ -741,6 +842,7 @@ async function emitDevTree(
   bundlePath: string,
   workerNoticeSourcePath: string,
   webRoot?: string,
+  beforeCommit?: () => void,
 ): Promise<void> {
   const root = resolve(project.outputRoot, "sunder-dev");
   const obsoleteSidecarPath = `${root}.sunder-node-dev.json`;
@@ -781,6 +883,7 @@ async function emitDevTree(
     const stagedOutputs = [stagedDirectory.output, stagedDirectory.marker];
     try {
       await revalidateOwnedRpc(project);
+      beforeCommit?.();
       await commitStagedOutputs(stagedOutputs);
       await rm(obsoleteSidecarPath, { force: true });
     } finally {
@@ -942,7 +1045,11 @@ async function writeWorkerNotice(
   return noticePath;
 }
 
-async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string): Promise<void> {
+async function buildWebAssetsLocked(
+  project: PreparedProject,
+  outputRoot: string,
+  beforeCommit: () => void | Promise<void> = () => revalidateOwnedRpc(project),
+): Promise<WebBuildInputs> {
   const app = project.config.app;
   if (app === undefined) throw new Error("The package does not configure an App web target.");
   if (!isInside(project.outputRoot, outputRoot) && resolve(project.outputRoot) !== resolve(outputRoot)) {
@@ -950,6 +1057,7 @@ async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string
   }
   const appRoot = await realpath(resolveAppRoot(project));
   const { build: buildVite } = await import("vite");
+  const inputs: WebBuildInputs = { files: new Set(), configFiles: new Set(), publicDirectories: new Set() };
   await assertReplaceableGeneratedDirectory(outputRoot, true);
   const staged = await stageGeneratedDirectory(
     outputRoot,
@@ -959,7 +1067,15 @@ async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string
       const metadataPlugin: VitePlugin = {
         name: "sunder-bundled-dependency-metadata",
         enforce: "post",
+        configResolved(config) {
+          for (const path of config.configFileDependencies) inputs.configFiles.add(path);
+          if (config.configFile) inputs.configFiles.add(config.configFile);
+          if (config.publicDir) inputs.publicDirectories.add(config.publicDir);
+        },
         generateBundle(_options, bundle) {
+          // Vite 8's pinned Rolldown context exposes module IDs (including
+          // tree-shaken inputs), rather than Rollup's getWatchFiles API.
+          for (const path of this.getModuleIds()) if (!isVirtualBundlerModuleId(path)) inputs.files.add(path.split("?")[0]!);
           for (const output of Object.values(bundle)) {
             if (output.type === "chunk") {
               for (const [moduleId, metadata] of Object.entries(output.modules)) {
@@ -976,6 +1092,7 @@ async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string
         build: {
           outDir: stagingRoot,
           emptyOutDir: true,
+          watch: null,
         },
         logLevel: "info",
       });
@@ -987,11 +1104,12 @@ async function buildWebAssetsLocked(project: PreparedProject, outputRoot: string
   );
   const stagedOutputs = [staged.output, staged.marker];
   try {
-    await revalidateOwnedRpc(project);
+    await beforeCommit();
     await commitStagedOutputs(stagedOutputs);
   } finally {
     await cleanupStagedOutputs(stagedOutputs);
   }
+  return inputs;
 }
 
 function isVirtualBundlerModuleId(moduleId: string): boolean {

@@ -19,8 +19,11 @@ internal sealed class AppPackageUnloadCoordinator(
         AppPackageLoadContext? loadContext,
         IAsyncDisposable? targetLifetime = null,
         PackageProjectionAcquisition? projectionLease = null,
-        bool stopRuntimeWork = true)
+        bool stopRuntimeWork = true,
+        AppPackageLoadAdmission? loadAdmission = null)
     {
+        using var ownership = loadAdmission?.EnterCleanup();
+        using var cleanupAuthority = (targetLifetime as AppPackageManagedRpcClient)?.BeginCleanup();
         var cleanupProven = true;
         if (packageInfo is not null || targetLifetime is not null)
         {
@@ -53,15 +56,32 @@ internal sealed class AppPackageUnloadCoordinator(
                 loadContext,
                 targetLifetime,
                 projectionLease,
-                removeWholePackageTracking: packageInfo is not null || targetLifetime is not null));
+                removeWholePackageTracking: packageInfo is not null || targetLifetime is not null,
+                loadAdmission,
+                cleanupProven,
+                retireActivation: true));
         return ToCleanupOutcome(cleanupProven);
     }
 
-    public async Task<AppPackageUiCleanupOutcome> UnloadPackageAsync(
+    public Task<AppPackageUiCleanupOutcome> UnloadPackageAsync(
         string packageId,
         AppLoadedPackageHandle handle,
         bool useRetirementDeadline = true)
+        => UnloadPackageCoreAsync(packageId, handle, useRetirementDeadline, retireActivation: true);
+
+    // Composition owns the memoized, actual local drain and retries its separate
+    // Host acknowledgement. A caller timeout must not complete this drain early.
+    internal Task<AppPackageUiCleanupOutcome> DrainPackageAsync(string packageId, AppLoadedPackageHandle handle)
+        => UnloadPackageCoreAsync(packageId, handle, useRetirementDeadline: false, retireActivation: false);
+
+    private async Task<AppPackageUiCleanupOutcome> UnloadPackageCoreAsync(
+        string packageId,
+        AppLoadedPackageHandle handle,
+        bool useRetirementDeadline,
+        bool retireActivation)
     {
+        using var ownership = handle.LoadAdmission?.EnterCleanup();
+        using var cleanupAuthority = (handle.TargetLifetime as AppPackageManagedRpcClient)?.BeginCleanup();
         var viewCleanup = await viewRegistry.UnregisterPackageWithOutcomeAsync(
             packageId,
             CancellationToken.None);
@@ -83,15 +103,18 @@ internal sealed class AppPackageUnloadCoordinator(
             handle.LoadContext,
             handle.TargetLifetime,
             handle.ProjectionLease,
-            removeWholePackageTracking: true);
+            removeWholePackageTracking: true,
+            handle.LoadAdmission,
+            viewCleanup.CleanupProven,
+            retireActivation);
         if (useRetirementDeadline)
         {
-            return ToCleanupOutcome(
-                viewCleanup.CleanupProven
-                && await RunBoundedOwnerCleanupAsync(packageId, cleanup));
+            var ownerCleanup = await RunBoundedOwnerCleanupAsync(packageId, cleanup).ConfigureAwait(false);
+            return ToCleanupOutcome(viewCleanup.CleanupProven && ownerCleanup);
         }
 
-        return ToCleanupOutcome(viewCleanup.CleanupProven && await cleanup);
+        var drained = await cleanup.ConfigureAwait(false);
+        return ToCleanupOutcome(viewCleanup.CleanupProven && drained);
     }
 
     public Task StopAllOwnedRuntimeWorkAsync()
@@ -141,9 +164,11 @@ internal sealed class AppPackageUnloadCoordinator(
         AppPackageLoadContext? loadContext,
         IAsyncDisposable? targetLifetime,
         PackageProjectionAcquisition? projectionLease,
-        bool removeWholePackageTracking)
+        bool removeWholePackageTracking,
+        AppPackageLoadAdmission? loadAdmission,
+        bool cleanupProven,
+        bool retireActivation)
     {
-        var cleanupProven = true;
         if (removeWholePackageTracking)
         {
             assemblyTracker.RemovePackage(packageId);
@@ -235,9 +260,21 @@ internal sealed class AppPackageUnloadCoordinator(
                     $"retaining immutable package projection after unproven cleanup for '{packageId}'");
             }
         }
-        if (packageFolder is not null && canDeletePackageFolder)
+        if (cleanupProven && packageFolder is not null && canDeletePackageFolder)
         {
             AppPackageSourcePreparer.TryDeleteDirectory(packageFolder);
+        }
+        // Closing a transport is not activation retirement. Only a proven local
+        // drain may acknowledge active use; loaded security remains process-owned.
+        if (cleanupProven && retireActivation && loadAdmission is not null)
+        {
+            try { await loadAdmission.RetireAsync().ConfigureAwait(false); }
+            catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
+            {
+                cleanupProven = false;
+                AppCleanupQuarantine.Retain(loadAdmission, $"retiring App activation policy for '{packageId}'");
+                AppSessionLog.WriteError($"The Host did not acknowledge retirement of App activation '{packageId}'.", exception);
+            }
         }
         return cleanupProven;
     }

@@ -71,8 +71,10 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
     public void ContractNames_AreAutomaticallyAndInjectivelyDerived(string id, string expected)
         => Assert.Equal(expected, SunderRpcCSharpImportPrepass.ContractName(id));
 
-    [Fact]
-    public void Prepare_SharedConsumerProviderContractGeneratesOneBindingAndTrustedAggregateInterface()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Prepare_SharedConsumerProviderContractGeneratesOneBindingAndTrustedAggregateInterface(bool canonicalAggregate)
     {
         var selected = WithProvider(_lock);
         var result = SunderRpcCSharpImportPrepass.Prepare(selected, _root);
@@ -80,7 +82,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
         var surface = Assert.Single(result.ProviderSurfaces);
         Assert.Same(result.Contracts[0], surface.Contract);
         Assert.Equal("Sunder.Generated.Packages.Example_Dependency_Services.IMinimalProviderService", surface.InterfaceMetadataName);
-        const string source = """
+        var source = """
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
@@ -92,6 +94,8 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
                 public ValueTask PingAsync(CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
             }
             """;
+        if (canonicalAggregate) source = source.Replace("using Sunder.Generated.Packages.Example_Dependency_Services;",
+            "using IMinimalProviderService = Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IContractServices;", StringComparison.Ordinal);
         var input = new SunderRpcCSharpCompilerInput("example.consumer", "3.0.0", [new("Provider.cs", source)],
             References().Append(typeof(SunderWorkerProviderRegistration).Assembly.Location).ToArray(),
             SupplementalSources: result.Sources, ImportedProviderSurfaces: result.ProviderSurfaces);
@@ -115,11 +119,10 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
     }
 
     [Fact]
-    public void Prepare_ServicePunctuationPreservesTransportNamesAndRejectsAuthorityWideNaturalCollisions()
+    public void Prepare_ServicePunctuationPreservesTransportNamesAndRejectsContractLocalNaturalCollisions()
     {
-        using var parity = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/parity/expectations.json")));
-        var vectors = parity.RootElement.GetProperty("namingAndDefaults").GetProperty("generatedApiVectors")
-            .GetProperty("clientServiceNameVectors").EnumerateArray().ToArray();
+        using var parity = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/current-parity/service-name-vectors.json")));
+        var vectors = parity.RootElement.GetProperty("clientServiceNameVectors").EnumerateArray().ToArray();
         var artifact = _lock.PackageArtifacts["example.dependency"];
         var contracts = new Dictionary<string, SunderRpcLockedArtifactContract>(StringComparer.Ordinal);
         for (var index = 0; index < vectors.Length; index++)
@@ -171,8 +174,9 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
                 [artifact.PackageId] = SeedDescriptorOnlyArtifact(artifact with { Contracts = contracts, PublicContractCount = contracts.Count }),
             },
         };
-        var collision = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(selected, _root));
-        Assert.StartsWith("rpc-authoring.generated-name-collision:", collision.Message, StringComparison.Ordinal);
+        var combined = SunderRpcCSharpImportPrepass.Prepare(selected, _root);
+        var compilation = new SunderRpcCSharpSourceCompiler().Compile(new("example.consumer", "1.0.0", [], References(), SupplementalSources: combined.Sources));
+        Assert.True(compilation.Success, string.Join(Environment.NewLine, compilation.Diagnostics));
         var reversed = selected with
         {
             PackageArtifacts = new Dictionary<string, SunderRpcLockedPackageArtifact>
@@ -180,7 +184,36 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
                 [artifact.PackageId] = selected.PackageArtifacts[artifact.PackageId] with { Contracts = contracts.Reverse().ToDictionary() },
             },
         };
-        Assert.Equal(collision.Message, Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(reversed, _root)).Message);
+        Assert.Equal(combined.Sources, SunderRpcCSharpImportPrepass.Prepare(reversed, _root).Sources);
+
+        var collidingJson = JsonNode.Parse(_descriptor.GetCanonicalUtf8())!;
+        var collidingServices = collidingJson["services"]!.AsObject();
+        var method = collidingServices["example"]!.DeepClone();
+        collidingServices.Clear();
+        collidingServices["same-service"] = method;
+        collidingServices["same.service"] = method.DeepClone();
+        var collidingDescriptor = SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(collidingJson));
+        File.WriteAllBytes(SunderRpcContractCache.GetDescriptorPath(_root, collidingDescriptor.Sha256), collidingDescriptor.GetCanonicalUtf8());
+        File.WriteAllBytes(SunderRpcContractCache.GetReceiptPath(_root, collidingDescriptor.Sha256),
+            SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(new
+            {
+                schemaVersion = 1, contractId = collidingDescriptor.ContractId, contractVersion = collidingDescriptor.Version,
+                descriptorBytes = collidingDescriptor.GetCanonicalUtf8().Length, descriptorSha256 = collidingDescriptor.Sha256, abiSha256 = collidingDescriptor.AbiSha256,
+            })));
+        var colliding = _lock with { PackageArtifacts = new Dictionary<string, SunderRpcLockedPackageArtifact>
+        {
+            [artifact.PackageId] = SeedDescriptorOnlyArtifact(artifact with { Contracts = new Dictionary<string, SunderRpcLockedArtifactContract>
+            {
+                [collidingDescriptor.ContractId] = artifact.Contracts[_descriptor.ContractId] with
+                {
+                    DescriptorBytes = collidingDescriptor.GetCanonicalUtf8().Length, DescriptorSha256 = collidingDescriptor.Sha256,
+                    AbiSha256 = collidingDescriptor.AbiSha256, Etag = "\"" + collidingDescriptor.Sha256 + "\"",
+                },
+            } }),
+        } };
+        var collision = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(colliding, _root));
+        Assert.StartsWith("rpc-authoring.generated-name-collision:", collision.Message, StringComparison.Ordinal);
+        Assert.Contains("CExample_Rpc_V1_Minimal.ISameService", collision.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -496,12 +529,12 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
                 public static object CreateNaturalCatalog(ISunderRpcClient rpc)
                     => new Sunder.Generated.Packages.Example_Dependency_Internal.CExample_Rpc_V1_Minimal_ExampleServiceClientProviders(rpc);
                 public static async Task<object> ListNatural(object catalog, CancellationToken token)
-                    => await ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)catalog).ListAsync(token);
+                    => await ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IExampleService>)catalog).ListAsync(token);
                 public static async Task CallNatural(object provider, CancellationToken token)
-                    => await ((Sunder.Sdk.Services.ServiceProvider<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)provider).Service.PingAsync(token);
+                    => await ((Sunder.Sdk.Services.ServiceProvider<Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IExampleService>)provider).Service.PingAsync(token);
                 public static async Task<object?> BorrowNatural(object catalog, CancellationToken token)
                 {
-                    var snapshot = await ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)catalog).ListAsync(token);
+                    var snapshot = await ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IExampleService>)catalog).ListAsync(token);
                     foreach (var provider in snapshot.Providers.Where(value => value.State == Sunder.Sdk.Services.ServiceProviderState.Active))
                     {
                         if (provider.RetirementToken.IsCancellationRequested) continue;
@@ -517,7 +550,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
                 public static async Task<object[]> WatchNatural(object catalog, long revision, long sequence, CancellationToken token)
                 {
                     var result = new List<object>();
-                    await foreach (var item in ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.IExampleService>)catalog).WatchAsync(revision, sequence, token)) result.Add(item);
+                    await foreach (var item in ((Sunder.Sdk.Services.IServiceProviders<Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IExampleService>)catalog).WatchAsync(revision, sequence, token)) result.Add(item);
                     return result.ToArray();
                 }
             }

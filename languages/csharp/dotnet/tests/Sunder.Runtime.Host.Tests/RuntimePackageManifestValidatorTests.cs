@@ -10,13 +10,18 @@ public sealed class RuntimePackageManifestValidatorTests
 {
     private static readonly SunderPackageTargetKey RuntimeTargetKey = new("runtime", "win-x64");
 
-    [Fact]
-    public void Validate_WhenSelectedTargetIsCompatible_ReturnsNoErrors()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Validate_WhenSelectedTargetIsCompatible_ReturnsNoErrors(bool appStateUpdates)
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
-            RuntimeTargetKey,
-            CreateTarget());
+            appStateUpdates ? new("app", "win-x64") : RuntimeTargetKey,
+            appStateUpdates
+                ? CreateTarget(role: "app", kind: "avalonia", capabilities:
+                    [SunderSdkCapabilities.Baseline11V1, SunderSdkCapabilities.AppStateUpdatesV1])
+                : CreateTarget());
 
         Assert.Empty(errors);
     }
@@ -94,6 +99,9 @@ public sealed class RuntimePackageManifestValidatorTests
     {
         string[] reservedCapabilities =
         [
+            SunderSdkCapabilities.PackageDevelopmentV1,
+            SunderSdkCapabilities.PackageLogNavigationV1,
+            SunderSdkCapabilities.AppStateUpdatesV1,
             "runtime-operations.v1",
             "runtime-invocation-errors.v1",
         ];

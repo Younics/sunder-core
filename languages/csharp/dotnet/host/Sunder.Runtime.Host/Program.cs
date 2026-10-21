@@ -196,6 +196,11 @@ try
         app.Lifetime.StopApplication();
         runtimeSessionOwner.MarkShuttingDown();
         await RunCleanupStepAsync(
+            "drain installed policy persistence",
+            cancellationToken => app.Services.GetRequiredService<ActivePackagePolicySynchronizer>().StopPersistenceAsync(cancellationToken),
+            shutdownDeadline.Token,
+            shutdownLogger);
+        await RunCleanupStepAsync(
             "finish execution-runtime startup maintenance",
             _ => executionRuntimeMaintenanceTask,
             shutdownDeadline.Token,

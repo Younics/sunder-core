@@ -64,8 +64,8 @@ discovery runs when the page opens or **Check for updates** is selected; Host au
 update checks continue independently. Offline discovery preserves installed status and
 shows that the latest release could not be checked, rather than claiming **Up to date**.
 
-Details expose installed bytes, health, support status, retention, device RID, vendor
-checksum and source evidence. Unknown download size is shown as unknown, never as zero.
+Details show source, platform, installed size and installation date, or download size
+for an available runtime. Unknown download size is shown as unknown, never as zero.
 Install uses an exact Host preview and retains the runtime until removal.
 Manual runtime installation uses the existing background queue and continues when
 Settings is closed; cancellation is available in Background Processes.
@@ -86,7 +86,8 @@ stamp distinguish saved bindings, pending reconciliation and actual application.
 The shared API is described in [Official runtime downloads](OFFICIAL-RUNTIME-HANDOFF.md).
 App queue and confirmation behavior is exercised with typed fixtures, including one-slot
 ordering, fast failure, queued cancellation, retained-upload cleanup and atomic batches.
-Shared-client HTTP coverage verifies authentication and retained-upload proof through the
-runtime-first queue and final package staging. This does not yet qualify an end-to-end
-App queued installation against actual official-runtime Host handlers. That integration
-remains open; the earlier signed-runtime journey does not qualify this replacement model.
+Shared-client HTTP coverage verifies authentication and retained-upload proof. Actual
+App queue/client → Host handler cases cover update-one, update-all and adoption with
+healthy reuse and missing-runtime acquisition using controlled sources. Real vendor
+and Worker checks have osx-arm64 scope. All-source deployed and six-RID native release
+acceptance remains separate; these results should not be broadened beyond their fixtures.

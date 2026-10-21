@@ -1,118 +1,132 @@
-type sealed class Sunder.Host.Contracts.HostDeploymentIdentity
-  field static System.String Sha256Prefix = "host-payload-v1:sha256:"
-  method static System.Boolean IsValid(System.String? value)
-  method static System.String FromSha256(System.String sha256)
-type sealed class Sunder.Host.Contracts.HostHandshakeResponse : System.IEquatable<Sunder.Host.Contracts.HostHandshakeResponse>
-  method .ctor(System.String ProtocolIdentity, System.Int32 ProtocolRevision, System.Int32 MinimumSupportedRevision, System.Int32 MaximumSupportedRevision, System.Guid HostId, System.Guid SupervisorInstanceId, System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, Sunder.Host.Contracts.HostProductVersionDiagnostics Product)
-  property System.String? DeploymentIdentity { get; init; }
-  property System.Guid HostId { get; init; }
-  property System.Int32 MaximumSupportedRevision { get; init; }
-  property System.Int32 MinimumSupportedRevision { get; init; }
-  property Sunder.Host.Contracts.HostProductVersionDiagnostics Product { get; init; }
-  property System.String ProtocolIdentity { get; init; }
-  property System.Int32 ProtocolRevision { get; init; }
-  property System.Guid SupervisorInstanceId { get; init; }
-  property System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures { get; init; }
-  method Sunder.Host.Contracts.HostHandshakeResponse <Clone>$()
-  method System.Void Deconstruct(out System.String ProtocolIdentity, out System.Int32 ProtocolRevision, out System.Int32 MinimumSupportedRevision, out System.Int32 MaximumSupportedRevision, out System.Guid HostId, out System.Guid SupervisorInstanceId, out System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, out Sunder.Host.Contracts.HostProductVersionDiagnostics Product)
-  method virtual System.Boolean Equals(Sunder.Host.Contracts.HostHandshakeResponse? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Host.Contracts.HostLifecycleRequest : System.IEquatable<Sunder.Host.Contracts.HostLifecycleRequest>
-  method .ctor(System.Guid MutationId, System.Int64 ExpectedDeploymentGeneration)
-  property System.Int64 ExpectedDeploymentGeneration { get; init; }
-  property System.Guid MutationId { get; init; }
-  method Sunder.Host.Contracts.HostLifecycleRequest <Clone>$()
-  method System.Void Deconstruct(out System.Guid MutationId, out System.Int64 ExpectedDeploymentGeneration)
-  method virtual System.Boolean Equals(Sunder.Host.Contracts.HostLifecycleRequest? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Host.Contracts.HostLifecycleSubmission : System.IEquatable<Sunder.Host.Contracts.HostLifecycleSubmission>
-  method .ctor(Sunder.Host.Contracts.HostOperationDescriptor Operation)
-  property Sunder.Host.Contracts.HostOperationDescriptor Operation { get; init; }
-  method Sunder.Host.Contracts.HostLifecycleSubmission <Clone>$()
-  method System.Void Deconstruct(out Sunder.Host.Contracts.HostOperationDescriptor Operation)
-  method virtual System.Boolean Equals(Sunder.Host.Contracts.HostLifecycleSubmission? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Host.Contracts.HostOperationDescriptor : System.IEquatable<Sunder.Host.Contracts.HostOperationDescriptor>
-  method .ctor(System.String OperationId, System.Guid MutationId, System.String Kind, System.Int64 ExpectedDeploymentGeneration, Sunder.Host.Contracts.HostOperationState State, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, System.String? Message, System.String? FailureCode)
-  property System.DateTimeOffset CreatedAtUtc { get; init; }
-  property System.Int64 ExpectedDeploymentGeneration { get; init; }
-  property System.String? FailureCode { get; init; }
-  property System.String Kind { get; init; }
-  property System.String? Message { get; init; }
-  property System.Guid MutationId { get; init; }
-  property System.String OperationId { get; init; }
-  property Sunder.Host.Contracts.HostOperationState State { get; init; }
-  property System.DateTimeOffset UpdatedAtUtc { get; init; }
-  method Sunder.Host.Contracts.HostOperationDescriptor <Clone>$()
-  method System.Void Deconstruct(out System.String OperationId, out System.Guid MutationId, out System.String Kind, out System.Int64 ExpectedDeploymentGeneration, out Sunder.Host.Contracts.HostOperationState State, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out System.String? Message, out System.String? FailureCode)
-  method virtual System.Boolean Equals(Sunder.Host.Contracts.HostOperationDescriptor? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Host.Contracts.HostOperationKinds
-  field static System.String RuntimeRestart = "runtime.restart"
-  field static System.String RuntimeStart = "runtime.start"
-  field static System.String RuntimeStop = "runtime.stop"
-type enum Sunder.Host.Contracts.HostOperationState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Host.Contracts.HostOperationState Accepted = 0
-  field static Sunder.Host.Contracts.HostOperationState Failed = 3
-  field static Sunder.Host.Contracts.HostOperationState Running = 1
-  field static Sunder.Host.Contracts.HostOperationState Succeeded = 2
-  field System.Int32 value__
-type sealed class Sunder.Host.Contracts.HostProductVersionDiagnostics : System.IEquatable<Sunder.Host.Contracts.HostProductVersionDiagnostics>
-  method .ctor(System.String ProductName, System.String ProductVersion, System.String InformationalVersion)
-  property System.String InformationalVersion { get; init; }
-  property System.String ProductName { get; init; }
-  property System.String ProductVersion { get; init; }
-  method Sunder.Host.Contracts.HostProductVersionDiagnostics <Clone>$()
-  method System.Void Deconstruct(out System.String ProductName, out System.String ProductVersion, out System.String InformationalVersion)
-  method virtual System.Boolean Equals(Sunder.Host.Contracts.HostProductVersionDiagnostics? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Host.Contracts.HostProtocol
-  field static System.Int32 CurrentRevision = 1
-  field static System.String Identity = "dev.sunder.host"
-  field static System.Int32 MaximumSupportedRevision = 1
-  field static System.Int32 MinimumSupportedRevision = 1
-type sealed class Sunder.Host.Contracts.HostProtocolFeatures
-  field static System.String DurableOperationsV1 = "durable-operations.v1"
-  field static System.String RuntimeGatewayV1 = "runtime-gateway.v1"
-  field static System.String RuntimeLifecycleV1 = "runtime-lifecycle.v1"
-  field static System.String RuntimeStartupDiagnosticsV1 = "runtime-startup-diagnostics.v1"
-type enum Sunder.Host.Contracts.HostRuntimeDesiredState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Host.Contracts.HostRuntimeDesiredState Running = 1
-  field static Sunder.Host.Contracts.HostRuntimeDesiredState Stopped = 0
-  field System.Int32 value__
-type enum Sunder.Host.Contracts.HostRuntimeState : System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field static Sunder.Host.Contracts.HostRuntimeState CrashLoop = 6
-  field static Sunder.Host.Contracts.HostRuntimeState Failed = 5
-  field static Sunder.Host.Contracts.HostRuntimeState Ready = 2
-  field static Sunder.Host.Contracts.HostRuntimeState Restarting = 4
-  field static Sunder.Host.Contracts.HostRuntimeState Starting = 1
-  field static Sunder.Host.Contracts.HostRuntimeState Stopped = 0
-  field static Sunder.Host.Contracts.HostRuntimeState Stopping = 3
-  field System.Int32 value__
-type sealed class Sunder.Host.Contracts.HostRuntimeStatus : System.IEquatable<Sunder.Host.Contracts.HostRuntimeStatus>
-  method .ctor(Sunder.Host.Contracts.HostRuntimeDesiredState DesiredState, Sunder.Host.Contracts.HostRuntimeState State, System.Int64 DeploymentGeneration, System.Guid? RuntimeInstanceId, System.String? FailureCode, System.String? FailureMessage, System.String? ActiveOperationId)
-  property System.String? ActiveOperationId { get; init; }
-  property System.Int64 DeploymentGeneration { get; init; }
-  property Sunder.Host.Contracts.HostRuntimeDesiredState DesiredState { get; init; }
-  property System.String? FailureCode { get; init; }
-  property System.String? FailureMessage { get; init; }
-  property System.Guid? RuntimeInstanceId { get; init; }
-  property Sunder.Host.Contracts.HostRuntimeState State { get; init; }
-  method Sunder.Host.Contracts.HostRuntimeStatus <Clone>$()
-  method System.Void Deconstruct(out Sunder.Host.Contracts.HostRuntimeDesiredState DesiredState, out Sunder.Host.Contracts.HostRuntimeState State, out System.Int64 DeploymentGeneration, out System.Guid? RuntimeInstanceId, out System.String? FailureCode, out System.String? FailureMessage, out System.String? ActiveOperationId)
-  method virtual System.Boolean Equals(Sunder.Host.Contracts.HostRuntimeStatus? other)
-  method virtual System.Boolean Equals(System.Object? obj)
-  method virtual System.Int32 GetHashCode()
-  method virtual System.String ToString()
-type sealed class Sunder.Host.Contracts.HostStatePaths
-  method static System.String GetDefaultRootPath()
+# sunder-public-api-v2
+assembly Sunder.Host.Contracts, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+type public static class Sunder.Host.Contracts.HostDeploymentIdentity
+  field public const System.String Sha256Prefix = "host-payload-v1:sha256:"
+  method public static System.Boolean IsValid(System.String? value)
+  method public static System.String FromSha256(System.String sha256)
+type public sealed class Sunder.Host.Contracts.HostHandshakeResponse : System.IEquatable<Sunder.Host.Contracts.HostHandshakeResponse>
+  method public .ctor(System.String ProtocolIdentity, System.Int32 ProtocolRevision, System.Int32 MinimumSupportedRevision, System.Int32 MaximumSupportedRevision, System.Guid HostId, System.Guid SupervisorInstanceId, System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, Sunder.Host.Contracts.HostProductVersionDiagnostics Product)
+  property System.Int32 MaximumSupportedRevision { public get; public init; }
+  property System.Int32 MinimumSupportedRevision { public get; public init; }
+  property System.Int32 ProtocolRevision { public get; public init; }
+  property Sunder.Host.Contracts.HostProductVersionDiagnostics Product { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures { public get; public init; }
+  property System.Guid HostId { public get; public init; }
+  property System.Guid SupervisorInstanceId { public get; public init; }
+  property System.String? DeploymentIdentity { public get; public init; }
+  property System.String ProtocolIdentity { public get; public init; }
+  method public Sunder.Host.Contracts.HostHandshakeResponse <Clone>$()
+  method public System.Void Deconstruct(out System.String ProtocolIdentity, out System.Int32 ProtocolRevision, out System.Int32 MinimumSupportedRevision, out System.Int32 MaximumSupportedRevision, out System.Guid HostId, out System.Guid SupervisorInstanceId, out System.Collections.Generic.IReadOnlyList<System.String> SupportedFeatures, out Sunder.Host.Contracts.HostProductVersionDiagnostics Product)
+  method public final virtual System.Boolean Equals(Sunder.Host.Contracts.HostHandshakeResponse? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Host.Contracts.HostHandshakeResponse? left, Sunder.Host.Contracts.HostHandshakeResponse? right)
+  method public static System.Boolean op_Inequality(Sunder.Host.Contracts.HostHandshakeResponse? left, Sunder.Host.Contracts.HostHandshakeResponse? right)
+type public sealed class Sunder.Host.Contracts.HostLifecycleRequest : System.IEquatable<Sunder.Host.Contracts.HostLifecycleRequest>
+  method public .ctor(System.Guid MutationId, System.Int64 ExpectedDeploymentGeneration)
+  property System.Int64 ExpectedDeploymentGeneration { public get; public init; }
+  property System.Guid MutationId { public get; public init; }
+  method public Sunder.Host.Contracts.HostLifecycleRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Guid MutationId, out System.Int64 ExpectedDeploymentGeneration)
+  method public final virtual System.Boolean Equals(Sunder.Host.Contracts.HostLifecycleRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Host.Contracts.HostLifecycleRequest? left, Sunder.Host.Contracts.HostLifecycleRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Host.Contracts.HostLifecycleRequest? left, Sunder.Host.Contracts.HostLifecycleRequest? right)
+type public sealed class Sunder.Host.Contracts.HostLifecycleSubmission : System.IEquatable<Sunder.Host.Contracts.HostLifecycleSubmission>
+  method public .ctor(Sunder.Host.Contracts.HostOperationDescriptor Operation)
+  property Sunder.Host.Contracts.HostOperationDescriptor Operation { public get; public init; }
+  method public Sunder.Host.Contracts.HostLifecycleSubmission <Clone>$()
+  method public System.Void Deconstruct(out Sunder.Host.Contracts.HostOperationDescriptor Operation)
+  method public final virtual System.Boolean Equals(Sunder.Host.Contracts.HostLifecycleSubmission? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Host.Contracts.HostLifecycleSubmission? left, Sunder.Host.Contracts.HostLifecycleSubmission? right)
+  method public static System.Boolean op_Inequality(Sunder.Host.Contracts.HostLifecycleSubmission? left, Sunder.Host.Contracts.HostLifecycleSubmission? right)
+type public sealed class Sunder.Host.Contracts.HostOperationDescriptor : System.IEquatable<Sunder.Host.Contracts.HostOperationDescriptor>
+  method public .ctor(System.String OperationId, System.Guid MutationId, System.String Kind, System.Int64 ExpectedDeploymentGeneration, Sunder.Host.Contracts.HostOperationState State, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, System.String? Message, System.String? FailureCode)
+  property System.Int64 ExpectedDeploymentGeneration { public get; public init; }
+  property Sunder.Host.Contracts.HostOperationState State { public get; public init; }
+  property System.DateTimeOffset CreatedAtUtc { public get; public init; }
+  property System.DateTimeOffset UpdatedAtUtc { public get; public init; }
+  property System.Guid MutationId { public get; public init; }
+  property System.String? FailureCode { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String? Message { public get; public init; }
+  property System.String OperationId { public get; public init; }
+  method public Sunder.Host.Contracts.HostOperationDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String OperationId, out System.Guid MutationId, out System.String Kind, out System.Int64 ExpectedDeploymentGeneration, out Sunder.Host.Contracts.HostOperationState State, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset UpdatedAtUtc, out System.String? Message, out System.String? FailureCode)
+  method public final virtual System.Boolean Equals(Sunder.Host.Contracts.HostOperationDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Host.Contracts.HostOperationDescriptor? left, Sunder.Host.Contracts.HostOperationDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Host.Contracts.HostOperationDescriptor? left, Sunder.Host.Contracts.HostOperationDescriptor? right)
+type public static class Sunder.Host.Contracts.HostOperationKinds
+  field public const System.String RuntimeRestart = "runtime.restart"
+  field public const System.String RuntimeStart = "runtime.start"
+  field public const System.String RuntimeStop = "runtime.stop"
+type public enum Sunder.Host.Contracts.HostOperationState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Host.Contracts.HostOperationState Accepted = 0
+  field public const Sunder.Host.Contracts.HostOperationState Failed = 3
+  field public const Sunder.Host.Contracts.HostOperationState Running = 1
+  field public const Sunder.Host.Contracts.HostOperationState Succeeded = 2
+  field public System.Int32 value__
+type public sealed class Sunder.Host.Contracts.HostProductVersionDiagnostics : System.IEquatable<Sunder.Host.Contracts.HostProductVersionDiagnostics>
+  method public .ctor(System.String ProductName, System.String ProductVersion, System.String InformationalVersion)
+  property System.String InformationalVersion { public get; public init; }
+  property System.String ProductName { public get; public init; }
+  property System.String ProductVersion { public get; public init; }
+  method public Sunder.Host.Contracts.HostProductVersionDiagnostics <Clone>$()
+  method public System.Void Deconstruct(out System.String ProductName, out System.String ProductVersion, out System.String InformationalVersion)
+  method public final virtual System.Boolean Equals(Sunder.Host.Contracts.HostProductVersionDiagnostics? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Host.Contracts.HostProductVersionDiagnostics? left, Sunder.Host.Contracts.HostProductVersionDiagnostics? right)
+  method public static System.Boolean op_Inequality(Sunder.Host.Contracts.HostProductVersionDiagnostics? left, Sunder.Host.Contracts.HostProductVersionDiagnostics? right)
+type public static class Sunder.Host.Contracts.HostProtocol
+  field public const System.Int32 CurrentRevision = 1
+  field public const System.String Identity = "dev.sunder.host"
+  field public const System.Int32 MaximumSupportedRevision = 1
+  field public const System.Int32 MinimumSupportedRevision = 1
+type public static class Sunder.Host.Contracts.HostProtocolFeatures
+  field public const System.String DurableOperationsV1 = "durable-operations.v1"
+  field public const System.String RuntimeGatewayV1 = "runtime-gateway.v1"
+  field public const System.String RuntimeLifecycleV1 = "runtime-lifecycle.v1"
+  field public const System.String RuntimeStartupDiagnosticsV1 = "runtime-startup-diagnostics.v1"
+type public enum Sunder.Host.Contracts.HostRuntimeDesiredState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Host.Contracts.HostRuntimeDesiredState Running = 1
+  field public const Sunder.Host.Contracts.HostRuntimeDesiredState Stopped = 0
+  field public System.Int32 value__
+type public enum Sunder.Host.Contracts.HostRuntimeState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Host.Contracts.HostRuntimeState CrashLoop = 6
+  field public const Sunder.Host.Contracts.HostRuntimeState Failed = 5
+  field public const Sunder.Host.Contracts.HostRuntimeState Ready = 2
+  field public const Sunder.Host.Contracts.HostRuntimeState Restarting = 4
+  field public const Sunder.Host.Contracts.HostRuntimeState Starting = 1
+  field public const Sunder.Host.Contracts.HostRuntimeState Stopped = 0
+  field public const Sunder.Host.Contracts.HostRuntimeState Stopping = 3
+  field public System.Int32 value__
+type public sealed class Sunder.Host.Contracts.HostRuntimeStatus : System.IEquatable<Sunder.Host.Contracts.HostRuntimeStatus>
+  method public .ctor(Sunder.Host.Contracts.HostRuntimeDesiredState DesiredState, Sunder.Host.Contracts.HostRuntimeState State, System.Int64 DeploymentGeneration, System.Guid? RuntimeInstanceId, System.String? FailureCode, System.String? FailureMessage, System.String? ActiveOperationId)
+  property System.Int64 DeploymentGeneration { public get; public init; }
+  property Sunder.Host.Contracts.HostRuntimeDesiredState DesiredState { public get; public init; }
+  property Sunder.Host.Contracts.HostRuntimeState State { public get; public init; }
+  property System.Guid? RuntimeInstanceId { public get; public init; }
+  property System.String? ActiveOperationId { public get; public init; }
+  property System.String? FailureCode { public get; public init; }
+  property System.String? FailureMessage { public get; public init; }
+  method public Sunder.Host.Contracts.HostRuntimeStatus <Clone>$()
+  method public System.Void Deconstruct(out Sunder.Host.Contracts.HostRuntimeDesiredState DesiredState, out Sunder.Host.Contracts.HostRuntimeState State, out System.Int64 DeploymentGeneration, out System.Guid? RuntimeInstanceId, out System.String? FailureCode, out System.String? FailureMessage, out System.String? ActiveOperationId)
+  method public final virtual System.Boolean Equals(Sunder.Host.Contracts.HostRuntimeStatus? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Host.Contracts.HostRuntimeStatus? left, Sunder.Host.Contracts.HostRuntimeStatus? right)
+  method public static System.Boolean op_Inequality(Sunder.Host.Contracts.HostRuntimeStatus? left, Sunder.Host.Contracts.HostRuntimeStatus? right)
+type public static class Sunder.Host.Contracts.HostStatePaths
+  method public static System.String GetDefaultRootPath()

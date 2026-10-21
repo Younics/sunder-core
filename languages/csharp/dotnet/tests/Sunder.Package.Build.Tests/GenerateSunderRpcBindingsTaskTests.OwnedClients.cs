@@ -14,9 +14,9 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         {
             var path = Path.Combine(root, "Program.cs");
             var references = CompilationReferences();
-            var descriptor = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
-                "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts).Descriptor;
-            WriteSourceAuthoringState(root, descriptor);
+            var contract = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
+                "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts);
+            WriteSourceAuthoringState(root, contract);
             File.Delete(Path.Combine(root, "sunder-contracts.owned.json"));
             File.WriteAllText(path, ImplementationFirstSource + OwnedCaller);
             var accept = CreateSourceTask(root, Path.Combine(root, "obj"), path, references);
@@ -26,7 +26,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             Assert.True(generate.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)generate.BuildEngine).Errors));
             Assert.Contains(generate.CompileItems, item => Path.GetFileName(item.ItemSpec) == "package-api.g.cs");
             Assert.Empty(generate.RpcUses);
-            Assert.Equal(descriptor.Sha256, Assert.Single(generate.BindingSnapshots).GetMetadata("DescriptorSha256"));
+            Assert.Equal(contract.Descriptor.Sha256, Assert.Single(generate.BindingSnapshots).GetMetadata("DescriptorSha256"));
             using var receipt = JsonDocument.Parse(File.ReadAllBytes(Assert.Single(generate.AuthoringReceipts).ItemSpec));
             Assert.Empty(receipt.RootElement.GetProperty("uses").EnumerateArray());
             Assert.Empty(receipt.RootElement.GetProperty("packageApiImports").EnumerateArray());
@@ -45,21 +45,25 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         {
             var path = Path.Combine(root, "Program.cs");
             var references = CompilationReferences();
-            var descriptor = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
-                "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts).Descriptor;
-            WriteSourceAuthoringState(root, descriptor);
+            var contract = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
+                "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts);
+            WriteSourceAuthoringState(root, contract);
             var changed = ImplementationFirstSource.Replace("public sealed partial class GreetingService\n{", "public sealed partial class GreetingService\n{\n"
                 + "    public ValueTask<GreetingResult> SecondAsync(GreetingRequest request, CancellationToken token) => ValueTask.FromResult(new GreetingResult { Message = request.Name });", StringComparison.Ordinal);
             Assert.NotEqual(ImplementationFirstSource, changed);
             File.WriteAllText(path, changed + OwnedCaller.Replace(".GreetAsync(", ".SecondAsync(", StringComparison.Ordinal));
             var accept = CreateSourceTask(root, Path.Combine(root, "obj"), path, references);
             accept.ContractOperation = "Accept";
+            accept.ContractKey = "greeting";
+            accept.ContractCurrentVersion = "1.0.0";
+            accept.ContractNextVersion = "2.0.0";
+            accept.AcknowledgeBreakingChange = true;
             Assert.True(accept.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)accept.BuildEngine).Errors));
             var generate = CreateSourceTask(root, Path.Combine(root, "obj"), path, references);
             Assert.True(generate.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)generate.BuildEngine).Errors));
             var nextHash = Assert.Single(generate.BindingSnapshots).GetMetadata("DescriptorSha256");
             Assert.Equal(64, nextHash.Length);
-            Assert.NotEqual(descriptor.Sha256, nextHash);
+            Assert.NotEqual(contract.Descriptor.Sha256, nextHash);
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -74,9 +78,9 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         {
             var path = Path.Combine(root, "Program.cs");
             var references = CompilationReferences();
-            var descriptor = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
-                "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts).Descriptor;
-            WriteSourceAuthoringState(root, descriptor);
+            var contract = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
+                "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts);
+            WriteSourceAuthoringState(root, contract);
             File.WriteAllText(path, ImplementationFirstSource + OwnedCaller);
             var generate = CreateSourceTask(root, Path.Combine(root, "obj"), path, references);
             Assert.True(generate.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)generate.BuildEngine).Errors));

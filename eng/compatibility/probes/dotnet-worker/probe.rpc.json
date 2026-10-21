@@ -1,0 +1,18 @@
+{
+  "descriptorVersion": 1,
+  "schemaProfile": "sunder.rpc.values.v1",
+  "contractId": "compatibility.probe",
+  "version": "1.0.0",
+  "errors": {},
+  "services": {
+    "probe": { "methods": {
+      "echo": { "kind": "unary", "idempotency": "none", "errors": [], "requestSchema": { "$ref": "#/$defs/Request" }, "responseSchema": { "$ref": "#/$defs/Value" } },
+      "finite": { "kind": "server-stream", "idempotency": "none", "errors": [], "requestSchema": { "$ref": "#/$defs/Request" }, "eventSchema": { "$ref": "#/$defs/Value" } },
+      "wait": { "kind": "server-stream", "idempotency": "none", "errors": [], "requestSchema": { "$ref": "#/$defs/Request" }, "eventSchema": { "$ref": "#/$defs/Value" } }
+    } }
+  },
+  "$defs": {
+    "Request": { "type": "object", "properties": { "value": { "type": "string" } }, "required": ["value"], "additionalProperties": false },
+    "Value": { "type": "string" }
+  }
+}

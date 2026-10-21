@@ -1,0 +1,47 @@
+{
+  "formatVersion": 1,
+  "status": "current-metadata",
+  "mixed": {
+    "lock": "../conformance/valid/mixed-contract-lock.json",
+    "receipt": "../conformance/valid/authoring-receipt-mixed.json",
+    "inventory": "../conformance/valid/package-public-inventory-mixed-authority.json",
+    "projection": "../conformance/valid/rpc-model-projection-mixed-authority.json",
+    "lockSha256": "6ea46e7a2e9dcfc2b04f221224cb61434dcc181bc53f540fe3b3f9527f36a93e",
+    "packageId": "example.consumer",
+    "selectedPackageId": "example.dependency",
+    "publicInventorySha256": "6f69988fd727caa6b6eeab5a8f0635264a3c663b7a03cfd865784fa4ef022329",
+    "modelProjectionBytes": 840,
+    "modelProjectionSha256": "2bfacdb1415230a81b6004e0d1cf2c2d3be9e68b6e5295c3cba83b7d418732e1",
+    "consumerRoles": ["runtime"],
+    "presence": "optional",
+    "packageApiContracts": ["example.rpc.v1.minimal"],
+    "platformKey": "stackContributor",
+    "contracts": [
+      { "contractKey": "example.rpc.v1.minimal", "contractId": "example.rpc.v1.minimal", "contractVersion": "2.0.0", "exposure": "public", "source": "imported", "authorityKind": "package", "authorityId": "example.dependency", "descriptorSha256": "709c513e8ce97618f8a5fefdf3b7de92c8ed673a7d657ba151b279d527c0d371", "abiSha256": "999c92cc5041ca77b2acabeab94a5bf0887117a8005ec3fa709564dc95902a42", "modelProjection": { "models": {}, "serviceReferences": {} } },
+      { "contractKey": "ownedBase64", "contractId": "example.rpc.v1.unboundedbase64", "contractVersion": "2.0.0", "exposure": "package", "source": "owned", "authorityKind": "package", "authorityId": "example.consumer", "descriptorSha256": "1cab33cde30b1f2989ee3a141f7ae9edddefb48c11bb122613563e2c5e5ef472", "abiSha256": "1dfd88034f2078d9b0ee886153c46a3e60aebd821c77d8683f613fa696a66d16", "modelProjection": { "models": { "Value": "PrivateBytes" }, "serviceReferences": {} } },
+      { "contractKey": "sunder.stack.contributor", "contractId": "sunder.stack.contributor", "contractVersion": "2.0.0", "exposure": "public", "source": "imported", "authorityKind": "platform", "authorityId": "sunder.core", "descriptorSha256": "6865e949afb4e290d3c67f5868d33701184d5bb01441b69f5909d6f044d40567", "abiSha256": "318cecfb47ebabf569af693541993a671b73d40c3e380293bfbca58a9e56eb56", "modelProjection": { "models": {}, "serviceReferences": {} } }
+    ],
+    "providers": [
+      { "providerId": "example.consumer.base64", "role": "runtime", "audience": "owner", "contractKey": "ownedBase64" },
+      { "providerId": "example.consumer.stack", "role": "runtime", "audience": "public", "contractKey": "sunder.stack.contributor" }
+    ],
+    "uses": [{ "role": "runtime", "required": true, "actions": ["discover", "invoke"], "contractKey": "example.rpc.v1.minimal" }]
+  },
+  "consumerLocks": [
+    { "path": "../conformance/valid/package-api-contract-lock.json", "roles": ["runtime"] },
+    { "path": "../conformance/valid/package-api-app-contract-lock.json", "roles": ["app"] },
+    { "path": "../conformance/valid/package-api-both-contract-lock.json", "roles": ["app", "runtime"] }
+  ],
+  "projectExports": [
+    { "export": "../conformance/valid/package-project-export-owned.json", "projection": "../conformance/valid/rpc-model-projection-nonempty.json" },
+    { "export": "../conformance/valid/package-project-export-method-policies.json", "projection": "../conformance/valid/rpc-model-projection-method-policies.json" },
+    { "export": "../conformance/valid/package-project-export-service-reference.json", "projection": "../conformance/valid/rpc-model-projection-service-reference.json" },
+    { "export": "../conformance/valid/package-project-export-optional-reference.json", "projection": "../conformance/valid/rpc-model-projection-optional-reference.json" }
+  ],
+  "schemaRequirements": {
+    "lockArtifact": ["requestedVersionRange", "includePrerelease", "selectedPackageVersion", "selectedPackageContentIdentity", "publicContractCount", "publicInventorySha256", "modelProjectionBytes", "modelProjectionSha256", "contracts"],
+    "consumerImport": ["localName", "presence", "requiredContracts", "consumerRoles"],
+    "receiptContract": ["contractKey", "contractId", "contractVersion", "exposure", "descriptorBytes", "canonicalDescriptor", "descriptorSha256", "abiSha256", "modelProjection"],
+    "exportedContract": ["contractKey", "contractId", "contractVersion", "exposure", "source", "authorityKind", "authorityId", "descriptorBytes", "canonicalDescriptor", "descriptorSha256", "abiSha256", "modelProjection"]
+  }
+}

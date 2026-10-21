@@ -80,6 +80,11 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const SHA256_ANY_CASE = /^[0-9a-fA-F]{64}$/u;
 const STORAGE_KEY = /^[A-Za-z0-9._-]{1,256}$/u;
 const RPC_EXTENDED_DEADLINE_ENVIRONMENT = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
+const OPERATIONAL_OUTCOMES_ENVIRONMENT = "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1";
+const MAX_OUTBOUND_OBSERVATIONS = 32;
+const MAX_INBOUND_OBSERVATIONS = 64;
+// Public RpcError metadata is descriptive, not proof of transport provenance.
+const operationalErrors = new WeakSet<RpcError>();
 const WINDOWS_RESERVED = new Set([
   "CON", "PRN", "AUX", "NUL",
   "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
@@ -314,6 +319,7 @@ class WorkerRuntime {
       candidateLifecycle: normalized.onCandidateStarted !== undefined,
       generationLifecycle: normalized.onGenerationCommitted !== undefined,
       migrationPreparationLifecycle: true,
+      ...(this.#environment.operationalOutcomesV1 ? { operationalOutcomesV1: true } : {}),
     });
     await this.#writer.write({
       type: "worker.ready",
@@ -502,16 +508,22 @@ class WorkerRuntime {
     }, { signal }, migrationPhysicalKeys);
   }
 
+  #requireFreshHostId(id: string): void {
+    if (this.#hostInvocations.has(id) || this.#hostContributions.has(id) || this.#rememberedHostIds.has(id)) {
+      throw new ProtocolError(`Protocol peer reused identifier '${id}'.`);
+    }
+  }
+
   #beginHostInvocation(root: Readonly<Record<string, JsonValue>>): void {
     only(root, "type", "id", "kind", "providerId", "serviceId", "methodId", "request", "context");
     if (this.#phase !== "active") throw new ProtocolError("Host invocation arrived before activation.");
     const id = idValue(root, "id");
-    this.#rememberedHostIds.add(id);
-    if (this.#hostInvocations.size + this.#hostContributions.size >= LIMITS.maxInboundCalls) {
-      throw new ProtocolError("Host exceeded the worker outstanding invocation limit.");
-    }
+    this.#requireFreshHostId(id);
     const kind = stringValue(root, "kind", 32);
     if (kind !== "unary" && kind !== "server-stream") throw new ProtocolError("Host invocation kind is invalid.");
+    if (this.#inboundLimitReached(kind === "server-stream")) {
+      throw new ProtocolError("Host exceeded the worker outstanding invocation limit.");
+    }
     const providerId = stringValue(root, "providerId", 256);
     const provider = this.#providers.get(providerId);
     if (provider === undefined) throw new ProtocolError(`Host invoked undeclared provider '${providerId}'.`);
@@ -568,6 +580,8 @@ class WorkerRuntime {
       : this.#invokeStream(invocation, context, request));
     invocation.operation = operation.finally(() => {
       this.#hostInvocations.delete(id);
+      // Active lifetime must not consume the bounded terminal/cancel window.
+      this.#rememberedHostIds.add(id);
       invocation.active = false;
       for (const file of invocation.contentFiles) file.revoke();
       invocation.contentFiles.clear();
@@ -637,6 +651,16 @@ class WorkerRuntime {
         id: invocation.id,
         error: { kind: "cancelled", code: "rpc.call.cancelled", message: "The RPC call was cancelled." },
       });
+      return;
+    }
+
+    if (this.#environment.operationalOutcomesV1 && error instanceof RpcError && operationalErrors.has(error)
+      && (error.error.kind === "resource-exhausted" || error.error.kind === "unavailable" || error.error.kind === "deadline-exceeded")) {
+      // Never forward a nested call's NotDispatched/Safe stamp to the enclosing
+      // provider call. The Host owns its code, message and dispatch/retry metadata.
+      await this.#writer.write({ type: "worker.error", id: invocation.id, error: {
+        kind: "operational", code: error.error.kind, message: "The provider could not complete the RPC operation.",
+      } });
       return;
     }
 
@@ -711,8 +735,8 @@ class WorkerRuntime {
       || sessionGeneration !== this.#sessionGeneration) {
       throw new ProtocolError("Host contribution call does not identify this exact active generation.");
     }
-    this.#rememberedHostIds.add(id);
-    if (this.#hostInvocations.size + this.#hostContributions.size >= LIMITS.maxInboundCalls) {
+    this.#requireFreshHostId(id);
+    if (this.#inboundLimitReached(false)) {
       throw new ProtocolError("Host exceeded the worker inbound call limit.");
     }
     const controller = new AbortController();
@@ -731,6 +755,7 @@ class WorkerRuntime {
     contribution.operation = this.#executeHostContribution(contribution).finally(() => {
       this.#work.signal.removeEventListener("abort", stop);
       this.#hostContributions.delete(id);
+      this.#rememberedHostIds.add(id);
       contribution.active = false;
     });
     void contribution.operation.catch((error: unknown) => this.#fail(error));
@@ -2157,7 +2182,7 @@ class WorkerRuntime {
     behavior: ClientCallBehavior,
     streamIdentity?: OutboundStreamIdentity,
   ): ClientCall {
-    const lane = behavior.lane ?? "ordinary";
+    const lane = behavior.lane ?? (this.#environment.operationalOutcomesV1 && kind === "stream" ? "observation" : "ordinary");
     if (!this.#laneAvailable(lane, behavior.migrationPreparationRead ?? false)) {
       throw infrastructureError("unavailable", "rpc.worker.not-active", "The process worker activation is not active.");
     }
@@ -2166,12 +2191,12 @@ class WorkerRuntime {
       ? LIMITS.maxControlCalls
       : lane === "logging"
         ? LIMITS.maxLoggingCalls
-        : LIMITS.maxOutboundCalls;
+        : lane === "observation" ? MAX_OUTBOUND_OBSERVATIONS : LIMITS.maxOutboundCalls;
     if (laneCount >= laneLimit) {
       throw infrastructureError(
         "resource-exhausted",
-        lane === "control" ? "rpc.worker.control-call-limit" : lane === "logging" ? "rpc.worker.logging-call-limit" : "rpc.worker.call-limit",
-        lane === "control" ? "The worker RPC control-call limit was reached." : lane === "logging" ? "The worker logging-call limit was reached." : "The worker RPC call limit was reached.",
+        lane === "control" ? "rpc.worker.control-call-limit" : lane === "logging" ? "rpc.worker.logging-call-limit" : lane === "observation" ? "rpc.worker.observation-limit" : "rpc.worker.call-limit",
+        lane === "control" ? "The worker RPC control-call limit was reached." : lane === "logging" ? "The worker logging-call limit was reached." : lane === "observation" ? "The worker RPC observation limit was reached." : "The worker RPC call limit was reached.",
       );
     }
     options?.signal?.throwIfAborted();
@@ -2271,6 +2296,12 @@ class WorkerRuntime {
       return !this.#loggingClosed && this.#phase !== "waiting-hello" && this.#phase !== "stopped" && this.#phase !== "faulted";
     }
     return this.#phase === "activating" || this.#phase === "active";
+  }
+
+  #inboundLimitReached(observation: boolean): boolean {
+    if (!this.#environment.operationalOutcomesV1) return this.#hostInvocations.size + this.#hostContributions.size >= LIMITS.maxInboundCalls;
+    const count = [...this.#hostInvocations.values()].filter(call => (call.kind === "server-stream") === observation).length;
+    return observation ? count >= MAX_INBOUND_OBSERVATIONS : count + this.#hostContributions.size >= LIMITS.maxInboundCalls;
   }
 
   #canSendControl(): boolean {
@@ -2529,6 +2560,7 @@ function captureEnvironment(): WorkerEnvironment {
   const temporary = localPath(requiredPathEnvironment("SUNDER_WORKER_TEMP_ROOT"));
   const workspace = bindableLocalPath();
   const rpcExtendedDeadlineV1 = optionalEnvironmentFlag(RPC_EXTENDED_DEADLINE_ENVIRONMENT);
+  const operationalOutcomesV1 = optionalEnvironmentFlag(OPERATIONAL_OUTCOMES_ENVIRONMENT);
   const identities = [content.rootPath, temporary.rootPath]
     .map((path) => process.platform === "win32" ? path.toLowerCase() : path);
   if (new Set(identities).size !== identities.length) {
@@ -2544,6 +2576,7 @@ function captureEnvironment(): WorkerEnvironment {
     temporary,
     workspace,
     rpcExtendedDeadlineV1,
+    operationalOutcomesV1,
   });
 }
 
@@ -3511,7 +3544,9 @@ function rpcError(value: JsonValue | undefined): RpcError {
     dispatchState: dispatchState as RpcErrorValue["dispatchState"],
     retrySafety: retrySafety as RpcErrorValue["retrySafety"],
   };
-  return new RpcError(details === undefined ? rpcErrorValue : { ...rpcErrorValue, details }, true);
+  const result = new RpcError(details === undefined ? rpcErrorValue : { ...rpcErrorValue, details }, true);
+  operationalErrors.add(result);
+  return result;
 }
 
 function validateProviderIdentity(provider: RpcProviderRegistration): void {
@@ -3590,7 +3625,9 @@ function infrastructureError(
   dispatchState: RpcErrorValue["dispatchState"] = "not-dispatched",
   retrySafety: RpcErrorValue["retrySafety"] = "safe",
 ): RpcError {
-  return new RpcError({ kind, code, message, dispatchState, retrySafety });
+  const result = new RpcError({ kind, code, message, dispatchState, retrySafety });
+  operationalErrors.add(result);
+  return result;
 }
 
 function streamQueueLimitMessage(
@@ -3944,6 +3981,7 @@ interface WorkerEnvironment {
   readonly temporary: WorkerLocalPath;
   readonly workspace: BindableWorkerLocalPath;
   readonly rpcExtendedDeadlineV1: boolean;
+  readonly operationalOutcomesV1: boolean;
 }
 
 interface BindableWorkerLocalPath extends WorkerLocalPath {
@@ -3993,7 +4031,7 @@ interface HostContribution {
   operation?: Promise<void>;
 }
 
-type ClientCallLane = "ordinary" | "control" | "logging";
+type ClientCallLane = "ordinary" | "observation" | "control" | "logging";
 
 interface ClientCall {
   readonly hostError?: (error: RpcError) => void;

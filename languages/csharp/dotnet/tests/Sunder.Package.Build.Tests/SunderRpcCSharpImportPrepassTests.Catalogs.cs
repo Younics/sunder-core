@@ -45,7 +45,8 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         Assert.Equal("rpc.stale-endpoint", (await Assert.ThrowsAsync<SunderRpcException>(() => probe.CallNatural(providers[0], default))).Error.Code);
         Assert.Equal(0, scope.InvokeCount); Assert.False(scope.Disposed); // Receiver preflight precedes scope creation.
         rpc.Current = extension;
-        var failure = new SunderRpcException(new(SunderRpcErrorKind.StaleEndpoint, "rpc.stale-endpoint", "retired after dispatch"));
+        var failure = new SunderRpcException(new(SunderRpcErrorKind.StaleEndpoint, "rpc.stale-endpoint", "retired after dispatch",
+            SunderRpcDispatchState.PossiblyDispatched, SunderRpcRetrySafety.Unsafe));
         scope = new RpcStub { Current = extension, Failure = failure };
         Assert.Same(failure, await Assert.ThrowsAsync<SunderRpcException>(() => probe.CallNatural(providers[0], default)));
         Assert.Equal(1, scope.InvokeCount); Assert.True(scope.Disposed);

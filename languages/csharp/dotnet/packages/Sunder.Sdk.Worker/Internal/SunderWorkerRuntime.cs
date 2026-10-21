@@ -26,7 +26,6 @@ internal sealed partial class SunderWorkerRuntime
     private Task _generationCommitOperation = Task.CompletedTask;
     private Task _migrationPreparationOperation = Task.CompletedTask;
     private Task _generationHealthOperation = Task.CompletedTask;
-    private Task _shutdownOperation = Task.CompletedTask;
     private RuntimePhase _phase;
     private long? _sessionGeneration;
     private bool _generationCommitAcknowledgementPending;
@@ -59,12 +58,12 @@ internal sealed partial class SunderWorkerRuntime
     internal bool IsActiveUnderGate => _phase is RuntimePhase.Activating or RuntimePhase.Active;
     internal bool CanReadStateForMigrationPreparationUnderGate =>
         _phase == RuntimePhase.PreparingStorageMigrations;
-    internal bool CanSendControlUnderGate => _phase is
+    internal bool CanSendControlUnderGate => _stop?.Aborted != true && _phase is
         RuntimePhase.PreparingStorageMigrations
         or RuntimePhase.Activating
         or RuntimePhase.Active
         or RuntimePhase.Stopping;
-    internal bool CanSendLoggingUnderGate => !_loggingClosed && _phase is
+    internal bool CanSendLoggingUnderGate => !_loggingClosed && _stop?.Aborted != true && _phase is
         RuntimePhase.Ready
         or RuntimePhase.CandidateStarting
         or RuntimePhase.CandidateStarted
@@ -93,17 +92,6 @@ internal sealed partial class SunderWorkerRuntime
         }
         catch (OperationCanceledException) when (_protocolStop.IsCancellationRequested)
         {
-            Exception? failure;
-            bool stopped;
-            lock (Gate)
-            {
-                failure = _failure;
-                stopped = _phase == RuntimePhase.Stopped;
-            }
-            if (failure is not null) throw failure;
-            if (stopped) return;
-            cancellationToken.ThrowIfCancellationRequested();
-            throw;
         }
         catch (Exception exception)
         {
@@ -111,34 +99,21 @@ internal sealed partial class SunderWorkerRuntime
                 ? exception
                 : new WorkerProtocolException("Sunder worker protocol processing failed.", exception);
             Fail(failure);
-            throw failure;
         }
         finally
         {
-            CompleteRuntime();
+            await CompleteRuntimeAsync().ConfigureAwait(false);
         }
+        if (_failure is not null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(_failure).Throw();
+        if (_phase == RuntimePhase.Stopped) return;
+        cancellationToken.ThrowIfCancellationRequested();
+        throw new OperationCanceledException(_protocolStop.Token);
     }
 
     internal void Fail(Exception exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        InboundInvocation[] invocations;
-        InboundContribution[] contributions;
-        lock (Gate)
-        {
-            if (_phase is RuntimePhase.Stopped or RuntimePhase.Faulted) return;
-            _phase = RuntimePhase.Faulted;
-            _failure = exception;
-            invocations = _invocations.Values.ToArray();
-            contributions = GetContributionsUnderGate();
-        }
-
-        _diagnostics.Write($"{WorkerProtocol.Name} worker failure", exception);
-        CancelSource(_workStop);
-        foreach (var invocation in invocations) CancelInvocation(invocation);
-        CancelContributions(contributions);
-        _client.FailAll(exception);
-        CancelSource(_protocolStop);
+        AbortRuntime(exception);
     }
 
     private async ValueTask<bool> HandleEnvelopeAsync(JsonElement root)

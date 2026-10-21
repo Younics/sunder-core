@@ -42,19 +42,20 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
         """;
 
     [Theory]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "complete")]
-    [InlineData("deadline-exceeded", "rpc.call.deadline-exceeded", "complete")]
-    [InlineData("stale-endpoint", "rpc.endpoint.stale", "complete")]
-    [InlineData("cancelled", "rpc.call.cancelled", "complete")]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "default")]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "body")]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "business")]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "unary")]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "unsafe")]
-    [InlineData("unavailable", "rpc.content.authority-revoked", "dispatched")]
-    [InlineData("unavailable", "rpc.other.operation", "other")]
-    [InlineData("permission-denied", "rpc.content.authority-revoked", "mismatch")]
-    public async Task ResponseRetirement_CompiledWatchUsesActualWorkerCompletionAndFaultBoundary(string kind, string code, string scenario)
+    [InlineData("unavailable", "rpc.content.authority-revoked", "complete", true)]
+    [InlineData("deadline-exceeded", "rpc.call.deadline-exceeded", "complete", true)]
+    [InlineData("stale-endpoint", "rpc.endpoint.stale", "complete", true)]
+    [InlineData("cancelled", "rpc.call.cancelled", "complete", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "default", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "body", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "business", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "unary", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "unsafe", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "dispatched", true)]
+    [InlineData("unavailable", "rpc.other.operation", "other", true)]
+    [InlineData("permission-denied", "rpc.content.authority-revoked", "mismatch", true)]
+    [InlineData("unavailable", "rpc.content.authority-revoked", "default", false)]
+    public async Task ResponseRetirement_CompiledWatchUsesActualWorkerCompletionAndFaultBoundary(string kind, string code, string scenario, bool operationalOutcomesV1)
     {
         var source = scenario == "default" ? ResponseWatchSource.Replace("Retirement = true", "Retirement = false", StringComparison.Ordinal) : ResponseWatchSource;
         var result = Compile(source);
@@ -76,8 +77,8 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
         var (load, probe) = LoadProjectionProbe(sources, "ResponseWorkerProbe", "Sunder.Sdk.Worker.Tests");
         try
         {
-            var run = probe.GetMethod("Run")!.CreateDelegate<Func<string, string, string, Task>>();
-            await run(kind, code, scenario).WaitAsync(TimeSpan.FromSeconds(30));
+            var run = probe.GetMethod("Run")!.CreateDelegate<Func<string, string, string, bool, Task>>();
+            await run(kind, code, scenario, operationalOutcomesV1).WaitAsync(TimeSpan.FromSeconds(30));
         }
         finally { load.Unload(); }
     }
@@ -95,11 +96,11 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
         using Sunder.Sdk.Worker.Tests.TestSupport;
         public static class ResponseWorkerProbe
         {
-            public static async Task Run(string kind, string code, string scenario)
+            public static async Task Run(string kind, string code, string scenario, bool operationalOutcomesV1)
             {
                 var service = new WatchService { BodyFailure = scenario == "body", BusinessFailure = scenario == "business" };
                 var handler = service.CreateSunderRpcProviderRegistration().Handler;
-                await using var worker = new WorkerHarness(_ => new SunderWorkerOptions([WorkerHarness.Registration(handler)]));
+                await using var worker = new WorkerHarness(_ => new SunderWorkerOptions([WorkerHarness.Registration(handler)]), operationalOutcomesV1: operationalOutcomesV1);
                 await worker.HandshakeAndActivateAsync();
                 if (scenario == "unary")
                 {
@@ -114,7 +115,11 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
                     Assert.Equal("worker.event", first.RootElement.GetProperty("type").GetString());
                     await Register(worker, success: false, kind, code, scenario);
                 }
-                if (scenario != "complete")
+                // Authenticated registration unavailability is operational when
+                // negotiated, even when it must not silently complete the stream.
+                // Forged/body failures and legacy peers still use the fault boundary.
+                var providerFault = !operationalOutcomesV1 || scenario is "body" or "business" or "mismatch";
+                if (scenario != "complete" && providerFault)
                 {
                     using var diagnostic = await worker.ReadAsync();
                     Assert.Equal("worker.provider-fault-diagnostic", diagnostic.RootElement.GetProperty("type").GetString());
@@ -123,7 +128,15 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
                 using (var terminal = await worker.ReadAsync())
                 {
                     Assert.Equal(scenario == "complete" ? "worker.complete" : "worker.error", terminal.RootElement.GetProperty("type").GetString());
-                    if (scenario != "complete") Assert.Equal("rpc.provider.handler-fault", terminal.RootElement.GetProperty("error").GetProperty("code").GetString());
+                    if (scenario != "complete")
+                    {
+                        var error = terminal.RootElement.GetProperty("error");
+                        Assert.Equal(providerFault ? "provider-fault" : "operational", error.GetProperty("kind").GetString());
+                        Assert.Equal(providerFault ? "rpc.provider.handler-fault" : "unavailable", error.GetProperty("code").GetString());
+                        Assert.False(error.TryGetProperty("dispatchState", out _));
+                        Assert.False(error.TryGetProperty("retrySafety", out _));
+                        Assert.False(error.TryGetProperty("details", out _));
+                    }
                     Assert.DoesNotContain("business-canary", terminal.RootElement.GetRawText(), StringComparison.Ordinal);
                 }
                 Assert.Equal(scenario == "unary" ? 0 : 1, service.Disposals);

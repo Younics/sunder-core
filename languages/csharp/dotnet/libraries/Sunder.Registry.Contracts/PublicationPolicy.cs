@@ -44,7 +44,6 @@ public sealed record PackageVersionCohortAvailabilityResultV1(
     [property: JsonRequired] string IdempotencyKey,
     [property: JsonRequired] string RequestSha256,
     [property: JsonRequired] RegistryPolicyIdentity PackagePolicy,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity Checkpoint,
     [property: JsonRequired] DateTimeOffset CommittedAtUtc,
     IReadOnlyList<RegistryPackageAvailabilityChange> Versions,
     IReadOnlyList<RegistryCohortPackageTagSnapshot> PreviousTags,
@@ -76,7 +75,6 @@ public sealed record RegistryPolicyMutationResult(
     [property: JsonRequired] string IdempotencyKey,
     [property: JsonRequired] string RequestSha256,
     [property: JsonRequired] RegistryPolicyIdentity Policy,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity Checkpoint,
     [property: JsonRequired] DateTimeOffset CommittedAtUtc);
 
 public static class RegistryStackVisibilityStates
@@ -141,8 +139,7 @@ public sealed record RegistryStackPolicySnapshot(
     [property: JsonRequired] RegistryStackRevisionIdentity CurrentRevision,
     [property: JsonRequired] string Visibility,
     [property: JsonRequired] string? PublicReason,
-    [property: JsonRequired] RegistryPolicyIdentity PublicationAuthorityPolicy,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity Checkpoint);
+    [property: JsonRequired] RegistryPolicyIdentity PublicationAuthorityPolicy);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryStackVisibilityRequest(

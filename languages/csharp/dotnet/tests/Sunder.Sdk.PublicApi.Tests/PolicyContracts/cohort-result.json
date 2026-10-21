@@ -5,12 +5,6 @@
     "revision": 42,
     "fingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
   },
-  "checkpoint": {
-    "sequence": 99,
-    "digest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "topologyGeneration": 1,
-    "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-  },
   "committedAtUtc": "2026-09-14T10:00:00+00:00",
   "versions": [
     {

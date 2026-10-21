@@ -188,7 +188,7 @@ public sealed class LocalStackLibraryServiceTests
             [
                 new SunderStackPackageRequirement
                 {
-                    PackageId = "sunder.package.agent",
+                    PackageId = "younics.ai.agent",
                     InstallTag = "latest",
                     CreatedWithVersion = "1.2.3",
                     MinimumVersion = "1.0.0",
@@ -200,9 +200,9 @@ public sealed class LocalStackLibraryServiceTests
                 new SunderStackFragmentManifest
                 {
                     FragmentId = "agent-profile.fullstack",
-                    OwnerPackageId = "sunder.package.agent",
-                    ContributorId = "sunder.package.agent.profiles",
-                    SchemaId = "sunder.package.agent/profile",
+                    OwnerPackageId = "younics.ai.agent",
+                    ContributorId = "younics.ai.agent.profiles",
+                    SchemaId = "younics.ai.agent/profile",
                     SchemaVersion = 1,
                     DisplayName = "Fullstack Agent Profile",
                     Description = "A coding profile.",

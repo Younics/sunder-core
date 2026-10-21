@@ -2,13 +2,17 @@
 
 > **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
-Activation is generation-based. Sunder prepares a complete candidate package graph, publishes it atomically, and retires the previous generation only after in-flight leased work drains.
+Activation is generation-based. Sunder prepares a complete candidate package graph, publishes it atomically, and retires replaced activations only after in-flight leased work drains. App can retain an unchanged managed package activation across graph changes when Host-issued source/dependency fingerprints and current process policy agree; see [App activation retention](APP-DEVELOPMENT-SESSIONS.md#activation-retention-across-development-changes).
 
 ## Runtime Activation
 
 Runtime validates the package, current-RID projection, Worker V1 capability set, dependencies, and executable entry point before starting package code. It resolves dependencies in topological order; a missing, incompatible, cyclic, or failed dependency prevents its dependents from starting.
 
-The Host selects `sunder.worker.v1` before launch and starts the declared exact-RID executable as a supervised child process. The entry point calls the context-configured `SunderWorker.RunAsync` overload; its configuration callback runs once and returns `SunderWorkerOptions`, whose provider registrations and optional settings schema form the immutable contribution catalog advertised during composition. Runtime does not load an `ISunderRuntimePackageModule`, create a package load context, or build package-owned Runtime DI.
+The Host selects `sunder.worker.v1` before launch and runs the exact-RID module through
+its bound execution runtime in a supervised child process. Canonical package tooling
+generates the entry point and context-configured `SunderWorker.RunAsync` call. Its
+configuration runs once and returns immutable provider/contribution options. Runtime
+does not load an `ISunderRuntimePackageModule` or build package-owned Runtime DI.
 
 Runtime does not inherit the Host environment into a worker. It constructs a closed OS-specific baseline containing activation-owned `TMPDIR`, `TMP`, and `TEMP` values on every platform, `SystemRoot`/`WINDIR` on Windows, and `__CF_USER_TEXT_ENCODING` on macOS; Linux inherits no OS values. Runtime then adds only the documented `SUNDER_*` activation values. `PATH`, home, locale, .NET/Node selectors, tokens, cloud credentials, profiler/startup-hook variables, arbitrary parent variables, and Host bootstrap `SUNDER_*` values are absent. The absolute execution-runtime launcher and closed argument recipe come from the verified installed runtime receipt; package code cannot select or override either one.
 
@@ -30,6 +34,10 @@ App receives an authenticated, generation-scoped package UI snapshot from Runtim
 Views are registered during activation but constructed lazily from the package provider. Candidate generations are not externally usable until publication succeeds.
 
 ## DI Rules
+
+Normal package source uses the [single-project constructor composition](SINGLE-PROJECT-AUTHORING.md)
+and declarative view/lifecycle roots. The module registration example below describes
+the lower-level App integration boundary implemented by generated code.
 
 App modules use normal `Microsoft.Extensions.DependencyInjection` lifetimes inside their App activation:
 
@@ -53,7 +61,7 @@ Do not build a nested provider in `ConfigureAppServices`. Resolve contribution i
 
 Worker V1 owns its process-local object composition. It receives Host-mediated services through `SunderWorkerContext` and supplies handlers through immutable `SunderWorkerProviderRegistration` entries rather than a managed contribution registry.
 
-App packages cannot replace reserved host capabilities. These include `IPackageContext`, logging, callback/RPC clients, shell/settings/notification services, and App background processes. Registering a reserved service fails activation.
+App packages cannot replace reserved host capabilities. These include `IPackageContext`, logging, callback/RPC clients, shell/settings/notification services, App background processes, `IPackageDevelopmentService`, `IPackageLogNavigationService`, and `IPackageWorkerExecutionObservations`. Registering a reserved service fails activation. See [App development sessions and execution observations](APP-DEVELOPMENT-SESSIONS.md) for ownership, applied output and exact cleanup semantics.
 
 Worker code receives Host-mediated Runtime capabilities through `SunderWorkerContext`. App supplies shell-facing services and an RPC client after generation publication.
 
@@ -72,7 +80,12 @@ Start work from view navigation/warmup, a user action, an App background process
 
 ## Worker Lifecycle
 
-Use `OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`, `OnActivated`, and `OnShutdown` for single-callback staged Worker V1 lifecycle work. For package-owned DI and multiple ordered services, supply a `SunderWorkerComposition` containing `ISunderWorkerLifecycleService` instances.
+In canonical source, implement `ISunderWorkerLifecycleService` for staged lifecycle
+work or `ISunderWorkerActivationService` for activation-only work. Optional storage
+migration roots provide plans and read-only preparation. Tooling constructs the
+Worker composition and callbacks. The corresponding low-level options are
+`OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`,
+`OnActivated`, and `OnShutdown`.
 
 The canonical order is:
 
@@ -80,7 +93,12 @@ The canonical order is:
 2. Composition awaits `CommitGenerationAsync` in registration order for the exact Host-assigned generation, then awaits `OnGenerationCommitted`. Commit work must be local and idempotent.
 3. The Host awaits `OnBeforeStorageMigrations` from every process participant, runs declared migrations, then composition awaits every `ActivateAsync` and finally `OnActivated`. The worker does not acknowledge activation and the Host cannot publish the candidate until all activation work succeeds.
 4. After activation, the worker monitors each service's stable `Completion` task. A fault or unexpected cancellation faults that exact worker generation.
-5. During retirement or candidate discard, `OnShutdown` runs first, composition calls `ShutdownAsync` in reverse registration order for every successfully prepared service, and then disposes the package provider. A discarded candidate is shut down without commit or activation.
+5. During retirement, lifecycle failure, startup failure, or candidate discard,
+   admission closes and admitted work/cancellation callbacks drain while dependencies
+   remain usable. Then `OnShutdown` runs, composition calls `ShutdownAsync` in reverse
+   registration order for every successfully prepared service, and the package
+   provider is disposed once. A discarded candidate is shut down without commit or
+   activation. Unproven cleanup is bounded by process containment, not premature DI disposal.
 
 Pre-migration work may read only Host-mediated state through its dedicated context; normal package data, mutation, secrets, files, and RPC remain unavailable. Externally visible loops start only from activation and must stop promptly during shutdown. Every callback receives cancellation and is bounded by Host deadlines.
 
@@ -118,6 +136,14 @@ Package services must:
 - Worker lifecycle callbacks run outside a UI context.
 - View creation, warmup, presentation, navigation, and cached-view detachment are marshalled to the App UI dispatcher while it is available.
 - `IPackageViewNavigationTarget` enters on the UI dispatcher. If code uses `ConfigureAwait(false)`, it must dispatch later UI access itself.
+
+Activation-owned observers can outlive the RPC request that first starts them.
+Start such work from activation, or suppress `ExecutionContext` flow while scheduling
+its task, and give it an activation-owned cancellation token. Otherwise `Task.Run`
+captures the request's Worker parent invocation; later nested RPC calls refer to a
+completed parent. The SDK's lazy service-catalog observer uses activation ownership.
+Ordinary request-owned child work retains its caller's lineage and deadline and
+must drain before that request completes.
 
 ## Cross-Package Contributions
 

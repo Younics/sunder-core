@@ -37,7 +37,7 @@ export const unrelated=defineService({ping(){return "unused";}},{exposure:"publi
 const targetToken="Services.Contracts.CExample_Typed_Target.target";
 const leafToken="Services.Contracts.CExample_Typed_Leaf.leaf";
 const consumerSource=(intent:string)=>`import {defineService} from "@sunder/sdk";import {Implementations,Services} from "#sunder/api";
-export const provider=defineService({handle(request){return true;}},{implements:Implementations.holder,providerId:"example.consumer.holder"${intent}});`;
+export const provider=defineService({holderHandle(request){return true;}},{implements:Implementations.holder,providerId:"example.consumer.holder"${intent}});`;
 
 async function setup(language:"ts"|"js"){
   const root=await mkdtemp(join(tmpdir(),"sunder-typed-runtime-"));const producer=join(root,"producer"),consumer=join(root,"consumer"),cache=join(root,"cache");
@@ -55,10 +55,9 @@ async function setup(language:"ts"|"js"){
     resolvedContractVersion:contract.descriptor.version,descriptorBytes:contract.canonicalBytes.length,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,etag:`"${contract.descriptorSha256}"`}]));
   const candidate=await canonicalCandidateFixture(project.config.id,{requestedVersionRange:">=1.0.0 <2.0.0",includePrerelease:false,selectedPackageVersion:"1.0.0",selectedPackageContentIdentity:"0".repeat(64),publicContractCount:4,publicInventorySha256:"0".repeat(64),modelProjectionBytes:1,modelProjectionSha256:"0".repeat(64),contracts},Buffer.from(project.ownedRpc!.files.get(MODEL_PROJECTION_PATH)!),descriptors);
   const raw={lockVersion:1,packageArtifacts:{[project.config.id]:candidate.artifact},packageImports:{},providerImports:{holder:{packageId:project.config.id,contractId:"example.typed.holder"}},platformImports:{}};
-  const modern=Buffer.from(JSON.stringify(raw,null,2)+"\n"),legacy=structuredClone(raw);const legacyArtifact=legacy.packageArtifacts[project.config.id]!;delete legacyArtifact.modelProjectionBytes;delete legacyArtifact.modelProjectionSha256;
-  const old=Buffer.from(JSON.stringify(legacy,null,2)+"\n");await writeFile(join(consumer,"sunder-contracts.lock.json"),old);
+  const modern=Buffer.from(JSON.stringify(raw,null,2)+"\n");await writeFile(join(consumer,"sunder-contracts.lock.json"),modern);
   const candidatePath=join(root,"candidate.sunderpkg");await writeFile(candidatePath,candidate.bytes);const restoreInspector=await installFixtureInspector(root);
-  return {root,consumer,cache,project,descriptors,candidate,modern,old,
+  return {root,consumer,cache,project,descriptors,candidate,modern,
     write:(intent:string)=>writeFile(join(consumer,`src/services.${language}`),consumerSource(intent)),
     update:()=>packageApiCommand(consumer,{operation:"update",packageId:project.config.id,candidate:candidatePath,cacheRoot:cache}),
     load:()=>loadProjectWithOwnedFrame(consumer,{contractCacheRoot:cache}),
@@ -66,15 +65,15 @@ async function setup(language:"ts"|"js"){
 }
 const discover=`,runtimeUses:[{service:${targetToken},actions:["discover"]}]`;
 
-for(const language of ["ts","js"] as const)test(`${language} provider-only legacy Update requires explicit typed discovery, retains pinned recursive metadata and no App/package API grant`,async()=>{
+for(const language of ["ts","js"] as const)test(`${language} provider-only Update requires explicit typed discovery, retains pinned recursive metadata and no App/package API grant`,async()=>{
   const c=await setup(language);try{
-    await assert.rejects(c.update(),/service-reference-use-missing/);assert.deepEqual(await readFile(join(c.consumer,"sunder-contracts.lock.json")),c.old);
-    await c.write(discover);const selected=await c.update();assert.equal(selected.changed,true);assert.deepEqual(selected.lock.exactBytes,c.modern);assert.equal(selected.lock.packageImports.size,0);assert.equal(selected.lock.providerImports.size,1);
+    await assert.rejects(c.update(),/service-reference-use-missing/);assert.deepEqual(await readFile(join(c.consumer,"sunder-contracts.lock.json")),c.modern);
+    await c.write(discover);const selected=await c.update();assert.equal(selected.changed,false);assert.deepEqual(selected.lock.exactBytes,c.modern);assert.equal(selected.lock.packageImports.size,0);assert.equal(selected.lock.providerImports.size,1);
     const loaded=await c.load();await generateRpcBindingsForLoadedProject(loaded);
     assert.deepEqual(loaded.contracts.map(contract=>contract.descriptor.contractId),["example.typed.holder","example.typed.leaf","example.typed.target"]);
     assert.deepEqual(loaded.config.usesContracts,[{role:"runtime",contractId:"example.typed.target",contractVersion:"1.0.0",required:false,actions:["discover"]}]);
     const target=c.project.contracts.find(contract=>contract.descriptor.contractId==="example.typed.target")!;
-    const expected=[{role:"runtime",contractId:target.descriptor.contractId,contractVersion:target.descriptor.version,descriptorSha256:target.descriptorSha256,abiSha256:target.abiSha256,serviceId:"target",serviceType:"Sunder.Generated.Packages.Example_Typed_Services.ITargetService",required:false,actions:["discover"]}];
+    const expected=[{role:"runtime",contractId:target.descriptor.contractId,contractVersion:target.descriptor.version,descriptorSha256:target.descriptorSha256,abiSha256:target.abiSha256,serviceId:"target",serviceType:"Sunder.Generated.Packages.Example_Typed_Services.CExample_Typed_Target.ITargetService",required:false,actions:["discover"]}];
     const receipt=JSON.parse(loaded.ownedRpc!.files.get("authoring-receipt.v1.json")!),exported=JSON.parse(loaded.ownedRpc!.files.get("package-export.v1.json")!),app=JSON.parse(loaded.ownedRpc!.files.get("app-authoring-receipt.v1.json")!);
     assert.deepEqual(receipt.roleUses,expected);assert.deepEqual(exported.roleUses,expected);assert.equal(app.roleUses,undefined);assert.deepEqual(app.uses,[]);assert.deepEqual(app.contracts,[]);
     assert.deepEqual(validateRoleUseEvidence(parseOuter(Buffer.from(loaded.ownedRpc!.files.get("package-export.v1.json")!)),"export",loaded.ownedRpc!.roleUses),loaded.ownedRpc!.roleUses);
@@ -99,6 +98,8 @@ for(const language of ["ts","js"] as const)test(`${language} provider-only legac
     for(const mutate of [
       (value:any)=>delete value.roleUses,(value:any)=>value.uses[0].actions.push("invoke"),(value:any)=>value.uses[0].required=true,
       (value:any)=>value.roleUses[0].descriptorSha256="f".repeat(64),(value:any)=>value.roleUses[0].serviceType="Lookalike.ITargetService",(value:any)=>value.uses=[],
+      (value:any)=>value.roleUses[0].serviceType="Sunder.Generated.Packages.Example_Typed_Services.ITargetService",
+      (value:any)=>value.roleUses[0].serviceType="Sunder.Generated.Packages.Example_Typed_Services.CExample_Typed_Leaf.ITargetService",
       (value:any)=>value.roleUses[0].extra=true,(value:any)=>value.roleUses[0].role="app",
     ]){const altered=structuredClone(receipt);mutate(altered);assert.throws(()=>validateRoleUseEvidence(parseOuter(Buffer.from(JSON.stringify(altered,null,2)+"\n")),"receipt"));}
     await c.write("");await assert.rejects(c.load(),/service-reference-use-missing/);assert.deepEqual(await readFile(join(c.consumer,"sunder-contracts.lock.json")),c.modern);
@@ -136,7 +137,7 @@ test("shared export and receipt schemas recognize exact typed role-use evidence"
   const root=resolve(__dirname,"../../../../../../../specs/rpc/v1/authoring");
   const schemas=await Promise.all(["authoring-receipt","package-project-export","rpc-model-projection"].map(async name=>JSON.parse(await readFile(join(root,name+".schema.json"),"utf8"))));
   const ajv=new Ajv2020({strict:true,allErrors:true,schemas});const validate=ajv.getSchema(schemas[0].$id+"#/$defs/roleUse")!;
-  const evidence={role:"runtime",contractId:"example.typed.target",contractVersion:"1.0.0",descriptorSha256:"a".repeat(64),abiSha256:"b".repeat(64),serviceId:"target",serviceType:"Sunder.Generated.Packages.Example_Typed_Services.ITargetService",required:false,actions:["discover"]};
+  const evidence={role:"runtime",contractId:"example.typed.target",contractVersion:"1.0.0",descriptorSha256:"a".repeat(64),abiSha256:"b".repeat(64),serviceId:"target",serviceType:"Sunder.Generated.Packages.Example_Typed_Services.CExample_Typed_Target.ITargetService",required:false,actions:["discover"]};
   assert.equal(validate(evidence),true,JSON.stringify(validate.errors));assert.equal(validate({...evidence,role:"app"}),false);
   assert.equal(validate({...evidence,unexpected:true}),false);
 });

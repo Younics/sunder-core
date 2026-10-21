@@ -31,7 +31,7 @@ public sealed class PackagesWindowViewModelTests
     [Fact]
     public async Task UnknownProvenancePackage_OffersExplicitRegistrySourceAdoption()
     {
-        var package = CreateInstalledPackage("sunder.package.agent", isEnabled: false);
+        var package = CreateInstalledPackage("younics.ai.agent", isEnabled: false);
         var runtimeClient = new FakeRuntimeApiClient([package]);
         var executor = new FakePackageOperationExecutor();
         using var viewModel = CreateViewModel(runtimeClient, operationExecutor: executor);
@@ -45,10 +45,10 @@ public sealed class PackagesWindowViewModelTests
 
         await viewModel.AdoptSelectedInstalledPackageSourceCommand.ExecuteAsync(null);
 
-        Assert.Equal("sunder.package.agent", executor.AdoptedPackageId);
+        Assert.Equal("younics.ai.agent", executor.AdoptedPackageId);
         Assert.Equal(new Uri("https://registry.example/"), executor.AdoptionRegistryUrl);
         Assert.Equal(
-            "Queued Registry source adoption for sunder.package.agent.",
+            "Queued Registry source adoption for younics.ai.agent.",
             viewModel.Operations.StatusText);
     }
 
@@ -137,11 +137,11 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            Updates = [CreateUpdate("sunder.package.agent", "1.0.0", "1.1.0")],
+            Updates = [CreateUpdate("younics.ai.agent", "1.0.0", "1.1.0")],
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([CreateInstalledPackage(
-                "sunder.package.agent",
+                "younics.ai.agent",
                 isEnabled: true,
                 isRegistryManaged: true)])
             {
@@ -495,12 +495,12 @@ public sealed class PackagesWindowViewModelTests
     public void MarketplacePackages_UseRegistryIconUrlWhenAvailable()
     {
         var iconUri = new Uri(
-            "http://127.0.0.1:1/api/v1/packages/sunder.package.agent/versions/1.0.0/icon"
+            "http://127.0.0.1:1/api/v1/packages/younics.ai.agent/versions/1.0.0/icon"
         );
         using var package = new RegistryPackageSearchItemViewModel(
             new RegistryPackageSummary(
-                "sunder.package.agent",
-                "Sunder Agent",
+                "younics.ai.agent",
+                "AI Agent",
                 "Adds local agents.",
                 "1.0.0",
                 iconUri.ToString(),
@@ -515,7 +515,7 @@ public sealed class PackagesWindowViewModelTests
         );
 
         Assert.Equal(iconUri, package.IconUri);
-        Assert.Equal("S", package.Glyph);
+        Assert.Equal("A", package.Glyph);
         Assert.True(package.ShowGlyphFallback);
     }
 
@@ -524,7 +524,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
         };
         var runtimeClient = new FakeRuntimeApiClient([]);
         using var viewModel = CreateViewModel(
@@ -542,7 +542,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("agent", query));
         Assert.Collection(
             viewModel.Marketplace.Packages,
-            package => Assert.Equal("sunder.package.agent", package.PackageId)
+            package => Assert.Equal("younics.ai.agent", package.PackageId)
         );
         Assert.True(viewModel.HasSearchText);
     }
@@ -552,7 +552,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
@@ -577,8 +577,8 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = query => string.Equals(query, "sunder.package.agent", StringComparison.OrdinalIgnoreCase)
-                ? [CreateRegistryPackage("sunder.package.agent.tools"), CreateRegistryPackage("sunder.package.agent")]
+            SearchResults = query => string.Equals(query, "younics.ai.agent", StringComparison.OrdinalIgnoreCase)
+                ? [CreateRegistryPackage("younics.ai.agent.tools.files"), CreateRegistryPackage("younics.ai.agent")]
                 : [],
         };
         using var viewModel = CreateViewModel(
@@ -589,16 +589,16 @@ public sealed class PackagesWindowViewModelTests
 
         await viewModel.ApplyLaunchRequestAsync(new AppLaunchRequest(
             AppLaunchRequestKind.PackageDetails,
-            PackageId: "sunder.package.agent",
+            PackageId: "younics.ai.agent",
             RegistryUrl: new Uri("https://registry.example/")));
 
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
-        Assert.Equal("sunder.package.agent", viewModel.SearchText);
-        Assert.Equal("sunder.package.agent", viewModel.SelectedMarketplacePackage?.PackageId);
-        Assert.Collection(viewModel.Marketplace.Packages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+        Assert.Equal("younics.ai.agent", viewModel.SearchText);
+        Assert.Equal("younics.ai.agent", viewModel.SelectedMarketplacePackage?.PackageId);
+        Assert.Collection(viewModel.Marketplace.Packages, package => Assert.Equal("younics.ai.agent", package.PackageId));
         Assert.True(viewModel.ShowMarketplaceInstallButton);
-        Assert.Contains("Loaded sunder.package.agent", viewModel.Operations.StatusText, StringComparison.OrdinalIgnoreCase);
-        Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("sunder.package.agent", query));
+        Assert.Contains("Loaded younics.ai.agent", viewModel.Operations.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("younics.ai.agent", query));
     }
 
     [Fact]
@@ -606,7 +606,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
@@ -632,7 +632,7 @@ public sealed class PackagesWindowViewModelTests
             SearchResults = query =>
                 query is null
                     ? [CreateRegistryPackage("sunder.package.tools")]
-                    : [CreateRegistryPackage("sunder.package.agent")],
+                    : [CreateRegistryPackage("younics.ai.agent")],
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
@@ -671,12 +671,12 @@ public sealed class PackagesWindowViewModelTests
         {
             SearchResults = _ =>
             [
-                CreateRegistryPackage("sunder.package.agent", "9.0.0"),
+                CreateRegistryPackage("younics.ai.agent", "9.0.0"),
                 CreateRegistryPackage("sunder.package.tools", "2.0.0"),
             ],
             PackageDetails = async (packageId, cancellationToken) =>
             {
-                if (string.Equals(packageId, "sunder.package.agent", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(packageId, "younics.ai.agent", StringComparison.OrdinalIgnoreCase))
                 {
                     agentDetailsStarted.SetResult();
                     try
@@ -726,7 +726,7 @@ public sealed class PackagesWindowViewModelTests
         {
             SearchResults = _ =>
             [
-                CreateRegistryPackage("sunder.package.agent", "9.0.0"),
+                CreateRegistryPackage("younics.ai.agent", "9.0.0"),
                 CreateRegistryPackage("sunder.package.tools", "2.0.0"),
             ],
             PackageDetails = async (packageId, cancellationToken) =>
@@ -777,7 +777,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
         };
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient([]),
@@ -799,7 +799,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
             VersionDetails = (packageId, version, cancellationToken) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -846,7 +846,7 @@ public sealed class PackagesWindowViewModelTests
             "sunder.dotnet-worker-module.v1");
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
             VersionDetails = (packageId, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(
                 CreateRegistryPackageVersionDetails(
                     packageId,
@@ -896,7 +896,7 @@ public sealed class PackagesWindowViewModelTests
         var releaseRequest = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
             VersionDetails = async (packageId, version, cancellationToken) =>
             {
                 requestStarted.TrySetResult();
@@ -940,12 +940,12 @@ public sealed class PackagesWindowViewModelTests
         {
             Success = false,
             RuntimePrerequisites = new(true, false, "execution-runtime.missing", "Runtime required", new('a', 64), rid,
-                [new(new("sunder.package.agent", "1.0.0", new('a', 64), "runtime", rid), new('a', 64),
+                [new(new("younics.ai.agent", "1.0.0", new('a', 64), "runtime", rid), new('a', 64),
                     new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi), false, "execution-runtime.missing", null, installation)], []),
         };
         var registry = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
             VersionDetails = (id, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(CreateRegistryPackageVersionDetails(id, version,
                 targets: [new("runtime", rid, "worker", "lib/Agent.dll", "net10.0", "1.1.0", [], ExecutionRuntime: requirement)])),
         };
@@ -962,9 +962,9 @@ public sealed class PackagesWindowViewModelTests
     public async Task MarketplaceSelection_WhenDetailsContainProfile_PopulatesProfileSections()
     {
         var profile = new RegistryPackageProfile(
-            "sunder.package.agent",
+            "younics.ai.agent",
             "Detailed local agent package.",
-            "# Sunder Agent",
+            "# AI Agent",
             "https://example.test/agent",
             "https://example.test/source",
             "https://example.test/issues",
@@ -974,7 +974,7 @@ public sealed class PackagesWindowViewModelTests
             DateTimeOffset.UtcNow);
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
             PackageDetails = (packageId, _) => Task.FromResult<RegistryPackageDetails?>(
                 CreateRegistryPackageDetails(packageId, "1.0.0", profile)),
         };
@@ -1025,7 +1025,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
             PackageDetails = (packageId, _) => Task.FromResult<RegistryPackageDetails?>(new RegistryPackageDetails(
                 packageId,
                 ToDisplayName(packageId),
@@ -1053,7 +1053,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.Equal("4 downloads · 2 stars", viewModel.MarketplacePackageStatsText);
         Assert.Equal("Unstar", viewModel.MarketplacePackageStarActionText);
         Assert.True(viewModel.SelectedMarketplacePackageIsStarred);
-        Assert.Equal("sunder.package.agent", runtimeClient.LastRegistryStarRequest?.ResourceId);
+        Assert.Equal("younics.ai.agent", runtimeClient.LastRegistryStarRequest?.ResourceId);
     }
 
     [Fact]
@@ -1061,7 +1061,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent", "2.0.0")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent", "2.0.0")],
             PackageDetails = (packageId, _) => Task.FromResult<RegistryPackageDetails?>(new RegistryPackageDetails(
                 packageId,
                 ToDisplayName(packageId),
@@ -1077,7 +1077,7 @@ public sealed class PackagesWindowViewModelTests
                 Profile: null)),
             InstallPlan = new RegistryResolveInstallPlanResponse(
                 true,
-                [CreatePlanItem("sunder.package.agent", "1.5.0")],
+                [CreatePlanItem("younics.ai.agent", "1.5.0")],
                 [],
                 [],
                 [],
@@ -1096,7 +1096,7 @@ public sealed class PackagesWindowViewModelTests
         viewModel.Marketplace.Versions.Single(version => version.Version == "1.5.0").SelectCommand.Execute(null);
         await viewModel.InstallSelectedMarketplacePackageCommand.ExecuteAsync(null);
 
-        Assert.Equal("sunder.package.agent", operationExecutor.MarketplaceInstallPackageId);
+        Assert.Equal("younics.ai.agent", operationExecutor.MarketplaceInstallPackageId);
         Assert.Equal("1.5.0", operationExecutor.MarketplaceInstallVersion);
     }
 
@@ -1110,7 +1110,7 @@ public sealed class PackagesWindowViewModelTests
         using var viewModel = CreateViewModel(
             new FakeRuntimeApiClient(
             [
-                CreateInstalledPackage("sunder.package.agent", isEnabled: true),
+                CreateInstalledPackage("younics.ai.agent", isEnabled: true),
                 CreateInstalledPackage("sunder.package.tools", isEnabled: true),
             ]),
             _ => registryClient,
@@ -1119,7 +1119,7 @@ public sealed class PackagesWindowViewModelTests
         viewModel.RegistryUrlText = "https://registry.example/";
         await viewModel.InitializeAsync();
         viewModel.SearchText = "agent";
-        Assert.Collection(viewModel.Installed.Packages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+        Assert.Collection(viewModel.Installed.Packages, package => Assert.Equal("younics.ai.agent", package.PackageId));
 
         await viewModel.ShowMarketplaceCommand.ExecuteAsync(null);
 
@@ -1130,7 +1130,7 @@ public sealed class PackagesWindowViewModelTests
         await viewModel.ShowInstalledCommand.ExecuteAsync(null);
 
         Assert.Equal("agent", viewModel.SearchText);
-        Assert.Collection(viewModel.Installed.Packages, package => Assert.Equal("sunder.package.agent", package.PackageId));
+        Assert.Collection(viewModel.Installed.Packages, package => Assert.Equal("younics.ai.agent", package.PackageId));
     }
 
     [Fact]
@@ -1138,7 +1138,7 @@ public sealed class PackagesWindowViewModelTests
     {
         var registryClient = new FakeRegistryApiClient
         {
-            SearchResults = _ => [CreateRegistryPackage("sunder.package.agent")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
         };
         var runtimeClient = new FakeRuntimeApiClient([CreateInstalledPackage("sunder.package.tools", isEnabled: true)]);
         using var viewModel = new PackagesWindowViewModel(
@@ -1153,15 +1153,15 @@ public sealed class PackagesWindowViewModelTests
 
         await viewModel.InitializeAsync();
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
-        Assert.DoesNotContain(viewModel.Installed.Packages, package => package.PackageId == "sunder.package.agent");
-        runtimeClient.AddInstalledPackage(CreateInstalledPackage("sunder.package.agent", isEnabled: true));
+        Assert.DoesNotContain(viewModel.Installed.Packages, package => package.PackageId == "younics.ai.agent");
+        runtimeClient.AddInstalledPackage(CreateInstalledPackage("younics.ai.agent", isEnabled: true));
 
         await InvokeRefreshAfterPackageOperationAsync(
             viewModel,
-            new PackageOperationMetadata("sunder.package.agent", PackageOperationKind.InstallMarketplace, "Sunder Agent"));
+            new PackageOperationMetadata("younics.ai.agent", PackageOperationKind.InstallMarketplace, "AI Agent"));
 
         Assert.Equal(PackageWindowMode.Marketplace, viewModel.Mode);
-        Assert.Contains(viewModel.Installed.Packages, package => package.PackageId == "sunder.package.agent");
+        Assert.Contains(viewModel.Installed.Packages, package => package.PackageId == "younics.ai.agent");
     }
 
     private static async Task InvokeRefreshAfterPackageOperationAsync(
@@ -1174,7 +1174,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.NotNull(method);
         var snapshot = new BackgroundProcessSnapshot(
             Guid.NewGuid(),
-            "Install Sunder Agent",
+            "Install AI Agent",
             PackageOperationService.PackageStoreGroupKey,
             BackgroundProcessIndicator.Packages,
             BackgroundProcessConcurrencyMode.SequentialWithinGroup,
@@ -1374,7 +1374,7 @@ public sealed class PackagesWindowViewModelTests
         return new RuntimeRegistryResolveInstallPlanResponse(
             true,
             [new RuntimeRegistryPackageInstallPlanItem(
-                "sunder.package.agent",
+                "younics.ai.agent",
                 null,
                 "1.0.0",
                 new string('a', 64),
@@ -1405,7 +1405,7 @@ public sealed class PackagesWindowViewModelTests
             [],
             [])
         { RuntimePrerequisites = new(true, true, null, "Ready", new('a', 64), runtimeArtifact.Identity.Rid,
-            [new(new("sunder.package.agent", "1.0.0", new('a', 64), "runtime", runtimeArtifact.Identity.Rid), new('a', 64),
+            [new(new("younics.ai.agent", "1.0.0", new('a', 64), "runtime", runtimeArtifact.Identity.Rid), new('a', 64),
                 new(requirement.RuntimeId, requirement.VersionRange, requirement.ModuleAbi), true, null, runtimeArtifact.Identity, null)], []) };
     }
 

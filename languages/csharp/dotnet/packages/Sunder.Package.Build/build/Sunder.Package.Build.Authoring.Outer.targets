@@ -43,11 +43,13 @@
       <_SunderRoleSnapshotRoot>@(_SunderPackageRolePlan->'%(SnapshotGeneratedDirectory)')</_SunderRoleSnapshotRoot>
     </PropertyGroup>
     <ItemGroup>
-      <_SunderPackageRole Include="worker" OutputType="Exe" AssemblyName="$(AssemblyName)" />
-      <_SunderPackageRole Include="app" OutputType="Library" AssemblyName="$(AssemblyName).App" Condition="'%(_SunderPackageRolePlan.HasApp)' == 'true'" />
+      <_SunderPackageRole Include="worker" OutputType="Exe" AssemblyName="$(AssemblyName)" CompilationRoot="%(_SunderPackageRolePlan.WorkerCompilationRoot)" />
+      <_SunderPackageRole Include="app" OutputType="Library" AssemblyName="$(AssemblyName).App" CompilationRoot="%(_SunderPackageRolePlan.AppCompilationRoot)" Condition="'%(_SunderPackageRolePlan.HasApp)' == 'true'" />
     </ItemGroup>
+    <Error Condition="'%(_SunderPackageRole.CompilationRoot)' == ''"
+           Text="package-authoring.build-tool-mismatch: The role plan lacks its compiler snapshot. Rebuild Sunder.Package.Build so the task assembly and imported targets come from the same generation." />
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Build" BuildInParallel="false" StopOnFirstFailure="true"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderRoleRid);SunderPackageCompilationRole=%(_SunderPackageRole.Identity);SunderPackageRolePlanPath=$(_SunderRolePlanPath);SunderPackageRolePlanSha256=$(_SunderRolePlanSha256);SunderPackageAnalysisGlobalUsingsFile=$([System.IO.Path]::GetFullPath('$(GeneratedGlobalUsingsFile)', '$(MSBuildProjectDirectory)'));AssemblyName=%(_SunderPackageRole.AssemblyName);OutputType=%(_SunderPackageRole.OutputType);SunderPackageProject=true;IntermediateOutputPath=$(_SunderRoleIntermediateRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;OutputPath=$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/project.assets.json;MSBuildProjectExtensionsPath=$(_SunderRoleSnapshotRoot)/roles/%(_SunderPackageRole.Identity)/restore/"
+             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderRoleRid);SunderPackageCompilationRole=%(_SunderPackageRole.Identity);SunderPackageRolePlanPath=$(_SunderRolePlanPath);SunderPackageRolePlanSha256=$(_SunderRolePlanSha256);SunderPackageRoleCompilationRoot=%(_SunderPackageRole.CompilationRoot);SunderPackageAnalysisGlobalUsingsFile=$([System.IO.Path]::GetFullPath('$(GeneratedGlobalUsingsFile)', '$(MSBuildProjectDirectory)'));AssemblyName=%(_SunderPackageRole.AssemblyName);OutputType=%(_SunderPackageRole.OutputType);SunderPackageProject=true;IntermediateOutputPath=$(_SunderRoleIntermediateRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;OutputPath=$(_SunderRoleOutputRoot)sunder-roles/%(_SunderPackageRole.Identity)/$(_SunderRoleRid)/;AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=%(_SunderPackageRole.CompilationRoot)/roles/%(_SunderPackageRole.Identity)/restore/project.assets.json;MSBuildProjectExtensionsPath=%(_SunderPackageRole.CompilationRoot)/roles/%(_SunderPackageRole.Identity)/restore/"
              RemoveProperties="OutDir;StartupObject;SunderPackagePrimaryProject;SunderPackageInnerBuild">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageRoleOutput" />
     </MSBuild>
@@ -65,7 +67,8 @@
     <ItemGroup>
       <_SunderPackageRidResult Include="$(SunderDevOutputPath)" DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
                                RuntimeIdentifier="$(_SunderRoleRid)" TargetFramework="$(TargetFramework)" HasApp="$(_SunderRoleHasApp)"
-                               AssemblyName="$(AssemblyName).App" RolePlanPath="$(_SunderRolePlanPath)" RolePlanSha256="$(_SunderRolePlanSha256)" SnapshotRoot="$(_SunderRoleSnapshotRoot)"
+                                AssemblyName="$(AssemblyName).App" RolePlanPath="$(_SunderRolePlanPath)" RolePlanSha256="$(_SunderRolePlanSha256)" SnapshotRoot="$(_SunderRoleSnapshotRoot)"
+                                AppCompilationRoot="%(_SunderPackageRolePlan.AppCompilationRoot)"
                                 AppOutputPath="$(_SunderRoleOutputRoot)sunder-roles/app/$(_SunderRoleRid)/"
                                 AppIntermediatePath="$(_SunderRoleIntermediateRoot)sunder-roles/app/$(_SunderRoleRid)/"
                                 RoleInputsPath="@(_SunderExportedRoleInputs)" RoleInputsSha256="@(_SunderExportedRoleInputs->'%(Sha256)')" />

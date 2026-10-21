@@ -20,7 +20,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
         using System.Threading.Tasks;
         using Sunder.Sdk.Services;
         using Sunder.Generated.Packages.Example_Models_Models;
-        using Sunder.Generated.Packages.Example_Models_Services;
+        using Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Holder;
+        using Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Target;
+        using Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Leaf;
         [SunderRuntimeUse(typeof(ITargetService), Actions = ["discover"])]
         [SunderServiceProvider(typeof(IHolderService), ProviderId = "example.consumer.holder")]
         public sealed partial class HolderProvider : IHolderService
@@ -99,8 +101,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
                     + "\nnamespace Lookalike { public interface ITargetService { } }";
                 break;
             case "unselected":
-                source = source.Replace("typeof(ITargetService)", "typeof(IUnrelatedService)", StringComparison.Ordinal)
-                    + "\nnamespace Sunder.Generated.Packages.Example_Models_Services { public interface IUnrelatedService { } }";
+                source = source.Replace("typeof(ITargetService)", "typeof(Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Unrelated.IUnrelatedService)", StringComparison.Ordinal)
+                    + "\nnamespace Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Unrelated { public interface IUnrelatedService { } }";
                 break;
             case "private":
                 source = source.Replace("typeof(ITargetService)", "typeof(PrivateService)", StringComparison.Ordinal)
@@ -108,7 +110,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 break;
             case "foreign":
                 var path = Path.Combine(scope.RootPath, "Foreign.dll");
-                var foreign = CSharpCompilation.Create("Foreign", [CSharpSyntaxTree.ParseText("namespace Sunder.Generated.Packages.Example_Models_Services { public interface ITargetService { } }")],
+                var foreign = CSharpCompilation.Create("Foreign", [CSharpSyntaxTree.ParseText("namespace Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Target { public interface ITargetService { } }")],
                     input.ReferencePaths.Select(path => MetadataReference.CreateFromFile(path)), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
                 Assert.True(foreign.Emit(path).Success);
                 input = input with { ReferencePaths = input.ReferencePaths.Append(path).ToArray(),
@@ -145,6 +147,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.False(use.Required); Assert.Equal(["discover"], use.Actions);
         var exportPath = scope.GetPath("package-export.v1.json");
         var evidence = compiled.ImportedUses.Select(intent => intent.Evidence).ToArray();
+        Assert.Equal("Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Target.ITargetService", Assert.Single(evidence).ServiceType);
         await File.WriteAllBytesAsync(exportPath, SunderRpcAuthoringDocuments.WritePackageExport("1.1.0", "consumer", "Debug", "net10.0", new string('a', 64),
             selected.Sha256, "example.consumer", "1.0.0", compiled.Contracts, evidence));
         var export = SunderRpcAuthoringDocuments.ReadPackageProjectExport(exportPath, "1.1.0", "consumer", "Debug", "net10.0", "example.consumer", "1.0.0");
@@ -163,7 +166,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var appBytes = SunderRpcAuthoringDocuments.WriteAuthoringReceipt("1.1.0", new string('a', 64), selected, "example.consumer", "1.0.0", compiled, imports, "app");
         var app = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(appBytes, selected.Sha256, "example.consumer", "1.0.0");
         Assert.Empty(app.RoleUses); Assert.Empty(app.Manifest.UsesContracts!); Assert.Empty(app.Manifest.ContractBundles!);
-        foreach (var mutation in new[] { "omit-intent", "widen-actions", "required", "tuple", "service", "omit-use" })
+        foreach (var mutation in new[] { "omit-intent", "widen-actions", "required", "tuple", "service", "flat-service", "wrong-contract", "omit-use" })
         {
             var document = JsonNode.Parse(receiptBytes)!;
             switch (mutation)
@@ -173,6 +176,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 case "required": document["uses"]![0]!["required"] = true; break;
                 case "tuple": document["roleUses"]![0]!["descriptorSha256"] = new string('b', 64); break;
                 case "service": document["roleUses"]![0]!["serviceType"] = "Lookalike.ITargetService"; break;
+                case "flat-service": document["roleUses"]![0]!["serviceType"] = "Sunder.Generated.Packages.Example_Models_Services.ITargetService"; break;
+                case "wrong-contract": document["roleUses"]![0]!["serviceType"] = "Sunder.Generated.Packages.Example_Models_Services.CExample_Models_Leaf.ITargetService"; break;
                 case "omit-use": document["uses"] = new JsonArray(); break;
             }
             Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(

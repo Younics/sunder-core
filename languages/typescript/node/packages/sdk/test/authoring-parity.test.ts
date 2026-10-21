@@ -85,9 +85,16 @@ interface ParityExpectations {
   readonly packagePresenceAndReadiness: JsonRecord;
   readonly compatiblePackageInstallation: JsonRecord;
   readonly artifactLocalProvenanceCoalescing: JsonRecord;
-  readonly executableShapes: readonly JsonRecord[];
   readonly sourceLimits: JsonRecord;
   readonly fileIndex: JsonRecord;
+}
+
+interface CurrentMetadataExpectations {
+  readonly schemaVersion: number;
+  readonly status: string;
+  readonly inputFiles: readonly SourceIndexEntry[];
+  readonly lockToReceiptProjection: JsonRecord;
+  readonly executableShapes: readonly JsonRecord[];
 }
 
 const parityRoot = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/parity");
@@ -326,8 +333,8 @@ test("Node coalesces owner and reexport provenance without comparing artifact-lo
   }
 });
 
-test("Node validates executable shapes against referenced schemas, artifacts, and exact projections", async () => {
-  const expectations = await readExpectations();
+test("Node validates current metadata shapes with complete role and model projection evidence", async () => {
+  const expectations = await readCurrentMetadataExpectations();
   const shapes = expectations.executableShapes;
   assert.deepEqual(shapes.map(shape => shape.id), [
     "same-package-app-use",
@@ -336,14 +343,12 @@ test("Node validates executable shapes against referenced schemas, artifacts, an
     "explicit-platform-import",
   ]);
   for (const shape of shapes) {
-    assert.equal(shape.status, "artifact-and-projection-oracle");
-    assert.equal(shape.frontendExecution, "deferred");
     for (const [name, path] of Object.entries(shape.input as JsonRecord)) {
       if (name.endsWith("Schema")) await assertReferencedSchema(String(path));
     }
   }
 
-  await assertSamePackageShape(expectations, shapes[0]!);
+  await assertSamePackageShape(shapes[0]!);
   await assertWholePackageShape(shapes[1]!);
   await assertPackageProviderShape(shapes[2]!);
   await assertPlatformImportShape(shapes[3]!);
@@ -637,10 +642,10 @@ async function assertPackagePresenceAndReadiness(expectations: ParityExpectation
   assert.equal(oracle.frontendExecution, "deferred");
   assert.deepEqual(oracle.allowedPresence, ["required", "optional"]);
 
-  const projection = oracle.lockToReceiptProjection as JsonRecord;
-  assertExactKeys(projection, ["lockPath", "receiptPath", "packageId", "lockPresence", "receiptPresence", "lockSha256"]);
-  const lock = await readMetadata(projection.lockPath) as JsonRecord;
-  const receipt = await readMetadata(projection.receiptPath) as JsonRecord;
+  const projection = (await readCurrentMetadataExpectations()).lockToReceiptProjection;
+  assertExactKeys(projection, ["lockPath", "receiptPath", "packageId", "lockPresence", "receiptPresence", "consumerRoles", "lockSha256"]);
+  const lock = await validateCurrentMetadata(await readMetadata(projection.lockPath) as JsonRecord);
+  const receipt = await validateCurrentMetadata(await readMetadata(projection.receiptPath) as JsonRecord);
   const packageId = String(projection.packageId);
   const lockPresence = lock.packageImports[packageId].presence;
   const receiptPresence = findBy(receipt.packageApiImports, "packageId", packageId).presence;
@@ -648,16 +653,9 @@ async function assertPackagePresenceAndReadiness(expectations: ParityExpectation
   assert.equal(receiptPresence, projection.receiptPresence);
   assert.equal(receiptPresence, lockPresence);
   const lockSha256 = createHash("sha256").update(await readFile(resolve(parityRoot, projection.lockPath))).digest("hex");
-  // The frozen parity pin predates consumerRoles and model-projection pins.
-  // Verify the current sidecar evidence before comparing the historical image.
-  const historicalLock = await historicalMetadataProjection(lock);
-  for (const selection of Object.values(historicalLock.packageImports) as JsonRecord[]) {
-    assert.deepEqual(selection.consumerRoles, ["runtime"]);
-    delete selection.consumerRoles;
-  }
-  const historicalHash = createHash("sha256").update(JSON.stringify(historicalLock, null, 2) + "\n").digest("hex");
-  assert.equal(historicalHash, projection.lockSha256);
-  assert.notEqual(lockSha256, historicalHash);
+  assert.deepEqual(lock.packageImports[packageId].consumerRoles, projection.consumerRoles);
+  assert.deepEqual(findBy(receipt.packageApiImports, "packageId", packageId).useRefs.map((use: JsonRecord) => use.role), projection.consumerRoles);
+  assert.equal(lockSha256, projection.lockSha256);
   assert.equal(receipt.lockSha256, lockSha256);
 
   const coalescing = oracle.dependencyCoalescing as JsonRecord;
@@ -1022,31 +1020,22 @@ async function assertLimitMaterialization(fixture: JsonRecord): Promise<void> {
   }
 }
 
-async function assertSamePackageShape(expectations: ParityExpectations, shape: JsonRecord): Promise<void> {
-  const source = shape.input.sourceFixture as JsonRecord;
-  const fixture = findFixture(expectations.validFixtures, source.fixtureId);
-  const contract = findContract(fixture, source.contractKey);
-  const exported = shape.expectedProjectExportContracts[0] as JsonRecord;
-  assert.deepEqual(exported, {
-    contractKey: contract.contractKey,
-    contractId: contract.contractId,
-    contractVersion: contract.contractVersion,
-    exposure: contract.exposure,
-    source: "owned",
-    authorityKind: "package",
-    authorityId: fixture.packageId,
-    descriptorBytes: contract.canonicalDescriptorBytes,
-    canonicalDescriptor: Buffer.from(contract.canonicalDescriptorBase64, "base64").toString("utf8"),
-    descriptorSha256: contract.descriptorSha256,
-    abiSha256: contract.abiSha256,
-  });
+async function assertSamePackageShape(shape: JsonRecord): Promise<void> {
+  const project = await validateCurrentMetadata(await readMetadata(shape.input.projectExportPath) as JsonRecord);
+  assert.deepEqual(project.contracts, shape.expectedProjectExportContracts);
+  const contract = project.contracts[0] as JsonRecord;
+  assert.equal(contract.exposure, "package");
+  assert.equal(contract.contractVersion, project.packageVersion);
+  assert.equal(contract.source, "owned");
+  assert.equal(contract.authorityKind, "package");
+  assert.equal(contract.authorityId, project.packageId);
   const schema = await readMetadata(shape.input.projectExportSchema) as JsonRecord;
   const rootMembers = ["schemaVersion", "producer", "projectIdentity", "configuration", "targetFramework", "inputFingerprint", "lockSha256", "packageId", "packageVersion", "contracts"];
   assert.deepEqual(schema.required, rootMembers);
   assert.deepEqual(Object.keys(schema.properties), ["roleUses",...rootMembers]);
   assert.equal(schema.maxProperties, rootMembers.length+1);
   assert.deepEqual(schema.properties.roleUses.items,{$ref:"authoring-receipt.schema.json#/$defs/roleUse"});
-  assert.deepEqual([...Object.keys(exported), "modelProjection"].sort(), [...schema.$defs.exportedContract.required].sort());
+  assert.deepEqual(Object.keys(contract).sort(), [...schema.$defs.exportedContract.required].sort());
   assert.deepEqual(schema.$defs.exportedContract.properties.modelProjection, {
     $ref: "rpc-model-projection.schema.json#/$defs/modelProjection",
   });
@@ -1054,16 +1043,16 @@ async function assertSamePackageShape(expectations: ParityExpectations, shape: J
   const records = shape.expectedRecords as JsonRecord;
   assert.deepEqual(records.contracts, [receiptContractProjection(contract)]);
   assert.deepEqual(records.packageArtifacts, []);
-  assert.deepEqual(records.bundles, [{ contractKey: contract.contractKey, source: "owned", authorityKind: "package", authorityId: fixture.packageId }]);
+  assert.deepEqual(records.bundles, [{ contractKey: contract.contractKey, source: "owned", authorityKind: "package", authorityId: project.packageId }]);
   for (const name of ["packageArtifactImports", "packageApiImports", "providerImports", "platformImports", "providers", "generatedPackageFacades"])
     assert.deepEqual(records[name], [], name);
   assert.deepEqual(records.uses, [shape.input.appPolicy]);
-  assert.deepEqual(records.generatedBindings, [{ contractKey: contract.contractKey, logicalName: fixture.generatedBindings[0]!.csharpLogicalName }]);
+  assert.deepEqual(records.generatedBindings, [{ contractKey: contract.contractKey, logicalName: `Sunder.Generated.Rpc.${pascalFromSource(contract.contractKey)}` }]);
 }
 
 async function assertWholePackageShape(shape: JsonRecord): Promise<void> {
-  const receipt = await historicalMetadataProjection(await readMetadata(shape.input.recordDonorReceiptPath) as JsonRecord);
-  const lock = await historicalMetadataProjection(await readMetadata(shape.input.lockPath) as JsonRecord);
+  const receipt = await validateCurrentMetadata(await readMetadata(shape.input.recordDonorReceiptPath) as JsonRecord);
+  const lock = await validateCurrentMetadata(await readMetadata(shape.input.lockPath) as JsonRecord);
   const inventory = await readMetadata(shape.input.publicInventoryPath) as JsonRecord;
   const records = shape.expectedRecords as JsonRecord;
   const selected = new Set<string>(records.contracts.map((contract: JsonRecord) => contract.contractKey));
@@ -1078,6 +1067,8 @@ async function assertWholePackageShape(shape: JsonRecord): Promise<void> {
   const packageApiImport = records.packageApiImports[0] as JsonRecord;
   const lockIntent = lock.packageImports[artifact.packageId] as JsonRecord;
   assert.equal(packageApiImport.presence, lockIntent.presence);
+  assert.deepEqual(lockIntent.consumerRoles, [shape.input.consumerRole]);
+  assert.deepEqual(packageApiImport.useRefs.map((use: JsonRecord) => use.role), lockIntent.consumerRoles);
   const receiptSchema = await readMetadata(shape.input.receiptSchema) as JsonRecord;
   assert.deepEqual(Object.keys(packageApiImport).sort(), [...receiptSchema.$defs.packageApiImport.required].sort());
   assert.equal(artifact.packageId, inventory.packageId);
@@ -1100,8 +1091,8 @@ async function assertWholePackageShape(shape: JsonRecord): Promise<void> {
 }
 
 async function assertPackageProviderShape(shape: JsonRecord): Promise<void> {
-  const receipt = await historicalMetadataProjection(await readMetadata(shape.input.recordDonorReceiptPath) as JsonRecord);
-  const lockBase = await historicalMetadataProjection(await readMetadata(shape.input.lockBasePath) as JsonRecord);
+  const receipt = await validateCurrentMetadata(await readMetadata(shape.input.recordDonorReceiptPath) as JsonRecord);
+  const lockBase = await validateCurrentMetadata(await readMetadata(shape.input.lockBasePath) as JsonRecord);
   const transformed = applyTransformations(lockBase, shape.input.lockTransformations);
   const records = shape.expectedRecords as JsonRecord;
   const contract = records.contracts[0] as JsonRecord;
@@ -1136,8 +1127,8 @@ async function assertPackageProviderShape(shape: JsonRecord): Promise<void> {
 }
 
 async function assertPlatformImportShape(shape: JsonRecord): Promise<void> {
-  const receipt = await historicalMetadataProjection(await readMetadata(shape.input.recordDonorReceiptPath) as JsonRecord);
-  const lock = await historicalMetadataProjection(await readMetadata(shape.input.lockPath) as JsonRecord);
+  const receipt = await validateCurrentMetadata(await readMetadata(shape.input.recordDonorReceiptPath) as JsonRecord);
+  const lock = await validateCurrentMetadata(await readMetadata(shape.input.lockPath) as JsonRecord);
   const transformed = applyTransformations(lock, shape.input.lockTransformations);
   const records = shape.expectedRecords as JsonRecord;
   const contract = records.contracts[0] as JsonRecord;
@@ -1179,36 +1170,44 @@ function assertFilteredReceipt(receipt: JsonRecord, records: JsonRecord, selecte
   if (includeFacade) assert.deepEqual(records.generatedPackageFacades, receipt.generatedPackageFacades);
 }
 
-async function historicalMetadataProjection(current: JsonRecord): Promise<JsonRecord> {
-  const historical = structuredClone(current);
-  for (const contract of historical.contracts ?? []) {
+async function validateCurrentMetadata(current: JsonRecord): Promise<JsonRecord> {
+  for (const contract of current.contracts ?? []) {
     assertExactKeys(contract.modelProjection, ["models", "serviceReferences"]);
     const descriptor = parseRpcContractDescriptor(contract.canonicalDescriptor);
+    assert.equal(Buffer.byteLength(contract.canonicalDescriptor), contract.descriptorBytes);
+    assert.equal(await computeRpcDescriptorSha256(descriptor), contract.descriptorSha256);
+    assert.equal(await computeRpcAbiSha256(descriptor), contract.abiSha256);
+    assert.equal(Buffer.from(canonicalRpcDescriptorBytes(descriptor)).toString("utf8"), contract.canonicalDescriptor);
     for (const [definition, name] of Object.entries(contract.modelProjection.models)) {
       assert.ok(Object.hasOwn(descriptor.$defs, definition));
       assert.match(String(name), /^[A-Za-z_][A-Za-z0-9_]{0,127}$/u);
     }
     assert.deepEqual(contract.modelProjection.serviceReferences, {});
-    delete contract.modelProjection;
   }
-  const expectations = await readMetadata("../conformance/expectations.json") as JsonRecord;
-  for (const [key, artifact] of Object.entries(historical.packageArtifacts ?? {}) as [string, JsonRecord][]) {
+  const expectations = await readCurrentMetadataExpectations();
+  for (const selection of Object.values(current.packageImports ?? {}) as JsonRecord[])
+    assert.ok(['["app"]', '["runtime"]', '["app","runtime"]'].includes(JSON.stringify(selection.consumerRoles)));
+  for (const [key, artifact] of Object.entries(current.packageArtifacts ?? {}) as [string, JsonRecord][]) {
     const packageId = artifact.packageId ?? key;
-    const evidence = (expectations.immutableArtifactEvidence as JsonRecord[]).filter(item =>
-      item.packageId === packageId && item.packageVersion === artifact.selectedPackageVersion
-      && item.packageContentIdentity === artifact.selectedPackageContentIdentity
-      && item.publicInventorySha256 === artifact.publicInventorySha256);
+    const evidence = expectations.inputFiles.filter(item => item.path.includes("/rpc-model-projection-") && item.sha256 === artifact.modelProjectionSha256);
     assert.equal(evidence.length, 1, `Exact current projection evidence for ${packageId}`);
     const selected = evidence[0]!;
-    const bytes = await readFile(resolve(parityRoot, "../conformance", selected.modelProjectionFixturePath));
+    const bytes = await readFile(resolve(parityRoot, selected.path));
     assert.equal(artifact.modelProjectionBytes, bytes.length);
     assert.equal(artifact.modelProjectionSha256, createHash("sha256").update(bytes).digest("hex"));
-    assert.equal(artifact.modelProjectionBytes, selected.modelProjectionBytes);
-    assert.equal(artifact.modelProjectionSha256, selected.modelProjectionSha256);
-    delete artifact.modelProjectionBytes;
-    delete artifact.modelProjectionSha256;
+    assert.equal(artifact.modelProjectionBytes, selected.byteLength);
+    const sidecar = JSON.parse(bytes.toString("utf8")) as JsonRecord;
+    assert.equal(sidecar.packageId, packageId);
+    assert.equal(sidecar.packageVersion, artifact.selectedPackageVersion);
+    const contracts = Array.isArray(artifact.contracts) ? artifact.contracts : Object.entries(artifact.contracts).map(([contractId, value]) => ({ contractId, ...value as JsonRecord }));
+    assert.deepEqual(sidecar.contracts.map((contract: JsonRecord) => [contract.contractId, contract.contractVersion, contract.descriptorSha256, contract.abiSha256]),
+      contracts.map((contract: JsonRecord) => [contract.contractId, contract.resolvedContractVersion, contract.descriptorSha256, contract.abiSha256]));
+    for (const contract of sidecar.contracts) {
+      const materialized = current.contracts?.find((value: JsonRecord) => value.contractId === contract.contractId);
+      if (materialized) assert.deepEqual(materialized.modelProjection, contract.modelProjection);
+    }
   }
-  return historical;
+  return current;
 }
 
 function packageArtifactMapProjection(map: JsonRecord): JsonRecord[] {
@@ -1290,16 +1289,17 @@ function assertImportedBundleFromArtifact(records: JsonRecord, contract: JsonRec
     assert.deepEqual(records.bundles[0][name], artifactContract[name], `package bundle ${name}`);
 }
 
-function receiptContractProjection(contract: ContractExpectation): JsonRecord {
+function receiptContractProjection(contract: JsonRecord): JsonRecord {
   return {
     contractKey: contract.contractKey,
     contractId: contract.contractId,
     contractVersion: contract.contractVersion,
     exposure: contract.exposure,
-    descriptorBytes: contract.canonicalDescriptorBytes,
-    canonicalDescriptor: Buffer.from(contract.canonicalDescriptorBase64, "base64").toString("utf8"),
+    descriptorBytes: contract.descriptorBytes,
+    canonicalDescriptor: contract.canonicalDescriptor,
     descriptorSha256: contract.descriptorSha256,
     abiSha256: contract.abiSha256,
+    modelProjection: contract.modelProjection,
   };
 }
 
@@ -1485,6 +1485,19 @@ function assertExactKeys(value: JsonRecord, expected: readonly string[]): void {
 
 async function readExpectations(): Promise<ParityExpectations> {
   return await readJson(resolve(parityRoot, "expectations.json")) as ParityExpectations;
+}
+
+async function readCurrentMetadataExpectations(): Promise<CurrentMetadataExpectations> {
+  const expectations = await readJson(resolve(__dirname, "../../test/fixtures/current-authoring-metadata.json")) as CurrentMetadataExpectations;
+  assert.equal(expectations.schemaVersion, 1);
+  assert.equal(expectations.status, "reviewed-current-metadata");
+  assert.equal(new Set(expectations.inputFiles.map(file => file.path)).size, expectations.inputFiles.length);
+  for (const file of expectations.inputFiles) {
+    const bytes = await readFile(resolve(parityRoot, file.path));
+    assert.equal(bytes.length, file.byteLength, file.path);
+    assert.equal(createHash("sha256").update(bytes).digest("hex"), file.sha256, file.path);
+  }
+  return expectations;
 }
 
 async function readMetadata(relativePath: string): Promise<unknown> {

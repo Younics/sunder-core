@@ -52,7 +52,8 @@ internal sealed class AppPackageActivator(
                 $"Package '{package.PackageId}' snapshot target metadata does not match its strict manifest target '{targetKey}'.");
         }
 
-        await (packagePolicy ?? UnavailableAppPackagePolicy.Instance).RequireLoadAsync(source, cancellationToken).ConfigureAwait(false);
+        activation.LoadAdmission = await (packagePolicy ?? UnavailableAppPackagePolicy.Instance)
+            .AcquireLoadAsync(source, appGenerationId, cancellationToken).ConfigureAwait(false);
 
         if (string.Equals(source.Target.Kind, SunderPackageFormat.WebTargetKind, StringComparison.Ordinal))
         {
@@ -110,6 +111,7 @@ internal sealed class AppPackageActivator(
                 source,
                 preparedSource,
                 appGenerationId,
+                activation.LoadAdmission,
                 cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -150,6 +152,7 @@ internal sealed class AppPackageActivator(
         PackageUiSnapshotDescriptor source,
         AppPreparedPackageSource preparedSource,
         Guid appGenerationId,
+        AppPackageLoadAdmission initialAdmission,
         CancellationToken cancellationToken)
     {
         if (getRuntimeConnectionInfo is null)
@@ -164,21 +167,21 @@ internal sealed class AppPackageActivator(
                 await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false))
             .ToLowerInvariant();
         var factory = webRpcClientFactory ?? new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo);
-        var client = await factory.CreateAsync(
-            new ActivePackageWebStamp(
-                package.PackageId,
-                package.Version,
-                manifestHash,
-                source.Target,
-                source.SessionGeneration,
-                appGenerationId),
-            cancellationToken).ConfigureAwait(false);
-        if (client is ISunderRpcClient rpcClient)
+        AppPackageLoadAdmission? pendingAdmission = initialAdmission;
+        return new AppPackageManagedRpcClient(await OpenAsync(source, cancellationToken).ConfigureAwait(false), OpenAsync, serviceProviderFactory.Publication);
+
+        async Task<ISunderRpcClient> OpenAsync(PackageUiSnapshotDescriptor currentSource, CancellationToken token)
         {
-            return rpcClient;
+            var admission = Interlocked.Exchange(ref pendingAdmission, null)
+                ?? await (packagePolicy ?? UnavailableAppPackagePolicy.Instance)
+                    .AcquireLoadAsync(currentSource, appGenerationId, token).ConfigureAwait(false);
+            var client = await factory.CreateAsync(
+                new ActivePackageWebStamp(package.PackageId, package.Version, manifestHash,
+                    currentSource.Target, currentSource.SessionGeneration, appGenerationId) { LoadPermitId = admission.PermitId }, token).ConfigureAwait(false);
+            if (client is ISunderRpcClient rpcClient) return rpcClient;
+            await client.DisposeAsync().ConfigureAwait(false);
+            throw new InvalidOperationException("The managed App RPC factory did not produce a trusted SDK RPC client.");
         }
-        await client.DisposeAsync().ConfigureAwait(false);
-        throw new InvalidOperationException("The managed App RPC factory did not produce a trusted SDK RPC client.");
     }
 
     private static ISunderAppPackageModule? CreatePackageModule(Assembly entryAssembly)

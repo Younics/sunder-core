@@ -83,6 +83,22 @@ test("genuine discovery failures retain global retirement, including EnsureCurre
     }finally{await o.api.disposeAsync();}
   }
 });
+test("finite resource pressure preserves exact references and the independent observer",async t=>{
+  for(const operation of ["discover","ensure","resolve"] as const)await t.test(operation,async()=>{
+    const f=bindingFixture(),o=owner(f),other={...provider,contractId:"example.other",endpointReference:"other",providerId:"example.other"};
+    f.setProviders([{...provider},other]);
+    try{
+      const entry=await o.catalog.resolve();await o.context.serviceBindings().discover(other.contractId);
+      const sibling=o.context.serviceBindings().track(other);
+      const pressure=new RpcError({kind:"resource-exhausted",code:"rpc.worker.call-limit",message:"busy"});
+      f.setDiscoverFailure(pressure);f.setGetFailure(pressure);
+      await assert.rejects(operation==="discover"?o.catalog.list():operation==="ensure"?entry.ensureCurrent():o.context.serviceBindings().resolve(locatorFromProvider(provider)),error=>error===pressure);
+      assert.equal(entry.retirementSignal.aborted,false);assert.equal(sibling.signal.aborted,false);assert.equal(f.watches.length,1);
+      f.setDiscoverFailure(undefined);f.setGetFailure(undefined);
+      await entry.ensureCurrent();await sibling.ensureCurrent();assert.equal(await o.catalog.resolve(),entry);assert.equal(f.watches.length,1);
+    }finally{await o.api.disposeAsync();}
+  });
+});
 test("endpoint Unavailable retires only exact bindings, while PermissionDenied retains contract scope",async()=>{
   for(const kind of ["unavailable","permission-denied"] as const){
     const f=bindingFixture(),o=owner(f);const same={...provider,providerId:"example.second",endpointReference:"second"},other={...provider,contractId:"example.other",providerId:"example.other",endpointReference:"other"};f.setProviders([{...provider},same,other]);

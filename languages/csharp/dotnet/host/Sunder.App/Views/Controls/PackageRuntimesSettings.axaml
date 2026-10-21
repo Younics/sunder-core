@@ -2,14 +2,12 @@
              xmlns:vm="using:Sunder.App.ViewModels" x:Class="Sunder.App.Views.Controls.PackageRuntimesSettings"
              x:Name="RuntimePage" x:DataType="vm:SettingsPackageRuntimesViewModel">
   <StackPanel Spacing="16">
-    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-      <StackPanel Spacing="4" VerticalAlignment="Center">
-        <CheckBox Content="Keep runtimes up to date" IsChecked="{Binding AutomaticUpdatesEnabled}"
-                  IsEnabled="{Binding CanChangePreference}" />
-        <TextBlock Classes="caption" Text="{Binding LastCheckedText}" Margin="0,2,0,0" TextWrapping="Wrap" />
-      </StackPanel>
+    <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="4">
+      <CheckBox Content="Keep runtimes up to date" IsChecked="{Binding AutomaticUpdatesEnabled}"
+                IsEnabled="{Binding CanChangePreference}" VerticalAlignment="Center" />
       <Button Grid.Column="1" Classes="secondary-action" Content="Check for updates"
               Command="{Binding CheckUpdatesCommand}" IsEnabled="{Binding CanAct}" VerticalAlignment="Center" />
+      <TextBlock Grid.Row="1" Classes="caption" Text="{Binding LastCheckedText}" Margin="0,2,0,0" TextWrapping="Wrap" />
     </Grid>
     <TextBlock Classes="caption" Text="Sunder selects the latest supported LTS release. Downloaded updates apply when packages stop."
                TextWrapping="Wrap" />
@@ -35,7 +33,7 @@
                         CommandParameter="{Binding}" />
               </Grid>
               <TextBlock Classes="caption" Text="{Binding VersionText}" TextWrapping="Wrap" />
-              <TextBlock Classes="caption" Text="{Binding UsageText}" TextWrapping="Wrap" />
+              <TextBlock Classes="caption" Text="{Binding UsageText}" IsVisible="{Binding HasUsageText}" TextWrapping="Wrap" />
               <ProgressBar IsVisible="{Binding IsWorking}" IsIndeterminate="{Binding IsProgressIndeterminate}"
                            Value="{Binding ProgressValue}" />
               <TextBlock IsVisible="{Binding HasIssue}" Text="{Binding IssueText}" TextWrapping="Wrap"
@@ -47,18 +45,21 @@
                 <Button Classes="primary-action" Content="Restart &amp; Apply"
                         Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RestartFamilyCommand}" CommandParameter="{Binding}" />
               </WrapPanel>
-              <Expander Header="Details" HorizontalAlignment="Stretch">
+              <Expander Header="Details" HorizontalAlignment="Stretch" IsVisible="{Binding HasDetails}">
                 <StackPanel Spacing="10" Margin="0,8,0,0">
                   <TextBlock Classes="caption" Text="{Binding Details}" TextWrapping="Wrap" />
-                  <WrapPanel IsVisible="{Binding IsInstalled}"
-                             IsEnabled="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).CanAct}">
-                    <Button Classes="secondary-action" Content="Check integrity" Margin="0,0,8,8"
-                            Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).VerifyFamilyCommand}" CommandParameter="{Binding}" />
-                    <Button Classes="secondary-action" Content="Repair" Margin="0,0,8,8"
-                            Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RepairFamilyCommand}" CommandParameter="{Binding}" />
-                    <Button Classes="secondary-action" Content="Remove this installation" Margin="0,0,0,8" IsEnabled="{Binding CanRemove}"
+                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12" IsVisible="{Binding IsInstalled}"
+                        IsEnabled="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).CanAct}">
+                    <WrapPanel>
+                      <Button Classes="secondary-action" Content="Check integrity" Margin="0,0,8,8"
+                              Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).VerifyFamilyCommand}" CommandParameter="{Binding}" />
+                      <Button Classes="secondary-action" Content="Repair" Margin="0,0,0,8"
+                              Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RepairFamilyCommand}" CommandParameter="{Binding}" />
+                    </WrapPanel>
+                    <Button Grid.Column="1" Classes="secondary-action" Content="Uninstall" Margin="0,0,0,8" IsEnabled="{Binding CanRemove}"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
                             Command="{Binding #RuntimePage.((vm:SettingsPackageRuntimesViewModel)DataContext).RemoveFamilyCommand}" CommandParameter="{Binding}" />
-                  </WrapPanel>
+                  </Grid>
                 </StackPanel>
               </Expander>
             </StackPanel>

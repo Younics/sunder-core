@@ -30,6 +30,9 @@ public sealed class SunderPackageCompositionPlannerTests
     [InlineData("Sunder.Sdk.Abstractions.IBackgroundProcessQueue background", "", "di-unresolved")]
     [InlineData("Sunder.Sdk.Abstractions.IPackageSettingsNavigationService navigation", "", "di-unresolved")]
     [InlineData("Sunder.Sdk.Abstractions.IPackageShellViewService shell", "", "di-unresolved")]
+    [InlineData("Sunder.Sdk.Abstractions.IPackageDevelopmentService development", "", "di-unresolved")]
+    [InlineData("Sunder.Sdk.Abstractions.IPackageLogNavigationService logs", "", "di-unresolved")]
+    [InlineData("Sunder.Sdk.Abstractions.IPackageAppStateUpdates updates", "", "di-unresolved")]
     [InlineData("ref long number", "", "di-parameter-invalid")]
     public void Analyze_RejectsInvalidDefaultConstructorGraphsAtAuthoredSource(string parameters, string helpers, string diagnostic)
     {
@@ -54,6 +57,28 @@ public sealed class SunderPackageCompositionPlannerTests
         Assert.Contains(analysis.Composition!.Worker, entry => entry.Type.Name == "Settings");
         var duplicate = Analyze(Service + settings + settings.Replace("class Settings", "class OtherSettings", StringComparison.Ordinal));
         Assert.Contains(duplicate.RolePlan.Diagnostics, error => error.Id == "package-authoring.settings-schema-duplicate" && error.Path == "composition.cs");
+    }
+
+    [Fact]
+    public void Analyze_ClassifiesStorageMigrationRootsAndRejectsMultiplePlanProviders()
+    {
+        const string migrations = """
+            public sealed class Migrations : Sunder.Sdk.Worker.ISunderWorkerStorageMigrationProvider,
+                Sunder.Sdk.Worker.ISunderWorkerStorageMigrationPreparation
+            {
+                public System.Threading.Tasks.ValueTask PrepareStorageMigrationsAsync(
+                    Sunder.Sdk.Worker.SunderWorkerMigrationPreparationContext context,
+                    System.Threading.CancellationToken token = default) => default;
+            }
+            """;
+        var analysis = Analyze(Service + migrations);
+        Assert.True(analysis.Success, Errors(analysis));
+        Assert.Equal(SunderPackageRoleMembership.Worker,
+            Assert.Single(analysis.RolePlan.Types, type => type.MetadataName == "global::Example.Migrations").Roles);
+        Assert.Single(analysis.Composition!.Worker, entry => entry.Type.Name == "Migrations");
+        var duplicate = Analyze(Service + migrations + migrations.Replace("class Migrations", "class OtherMigrations", StringComparison.Ordinal));
+        Assert.Contains(duplicate.RolePlan.Diagnostics, error =>
+            error.Id == "package-authoring.storage-migration-provider-duplicate" && error.Path == "composition.cs");
     }
 
     [Fact]
@@ -91,6 +116,25 @@ public sealed class SunderPackageCompositionPlannerTests
         Assert.Empty(formatter.Arguments); Assert.False(formatter.Transient);
         Assert.Equal("Formatter", Assert.Single(Assert.Single(analysis.Composition.App, entry => entry.Type.Name == "ViewModel").Arguments).ServiceType.Name);
         Assert.Equal(Assert.Single(Analyze(Service).Compilation.Contracts).Descriptor.GetCanonicalUtf8(), Assert.Single(analysis.Compilation.Contracts).Descriptor.GetCanonicalUtf8());
+    }
+
+    [Fact]
+    public void Analyze_BindsAppOnlyHostServicesForAppComposition()
+    {
+        var analysis = Analyze(Service + """
+            [SunderPackageView("example.view", "View", ViewModel = typeof(ViewModel))]
+            public sealed class View : Avalonia.Controls.UserControl;
+            public sealed class ViewModel(Sunder.Sdk.Abstractions.IPackageDevelopmentService development,
+                Sunder.Sdk.Abstractions.IPackageLogNavigationService logs,
+                Sunder.Sdk.Abstractions.IPackageAppStateUpdates updates)
+            {
+                public object Development => development;
+                public object Logs => logs;
+                public object Updates => updates;
+            }
+            """);
+        Assert.True(analysis.Success, Errors(analysis));
+        Assert.Equal(3, Assert.Single(analysis.Composition!.App, entry => entry.Type.Name == "ViewModel").Arguments.Count);
     }
 
     [Fact]

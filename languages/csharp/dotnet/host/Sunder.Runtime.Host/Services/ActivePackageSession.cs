@@ -40,6 +40,8 @@ internal sealed record ActiveLoadedPackage(
     public Func<ActiveLoadedPackage>? RecoveryFactory { get; init; }
 
     public RuntimePackageExecutionRuntimeBinding? ExecutionRuntimeBinding { get; init; }
+    internal long? ActivationSessionGeneration { get; init; }
+    internal IReadOnlyList<string> ApprovedSensitiveCapabilities { get; init; } = [];
 
     public IPackageAuthHandler? AuthHandler => Worker.AuthHandler;
 
@@ -52,7 +54,7 @@ internal sealed record DrainingPackageRecoveryCandidate(
     ActiveLoadedPackage FailedPackage,
     DateTimeOffset FailedAtUtc);
 
-internal sealed class ActivePackageSession
+internal sealed partial class ActivePackageSession
 {
     private static readonly TimeSpan DefaultCleanupTimeout = TimeSpan.FromSeconds(10);
     private readonly Dictionary<string, ActiveLoadedPackage> _loadedPackageMap;
@@ -92,6 +94,7 @@ internal sealed class ActivePackageSession
         _workerStartupWaves = NormalizeWorkerStartupWaves(_loadedPackageMap, workerStartupWaves);
         _maximumWorkerStartupConcurrency = maximumWorkerStartupConcurrency;
         _workersStarted = workersStarted;
+        InitializeSnapshotDirectories();
     }
 
     private ActivePackageSession()
@@ -149,6 +152,7 @@ internal sealed class ActivePackageSession
                 var packages = packageIds
                     .Where(_loadedPackageMap.ContainsKey)
                     .Select(packageId => _loadedPackageMap[packageId])
+                    .Where(package => !IsContinuingWorker(package.Worker))
                     .ToArray();
                 if (packages.Length == 0) continue;
                 var attempted = new bool[packages.Length];
@@ -259,8 +263,9 @@ internal sealed class ActivePackageSession
     private async Task StartRequiredProvidersAsync(RuntimeRequiredProviderPlan plan,
         List<(string PackageId, IRuntimePackageWorker Worker)> attempted, ILogger logger, TimeSpan timeout, CancellationToken token)
     {
-        var pending = _loadedPackageMap.Keys.ToHashSet(StringComparer.Ordinal);
+        var pending = _loadedPackageMap.Where(pair => !IsContinuingWorker(pair.Value.Worker)).Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
         var ready = GetActivePackageSources().Select(source => source.PackageId).Where(id => !pending.Contains(id)).ToHashSet(StringComparer.Ordinal);
+        foreach (var id in _loadedPackageMap.Keys.Where(id => !pending.Contains(id))) CandidateProviderReady?.Invoke(id, true);
         var running = new Dictionary<string, Task>(StringComparer.Ordinal);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
         try
@@ -371,6 +376,7 @@ internal sealed class ActivePackageSession
             .Select(static path => Path.GetFullPath(path!))
             .ToHashSet(PathComparer);
         return candidate._loadedPackageMap.Values
+            .Where(package => !candidate.IsContinuingWorker(package.Worker))
             .Select(static package => package.Worker.WorkspaceRootPath)
             .Where(static path => !string.IsNullOrWhiteSpace(path))
             .Select(static path => Path.GetFullPath(path!))
@@ -394,6 +400,7 @@ internal sealed class ActivePackageSession
         }
         await Task.WhenAll(activationOperations.Select(ObserveAsync)).ConfigureAwait(false);
         var workers = _loadedPackageMap.Values
+            .Where(package => !IsContinuingWorker(package.Worker))
             .Reverse()
             .Select(package => (package.Descriptor.PackageId, package.Worker))
             .ToArray();
@@ -405,7 +412,7 @@ internal sealed class ActivePackageSession
         Task[] lifecycleOperations;
         lock (_lifecycleSync)
         {
-            lifecycleOperations = _lifecycleOperations.ToArray();
+            lifecycleOperations = LifecycleOperationsToDrain();
         }
         await Task.WhenAll(lifecycleOperations.Select(ObserveAsync)).ConfigureAwait(false);
     }
@@ -418,7 +425,7 @@ internal sealed class ActivePackageSession
             throw new InvalidOperationException("The package storage activation transaction is already active.");
         }
         _storageActivationTransaction = await PackageStorageActivationTransaction.BeginAsync(
-            _loadedPackageMap.Values.ToArray(),
+            _loadedPackageMap.Values.Where(package => !IsContinuingWorker(package.Worker)).ToArray(),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -446,6 +453,11 @@ internal sealed class ActivePackageSession
 
         foreach (var package in _loadedPackageMap.Values.ToArray())
         {
+            if (IsContinuingWorker(package.Worker))
+            {
+                _committedRuntimeWorkers.Add(package.Worker);
+                continue;
+            }
             var generation = new RuntimePackageGeneration(package.RuntimeActivationId, sessionGeneration);
             if (_committedRuntimeWorkers.Contains(package.Worker))
             {
@@ -457,6 +469,7 @@ internal sealed class ActivePackageSession
                 CancellationToken.None);
             TrackRuntimeGenerationActivation(commitTask);
             await commitTask.WaitAsync(cancellationToken);
+            _loadedPackageMap[package.Descriptor.PackageId] = package with { ActivationSessionGeneration = sessionGeneration };
             _committedRuntimeWorkers.Add(package.Worker);
         }
 
@@ -480,6 +493,7 @@ internal sealed class ActivePackageSession
         _runtimeGenerationMonitoringStarted = true;
         foreach (var package in _loadedPackageMap.Values.ToArray())
         {
+            if (IsContinuingWorker(package.Worker)) continue;
             if (!_committedRuntimeWorkers.Contains(package.Worker))
             {
                 continue;
@@ -502,6 +516,7 @@ internal sealed class ActivePackageSession
                 generation,
                 generationFaulted);
             TrackLifecycleOperation(monitorTask);
+            _workerMonitors[package.Worker] = monitorTask;
         }
     }
 
@@ -516,6 +531,7 @@ internal sealed class ActivePackageSession
                                 ?? throw new InvalidOperationException(
                                     "The committed Runtime session generation is unavailable.");
         var workers = _loadedPackageMap.Values
+            .Where(package => !IsContinuingWorker(package.Worker))
             .Select(package => (
                 package.Worker,
                 Generation: new RuntimePackageGeneration(
@@ -530,7 +546,7 @@ internal sealed class ActivePackageSession
                 .ConfigureAwait(false);
         }
         _storageActivationTransaction ??= await PackageStorageActivationTransaction.BeginAsync(
-            _loadedPackageMap.Values.ToArray(),
+            _loadedPackageMap.Values.Where(package => !IsContinuingWorker(package.Worker)).ToArray(),
             cancellationToken).ConfigureAwait(false);
         await _storageActivationTransaction.ValidateMigrationPlansAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -599,6 +615,7 @@ internal sealed class ActivePackageSession
         foreach (var packageId in _loadedPackageMap.Keys.ToArray())
         {
             var current = _loadedPackageMap[packageId];
+            if (IsContinuingWorker(current.Worker) && !current.Worker.GenerationCompletion.IsCompleted) continue;
             if (current.RecoveryFactory is null)
             {
                 if (current.Worker.GenerationCompletion.IsFaulted
@@ -624,6 +641,7 @@ internal sealed class ActivePackageSession
         lock (_lifecycleSync)
         {
             _lifecycleOperations.Clear();
+            _lifecycleOperations.AddRange(_workerMonitors.Where(pair => _preservedWorkers.Contains(pair.Key)).Select(pair => pair.Value));
             _runtimeGenerationActivationOperations.Clear();
             _committedRuntimeWorkers.Clear();
             _runtimeGenerationFaultBeforePublication = null;
@@ -669,8 +687,10 @@ internal sealed class ActivePackageSession
     public bool OwnsRuntimeGeneration(
         string packageId,
         RuntimePackageGeneration generation)
-        => (_runtimeGenerationCommitted && _committedSessionGeneration == generation.SessionGeneration
-            || _startupGeneration == generation.SessionGeneration)
+        => _loadedPackageMap.TryGetValue(packageId, out var package)
+           && (package.ActivationSessionGeneration == generation.SessionGeneration
+               || package.ActivationSessionGeneration is null && (_runtimeGenerationCommitted && _committedSessionGeneration == generation.SessionGeneration
+                   || _startupGeneration == generation.SessionGeneration))
            && OwnsPackageActivation(packageId, generation.ActivationId);
 
     internal bool TryGetRuntimeGeneration(
@@ -681,7 +701,7 @@ internal sealed class ActivePackageSession
             && _loadedPackageMap.TryGetValue(packageId, out var package)
             && package.ExecutionRuntimeBinding is not null)
         {
-            generation = new RuntimePackageGeneration(package.RuntimeActivationId, sessionGeneration);
+            generation = new RuntimePackageGeneration(package.RuntimeActivationId, package.ActivationSessionGeneration ?? sessionGeneration);
             return true;
         }
         generation = null!;
@@ -783,6 +803,7 @@ internal sealed class ActivePackageSession
     public IReadOnlyList<SessionPackageDescriptor> GetSessionPackages()
     {
         return _sessionPackageMap.Values
+            .Select(package => package with { SourceContentIdentity = _packageSourceMap.GetValueOrDefault(package.PackageId)?.ContentIdentity })
             .OrderByDescending(package => !package.IsEnabled)
             .ThenBy(package => package.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToArray();
@@ -970,6 +991,7 @@ internal sealed class ActivePackageSession
 
             replacement = replacement with
             {
+                ActivationSessionGeneration = activationGeneration,
                 Source = source,
                 Descriptor = ToActiveDescriptor(failedPackage with
                 {
@@ -1022,6 +1044,7 @@ internal sealed class ActivePackageSession
         lock (_lifecycleSync)
         {
             _lifecycleOperations.Add(monitor);
+            if (_loadedPackageMap.TryGetValue(packageId, out var package)) _workerMonitors[package.Worker] = monitor;
         }
         return true;
     }
@@ -1094,7 +1117,7 @@ internal sealed class ActivePackageSession
         TimeSpan cleanupTimeout,
         CancellationToken cancellationToken = default)
     {
-        if (!_workersStarted)
+        if (!_workersStarted && _preservedWorkers.Count == 0)
         {
             return;
         }
@@ -1107,6 +1130,7 @@ internal sealed class ActivePackageSession
         }
         await Task.WhenAll(activationOperations.Select(ObserveAsync));
         var workers = _loadedPackageMap.Values
+            .Where(package => !_borrowedWorkers.Contains(package.Worker) && !_transferredWorkers.Contains(package.Worker))
             .Reverse()
             .Select(package => (package.Descriptor.PackageId, package.Worker))
             .ToArray();
@@ -1192,7 +1216,7 @@ internal sealed class ActivePackageSession
         Task[] lifecycleOperations;
         lock (_lifecycleSync)
         {
-            lifecycleOperations = _lifecycleOperations.ToArray();
+            lifecycleOperations = LifecycleOperationsToDrain();
         }
 
         await Task.WhenAll(lifecycleOperations.Select(ObserveAsync));
@@ -1266,6 +1290,7 @@ internal sealed class ActivePackageSession
 
         foreach (var package in _loadedPackageMap.Values.Reverse())
         {
+            if (_borrowedWorkers.Contains(package.Worker) || _transferredWorkers.Contains(package.Worker)) continue;
             try
             {
                 await package.Worker.DisposeAsync();
@@ -1279,7 +1304,8 @@ internal sealed class ActivePackageSession
             }
         }
 
-        TryDeleteSessionFolder();
+        foreach (var directory in _snapshotDirectories) directory.Release();
+        _snapshotDirectories.Clear();
 
         if (disposeErrors is { Count: > 0 })
         {

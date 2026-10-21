@@ -11,6 +11,7 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
     private readonly List<DeveloperLogEntryViewModel> _entries = [];
     private string _searchText = string.Empty;
     private DeveloperLogFilterOptionViewModel? _selectedFilter;
+    private bool _refreshingFilters;
     private bool _disposed;
 
     public DeveloperLogWindowViewModel(DeveloperLogService developerLog, IUiDispatcher? uiDispatcher = null)
@@ -30,7 +31,7 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
         get => _selectedFilter;
         set
         {
-            if (!SetProperty(ref _selectedFilter, value))
+            if (_refreshingFilters || !SetProperty(ref _selectedFilter, value))
             {
                 return;
             }
@@ -54,6 +55,15 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
     }
 
     public string StatusText => $"{FilteredEntries.Count:N0} of {_entries.Count:N0} log entries";
+
+    public void SelectPackage(string packageId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        SearchText = string.Empty;
+        SelectedFilter = DeveloperLogFilterOptionViewModel.ForPackage(packageId);
+        RefreshFilterOptions();
+        ApplyFilter();
+    }
 
     public void Dispose()
     {
@@ -153,28 +163,31 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
         var packageOptions = _entries
             .Where(entry => entry.Scope == DeveloperLogEntryScope.Package)
             .Select(entry => entry.Source)
+            .Concat(SelectedFilter is { Kind: DeveloperLogFilterKind.Package, PackageId: { } packageId } ? [packageId] : [])
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .Select(DeveloperLogFilterOptionViewModel.ForPackage)
             .ToArray();
 
-        FilterOptions.Clear();
-        FilterOptions.Add(DeveloperLogFilterOptionViewModel.All);
-        FilterOptions.Add(DeveloperLogFilterOptionViewModel.Application);
-        FilterOptions.Add(DeveloperLogFilterOptionViewModel.AllPackages);
-        foreach (var packageOption in packageOptions)
+        _refreshingFilters = true;
+        try
         {
-            FilterOptions.Add(packageOption);
-        }
+            // A bound selector can write null while its items are being replaced.
+            // That transient UI selection must not erase the requested package filter.
+            FilterOptions.Clear();
+            FilterOptions.Add(DeveloperLogFilterOptionViewModel.All);
+            FilterOptions.Add(DeveloperLogFilterOptionViewModel.Application);
+            FilterOptions.Add(DeveloperLogFilterOptionViewModel.AllPackages);
+            foreach (var packageOption in packageOptions)
+            {
+                FilterOptions.Add(packageOption);
+            }
 
-        var selected = FilterOptions.FirstOrDefault(option => string.Equals(option.Key, selectedKey, StringComparison.Ordinal))
-            ?? DeveloperLogFilterOptionViewModel.All;
-        if (ReferenceEquals(SelectedFilter, selected))
-        {
-            return;
+            var selected = FilterOptions.FirstOrDefault(option => string.Equals(option.Key, selectedKey, StringComparison.OrdinalIgnoreCase))
+                ?? DeveloperLogFilterOptionViewModel.All;
+            SetProperty(ref _selectedFilter, selected, nameof(SelectedFilter));
         }
-
-        SetProperty(ref _selectedFilter, selected, nameof(SelectedFilter));
+        finally { _refreshingFilters = false; }
     }
 }
 

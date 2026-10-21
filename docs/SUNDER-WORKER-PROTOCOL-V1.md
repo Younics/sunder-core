@@ -3,8 +3,8 @@
 This document defines the clean-break isolated Runtime protocol selected by the exact Host capability
 `worker-protocol.v1`. Its wire identity is `sunder.worker.v1` with protocol version `1`.
 
-Worker V1 is a package-authoring boundary, not a transport for managed package modules. A V1 executable
-registers native worker contributions through `Sunder.Sdk.Worker`. Neither the Host nor the child process
+Worker V1 is the isolated Runtime boundary. A package's framework-dependent module
+runs in a supervised process and registers contributions through its Worker SDK. Neither the Host nor the child process
 loads, discovers, or adapts `ISunderRuntimePackageModule`.
 
 ## Evolution
@@ -27,7 +27,7 @@ V1 uses a standard-stream transport with fail-closed framing rules:
 - every frame has exactly one canonical `Content-Length` header followed by strict UTF-8 JSON;
 - unknown envelope types, unknown properties, duplicate or ASCII-case-colliding properties, invalid ordering, and reused ids are fatal;
 - the Host clears the inherited environment and supplies only explicit package/protocol/path values, activation-owned temporary-directory values, Windows system-root values, and macOS `__CF_USER_TEXT_ENCODING` required for OS runtime support; it supplies no `PATH`, home, locale, or language-runtime selector;
-- malformed protocol, lifecycle deadline failure, transport-queue exhaustion, or unexpected process exit faults the exact package activation without automatic restart; per-call stream-consumer exhaustion is isolated as described below.
+- malformed protocol, lifecycle deadline failure, transport-queue exhaustion, or unexpected process exit faults the exact package activation; per-call stream-consumer exhaustion is isolated as described below. Host-managed bounded recovery creates a new activation after retirement is proven, without replaying calls or retargeting old endpoints.
 - The current Host allows up to two minutes for generation commit, migration preparation, and activation acknowledgement. The shorter process-handshake deadline does not bound package-owned generation startup work.
 
 Control frames stay bounded. Data that cannot safely fit after JSON encoding uses a Host-issued ephemeral payload
@@ -80,14 +80,26 @@ than the initial commit is a fatal protocol violation.
 
 After successful activation, a .NET worker monitors each lifecycle service's stable `Completion` task. An unexpected
 fault or cancellation reports a worker failure for the exact active generation. `worker.generation-fault` reports a bounded failure for the exact active generation. The Host fences the report by
-activation and generation, withdraws only that generation, and terminates its worker. Protocol failures also fault
-the process activation through the supervised process boundary.
+activation and generation and withdraws only that generation. A valid lifecycle fault
+retains the control/logging transport during bounded cancellation and shutdown, then
+terminates its worker. The report may cross an already-requested shutdown after the
+Host has acknowledged that generation's activation. Malformed, duplicate, or foreign
+reports remain protocol failures. Protocol failures also fault the process activation
+through the supervised process boundary.
 
 `host.shutdown` may retire an active generation or discard a prepared candidate. The worker cancels inbound work,
 drains handlers and worker-originated Host calls, releases Host-issued handles and call scopes, runs its option-level
 shutdown callback, shuts prepared lifecycle services down in reverse registration order, disposes package-owned
 composition, drains logging, sends `worker.shutdown-ack`, and exits. The Host kills the process tree if the shared
 shutdown deadline expires.
+
+The .NET SDK uses the same once-only shutdown owner for lifecycle/startup faults and
+Host retirement. It drains admitted package work and cancellation callbacks while DI
+is usable. A failed activation reports failure and may exit without a successful
+shutdown acknowledgement. The Host observes that exit under the same shutdown
+deadline. The SDK independently bounds cleanup, including noncooperative callbacks;
+expiry never permits disposal beneath unfinished handlers. Broken transport aborts
+new Host-call admission and leaves unproven cleanup to process containment.
 
 Windows Worker descendants remain in a kernel-enforced Job. Linux and macOS use cooperative inherited process-group
 cleanup: Worker code must not call `setsid` or move itself or descendants to another process group. Runtime detects
@@ -190,6 +202,36 @@ an opted-in worker cannot escape an inbound invocation. The implemented capabili
 
 Worker requests terminate with `host.result`, ordered `host.event` plus `host.complete`, or `host.error`.
 `worker.cancel` is subject to the same terminal-drain rule.
+
+Admission has independent bounded lanes for finite operations and long-lived observations. Worker-to-Host
+`worker.watch` and `worker.subscribe` share the observation lane (default 32); other ordinary requests share the
+finite-operation lane (default 32). Host-to-worker provider streams have a separate observation lane (default 64)
+from unary/contribution work (default 64). Pending activation waiters and cancelled calls awaiting terminal drain
+still consume their own lane. Cleanup and logging retain their separate bounded lanes. Admission never queues a
+handler waiting for another handler to release a slot. A valid ordinary request rejected by Host process admission
+receives a call-local `resource-exhausted` `host.error` (`rpc.worker.call-limit` or `rpc.worker.stream-limit`) with
+`not-dispatched` / `safe`; malformed envelopes, forged parent ids, duplicate ids, and protocol violations remain faults.
+Host advertises this admission/outcome support with the sanitized process variable
+`SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1=1`. Without that advertisement, a new SDK retains the original combined
+worker-to-Host admission count and legacy provider-failure normalization so an older strict V1 Host never receives
+an unknown operational outcome or more calls than its original combined bound permits.
+An SDK recognizing that advertisement acknowledges it with optional
+`worker.ready.contributions.operationalOutcomesV1: true`. The property must be absent or true.
+Until that exact Worker acknowledgement, a new Host preserves the old combined admission budget
+and rejects operational outcomes from that Worker. This also protects old SDKs which ignore the
+new environment variable. Callback/auth contribution work shares the finite lane, never the
+observation lane, once both peers have opted in.
+
+An SDK-generated or authenticated Host `resource-exhausted`, `unavailable`, or `deadline-exceeded` failure escaping
+a .NET or Node provider is normalized to a **provider-reported operational outcome**, not forwarded Host authority:
+`worker.error.error` has exactly `kind: "operational"`, `code`, and bounded `message`. `code` is exactly
+`resource-exhausted`, `unavailable`, or `deadline-exceeded`. Details, dispatch/retry claims, and other codes are
+forbidden. Host discards the worker message and creates its own kind, message, and `rpc.provider.<code>` error.
+The enclosing call is `possibly-dispatched` / `unsafe` unless the broker knows that unary method is idempotent.
+A nested admission rejection never proves that an enclosing mutation was not dispatched and never permits replay.
+These outcomes neither grant permission nor fault/retire the provider. Arbitrary provider-created infrastructure
+exceptions, undeclared domain errors, invalid output schemas, and protocol faults retain provider-fault behavior.
+The existing `resource-exhausted` / `rpc.worker.response-limit` worker outcome remains separately supported.
 
 Each received RPC stream has a nonblocking per-call queue bounded independently by message count and encoded JSON
 bytes. If a producer outruns its consumer, the receiver atomically classifies the rejection as `count`, `bytes`, or

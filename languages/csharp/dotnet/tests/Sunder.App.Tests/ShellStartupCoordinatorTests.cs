@@ -240,6 +240,31 @@ public sealed class ShellStartupCoordinatorTests
         Assert.Equal(1, client.CallCount);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task LoadConsistentPackageUiStateAsync_PersistentSourceMismatchExhaustsBoundedRetries(long sourceGeneration)
+    {
+        var initial = CreateSnapshot(Guid.NewGuid(), RuntimeBootstrapState.Ready, generation: 2);
+        var client = new SnapshotClient(initial, initial, initial);
+        var sourceLoads = 0;
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            ShellStartupCoordinator.LoadConsistentPackageUiStateAsync(
+                client,
+                initial,
+                _ =>
+                {
+                    sourceLoads++;
+                    return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>(
+                        [CreatePackageSource(sourceGeneration)]);
+                },
+                maxAttempts: 3));
+
+        Assert.Equal(3, sourceLoads);
+        Assert.Equal(3, client.CallCount);
+    }
+
     [Fact]
     public void ValidateStartupOptions_RejectsParseErrorsUnlessCoreShellWasExplicitlyChosen()
     {

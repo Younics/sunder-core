@@ -1,100 +1,83 @@
 # Package Anatomy
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
-
-> **RPC authoring transition:** The Protocol-project topology below describes
-> current pre-cutover source. The accepted final topology derives RPC from
-> ordinary package implementation in place; see
-> [Implementation-First RPC Authoring](IMPLEMENTATION-FIRST-RPC.md). That compiler
-> and migration are not implemented yet.
-
-A Sunder package is published as one versioned universal unit containing shared content and zero or more exact App/Runtime RID targets. Registry and local-file installation derive a strict shared-plus-current-RID installed projection while retaining package-wide metadata and canonical source provenance. App and Runtime run in separate processes and never share package object instances.
-
-## Target Roles
-
-| Role | Activation | Owns |
-| --- | --- | --- |
-| Runtime | Exact-RID Worker V1 module launched by an exact execution runtime | Headless work, settings schemas, callbacks/auth, owner/public RPC providers, and persistent Runtime data. |
-| App | `ISunderAppPackageModule` | Avalonia views/settings views, shell integration, notifications, and App background processes. |
-
-Each App entry assembly contains at most one top-level public, non-abstract, non-generic module with a public parameterless constructor. Build tooling infers App targets from that compiled metadata. Each Runtime leaf explicitly declares one exact-RID `worker` target and packages only its framework-dependent module plus package-owned dependencies and native assets. The exact language runtime is installed and trusted separately. A shared-only package contains RPC descriptor bundles and no executable target.
-
-The worker owns its process-local object graph and lifecycle; Sunder does not load a Runtime package assembly or construct package-owned Runtime DI. Never use static state to communicate between App and Runtime.
-
-## Process Boundary
-
-```text
-Package App role
-  runs in Sunder.App
-       |
-       | authenticated owner RPC and package data APIs
-       v
-Package Worker V1 Runtime role
-  runs as a supervised child process
-```
-
-Use owner RPC unary methods for commands and queries, owner RPC server streams for ordered live events, and Runtime-owned package storage for durable data. Do not send local filesystem paths across the boundary; App and Runtime do not assume a shared filesystem.
-
-## Capability Availability
-
-| Capability | Runtime activation | App activation |
-| --- | --- | --- |
-| `ContentRootPath` | Read-only Runtime shadow content. | Read-only generation-owned App snapshot. |
-| `Storage.State`, `Storage.Files` | Direct Runtime-owned persistence. | Authenticated proxy to the active Runtime role. |
-| `Settings`, `Secrets` | Direct Runtime-owned persistence. | Authenticated proxy to the active Runtime role. |
-| `Storage.RoleLocalWorkspace` | Runtime-local persistent workspace. | Separate App-local persistent workspace. |
-| `Logging` | Persistent Runtime package logs. | App session log. |
-| `ISunderRpcClient` | Available after activation for declared Runtime imports. | Available after publication for declared App imports, including owner RPC. |
-| `IPackageCallbackClient` | Unavailable (`IsAvailable == false`). | Available only after publication; handlers run in Runtime. |
-| Views and settings views | Not available. | Registered through `Sunder.Sdk.Avalonia`. |
-| Settings schemas and package lifecycle | Advertised by `SunderWorkerOptions`; worker lifecycle callbacks run in-process. | Not available. |
-
-An App-only package can use its App role-local workspace and App logging, but Runtime-backed state, files, settings, secrets, owner RPC, and callbacks require an active Runtime role for that package. Packages needing durable shared data should include both roles.
-
-All `IPackageContext` capabilities are scoped to one activation and must not escape it. Host capability implementations are thread-safe unless a member explicitly says otherwise; that guarantee does not make package services, returned Avalonia controls, streams, or caller-owned collections thread-safe. Follow each member's ownership/threading contract and marshal control access to the App dispatcher. `RoleLocalWorkspace` is host-owned; package code must not dispose it.
-
-## Typical Canonical Project
+A package is one versioned `.sunderpkg` with shared content and exact role/RID
+targets. A .NET author maintains one Library project; Sunder generates isolated
+Worker and optional App assemblies. Source folders organize code, not authority.
 
 ```text
 MyPackage/
   MyPackage.csproj
   PackageMetadata.cs
+  Services/
+  Views/                       # optional Avalonia source
+  Stacks/                      # optional platform contributor
   Assets/
-  MyPackage.Protocol/
-    Contracts/
-    Generated/
-  MyPackage.Worker/
-    Program.cs
-  MyPackage.App/
-    PackageModule.cs
+  sunder-contracts.lock.json
+  sunder-contracts.owned.json   # when reviewing owned public APIs
 ```
 
-The root unsuffixed csproj is the canonical Worker/package project and sets `SunderPackagePrimaryProject=true`. Worker source may stay under `*.Worker/`, but that folder has no separate csproj. The generated `*.Protocol` project is non-packable and package-local. It contains bundled descriptors plus generated DTO, client, and provider adapters; Worker and App consume it through private project references. Keep Avalonia types out of Worker code. A normal build emits one exact current-RID Worker leaf and composes it with the optional App; `PackSunderPackage` sequentially builds all configured Worker RIDs and combines validated leaves into one universal package.
+`SunderPackageProject=true` enables generation. Build composes the current RID at
+`bin/Debug/net10.0/sunder-dev`; direct `PackSunderPackage` combines all declared RIDs.
+Internal `sunder-roles/<role>/<rid>` outputs are generated, not authored projects.
+The [Quickstart](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/README.md)
+and [single-project guide](SINGLE-PROJECT-AUTHORING.md) demonstrate this layout.
 
-The compiled [quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) demonstrates the canonical Worker/package, App, and Protocol topology with a generated owner RPC binding.
+## Roles And Processes
 
-## Package Dependencies Versus Protocol Helpers
+| Role | Owns |
+| --- | --- |
+| Worker | Services, storage/secrets, settings schemas, callbacks/auth and background lifecycle |
+| App | Views/view models, navigation, notifications and presentation-only state |
+| Shared payload | Contract descriptors, portable content and shared package dependencies |
 
-These solve different problems:
+The Host launches the exact-RID framework-dependent Worker module using a verified
+official runtime. The App loads only its selected App projection. Generated clients
+cross the authenticated RPC boundary; mutable objects, static state and local paths
+are not a communication channel between roles.
 
-- `[assembly: SunderPackageDependency(...)]` says another Sunder package must be installed and ready at Runtime. Runtime validates versions and activates dependencies before dependents.
-- Package-local protocol source supplies DTOs, generated bindings, and adapters used by this package's targets. A coordinated package family may also distribute a helper NuGet package, but that is a build-time convenience only.
+Registration does not construct views or execute package methods. Generated
+constructor composition owns service lifetimes and disposal. App code injects a
+generated service interface, not the concrete Worker implementation.
 
-Cross-package Runtime behavior is defined by a language-neutral RPC descriptor bundled into every package that provides or consumes it. CLR types are never shared between package processes or App load contexts. A consumer that requires a specific provider package also declares a Sunder runtime dependency on that provider.
+## Capability Availability
 
-Only assemblies on an explicit Host allowlist use Host-provided type identity. Package-authored assemblies always remain activation-local.
+| Capability | Worker | App |
+| --- | --- | --- |
+| Content root | Read-only selected package content | Read-only generation snapshot |
+| State, files, settings, secrets | Runtime-owned persistence | Authenticated proxy to its active Worker |
+| Role-local workspace | Worker-local workspace | Separate App-local workspace |
+| Logging | Persistent Runtime package log | App session log |
+| Generated service clients | Declared Runtime use after activation | Declared App use after publication |
+| Callback client | Unavailable | Calls handlers owned by the Worker |
+| Views | Unavailable | Avalonia contribution registrations |
 
-## Target Selection
+An App-only package can use its App-local workspace and logging. Runtime-backed
+data/callbacks require its active Worker. Capabilities are activation-scoped and
+must not escape that lifetime. Host capability implementations are thread-safe
+unless documented otherwise; package services, controls, streams and collections
+still need their own concurrency/ownership discipline.
 
-Runtime keeps packages without a Runtime target in dependency readiness and snapshot planning but creates no Runtime provider or worker process for them. App activates only the selected exact App target. Shared-only packages have no executable activation.
+## Dependencies And Contracts
 
-## Boundaries To Keep
+Select another package's public API or a provider contract through the package
+tooling. The reviewed lock pins its exact descriptor/model authority and generates
+the required runtime dependency. Do not duplicate that dependency with an attribute.
+Ordinary non-API package dependencies may use `[assembly: SunderPackageDependency(...)]`.
 
-- Reference `Sunder.Sdk.Worker` from Worker leaves and `Sunder.Sdk` from App or Protocol projects; opt into `Sunder.Sdk.Avalonia` and `Sunder.Sdk.Stacks` only when used.
-- Reference `Sunder.Package.Build` as `PrivateAssets="all"`.
-- Do not reference `Sunder.App`, `Sunder.Runtime.Host`, `Sunder.Runtime.Contracts`, or other host implementation projects.
-- Treat `ContentRootPath` and installed package files as read-only.
-- Do not maintain `sunder-package.json` in source.
-- Do not treat collectible load contexts as a security sandbox. See [Package Trust And Security](SECURITY.md).
+Importers consume the authority package's generated `_Services` and `_Models`
+namespaces. CLR implementation assemblies are not shared across packages; Host
+allowlisted SDK types are the exception. Declaration-only interfaces remain useful
+for extension points without an owned implementation.
 
-The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for identity, exact targets, layered payloads, projections, RPC metadata, generated output, and archive rules.
+## Package Boundaries
+
+- Reference coordinated Sunder SDKs and `Sunder.Package.Build` (`PrivateAssets="all"`).
+- Keep backend/native dependencies in Worker ownership and Avalonia in App ownership.
+- Use explicit role metadata only for ambiguous helper/dependency ownership.
+- Treat installed content as read-only; use package storage for mutable data.
+- Do not author generated manifests, transport bindings or separate role projects.
+- Package projects do not reference App/Host implementation assemblies.
+- Collectible load contexts are not an OS security sandbox.
+
+The [package standard](../SUNDER-PACKAGE-STANDARD.md) owns archive/target/projection
+rules; [security](SECURITY.md) owns the trust and containment model.

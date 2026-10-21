@@ -9,11 +9,19 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed record AppPolicyLoadedPackage(RuntimePackagePolicySubject Package, string? RegistryOrigin, bool Development,
     string? ManifestSha256, IReadOnlyList<RuntimeRequiredProviderPredicate> RequiredProviders, IReadOnlyList<string> OwnerOnlyContracts,
-    IReadOnlyList<RegistryPlatformCatalogIdentity> Platforms);
+    IReadOnlyList<RegistryPlatformCatalogIdentity> Platforms)
+{
+    public bool TrackedLiveness { get; init; }
+}
 internal sealed record AppPolicySessionFile(int SchemaVersion, string SessionId, RuntimeAppProcessIdentity Process, AppPolicyPeer Peer,
-    string State, IReadOnlyList<AppPolicyLoadedPackage> Loaded, PolicyClockReading? ShutdownStarted, string? Cause);
+    string State, IReadOnlyList<AppPolicyLoadedPackage> Loaded, PolicyClockReading? ShutdownStarted, string? Cause)
+{
+    public IReadOnlyList<AppPolicyActivationRecord> Activations { get; init; } = [];
+}
+internal sealed record AppPolicyActivationPermit(string PermitId, RuntimePackagePolicySubject Package, PackageTargetDescriptor Target);
+internal sealed record AppPolicyActivationRecord(Guid ActivationId, string State, IReadOnlyList<AppPolicyActivationPermit> Permits);
 
-internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, RuntimeProtocolDescriptor protocol, IAppPolicySnapshotSource snapshots,
+internal sealed partial class AppProcessPolicySessions(RuntimePackagePaths paths, RuntimeProtocolDescriptor protocol, IAppPolicySnapshotSource snapshots,
     PackagePolicyAdmission admission, PackageLifecyclePolicyCache policies, IPolicyContinuousClock clock, TimeProvider time,
     IAppPolicyProcessController processes, ILogger<AppProcessPolicySessions> logger,
     PackageSessionState? runtimeSessions = null, RuntimeRpcReadinessEvaluator? readiness = null) : BackgroundService
@@ -102,6 +110,8 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
 
     internal async Task<RuntimeAppPolicySessionStatus> HeartbeatAsync(RuntimeAppPolicySessionRequest request, AppPolicyPeer peer, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        if (ObserveActiveStatus(Get(request, peer)) is { } active) { token.ThrowIfCancellationRequested(); return active; }
         await _gate.WaitAsync(token);
         try
         {
@@ -113,6 +123,10 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
 
     internal async Task<RuntimeAppPolicySessionStatus> GetStatusAsync(string sessionId, AppPolicyPeer peer, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        EnsureAvailable();
+        if (!_sessions.TryGetValue(sessionId, out var observed) || !PeerMatches(observed.Record.Peer, peer)) throw Required();
+        if (ObserveActiveStatus(observed) is { } active) { token.ThrowIfCancellationRequested(); return active; }
         await _gate.WaitAsync(token);
         try
         {
@@ -123,13 +137,34 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
         finally { _gate.Release(); }
     }
 
+    private RuntimeAppPolicySessionStatus? ObserveActiveStatus(Session entry)
+    {
+        // Fresh process identity and current package/platform security are the
+        // authority for proof, not provider readiness or a cached "active" reply.
+        // Those availability/retirement checks run in EnforceAsync. A healthy
+        // heartbeat must not queue behind publication, persistence or cleanup.
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var record = entry.Record;
+            if (record.State != RuntimeAppPolicySessionStates.Active
+                || entry.Process?.Probe() != AppPolicyProcessState.Alive || LoadedDenial(record) is not null) return null;
+            var status = Status(record);
+            EnsureAvailable();
+            if (ReferenceEquals(record, entry.Record)
+                && _sessions.TryGetValue(record.SessionId, out var current) && ReferenceEquals(entry, current)) return status;
+        }
+        // Never grant proof against a record superseded during validation, nor
+        // spin indefinitely under lifecycle pressure. The caller may retry.
+        throw new RuntimeUnavailableException("The App policy session changed during heartbeat validation. Retry with the current session.");
+    }
+
     private async Task<RuntimeAppPolicySessionStatus> ObserveStatusAsync(Session entry)
     {
         var probe = entry.Process?.Probe() ?? AppPolicyProcessState.Unproven;
         if (probe == AppPolicyProcessState.ExitProven) await RecordExitAsync(entry);
         else if (probe == AppPolicyProcessState.Unproven && entry.Record.Loaded.Count > 0)
             await RequestShutdownAsync(entry, PackagePolicyErrorCodes.AppProcessSupervisionRequired);
-        else if (LoadedDenial(entry.Record) is { } denial) await RequestShutdownAsync(entry, denial);
+        else if (LoadedDenial(entry.Record, out var deniedPackage) is { } denial) await RequestShutdownAsync(entry, denial, deniedPackage);
         return Status(entry.Record);
     }
 
@@ -147,6 +182,8 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
             if (entry.Record.State != RuntimeAppPolicySessionStates.Active || entry.Process?.Probe() != AppPolicyProcessState.Alive
                 || !ReferenceEquals(source, snapshots.PolicySource(id))) throw Required();
             admission.Require(source);
+            if (Volatile.Read(ref _publicationFences) > 0) throw new RuntimeUnavailableException("App permit admission is fenced during Runtime publication.");
+            ValidateTrackedRequest(request, source, entry);
             var development = source.Kind == PackageSourceKind.Dev;
             var subject = new RegistryPackageVersionIdentity(request.Package.PackageId, request.Package.Version, request.Package.PackageContentIdentity);
             var developmentPlatforms = development && source.DevelopmentImports is not { IsLocal: true }
@@ -156,8 +193,8 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
             var requiredProviders = RuntimeRpcReadinessEvaluator.AppPredicates(source);
             var ownerOnly = RuntimeRpcReadinessEvaluator.AppOwnerOnlyContracts(source);
             var manifestHash = source.ContentIndex is null ? null : RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
-            // Only admitted uses can enter the durable loaded record. Once loaded,
-            // their provider obligations survive removal of the source snapshot.
+            // Loaded security survives snapshot removal. Tracked activation
+            // liveness ends only after the independent Host drain acknowledgement.
             if (requiredProviders.Count > 0 && (!snapshots.IsPublished(id)
                 || development && requiredProviders.Any(predicate => !PackageCompatibilityAuthority.DevelopmentUseEnabled(source,
                     predicate.ConsumerRole, predicate.Contract.ContractId, predicate.Contract.ContractVersion))
@@ -170,17 +207,26 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
             {
                 if (entry.Record.Loaded.Count >= MaximumLoaded) throw Required();
                 var platforms = development ? developmentPlatforms : policies.PackageSubjects(origin!, subject).Platforms;
-                var next = entry.Record with { Loaded = [.. entry.Record.Loaded, new(request.Package, origin, development, manifestHash, requiredProviders, ownerOnly, platforms)] };
+                var next = entry.Record with { Loaded = [.. entry.Record.Loaded, new(request.Package, origin, development, manifestHash, requiredProviders, ownerOnly, platforms)
+                    { TrackedLiveness = request.AppActivationId.HasValue }] };
                 await PersistAsync(next);
                 entry.Record = next;
             }
+            else if (existing.TrackedLiveness && request.AppActivationId is null)
+            {
+                // An untracked load can never borrow a later tracked retirement.
+                var next = entry.Record with { Loaded = entry.Record.Loaded.Select(value => value == existing ? value with { TrackedLiveness = false } : value).ToArray() };
+                await PersistAsync(next);
+                entry.Record = next;
+            }
+            var permitId = await RecordTrackedPermitAsync(entry, request);
             // Recording may yield to a policy update or snapshot retirement. Keep the
             // conservative loaded record, but never return an obsolete permission.
             await RequireLoadedAllowedAsync(entry);
             if (entry.Process?.Probe() != AppPolicyProcessState.Alive || !ReferenceEquals(source, snapshots.PolicySource(id))) throw Required();
             admission.Require(source);
             var lease = development ? developmentPlatforms.Length == 0 ? null : policies.PlatformLease(origin!, developmentPlatforms) : policies.PackageLease(origin!, subject);
-            return new(true, null, Guid.NewGuid().ToString("N"), request.Session, request.Package, lease) { Development = development };
+            return new(true, null, permitId, request.Session, request.Package, lease) { Development = development, AppActivationId = request.AppActivationId };
         }
         finally { _gate.Release(); }
     }
@@ -210,7 +256,8 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
                     await RequestShutdownAsync(entry, PackagePolicyErrorCodes.AppProcessSupervisionRequired);
                 if (entry.Record.State == RuntimeAppPolicySessionStates.Active)
                 {
-                    if (LoadedDenial(entry.Record) is { } denial) await RequestShutdownAsync(entry, denial);
+                    if (LoadedDenial(entry.Record, out var deniedPackage) is { } denial) await RequestShutdownAsync(entry, denial, deniedPackage);
+                    else await RetireUnavailableActivationsAsync(entry);
                 }
                 if (!NeedsExit(entry.Record)) continue;
                 PolicyClockReading? now = null;
@@ -257,13 +304,15 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
     private static bool PeerMatches(AppPolicyPeer expected, AppPolicyPeer actual) => expected.ProcessId == actual.ProcessId
         && (expected.AuditToken is null && actual.AuditToken is null || expected.AuditToken is { } left && actual.AuditToken is { } right
             && left.ProcessId == right.ProcessId && left.ProcessVersion == right.ProcessVersion && left.EffectiveUserId == right.EffectiveUserId);
-    private async Task RequestShutdownAsync(Session entry, string cause)
+    private async Task RequestShutdownAsync(Session entry, string cause, string? deniedPackage = null)
     {
         if (NeedsExit(entry.Record)) return;
         PolicyClockReading? now = null;
         try { now = clock.Read(); } catch { }
         entry.Record = entry.Record with { State = RuntimeAppPolicySessionStates.ShutdownRequested, ShutdownStarted = now, Cause = cause };
         await PersistEnforcementAsync(entry.Record);
+        logger.LogWarning("App process {ProcessId} shutdown requested: {Cause}; affected package {PackageId}; policy session {PolicySessionId}; Runtime instance {RuntimeInstanceId}.",
+            entry.Record.Process.ProcessId, cause, deniedPackage, entry.Record.SessionId, protocol.RuntimeInstanceId);
     }
     private async Task RecordExitAsync(Session entry)
     {
@@ -279,30 +328,34 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
         .Select(loaded => new PackagePolicySubjects(loaded.RegistryOrigin!,
             loaded.Development ? [] : [new(loaded.Package.PackageId, loaded.Package.Version, loaded.Package.PackageContentIdentity)], loaded.Platforms)).ToArray();
 
-    private string? LoadedDenial(AppPolicySessionFile record)
+    private string? LoadedDenial(AppPolicySessionFile record) => LoadedDenial(record, out _);
+
+    private string? LoadedDenial(AppPolicySessionFile record, out string? deniedPackage)
     {
+        deniedPackage = null;
         foreach (var loaded in record.Loaded)
         {
             if (!loaded.Development)
             {
                 try { policies.RequireActivation(loaded.RegistryOrigin!, new(loaded.Package.PackageId, loaded.Package.Version, loaded.Package.PackageContentIdentity)); }
-                catch (PackagePolicyDeniedException error) { return error.Code; }
+                catch (PackagePolicyDeniedException error) { deniedPackage = loaded.Package.PackageId; return error.Code; }
             }
             else if (loaded.Platforms.Count > 0)
             {
                 try { policies.RequirePlatformActivation(loaded.RegistryOrigin!, loaded.Platforms); }
-                catch (PackagePolicyDeniedException error) { return error.Code; }
+                catch (PackagePolicyDeniedException error) { deniedPackage = loaded.Package.PackageId; return error.Code; }
             }
-            if (!PredicatesSatisfied(loaded.Package.Version, loaded.Development, loaded.ManifestSha256, loaded.RequiredProviders, loaded.OwnerOnlyContracts))
-                return RpcReadinessErrorCodes.RequiredProviderUnsatisfied;
+            // Provider liveness is availability, not permission to keep this OS
+            // process alive. Exact affected activations are fenced/retired separately;
+            // durable package/platform security denial still requires containment.
         }
         return null;
     }
 
     private async Task RequireLoadedAllowedAsync(Session entry)
     {
-        if (LoadedDenial(entry.Record) is not { } denial) return;
-        await RequestShutdownAsync(entry, denial);
+        if (LoadedDenial(entry.Record, out var deniedPackage) is not { } denial) return;
+        await RequestShutdownAsync(entry, denial, deniedPackage);
         throw TerminationRequired();
     }
 
@@ -321,12 +374,15 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
             : source.RegistryPolicyOrigin ?? policies.FindPackageOrigin(new(package.PackageId, package.Version, package.PackageContentIdentity));
         var manifestHash = source.ContentIndex is null ? null : RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
         if (loaded.Development != development || loaded.RegistryOrigin != origin || loaded.ManifestSha256 != manifestHash) throw Required();
+        if (!PredicatesSatisfied(loaded.Package.Version, loaded.Development, loaded.ManifestSha256, loaded.RequiredProviders, loaded.OwnerOnlyContracts))
+            throw new RuntimeUnavailableException($"Package '{loaded.Package.PackageId}' is unavailable because a required RPC provider is not ready. Other packages remain available; retry after the provider recovers.");
     }
     private bool PredicatesSatisfied(string version, bool development, string? manifestHash, IReadOnlyList<RuntimeRequiredProviderPredicate> predicates, IReadOnlyList<string> ownerOnly)
         => predicates.Count == 0 || readiness is not null && runtimeSessions is not null
             && runtimeSessions.AppPredicatesSatisfied(readiness, version, development, manifestHash, predicates, ownerOnly);
-    private static RuntimeAppPolicySessionStatus Status(AppPolicySessionFile record) => new(record.SessionId, record.State,
-        NeedsExit(record) ? PackagePolicyErrorCodes.AppProcessTerminationRequired : null, NeedsExit(record), record.Loaded.Select(value => value.Package).ToArray());
+    private RuntimeAppPolicySessionStatus Status(AppPolicySessionFile record) => new(record.SessionId, record.State,
+        NeedsExit(record) ? PackagePolicyErrorCodes.AppProcessTerminationRequired : null, NeedsExit(record), record.Loaded.Select(value => value.Package).ToArray())
+        { Retirements = PendingRetirements(record.SessionId).Concat(UnavailableRetirements(record)).DistinctBy(value => value.AppActivationId).ToArray() };
     private void EnsureAvailable() { if (!_initialized || _failed) throw Required(); }
     private string Root()
     {
@@ -363,15 +419,18 @@ internal sealed class AppProcessPolicySessions(RuntimePackagePaths paths, Runtim
                 || loaded.RequiredProviders.Count > 128 || loaded.OwnerOnlyContracts.Count > 128 || loaded.RequiredProviders.Any(predicate => predicate.ConsumerPackageId != loaded.Package.PackageId
                     || predicate.ConsumerRole != "app" || !RegistryActivePolicyClient.Hash(predicate.Contract.DescriptorSha256) || !RegistryActivePolicyClient.Hash(predicate.Contract.AbiSha256))) throw Required();
         }
+        ValidateActivations(record);
     }
     private static PackagePolicyDeniedException Required() => new(PackagePolicyErrorCodes.AppProcessSupervisionRequired);
     private static PackagePolicyDeniedException TerminationRequired() => new(PackagePolicyErrorCodes.AppProcessTerminationRequired);
-    public override void Dispose() { foreach (var entry in _sessions.Values) entry.Process?.Dispose(); _gate.Dispose(); base.Dispose(); }
+    public override void Dispose() { _failed = true; foreach (var entry in _sessions.Values) entry.Process?.Dispose(); _gate.Dispose(); base.Dispose(); }
     private sealed class Session(AppPolicySessionFile record, IAppPolicyProcessHandle? process)
     {
         internal volatile AppPolicySessionFile Record = record;
         internal IAppPolicyProcessHandle? Process { get; } = process;
         internal PolicyClockReading? NextAttempt;
         internal bool Attempted;
+        internal ConcurrentDictionary<Guid, AppPolicyActivationAuthority> Activations { get; } = new();
+        internal ConcurrentDictionary<Guid, RuntimeAppActivationRetirementRequirement> UnavailableActivations { get; } = new();
     }
 }

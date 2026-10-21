@@ -24,19 +24,22 @@ internal static class SunderRpcCSharpModelProjection
         var models = new Dictionary<INamedTypeSymbol, SunderRpcCSharpSourceModel>(SymbolEqualityComparer.Default);
         var names = new Dictionary<string, SunderRpcCSharpSourceModel>(StringComparer.OrdinalIgnoreCase);
         var diagnostics = new List<SunderRpcCSharpCompilerDiagnostic>();
-        foreach (var source in contracts.SelectMany(contract => contract.SourceTypes).Select(value => value.SourceType)
-                     .Distinct<INamedTypeSymbol>(SymbolEqualityComparer.Default).OrderBy(value => value.ToDisplayString(), StringComparer.Ordinal))
+        foreach (var value in contracts.SelectMany(contract => contract.SourceTypes)
+                     .DistinctBy(value => value.SourceType, SymbolEqualityComparer.Default).OrderBy(value => value.SourceType.ToDisplayString(), StringComparer.Ordinal))
         {
-            if (!SunderRpcCSharpNaming.TryCreate(source.Name, null, out var name) || name!.Pascal.Length > 128)
+            var source = value.SourceType;
+            var publicName = value.PublicName;
+            if (publicName is null && SunderRpcCSharpNaming.TryCreate(source.Name, null, out var name)) publicName = name!.Pascal;
+            if (!SunderRpcModelProjection.IsPortableModelName(publicName))
             {
-                diagnostics.Add(Error("rpc-authoring.model-projection-invalid", $"Source model '{source}' does not have a portable public model name.", [source]));
+                diagnostics.Add(Error("rpc-authoring.model-projection-invalid", $"Source model '{source}' must have a public model name of 1–128 ASCII identifier characters, excluding reserved C#/TypeScript keywords. SunderValue.PublicName is used exactly as authored.", [source]));
                 continue;
             }
-            var model = new SunderRpcCSharpSourceModel(name.Pascal, source);
+            var model = new SunderRpcCSharpSourceModel(publicName!, source);
             if (names.TryGetValue(model.Name, out var previous))
             {
                 diagnostics.Add(Error("rpc-authoring.generated-name-collision",
-                    $"Distinct source models '{previous.SourceType}' and '{source}' both project to '{model.Name}'. Use distinct source model names; equal schemas do not establish identity.",
+                    $"Distinct source models '{previous.SourceType}' and '{source}' collide at public model '{model.Name}' under ASCII case folding. Use distinct source model names or SunderValue.PublicName overrides; equal schemas do not establish identity.",
                     [previous.SourceType, source]));
                 continue;
             }

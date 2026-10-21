@@ -30,7 +30,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
               <Target Name="RejectLeakedRoleGlobals" BeforeTargets="PrepareForBuild;CoreClean;GetTargetPath">
-                <Error Condition="'$(RuntimeIdentifier)' != '' or '$(SunderPackageCompilationRole)' != '' or '$(SunderPackageReferenceRole)' != ''"
+                <Error Condition="'$(RuntimeIdentifier)' != '' or '$(SunderPackageCompilationRole)' != '' or '$(SunderPackageReferenceRole)' != '' or '$(SunderPackageAnalysisGlobalUsingsFile)' != ''"
                        Text="Generated role properties leaked to the source helper." />
               </Target>
             </Project>

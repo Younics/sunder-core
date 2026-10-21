@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Sunder.Runtime.Host.Services;
@@ -28,31 +27,29 @@ internal static class RuntimeWorkerLifecycle
         CancellationToken cancellationToken = default,
         Action<Task>? operationStarted = null)
     {
-        var startedAt = Stopwatch.GetTimestamp();
-        for (var index = 0; index < workers.Count; index++)
+        if (cancellationToken.IsCancellationRequested) return;
+        using var timeoutCancellation = new CancellationTokenSource(timeout);
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeoutCancellation.Token);
+        var stopToken = deadline.Token;
+        var stops = new List<(string PackageId, Task Operation)>(workers.Count);
+        // Stop requests target independent execution boundaries. Admit them all
+        // before observing completion under one unchanged batch deadline; dividing
+        // that budget into serial slices can cancel healthy Workers simply because
+        // many peers exist. Strict cutover quiescence and disposal stay separate.
+        foreach (var (packageId, worker) in workers)
         {
-            if (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            var (packageId, worker) = workers[index];
-            var remaining = timeout - Stopwatch.GetElapsedTime(startedAt);
-            var workersRemaining = workers.Count - index;
-            var workerTimeout = remaining > TimeSpan.Zero
-                ? TimeSpan.FromTicks(Math.Max(1, remaining.Ticks / workersRemaining))
-                : TimeSpan.Zero;
-            using var timeoutCancellation = new CancellationTokenSource();
-            timeoutCancellation.CancelAfter(workerTimeout);
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken,
-                timeoutCancellation.Token);
+            if (cancellationToken.IsCancellationRequested) break;
             var stopTask = Task.Run(
-                () => worker.StopAsync(deadline.Token),
+                () => worker.StopAsync(stopToken),
                 CancellationToken.None);
             operationStarted?.Invoke(stopTask);
+            stops.Add((packageId, stopTask));
+        }
+        foreach (var (packageId, stopTask) in stops)
+        {
             try
             {
-                await stopTask.WaitAsync(deadline.Token);
+                await stopTask.WaitAsync(stopToken);
             }
             catch (OperationCanceledException exception) when (deadline.IsCancellationRequested)
             {

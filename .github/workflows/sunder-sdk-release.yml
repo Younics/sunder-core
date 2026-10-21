@@ -2,1355 +2,308 @@ name: Sunder SDK Release
 
 on:
   push:
-    tags:
-      - "sdk/v*"
+    tags: ["sdk/v*"]
 
 permissions: {}
-
 concurrency:
-  group: sunder-release-draft-${{ github.ref_name }}
+  group: sunder-release-${{ github.ref_name }}
   cancel-in-progress: false
-
 env:
   DOTNET_VERSION: "10.0.100"
   NODE_VERSION: "24.18.1"
-  NUGET_SOURCE: https://api.nuget.org/v3/index.json
-  NUGET_FLAT_CONTAINER: https://api.nuget.org/v3-flatcontainer
+  NPM_VERSION: "11.19.0"
   NPM_REGISTRY: https://registry.npmjs.org
-  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
-  SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
-  SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
-  SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
-  SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
 
 jobs:
   prepare:
-    name: Prepare release metadata
-    environment: sunder-core-release
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    environment: sunder-core-release
     permissions:
       contents: read
     outputs:
-      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
-      npm_tag: ${{ steps.release.outputs.npm_tag }}
-      npm_version: ${{ steps.metadata.outputs.npm_version }}
-      npm_version_range: ${{ steps.metadata.outputs.npm_version_range }}
       version: ${{ steps.release.outputs.version }}
-      version_range: ${{ steps.metadata.outputs.version_range }}
-      vite_version: ${{ steps.metadata.outputs.vite_version }}
+      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
     steps:
-      - name: Validate release tag
-        id: release
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^sdk/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)$ ]]; then
-            echo "SDK release tags must use SemVer format, for example sdk/v1.1.0 or sdk/v1.1.1-beta.1." >&2
-            exit 1
-          fi
-
-          version="${BASH_REMATCH[1]}"
-          release_patch="${BASH_REMATCH[4]}"
-          is_prerelease="false"
-          npm_tag="accept-v$version"
-          if [[ "$version" == *-* ]]; then
-            is_prerelease="true"
-            prerelease="${version#*-}"
-            IFS='.' read -ra identifiers <<< "$prerelease"
-            for identifier in "${identifiers[@]}"; do
-              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
-                echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
-                exit 1
-              fi
-            done
-          fi
-          if [[ "$is_prerelease" == "true" && "$release_patch" == "0" ]]; then
-            echo "A coordinated minor line starts at stable X.Y.0; an X.Y.0 prerelease cannot satisfy that line's bounded dependency range." >&2
-            exit 1
-          fi
-
-          {
-            echo "is_prerelease=$is_prerelease"
-            echo "npm_tag=$npm_tag"
-            echo "version=$version"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Verify the exact approved artifactSourceCommit and SDK tag
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/release/release_coordinates.py sdk
-
-      - name: Verify pinned NuGet.org service identity
-        run: bash scripts/release/verify-nuget-source.sh
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-
-      - name: Verify coordinated production package metadata
-        id: metadata
+      - id: release
+        run: python3 -B scripts/release/github_release.py metadata "$GITHUB_REF_NAME"
+      - name: Verify tag source and coordinated metadata
         env:
-          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
-        run: node scripts/release/check-sdk-version.mjs "$EXPECTED_VERSION"
+          GH_TOKEN: ${{ github.token }}
+          SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
+          SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
+          SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
+          SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python3 -B scripts/release/release_coordinates.py sdk
+          node scripts/release/check-sdk-version.mjs "$VERSION"
+          bash scripts/release/verify-nuget-source.sh
 
-  package-format-build-smoke:
-    name: Package Format and packaged Build smoke (${{ matrix.os }})
+  validation:
     needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-24.04
-          - windows-2022
-          - macos-14
+    uses: ./.github/workflows/sunder-ci.yml
+    permissions:
+      contents: read
+
+  compatibility-corpus:
+    name: SDK retained corpus (${{ matrix.lane }})
+    needs: [prepare, validation]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     permissions:
       contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Run focused Package Format tests
-        run: |
-          dotnet restore languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --locked-mode
-          dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj -c Release --no-restore
-
-      - name: Build validator and pack release Build tooling
-        shell: pwsh
-        env:
-          SDK_VERSION_RANGE: ${{ needs.prepare.outputs.version_range }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          $feed = Join-Path $PWD "artifacts/packaged-build-feed"
-          New-Item -ItemType Directory -Force $feed | Out-Null
-          $sdkVersionRangeMsbuild = $env:SDK_VERSION_RANGE.Replace(",", "%2C")
-          $releaseProperties = @(
-            "-p:SunderDeveloperPackageVersion=$env:VERSION"
-            "-p:SunderDeveloperPackageVersionRange=$sdkVersionRangeMsbuild"
-            "-p:ContinuousIntegrationBuild=true"
-            "-p:GeneratePackageOnBuild=false"
-          )
-
-          dotnet restore languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj --locked-mode
-          dotnet restore languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj --locked-mode
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj -c Release --no-restore -o $feed @releaseProperties
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj -c Release --no-restore -o $feed @releaseProperties
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj -c Release --no-restore -o $feed @releaseProperties
-
-          dotnet restore languages/csharp/dotnet/host/Sunder.Cli/Sunder.Cli.csproj --locked-mode
-          dotnet build languages/csharp/dotnet/host/Sunder.Cli/Sunder.Cli.csproj -c Release --no-restore
-
-      - name: Consume packaged Build tooling and validate its exact archive
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          $feed = Join-Path $PWD "artifacts/packaged-build-feed"
-          $sample = Join-Path $env:RUNNER_TEMP "sunder-packaged-build-smoke"
-          New-Item -ItemType Directory -Force $sample | Out-Null
-          $project = Join-Path $sample "PackagedBuildSmoke.csproj"
-          $source = Join-Path $sample "Package.cs"
-          $consumerPackages = Join-Path $env:RUNNER_TEMP "sunder-packaged-build-packages"
-          $projectContent = @'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup>
-              <TargetFramework>net10.0</TargetFramework>
-              <ImplicitUsings>enable</ImplicitUsings>
-              <Nullable>enable</Nullable>
-              <Version>1.0.0</Version>
-            </PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Sunder.Sdk" Version="RELEASE_VERSION" />
-              <PackageReference Include="Sunder.Package.Build" Version="RELEASE_VERSION" PrivateAssets="all" />
-            </ItemGroup>
-          </Project>
-          '@
-          $projectContent.Replace("RELEASE_VERSION", $env:VERSION) | Set-Content -Encoding utf8 $project
-          @'
-          using Microsoft.Extensions.DependencyInjection;
-          using Sunder.Sdk.Abstractions;
-          using Sunder.Sdk.Packaging;
-
-          [assembly: SunderPackage(Id = "test.packaged.build", Name = "Packaged Build Smoke")]
-
-          namespace PackagedBuildSmoke;
-
-          public sealed class PackageModule : ISunderAppPackageModule
-          {
-              public void ConfigureAppServices(IServiceCollection services, IPackageContext context) { }
-              public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services) { }
-          }
-          '@ | Set-Content -Encoding utf8 $source
-
-          dotnet restore $project --no-cache --packages $consumerPackages --source $feed --source https://api.nuget.org/v3/index.json
-          dotnet msbuild $project -t:PackSunderPackage -p:Configuration=Release -p:RestorePackagesPath=$consumerPackages
-          $archives = @(Get-ChildItem $sample -Recurse -Filter *.sunderpkg)
-          if ($archives.Count -ne 1) {
-            throw "Expected exactly one packaged-Build smoke archive, found $($archives.Count)."
-          }
-          dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll dev package validate $archives[0].FullName
-
-          $workerSample = Join-Path $env:RUNNER_TEMP "sunder-packaged-worker-smoke"
-          New-Item -ItemType Directory -Force $workerSample | Out-Null
-          $workerProject = Join-Path $workerSample "PackagedWorkerSmoke.csproj"
-          $workerSource = Join-Path $workerSample "Program.cs"
-          $workerPackages = Join-Path $env:RUNNER_TEMP "sunder-packaged-worker-packages"
-          $workerProjectContent = @'
-          <Project Sdk="Microsoft.NET.Sdk">
-            <PropertyGroup>
-              <OutputType>Exe</OutputType>
-              <TargetFramework>net10.0</TargetFramework>
-              <ImplicitUsings>enable</ImplicitUsings>
-              <Nullable>enable</Nullable>
-              <Version>1.0.0</Version>
-              <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
-              <SelfContained>false</SelfContained>
-              <UseAppHost>false</UseAppHost>
-              <PublishSingleFile>false</PublishSingleFile>
-              <PublishTrimmed>false</PublishTrimmed>
-              <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/obj/$(Configuration)/$(TargetFramework)/$(RuntimeIdentifier)/sunder-package.json'))</SunderGeneratedPackageManifest>
-            </PropertyGroup>
-            <ItemGroup>
-              <PackageReference Include="Sunder.Sdk.Worker" Version="RELEASE_VERSION" />
-              <PackageReference Include="Sunder.Package.Build" Version="RELEASE_VERSION" PrivateAssets="all" />
-              <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
-                                   Role="runtime"
-                                   Rid="$(RuntimeIdentifier)"
-                                   Kind="worker" />
-            </ItemGroup>
-          </Project>
-          '@
-          $workerProjectContent.Replace("RELEASE_VERSION", $env:VERSION) | Set-Content -Encoding utf8 $workerProject
-          @'
-          using Sunder.Sdk.Packaging;
-          using Sunder.Sdk.Worker;
-
-          [assembly: SunderPackage(Id = "test.packaged.worker", Name = "Packaged Worker Smoke")]
-
-          await SunderWorker.RunAsync(_ => new SunderWorkerOptions([]));
-          '@ | Set-Content -Encoding utf8 $workerSource
-
-          dotnet restore $workerProject --no-cache --packages $workerPackages --source $feed --source https://api.nuget.org/v3/index.json
-          dotnet msbuild $workerProject -t:PackSunderPackage -p:Configuration=Release -p:RestorePackagesPath=$workerPackages
-          $workerArchives = @(Get-ChildItem $workerSample -Recurse -Filter *.sunderpkg)
-          if ($workerArchives.Count -ne 1) {
-            throw "Expected exactly one packaged worker smoke archive, found $($workerArchives.Count)."
-          }
-          dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll dev package validate $workerArchives[0].FullName
-
-  worker-native-smoke:
-    name: Native .NET worker ${{ matrix.rid }}
-    needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
-          - rid: win-x64
-            runner: windows-2022
-          - rid: win-arm64
-            runner: windows-11-arm
-          - rid: linux-x64
-            runner: ubuntu-24.04
-          - rid: linux-arm64
-            runner: ubuntu-24.04-arm
-          - rid: osx-x64
-            runner: macos-15-intel
-          - rid: osx-arm64
-            runner: macos-14
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 120
-    permissions:
-      contents: read
+          - {lane: portable, os: ubuntu-24.04}
+          - {lane: win-x64, os: windows-2022}
+          - {lane: win-arm64, os: windows-11-arm}
+          - {lane: linux-x64, os: ubuntu-24.04}
+          - {lane: linux-arm64, os: ubuntu-24.04-arm}
+          - {lane: osx-x64, os: macos-15-intel}
+          - {lane: osx-arm64, os: macos-15}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore worker Host interoperability test
-        run: dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
-
-      - name: Package exact current-RID Worker V1 module
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $PSNativeCommandUseErrorActionPreference = $true
-          $archive = Join-Path $env:RUNNER_TEMP "test.worker.v1.executable.1.0.0.sunderpkg"
-          dotnet msbuild languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/WorkerV1Executable/WorkerV1Executable.csproj `
-            -t:PackSunderPackage `
-            -p:Configuration=Release `
-            -p:RuntimeIdentifier=${{ matrix.rid }} `
-            -p:ContinuousIntegrationBuild=true `
-            -p:SunderPackageOutputPath=$archive
-
-      - name: Build, launch, activate, and stop exact Worker V1 package
-        env:
-          SUNDER_DOTNET_WORKER_ARCHIVE_PATH: ${{ runner.temp }}/test.worker.v1.executable.1.0.0.sunderpkg
-          SUNDER_REQUIRE_DOTNET_WORKER_ARTIFACT: "1"
-          SUNDER_WORKER_RELEASE_METRICS_PATH: ${{ github.workspace }}/artifacts/worker-v1/dotnet-worker-${{ matrix.rid }}.json
-        run: dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj -c Release --no-restore -p:GeneratePackageOnBuild=false --filter FullyQualifiedName~WorkerSdkPackagedExecutable
-
-      - name: Upload native worker release evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sunder-worker-v1-dotnet-evidence-${{ matrix.rid }}
-          path: artifacts/worker-v1/dotnet-worker-${{ matrix.rid }}.json
-          if-no-files-found: error
-          retention-days: 90
-
-  storage-tests:
-    name: Package storage tests (${{ matrix.os }})
-    needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-24.04
-          - windows-2022
-          - macos-14
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore runtime storage tests
-        run: dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
-
-      - name: Run runtime storage tests
-        env:
-          SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS: ${{ runner.os == 'macOS' && '1' || '0' }}
-        run: dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj -c Release --no-restore
-
-  package:
-    name: Build and pack coordinated NuGet and npm packages
-    needs:
-      - prepare
-      - package-format-build-smoke
-      - worker-native-smoke
-      - storage-tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      actions: read
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: languages/typescript/node/package-lock.json
-
-      - name: Restore solution
-        shell: bash
-        run: dotnet restore Sunder.Core.slnx --locked-mode
-
-      - name: Build SDK packages
-        shell: bash
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-tested-sdk
+          path: candidate
+      - name: Execute reviewed corpus with measured native context and byte-bound inputs
         env:
-          SDK_VERSION_RANGE: ${{ needs.prepare.outputs.version_range }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          sdk_version_range_msbuild="${SDK_VERSION_RANGE/,/%2C}"
-          common_args=(
-            -c Release
-            --no-restore
-            -m:1
-            -p:SunderDeveloperPackageVersion="$VERSION"
-            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild"
-            -p:ContinuousIntegrationBuild=true
-            -p:GeneratePackageOnBuild=false
-          )
-
-          dotnet build languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj "${common_args[@]}"
-          dotnet build languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj "${common_args[@]}"
-          dotnet build languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj "${common_args[@]}"
-          dotnet build languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj "${common_args[@]}"
-          dotnet build languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj "${common_args[@]}"
-          dotnet build languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj "${common_args[@]}"
-
-      - name: Test package build tooling
+          SDK_VERSION: ${{ needs.prepare.outputs.version }}
+          CORPUS_LANE: ${{ matrix.lane }}
         shell: bash
-        env:
-          SDK_VERSION_RANGE: ${{ needs.prepare.outputs.version_range }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          sdk_version_range_msbuild="${SDK_VERSION_RANGE/,/%2C}"
-          dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj \
-            -c Release \
-            --no-restore \
-            -p:SunderDeveloperPackageVersion="$VERSION" \
-            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild" \
-            -p:ContinuousIntegrationBuild=true \
-            -p:GeneratePackageOnBuild=false
-          dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.Worker.Tests/Sunder.Sdk.Worker.Tests.csproj \
-            -c Release \
-            --no-restore \
-            -p:SunderDeveloperPackageVersion="$VERSION" \
-            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild" \
-            -p:ContinuousIntegrationBuild=true \
-            -p:GeneratePackageOnBuild=false
-
-      - name: Verify V1 public API baselines
-        run: dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj -c Release --no-restore -p:GeneratePackageOnBuild=false
-
-      - name: Export canonical catalog from the same approved artifactSourceCommit
-        if: needs.prepare.outputs.is_prerelease == 'false'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          dotnet build languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj \
-            -c Release --no-restore -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false
-          python3 scripts/release/core_catalog_release.py export \
-            --tool languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/bin/Release/net10.0/Sunder.ExecutionRuntime.Build.dll \
-            --directory "$RUNNER_TEMP/core-catalog-export"
-
-      - name: Upload exact-attempt canonical catalog export
-        if: needs.prepare.outputs.is_prerelease == 'false'
+        run: >-
+          python3 -B scripts/compatibility/sdk_compatibility_execution.py collect
+          --candidate candidate --version "$SDK_VERSION" --lane "$CORPUS_LANE"
+          --output "$RUNNER_TEMP/sdk-compatibility-lane"
+      - name: Retain independently collected owning-lane evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-core-catalog-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/core-catalog-export/*
+          name: sunder-sdk-compatibility-lane-${{ matrix.lane }}
+          path: ${{ runner.temp }}/sdk-compatibility-lane
           if-no-files-found: error
-          retention-days: 1
 
-      - name: Pack NuGet packages
-        shell: bash
-        env:
-          SDK_VERSION_RANGE: ${{ needs.prepare.outputs.version_range }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          output_dir="$PWD/artifacts/release/sdk"
-          mkdir -p "$output_dir"
-
-          sdk_version_range="$SDK_VERSION_RANGE"
-          sdk_version_range_msbuild="${sdk_version_range/,/%2C}"
-          common_args=(
-            -c Release
-            --no-restore
-            -o "$output_dir"
-            -p:SunderDeveloperPackageVersion="$VERSION"
-            -p:SunderDeveloperPackageVersionRange="$sdk_version_range_msbuild"
-            -p:ContinuousIntegrationBuild=true
-            -p:GeneratePackageOnBuild=false
-          )
-
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj "${common_args[@]}"
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj "${common_args[@]}"
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj "${common_args[@]}"
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj "${common_args[@]}"
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj "${common_args[@]}"
-          dotnet pack languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj "${common_args[@]}"
-
-          packages=("$output_dir"/*.nupkg)
-          if [[ ${#packages[@]} -ne 6 ]]; then
-            echo "Expected exactly six NuGet packages in '$output_dir', found ${#packages[@]}." >&2
-            exit 1
-          fi
-
-          expected=(
-            "Sunder.Sdk.$VERSION.nupkg"
-            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
-            "Sunder.Sdk.Stacks.$VERSION.nupkg"
-            "Sunder.Sdk.Worker.$VERSION.nupkg"
-            "Sunder.Package.Build.$VERSION.nupkg"
-            "Sunder.Package.Templates.$VERSION.nupkg"
-          )
-          for package in "${expected[@]}"; do
-            test -f "$output_dir/$package" || { echo "Missing exact release artifact: $package" >&2; exit 1; }
-          done
-          python3 scripts/release/verify-nuget-package-set.py "$VERSION" "$output_dir" "$GITHUB_SHA"
-
-
-          worker_nuspec="$(unzip -p "$output_dir/Sunder.Sdk.Worker.$VERSION.nupkg" '*.nuspec')"
-          if [[ "$worker_nuspec" != *"id=\"Sunder.Sdk\" version=\"[$VERSION]\""* ]]; then
-            echo "Sunder.Sdk.Worker must depend on the exact coordinated Sunder.Sdk version '[$VERSION]'." >&2
-            exit 1
-          fi
-
-          dependency_range="$sdk_version_range"
-          dependency_range_with_space="${dependency_range/,/, }"
-          for package in Sunder.Sdk.Avalonia Sunder.Sdk.Stacks; do
-            nuspec="$(unzip -p "$output_dir/$package.$VERSION.nupkg" '*.nuspec')"
-            if [[ "$nuspec" != *"id=\"Sunder.Sdk\" version=\"$dependency_range\""* \
-                && "$nuspec" != *"id=\"Sunder.Sdk\" version=\"$dependency_range_with_space\""* ]]; then
-              echo "$package does not bound its Sunder.Sdk dependency to '$dependency_range'." >&2
-              exit 1
-            fi
-          done
-
-      - name: Validate generated template variants
-        shell: bash
-        env:
-          SDK_VERSION_RANGE: ${{ needs.prepare.outputs.version_range }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-
-          package_dir="$PWD/artifacts/release/sdk"
-          nuget_config="$RUNNER_TEMP/sunder-template-sample.nuget.config"
-          sdk_version_range="$SDK_VERSION_RANGE"
-
-          dotnet new install "$package_dir/Sunder.Package.Templates.$VERSION.nupkg"
-
-          cat > "$nuget_config" <<EOF
-          <?xml version="1.0" encoding="utf-8"?>
-          <configuration>
-            <packageSources>
-              <clear />
-              <add key="local-sdk-release" value="$package_dir" />
-              <add key="nuget.org" value="$NUGET_SOURCE" />
-            </packageSources>
-          </configuration>
-          EOF
-
-          expect_template_failure() {
-            local name="$1"
-            shift
-
-            local sample_dir="$RUNNER_TEMP/sunder-template-negative-$name"
-            rm -rf "$sample_dir"
-
-            if dotnet new sunder-package --output "$sample_dir" "$@"; then
-              echo "Template unexpectedly accepted invalid options for '$name'." >&2
-              exit 1
-            fi
-          }
-
-          expect_template_failure "missing-identity" --name MissingIdentity
-          expect_template_failure "missing-host-package" --name MissingHostPackage --packageId sample.missinghost --packageName "Missing Host" --withHostDependency
-
-          validate_template() {
-            local name="$1"
-            local package_id="$2"
-            local package_name="$3"
-            shift 3
-
-            local sample_dir="$RUNNER_TEMP/sunder-template-$name"
-            rm -rf "$sample_dir"
-
-            dotnet new sunder-package \
-              --name "$name" \
-              --packageId "$package_id" \
-              --packageName "$package_name" \
-              --output "$sample_dir" \
-              "$@"
-
-            local project_path
-            project_path="$(find "$sample_dir" -name "$name.csproj" -print -quit)"
-            if [[ -z "$project_path" ]]; then
-              echo "Generated sample project '$name' was not found under '$sample_dir'." >&2
-              exit 1
-            fi
-
-            local sunder_references
-            sunder_references="$(find "$sample_dir" -type f \( -name '*.csproj' -o -name '*.props' \) -exec grep -Eh 'PackageReference Include="(Sunder\.Sdk(\.Avalonia|\.Stacks)?|Sunder\.Package\.Build)"' {} + || true)"
-            if [[ -z "$sunder_references" ]]; then
-              echo "Generated sample '$name' did not contain Sunder package references." >&2
-              exit 1
-            fi
-            local invalid_references
-            invalid_references="$(printf '%s\n' "$sunder_references" | grep -Fv "Version=\"$sdk_version_range\"" || true)"
-            if [[ -n "$invalid_references" ]]; then
-              echo "Generated sample '$name' contained a Sunder reference outside release range '$sdk_version_range':" >&2
-              printf '%s\n' "$invalid_references" >&2
-              exit 1
-            fi
-
-            dotnet restore "$project_path" --configfile "$nuget_config"
-            dotnet build "$project_path" -c Release --no-restore -m:1
-            dotnet msbuild "$project_path" -t:PackSunderPackage -p:Configuration=Release -m:1
-
-            local archives
-            archives="$(find "$(dirname "$project_path")/bin/Release" -name '*.sunderpkg' -type f | wc -l)"
-            if [[ "$archives" -ne 1 ]]; then
-              echo "Generated sample '$name' must pack exactly one .sunderpkg archive; found $archives." >&2
-              exit 1
-            fi
-          }
-
-          validate_template "Sample.Base" "sample.base" "Sample Base"
-          validate_template "Sample.Avalonia" "sample.avalonia" "Sample Avalonia" --withAvalonia
-          validate_template "Sample.AvaloniaNoView" "sample.avalonianoview" "Sample Avalonia No View" --withAvalonia --noDefaultView
-          validate_template "Sample.Stacks" "sample.stacks" "Sample Stacks" --withStacks
-          validate_template "Sample.All" "sample.all" "Sample All" --withAvalonia --withStacks
-          validate_template "Sample.Extension" "sample.extension" "Sample Extension" --withHostDependency --hostPackageId sunder.package.agent
-
-      - name: Test, pack, and inspect npm packages
-        working-directory: languages/typescript/node
-        shell: bash
-        env:
-          NPM_BUILD_VERSION: ${{ needs.prepare.outputs.npm_version }}
-          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
-          NPM_VERSION_RANGE: ${{ needs.prepare.outputs.npm_version_range }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          VITE_VERSION: ${{ needs.prepare.outputs.vite_version }}
-        run: |
-          set -euo pipefail
-
-          npm install --global "npm@$NPM_BUILD_VERSION" --registry="$NPM_REGISTRY"
-          [[ "$(npm --version)" == "$NPM_BUILD_VERSION" ]] \
-            || { echo "Expected npm $NPM_BUILD_VERSION after installation." >&2; exit 1; }
-          node ../../../scripts/release/check-sdk-version.mjs "$VERSION"
-
-          jq -e \
-            --arg npm_range "$NPM_VERSION_RANGE" \
-            --arg version "$VERSION" \
-            --arg vite_version "$VITE_VERSION" '
-            .lockfileVersion == 3
-            and .version == $version
-            and .packages[""].version == $version
-            and .packages["packages/sdk"].version == $version
-            and .packages["packages/package-tool"].version == $version
-            and .packages["packages/create-sunder-package"].version == $version
-            and .packages["packages/package-tool"].dependencies["@sunder/sdk"] == $npm_range
-            and .packages["packages/create-sunder-package"].dependencies["@sunder/sdk"] == $npm_range
-            and .packages[""].devDependencies.vite == $vite_version
-            and .packages["packages/package-tool"].dependencies.vite == $vite_version
-            and .packages["node_modules/vite"].version == $vite_version
-          ' package-lock.json >/dev/null
-
-          npm ci
-          npm ls --all
-          npm test
-          npm run build
-
-          output_dir="$PWD/../../../artifacts/release/sdk"
-          npm pack --json \
-            --pack-destination "$output_dir" \
-            --workspace @sunder/sdk \
-            --workspace @sunder/package-tool \
-            --workspace create-sunder-package \
-            > "$RUNNER_TEMP/npm-pack.json"
-
-          expected_archives=(
-            "sunder-sdk-$VERSION.tgz"
-            "sunder-package-tool-$VERSION.tgz"
-            "create-sunder-package-$VERSION.tgz"
-          )
-          mapfile -t archives < <(find "$output_dir" -maxdepth 1 -name '*.tgz' -type f | sort)
-          if [[ ${#archives[@]} -ne ${#expected_archives[@]} ]]; then
-            echo "Expected exactly three npm tarballs, found ${#archives[@]}." >&2
-            exit 1
-          fi
-          node ../../../scripts/release/verify-node-package-artifacts.mjs \
-            "$VERSION" \
-            "$NPM_VERSION_RANGE" \
-            "$VITE_VERSION" \
-            "$output_dir" \
-            "$RUNNER_TEMP/npm-pack.json"
-          for archive in "${expected_archives[@]}"; do
-            test -f "$output_dir/$archive" || { echo "Missing exact npm tarball: $archive" >&2; exit 1; }
-            entries="$(tar -tzf "$output_dir/$archive")"
-            grep -Fxq package/LICENSE <<< "$entries"
-            grep -Fxq package/NOTICE <<< "$entries"
-            grep -Fxq package/README.md <<< "$entries"
-            manifest="$(tar -xOf "$output_dir/$archive" package/package.json)"
-            jq -e --arg version "$VERSION" '
-              .version == $version
-              and .license == "MIT"
-              and .repository.url == "git+https://github.com/Younics/sunder-core.git"
-              and .publishConfig.access == "public"
-              and .publishConfig.provenance == true
-            ' <<< "$manifest" >/dev/null
-            npm publish "$output_dir/$archive" --dry-run --ignore-scripts --access public --tag "$NPM_TAG" --registry="$NPM_REGISTRY"
-          done
-
-          package_tool_manifest="$(tar -xOf "$output_dir/sunder-package-tool-$VERSION.tgz" package/package.json)"
-          create_manifest="$(tar -xOf "$output_dir/create-sunder-package-$VERSION.tgz" package/package.json)"
-          jq -e \
-            --arg npm_range "$NPM_VERSION_RANGE" \
-            --arg vite_version "$VITE_VERSION" '
-              .dependencies["@sunder/sdk"] == $npm_range
-              and .dependencies.vite == $vite_version
-            ' <<< "$package_tool_manifest" >/dev/null
-          jq -e --arg npm_range "$NPM_VERSION_RANGE" \
-            '.dependencies["@sunder/sdk"] == $npm_range' <<< "$create_manifest" >/dev/null
-          for template in template template-react-node; do
-            template_manifest="$(tar -xOf "$output_dir/create-sunder-package-$VERSION.tgz" "package/$template/package.json")"
-            jq -e --arg npm_range "$NPM_VERSION_RANGE" '
-              .dependencies["@sunder/sdk"] == $npm_range
-              and .devDependencies["@sunder/package-tool"] == $npm_range
-            ' <<< "$template_manifest" >/dev/null
-          done
-          react_template_manifest="$(tar -xOf "$output_dir/create-sunder-package-$VERSION.tgz" "package/template-react-node/package.json")"
-          jq -e --arg vite_range "^$VITE_VERSION" \
-            '.devDependencies.vite == $vite_range' <<< "$react_template_manifest" >/dev/null
-
-          node ../../../scripts/release/generate-node-release-notices.mjs package-lock.json "$output_dir"
-
-      - name: Rebind an existing immutable package artifact on retry
-        id: package-artifact
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          response="$(gh api --paginate -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[]')"
-          mapfile -t artifacts < <(jq -c -s '[.[] | select(.name == "sunder-sdk-release-packages")] | .[]' <<< "$response")
-          if [[ ${#artifacts[@]} -gt 1 ]]; then
-            echo "SDK run has ambiguous coordinated package artifacts." >&2
-            exit 1
-          fi
-          if [[ ${#artifacts[@]} -eq 0 ]]; then
-            echo 'upload=true' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          artifact="${artifacts[0]}"
-          jq -e '.expired == false' <<< "$artifact" >/dev/null \
-            || { echo "Original SDK package artifact expired; use a new coordinated version." >&2; exit 1; }
-          artifact_id="$(jq -r '.id' <<< "$artifact")"
-          archive="$RUNNER_TEMP/original-sdk-packages.zip"
-          recovered="$RUNNER_TEMP/original-sdk-packages"
-          mkdir "$recovered"
-          gh api -H 'Accept: application/vnd.github+json' \
-            "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$archive"
-          unzip -q "$archive" -d "$recovered"
-
-          expected_names=(
-            "Sunder.Sdk.$VERSION.nupkg"
-            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
-            "Sunder.Sdk.Stacks.$VERSION.nupkg"
-            "Sunder.Sdk.Worker.$VERSION.nupkg"
-            "Sunder.Package.Build.$VERSION.nupkg"
-            "Sunder.Package.Templates.$VERSION.nupkg"
-            "sunder-sdk-$VERSION.tgz"
-            "sunder-package-tool-$VERSION.tgz"
-            "create-sunder-package-$VERSION.tgz"
-            npm-MIT-LICENSE.txt
-            npm-NOTICES.txt
-            node-dependency-notices.json
-          )
-          mapfile -t recovered_names < <(find "$recovered" -mindepth 1 -maxdepth 1 -type f -print \
-            | while IFS= read -r package_path; do basename "$package_path"; done \
-            | sort)
-          mapfile -t expected_names < <(printf '%s\n' "${expected_names[@]}" | sort)
-          [[ ${#recovered_names[@]} -eq ${#expected_names[@]} ]] \
-            || { echo "Original SDK package artifact inventory is incomplete." >&2; exit 1; }
-          for index in "${!expected_names[@]}"; do
-            [[ "${recovered_names[$index]}" == "${expected_names[$index]}" ]] \
-              || { echo "Original SDK package artifact identity is unexpected." >&2; exit 1; }
-          done
-          unexpected_entry="$(find "$recovered" -mindepth 1 -maxdepth 1 ! -type f -print -quit)"
-          [[ -z "$unexpected_entry" ]] \
-            || { echo "Original SDK package artifact contains a non-regular entry." >&2; exit 1; }
-          echo "Rebinding this retry to the original immutable SDK package bytes."
-          echo 'upload=false' >> "$GITHUB_OUTPUT"
-
-      - name: Upload coordinated package artifacts
-        if: steps.package-artifact.outputs.upload == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sunder-sdk-release-packages
-          path: |
-            artifacts/release/sdk/Sunder.Sdk.${{ needs.prepare.outputs.version }}.nupkg
-            artifacts/release/sdk/Sunder.Sdk.Avalonia.${{ needs.prepare.outputs.version }}.nupkg
-            artifacts/release/sdk/Sunder.Sdk.Stacks.${{ needs.prepare.outputs.version }}.nupkg
-            artifacts/release/sdk/Sunder.Sdk.Worker.${{ needs.prepare.outputs.version }}.nupkg
-            artifacts/release/sdk/Sunder.Package.Build.${{ needs.prepare.outputs.version }}.nupkg
-            artifacts/release/sdk/Sunder.Package.Templates.${{ needs.prepare.outputs.version }}.nupkg
-            artifacts/release/sdk/sunder-sdk-${{ needs.prepare.outputs.version }}.tgz
-            artifacts/release/sdk/sunder-package-tool-${{ needs.prepare.outputs.version }}.tgz
-            artifacts/release/sdk/create-sunder-package-${{ needs.prepare.outputs.version }}.tgz
-            artifacts/release/sdk/npm-MIT-LICENSE.txt
-            artifacts/release/sdk/npm-NOTICES.txt
-            artifacts/release/sdk/node-dependency-notices.json
-          if-no-files-found: error
-          retention-days: 90
-
-  npm-preflight:
-    name: Preflight npm OIDC exchange and dry-runs
-    needs:
-      - prepare
-      - package
+  stage:
+    needs: [prepare, validation, compatibility-corpus]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
+    environment: sunder-core-release
     permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Setup Node for trusted publishing
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: ${{ env.NPM_REGISTRY }}
-
-      - name: Use exact packageManager npm
-        shell: bash
-        env:
-          NPM_BUILD_VERSION: ${{ needs.prepare.outputs.npm_version }}
-        run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_BUILD_VERSION" --registry="$NPM_REGISTRY"
-          [[ "$(npm --version)" == "$NPM_BUILD_VERSION" ]]
-
-      - name: Download coordinated package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-sdk-release-packages
-          path: release-assets
-
-      - name: Exchange npm OIDC tokens and run non-publishing dry-runs
-        shell: bash
-        env:
-          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          bash scripts/release/preflight-npm-trusted-publishing.sh \
-            "$VERSION" \
-            "$NPM_TAG" \
-            "release-assets/sunder-sdk-$VERSION.tgz" \
-            "release-assets/sunder-package-tool-$VERSION.tgz" \
-            "release-assets/create-sunder-package-$VERSION.tgz"
-
-  create-draft:
-    name: Create and byte-verify draft GitHub Release
-    needs:
-      - prepare
-      - package
-      - npm-preflight
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      actions: read
       contents: write
+    outputs:
+      release_id: ${{ steps.publication.outputs.release_id }}
+      compatibility_sha256: ${{ steps.qualification.outputs.compatibility_sha256 }}
+      compatibility_base_commit: ${{ steps.qualification.outputs.compatibility_base_commit }}
+      compatibility_base_sha256: ${{ steps.qualification.outputs.compatibility_base_sha256 }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
+      SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
+      SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
+      SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
+      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ vars.SUNDER_SDK_COMPATIBILITY_BASE_COMMIT }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-
-      - name: Use release npm version
-        shell: bash
-        env:
-          NPM_BUILD_VERSION: ${{ needs.prepare.outputs.npm_version }}
-        run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_BUILD_VERSION" --registry="$NPM_REGISTRY"
-          [[ "$(npm --version)" == "$NPM_BUILD_VERSION" ]]
-
-      - name: Download coordinated package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-sdk-release-packages
-          path: release-assets
-
-      - name: Download the exact-attempt source-derived catalog
+      - name: Export source-bound canonical catalog
         if: needs.prepare.outputs.is_prerelease == 'false'
+        run: |
+          dotnet restore languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj --locked-mode
+          dotnet build languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj -c Release --no-restore
+          python3 -B scripts/release/core_catalog_release.py export --tool languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/bin/Release/net10.0/Sunder.ExecutionRuntime.Build.dll --directory "$RUNNER_TEMP/catalog"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sunder-tested-sdk
+          path: candidate
+      - name: Download same-run owning-lane outputs separately from candidate inputs
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: sunder-core-catalog-${{ github.run_id }}-${{ github.run_attempt }}
-          path: catalog-input
-
-      - name: Create or reuse and verify immutable draft
-        id: publication
-        shell: bash
+          pattern: sunder-sdk-compatibility-lane-*
+          path: compatibility-executions
+          merge-multiple: false
+      - name: Assemble the tested bytes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-
-          tag="sdk/v$VERSION"
-          bash scripts/release/verify-release-tag.sh "$tag"
-          expected_package_names=(
-            "Sunder.Sdk.$VERSION.nupkg"
-            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
-            "Sunder.Sdk.Stacks.$VERSION.nupkg"
-            "Sunder.Sdk.Worker.$VERSION.nupkg"
-            "Sunder.Package.Build.$VERSION.nupkg"
-            "Sunder.Package.Templates.$VERSION.nupkg"
-          )
-          expected_npm_names=(
-            "sunder-sdk-$VERSION.tgz"
-            "sunder-package-tool-$VERSION.tgz"
-            "create-sunder-package-$VERSION.tgz"
-          )
-          expected_notice_names=(
-            npm-MIT-LICENSE.txt
-            npm-NOTICES.txt
-            node-dependency-notices.json
-          )
-          evidence_names=(
-            SHA256SUMS
-            release-provenance.json
-            release-sbom.spdx.json
-            toolchain.txt
-          )
-          expected_remote_names=(
-            "${expected_package_names[@]}"
-            "${expected_npm_names[@]}"
-            "${expected_notice_names[@]}"
-            "${evidence_names[@]}"
-          )
-          if [[ "$IS_PRERELEASE" == false ]]; then
-            expected_remote_names+=(sunder-platform-contracts.v1.json sunder-platform-contracts.receipt.v1.json)
-          fi
-          collect_release_assets() {
-            mapfile -t assets < <(find release-assets -maxdepth 1 -type f | sort)
-            if [[ ${#assets[@]} -ne ${#expected_remote_names[@]} ]]; then
-              echo "Expected exactly ${#expected_remote_names[@]} SDK release assets, found ${#assets[@]}." >&2
-              exit 1
-            fi
-          }
-          packages=(release-assets/*.nupkg)
-          npm_packages=(release-assets/*.tgz)
-          [[ ${#packages[@]} -eq 6 ]] || { echo "Expected exactly six NuGet release assets." >&2; exit 1; }
-          [[ ${#npm_packages[@]} -eq 3 ]] || { echo "Expected exactly three npm release assets." >&2; exit 1; }
-          for asset_name in "${expected_package_names[@]}" "${expected_npm_names[@]}" "${expected_notice_names[@]}"; do
-            test -f "release-assets/$asset_name" || { echo "Missing exact SDK release asset: $asset_name" >&2; exit 1; }
-          done
-
-          created_release=false
-          verified_release=false
-          set +e
-          release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"
-          resolve_status=$?
-          set -e
-          if [[ $resolve_status -eq 4 ]]; then
-            create_args=(
-              release create "$tag"
-              --title "Sunder SDK $VERSION"
-              --notes "Automated coordinated Sunder SDK, package build tooling, and package template release for $VERSION: six NuGet packages and three npm packages."
-              --latest=false
-              --verify-tag
-              --target "$GITHUB_SHA"
-            )
-            [[ "$IS_PRERELEASE" != "true" ]] || create_args+=(--prerelease)
-            gh "${create_args[@]}" --draft
-            created_release=true
-            for _ in {1..30}; do
-              if release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"; then break; fi
-              release_json=''
-              sleep 2
-            done
-            [[ -n "$release_json" ]] || { echo "Created SDK draft was not discoverable through authenticated release listing." >&2; exit 1; }
-          elif [[ $resolve_status -ne 0 ]]; then
-            exit "$resolve_status"
-          fi
-          release_id="$(jq -r '.id' <<< "$release_json")"
-          jq -e --argjson release_id "$release_id" --arg tag "$tag" --argjson prerelease "$IS_PRERELEASE" '
-            .id == $release_id and .tag_name == $tag and .draft == true and .prerelease == $prerelease
-          ' <<< "$release_json" >/dev/null \
-            || { echo "SDK release identity, draft state, or prerelease state is unexpected." >&2; exit 1; }
-          cleanup_failed_draft() {
-            exit_code=$?
-            if [[ $exit_code -ne 0 && "$created_release" == true && "$verified_release" != true ]]; then
-              # A partially retained immutable handoff must remain recoverable by numeric ID.
-              count="$(gh api "repos/$GH_REPO/releases/$release_id" --jq '.assets | length')"
-              if [[ "$count" == 0 ]]; then
-                gh api --method DELETE "repos/$GH_REPO/releases/$release_id" >/dev/null 2>&1 || true
-              fi
-            fi
-            exit "$exit_code"
-          }
-          trap cleanup_failed_draft EXIT
-
-          if [[ "$IS_PRERELEASE" == false ]]; then
-            python3 scripts/release/core_catalog_release.py retain --directory catalog-input --release-id "$release_id"
-            cp catalog-input/sunder-platform-contracts.v1.json catalog-input/sunder-platform-contracts.receipt.v1.json release-assets/
-          fi
-          remote_asset_count="$(jq '[.assets[] | select(.name != "sunder-platform-contracts.v1.json" and .name != "sunder-platform-contracts.receipt.v1.json")] | length' <<< "$release_json")"
-          if [[ "$remote_asset_count" == 0 ]]; then
-            GITHUB_RELEASE_ID="$release_id" \
-              bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
-            collect_release_assets
-            bash scripts/release/upload-github-release-assets.sh "$release_id" "$tag" "${assets[@]}"
-            evidence_run_attempt="$GITHUB_RUN_ATTEMPT"
-          else
-            bash scripts/release/download-github-release-assets.sh \
-              "$release_id" "$tag" release-assets "${evidence_names[@]}"
-            jq -e \
-              --arg repository "$GITHUB_REPOSITORY" \
-              --arg workflow_ref "$GITHUB_REPOSITORY/.github/workflows/sunder-sdk-release.yml@refs/tags/$tag" \
-              --arg run_id "$GITHUB_RUN_ID" \
-              --argjson release_id "$release_id" \
-              --arg ref "refs/tags/$tag" \
-              --arg source_sha "$GITHUB_SHA" '
-                .invocation.repository == $repository
-                and .invocation.workflowRef == $workflow_ref
-                and .invocation.runId == $run_id
-                and .invocation.releaseId == $release_id
-                and .invocation.ref == $ref
-                and .invocation.sha == $source_sha
-                and .sources == [{name:"sunder-core",sha:$source_sha}]
-              ' release-assets/release-provenance.json >/dev/null \
-              || { echo "Existing SDK draft was verified by another publication run or source." >&2; exit 1; }
-            evidence_run_attempt="$(jq -r '.invocation.runAttempt' release-assets/release-provenance.json)"
-            [[ "$evidence_run_attempt" =~ ^[1-9][0-9]*$ ]] \
-              || { echo "Existing SDK publication attempt is invalid." >&2; exit 1; }
-            collect_release_assets
-          fi
-
-          bash scripts/release/verify-github-release-assets.sh \
-            "$release_id" "$tag" release-assets "${expected_remote_names[@]}"
-          verified_release=true
-          {
-            echo "release_id=$release_id"
-            echo "evidence_run_attempt=$evidence_run_attempt"
-          } >> "$GITHUB_OUTPUT"
-          trap - EXIT
-
-      - name: Capture exact verified publication bytes
-        id: handoff
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          EVIDENCE_RUN_ATTEMPT: ${{ steps.publication.outputs.evidence_run_attempt }}
-          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          artifact_name="sunder-sdk-publication-evidence-$RELEASE_ID-$EVIDENCE_RUN_ATTEMPT"
-          mkdir publication-evidence
-          bash scripts/release/download-github-release-assets.sh \
-            "$RELEASE_ID" "sdk/v${{ needs.prepare.outputs.version }}" publication-evidence
-          encoded_name="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
-          artifacts="$(gh api -H 'Accept: application/vnd.github+json' \
-            "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts?name=$encoded_name")"
-          artifact_count="$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length' <<< "$artifacts")"
-          [[ "$artifact_count" -le 1 ]] || { echo "Publication handoff artifact is ambiguous." >&2; exit 1; }
-          {
-            echo "artifact_name=$artifact_name"
-            echo "upload=$([[ "$artifact_count" == 0 ]] && echo true || echo false)"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Upload immutable publication evidence
-        if: steps.handoff.outputs.upload == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ steps.handoff.outputs.artifact_name }}
-          path: publication-evidence/*
-          if-no-files-found: error
-          retention-days: 90
-
-  publish-nuget:
-    name: Publish and verify six NuGet packages
-    needs:
-      - prepare
-      - package
-      - npm-preflight
-      - create-draft
-      - publish-npm
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Download coordinated package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-sdk-release-packages
-          path: release-assets
-
-      - name: Push packages to NuGet.org
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          bash scripts/release/verify-release-tag.sh "sdk/v$VERSION"
-          [[ -n "${NUGET_API_KEY:-}" ]] || { echo "Repository secret NUGET_API_KEY is not configured." >&2; exit 1; }
-          [[ "$NUGET_SOURCE" == "https://api.nuget.org/v3/index.json" \
-              && "$NUGET_FLAT_CONTAINER" == "https://api.nuget.org/v3-flatcontainer" ]] \
-            || { echo "NuGet publication endpoints do not match the pinned NuGet.org source." >&2; exit 1; }
-          bash scripts/release/verify-nuget-source.sh
-          packages=(release-assets/*.nupkg)
-          [[ ${#packages[@]} -eq 6 ]] || { echo "Expected exactly six NuGet packages to push." >&2; exit 1; }
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          mkdir release-assets
+          cp candidate/sdk/*.nupkg candidate/npm/*.tgz release-assets/
           python3 scripts/release/verify-nuget-package-set.py "$VERSION" release-assets "$GITHUB_SHA"
-          expected_package_names=(
-            "Sunder.Sdk.$VERSION.nupkg"
-            "Sunder.Sdk.Avalonia.$VERSION.nupkg"
-            "Sunder.Sdk.Stacks.$VERSION.nupkg"
-            "Sunder.Sdk.Worker.$VERSION.nupkg"
-            "Sunder.Package.Build.$VERSION.nupkg"
-            "Sunder.Package.Templates.$VERSION.nupkg"
-          )
-          package_ids=(
-            Sunder.Sdk
-            Sunder.Sdk.Avalonia
-            Sunder.Sdk.Stacks
-            Sunder.Sdk.Worker
-            Sunder.Package.Build
-            Sunder.Package.Templates
-          )
-          for package in "${expected_package_names[@]}"; do
-            test -f "release-assets/$package" || { echo "Missing exact NuGet package to push: $package" >&2; exit 1; }
-          done
-
-          verify_published_package() {
-            local package_id="$1"
-            local package_path="$2"
-            local package_id_lower="${package_id,,}"
-            local version_lower="${VERSION,,}"
-            local package_name
-            package_name="$(basename "$package_path")"
-            local remote_path="$RUNNER_TEMP/$package_name"
-            for _ in {1..30}; do
-              rm -f "$remote_path"
-              if curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-redirs 0 \
-                "$NUGET_FLAT_CONTAINER/$package_id_lower/$version_lower/$package_id_lower.$version_lower.nupkg" \
-                -o "$remote_path" 2>/dev/null; then
-                bash scripts/release/verify-nuget-package.sh "$package_path" "$remote_path" \
-                  || { echo "NuGet.org package '$package_name' failed canonical content or signature verification." >&2; exit 1; }
-                return
-              fi
-              sleep 10
-            done
-            echo "NuGet.org did not expose '$package_id' version '$VERSION' after publication." >&2
-            exit 1
-          }
-
-          for index in "${!package_ids[@]}"; do
-            package_id="${package_ids[$index]}"
-            package="release-assets/${expected_package_names[$index]}"
-            package_id_lower="${package_id,,}"
-            version_lower="${VERSION,,}"
-            remote_package="$RUNNER_TEMP/${expected_package_names[$index]}"
-            rm -f "$remote_package"
-            if ! curl --fail --silent --show-error --proto '=https' --tlsv1.2 --max-redirs 0 \
-              "$NUGET_FLAT_CONTAINER/$package_id_lower/$version_lower/$package_id_lower.$version_lower.nupkg" \
-              -o "$remote_package" 2>/dev/null; then
-              if ! dotnet nuget push "$package" \
-                --source "$NUGET_SOURCE" \
-                --api-key "$NUGET_API_KEY" \
-                --skip-duplicate; then
-                echo "NuGet push returned a failure; checking whether the immutable version became visible." >&2
-              fi
-            fi
-            verify_published_package "$package_id" "$package"
-          done
+          node scripts/release/generate-node-release-notices.mjs languages/typescript/node/package-lock.json release-assets
+      - name: Require release-specific compatibility and retain the new candidate reference
+        id: qualification
+        run: python3 -B scripts/compatibility/sdk_release_compatibility.py prepare --candidate candidate --directory release-assets --executions compatibility-executions
+      - name: Retain the numeric catalog receipt
+        if: needs.prepare.outputs.is_prerelease == 'false'
+        run: |
+          set -euo pipefail
+          release_id="$(python3 -B scripts/release/github_release.py create "$GITHUB_REF_NAME" | jq -er .id)"
+          python3 -B scripts/release/core_catalog_release.py retain --directory "$RUNNER_TEMP/catalog" --release-id "$release_id"
+          cp "$RUNNER_TEMP/catalog/sunder-platform-contracts.v1.json" "$RUNNER_TEMP/catalog/sunder-platform-contracts.receipt.v1.json" release-assets/
+      - name: Stage and read back immutable release assets
+        id: publication
+        env:
+          SUNDER_SDK_COMPATIBILITY_SHA256: ${{ steps.qualification.outputs.compatibility_sha256 }}
+          SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ steps.qualification.outputs.compatibility_base_sha256 }}
+        run: python3 -B scripts/release/github_release.py stage "$GITHUB_REF_NAME" --directory release-assets
 
   publish-npm:
-    name: Publish and attest three npm packages
-    needs:
-      - prepare
-      - package
-      - npm-preflight
-      - create-draft
+    needs: [prepare, stage]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 60
+    env:
+      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
+      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
+      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
     permissions:
       contents: read
       id-token: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Setup Node for trusted publishing
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: ${{ env.NPM_REGISTRY }}
-
-      - name: Use exact packageManager npm
-        shell: bash
+      - name: Publish with trusted publishing and verify each package before advancing
         env:
-          NPM_BUILD_VERSION: ${{ needs.prepare.outputs.npm_version }}
-        run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_BUILD_VERSION" --registry="$NPM_REGISTRY"
-          [[ "$(npm --version)" == "$NPM_BUILD_VERSION" ]]
-
-      - name: Download coordinated package artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-sdk-release-packages
-          path: release-assets
-
-      - name: Publish with trusted publishing and verify registry bytes
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          NPM_TAG: ${{ needs.prepare.outputs.npm_tag }}
-          NPM_VERSION_RANGE: ${{ needs.prepare.outputs.npm_version_range }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          mkdir release-assets
+          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
+          bash scripts/release/preflight-npm-trusted-publishing.sh "$VERSION" "accept-v$VERSION" \
+            "release-assets/sunder-sdk-$VERSION.tgz" "release-assets/sunder-package-tool-$VERSION.tgz" "release-assets/create-sunder-package-$VERSION.tgz"
+          bash scripts/release/publish-sdk.sh npm "$VERSION" release-assets
 
-          bash scripts/release/verify-release-tag.sh "sdk/v$VERSION"
-          package_ids=(
-            "@sunder/sdk"
-            "@sunder/package-tool"
-            "create-sunder-package"
-          )
-          package_names=(
-            "sunder-sdk-$VERSION.tgz"
-            "sunder-package-tool-$VERSION.tgz"
-            "create-sunder-package-$VERSION.tgz"
-          )
-
-          verify_published_package_before_advance() {
-            local package_id="$1"
-            for _ in {1..30}; do
-              if node scripts/release/verify-npm-release.mjs \
-                "$VERSION" \
-                "$NPM_VERSION_RANGE" \
-                "$NPM_TAG" \
-                release-assets \
-                "$GITHUB_REPOSITORY" \
-                .github/workflows/sunder-sdk-release.yml \
-                "$GITHUB_SHA" \
-                publication \
-                "$package_id"; then
-                return
-              fi
-              sleep 10
-            done
-            echo "Exact npm bytes, digest, dist-tag, signature, and provenance verification did not converge for '$package_id@$VERSION'." >&2
-            exit 1
-          }
-
-          for index in "${!package_ids[@]}"; do
-            package_id="${package_ids[$index]}"
-            package_path="release-assets/${package_names[$index]}"
-            test -f "$package_path" || { echo "Missing exact npm package: $package_path" >&2; exit 1; }
-            if ! npm view "$package_id@$VERSION" version --json --registry="$NPM_REGISTRY" >/dev/null 2>&1; then
-              if ! npm publish "$package_path" --ignore-scripts --access public --tag "$NPM_TAG" --registry="$NPM_REGISTRY" --provenance; then
-                echo "npm publish returned a failure; checking whether the immutable version became visible." >&2
-              fi
-            fi
-            verify_published_package_before_advance "$package_id"
-          done
-
-          verified=false
-          for _ in {1..30}; do
-            if node scripts/release/verify-npm-release.mjs \
-              "$VERSION" \
-              "$NPM_VERSION_RANGE" \
-              "$NPM_TAG" \
-              release-assets \
-              "$GITHUB_REPOSITORY" \
-              .github/workflows/sunder-sdk-release.yml \
-              "$GITHUB_SHA" \
-              publication; then
-              verified=true
-              break
-            fi
-            sleep 10
-          done
-          [[ "$verified" == true ]] || { echo "npm provenance verification did not converge." >&2; exit 1; }
-
-  publication-complete:
-    name: Confirm immutable SDK publication
-    needs:
-      - prepare
-      - create-draft
-      - publish-npm
-      - publish-nuget
+  publish-nuget:
+    needs: [prepare, stage, publish-npm]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    permissions: {}
+    timeout-minutes: 60
+    env:
+      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
+      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
+      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
+    environment: sunder-core-release
+    permissions:
+      contents: read
     steps:
-      - name: Leave mutable channels and GitHub Release unpromoted
-        shell: bash
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Publish and verify six immutable NuGet versions
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          [[ -n "$VERSION" ]]
-          printf 'Published immutable SDK version %s; promotion remains an explicit protected dispatch.\n' "$VERSION"
+          mkdir release-assets
+          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
+          bash scripts/release/publish-sdk.sh nuget "$VERSION" release-assets
+
+  promote-npm:
+    needs: [prepare, stage, publish-nuget]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
+      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
+      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
+    environment: sunder-sdk-npm-promotion
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: ${{ env.NPM_REGISTRY }}
+      - name: Advance verified npm consumer channels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          mkdir release-assets
+          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
+          bash scripts/release/publish-sdk.sh promote "$VERSION" release-assets
+
+  finalize:
+    needs: [prepare, stage, promote-npm]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
+      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
+      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
+    environment: sunder-github-release-promotion
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Recheck channels and finalize the same numeric release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
+          mkdir release-assets
+          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
+          bash scripts/release/publish-sdk.sh verify "$VERSION" release-assets
+          python3 -B scripts/release/github_release.py finalize "$GITHUB_REF_NAME" --directory release-assets

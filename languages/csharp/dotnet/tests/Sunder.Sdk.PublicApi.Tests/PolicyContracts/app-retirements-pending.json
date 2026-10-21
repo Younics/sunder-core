@@ -1,0 +1,26 @@
+{
+  "sessionId": "0123456789abcdef0123456789abcdef",
+  "state": "active",
+  "errorCode": null,
+  "shutdownRequired": false,
+  "loadedPackages": [
+    {
+      "packageId": "example.agent",
+      "version": "2.0.0",
+      "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "retirements": [
+    {
+      "policySessionId": "0123456789abcdef0123456789abcdef",
+      "appActivationId": "22222222-3333-4444-8555-666666666666",
+      "loadPermitId": "0123456789abcdef0123456789abcdef",
+      "package": {
+        "packageId": "example.agent",
+        "version": "2.0.0",
+        "packageContentIdentity": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "stageId": "0123456789abcdef0123456789abcdef"
+    }
+  ]
+}

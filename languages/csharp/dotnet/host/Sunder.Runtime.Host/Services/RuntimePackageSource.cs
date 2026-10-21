@@ -16,6 +16,12 @@ internal sealed record RuntimePackageSource(
     SunderPackageTargetKey? SelectedTargetKey = null,
     SunderPackageTargetManifest? SelectedTarget = null)
 {
+    // Host-owned snapshot lifetime; never serialized or part of package authority.
+    internal RuntimeSessionDirectory? SnapshotDirectory { get; set; }
+    internal RuntimeSessionDirectory? WorkerSnapshotDirectory { get; set; }
+    // Comparison evidence produced only after strict development snapshot validation.
+    // It never substitutes for ContentIdentity in policy, permits or RPC admission.
+    internal string? DevelopmentWorkerContentIdentity { get; init; }
     internal string? RegistryPolicyOrigin { get; init; }
     internal string? RegistryPolicyContentIdentity { get; init; }
     internal InstalledPackagePolicyRecord? InstalledPolicy { get; init; }

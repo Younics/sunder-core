@@ -212,22 +212,19 @@ internal sealed partial class PackageLifecyclePolicyCache
 
     private static bool SameMetadata(PackagePolicyOriginFile first, PackagePolicyOriginFile second)
         => first.Origin == second.Origin && first.AuthorityGeneration == second.AuthorityGeneration && first.ClockGeneration == second.ClockGeneration && first.PackagePolicy == second.PackagePolicy
-            && first.Checkpoint == second.Checkpoint && first.HighWater.SameEpoch(second.HighWater) && first.LastRequestStarted == second.LastRequestStarted
+            && first.HighWater.SameEpoch(second.HighWater) && first.LastRequestStarted == second.LastRequestStarted
             && first.LastNonce == second.LastNonce && first.ClockInvalidated == second.ClockInvalidated;
 
     private static bool SameAuthority(PackagePolicyOriginFile current, PackagePolicyOriginFile expected)
-        => current.ClockGeneration == expected.ClockGeneration && current.PackagePolicy == expected.PackagePolicy && current.Checkpoint == expected.Checkpoint
+        => current.ClockGeneration == expected.ClockGeneration && current.PackagePolicy == expected.PackagePolicy
             && expected.Packages.All(pair => current.Packages.TryGetValue(pair.Key, out var entry) && Same(entry.Decision, pair.Value.Decision))
             && expected.Platforms.All(pair => current.Platforms.TryGetValue(pair.Key, out var entry) && Same(entry.Decision, pair.Value.Decision));
 
     private static void RequireWatermarksAtLeast(PackagePolicyOriginFile latest, PackagePolicyOriginFile older)
         => Require(latest.Origin == older.Origin && latest.AuthorityGeneration >= older.AuthorityGeneration && latest.ClockGeneration >= older.ClockGeneration
             && latest.PackagePolicy.Revision >= older.PackagePolicy.Revision
-            && (latest.PackagePolicy.Revision != older.PackagePolicy.Revision || latest.PackagePolicy == older.PackagePolicy)
-            && latest.Checkpoint.Sequence >= older.Checkpoint.Sequence && latest.Checkpoint.TopologyGeneration >= older.Checkpoint.TopologyGeneration
-            && (latest.Checkpoint.Sequence != older.Checkpoint.Sequence || latest.Checkpoint == older.Checkpoint)
-            && (latest.Checkpoint.TopologyGeneration != older.Checkpoint.TopologyGeneration || latest.Checkpoint.TopologyFingerprint == older.Checkpoint.TopologyFingerprint),
-            "Retained policy watermarks roll back or conflict with newer authority.");
+            && (latest.PackagePolicy.Revision != older.PackagePolicy.Revision || latest.PackagePolicy == older.PackagePolicy),
+            "Retained policy watermarks are older than or conflict with newer cached observations.");
 
     private IEnumerable<string> RequiredOrigins(InstalledPackageRecord package)
     {

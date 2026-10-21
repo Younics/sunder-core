@@ -8,17 +8,17 @@ public sealed class AppLaunchRequestParserTests
     [Fact]
     public void Parse_WhenPackageDetailsLink_ReturnsPackageDetailsRequest()
     {
-        var request = AppLaunchRequestParser.Parse("sunder://packages/sunder.package.agent?registry=https%3A%2F%2Fregistry.example.test%2F");
+        var request = AppLaunchRequestParser.Parse("sunder://packages/younics.ai.agent?registry=https%3A%2F%2Fregistry.example.test%2F");
 
         Assert.Equal(AppLaunchRequestKind.PackageDetails, request.Kind);
-        Assert.Equal("sunder.package.agent", request.PackageId);
+        Assert.Equal("younics.ai.agent", request.PackageId);
         Assert.Equal("https://registry.example.test/", request.RegistryUrl?.ToString());
     }
 
     [Fact]
     public void Parse_WhenPackageInstallPath_ReturnsInvalidRequest()
     {
-        var request = AppLaunchRequestParser.Parse("sunder://packages/sunder.package.agent/install");
+        var request = AppLaunchRequestParser.Parse("sunder://packages/younics.ai.agent/install");
 
         Assert.Equal(AppLaunchRequestKind.Invalid, request.Kind);
         Assert.Contains("unsupported", request.ErrorMessage, StringComparison.OrdinalIgnoreCase);

@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
+using Sunder.Package.Format;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Services;
 using Sunder.Sdk.Worker;
@@ -20,8 +21,8 @@ public sealed class SunderRpcPlatformBaselineTests
     private const string Key = "stack-contributor";
     private const string Release = "9.8.7";
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Original = new(() => Compile(Source));
-    private static readonly Lazy<SunderRpcCSharpCompiledContract> Added = new(() => Compile(Source.Replace(
-        "[SunderMethod]", "[SunderMethod]\n    public ValueTask<Response> SearchAsync(Request request) => throw new System.NotImplementedException();\n    [SunderMethod]", StringComparison.Ordinal)));
+    // Exercise compatible Minor allocation with an additive declaration, not a new mandatory provider method.
+    private static readonly Lazy<SunderRpcCSharpCompiledContract> Added = new(() => Change(Original.Value, root => root["errors"]!["example.added"] = new JsonObject()));
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Breaking = new(() => Compile(Source.Replace("ReadAsync", "FetchAsync", StringComparison.Ordinal)));
     private static readonly Lazy<SunderRpcCSharpCompiledContract> Other = new(() => Compile(Source
         .Replace("StackContributorService", "OtherService", StringComparison.Ordinal).Replace(ContractId, "sunder.core.other", StringComparison.Ordinal)));
@@ -507,7 +508,20 @@ public sealed class SunderRpcPlatformBaselineTests
     }
 
     [Fact]
-    public void Accept_FirstBaselineDefaultsToOneUnlessAnExactKeyMigrationVersionIsReviewed()
+    public void MissingSourceProjection_CannotBeBackfilledIntoTheCoreFrozenSnapshot()
+    {
+        var baseline = Baseline(Snapshot(Original.Value, "release-frozen") with { ProjectionReview = null });
+        Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, [Original.Value]));
+        Assert.Throws<InvalidDataException>(() => Freeze(baseline, [Original.Value]));
+        Assert.Throws<InvalidDataException>(() => Accept(baseline, [Original.Value]));
+        var reviewed = Baseline(Snapshot(Original.Value, "release-frozen"));
+        Assert.Contains("source-projection-history-unavailable", Assert.Throws<InvalidDataException>(() =>
+            SunderRpcAuthoringDocuments.WriteOwnedPlatformBaseline(baseline with { Contracts = reviewed.Contracts })).Message);
+        Assert.Equal(baseline.ExactBytes, SunderRpcAuthoringDocuments.WriteOwnedPlatformBaseline(baseline));
+    }
+
+    [Fact]
+    public void Accept_FirstBaselineDefaultsToOneUnlessAnExactKeyVersionIsReviewed()
     {
         var baseline = Parse(Accept(null, [AtVersion(Original.Value, "7.0.0")]));
         Assert.Equal("1.0.0", baseline.Contracts[Key].Current!.Descriptor.Version);
@@ -603,6 +617,8 @@ public sealed class SunderRpcPlatformBaselineTests
         var previous = Original.Value with
         {
             Descriptor = SunderRpcContractDescriptor.Parse(Encoding.UTF8.GetBytes(json.ToJsonString(options))),
+            // This synthetic wire-only recipe replaces the authored value closure.
+            ModelProjection = SunderRpcModelProjection.Empty,
         };
         Assert.ThrowsAny<JsonException>(() => JsonDocument.Parse(previous.Descriptor.GetCanonicalUtf8()));
         json["$defs"]![requestDefinition]!["description"] = "Reviewed compatible annotation";
@@ -972,7 +988,11 @@ public sealed class SunderRpcPlatformBaselineTests
             ["registryOrigin"] = "https://registry.example/", ["authorityId"] = Authority, ["catalogRelease"] = release,
             ["catalogContentIdentity"] = new string('a', 64), ["publishedAtUtc"] = "2026-09-11T12:34:56.123456789Z", ["etag"] = "\"" + descriptor.Sha256 + "\"",
         };
-        return new(state, "public", descriptor, JsonSerializer.SerializeToElement(json));
+        // Exact synthetic source is supplied by this fixture, unlike retained historical documents.
+        return new(state, "public", descriptor, JsonSerializer.SerializeToElement(json))
+        {
+            ProjectionReview = SunderRpcAuthoringDocuments.CreateProjectionReview(descriptor, candidate.ModelProjection, candidate.MethodPolicies),
+        };
     }
 
     private static SunderRpcCSharpCompiledContract AtVersion(SunderRpcCSharpCompiledContract candidate, string version)

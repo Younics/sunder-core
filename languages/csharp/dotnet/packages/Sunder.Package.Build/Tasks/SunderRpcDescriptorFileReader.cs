@@ -23,10 +23,12 @@ internal static class SunderRpcDescriptorFileReader
     }
 
     public static byte[] ReadStableBytes(string path, int maximumBytes, string label)
+        => SunderBuildReadSnapshot.Read(path, maximumBytes, label);
+
+    internal static byte[] ReadCurrentBytes(string path, int maximumBytes, string label)
     {
         if (maximumBytes < 0) throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         var fullPath = Path.GetFullPath(path);
-        GeneratedOutputPathSafety.EnsureRegularFile(fullPath, label);
         var before = Capture(fullPath, label);
 
         using var stream = new FileStream(
@@ -57,9 +59,16 @@ internal static class SunderRpcDescriptorFileReader
 
     private static FileState Capture(string path, string label)
     {
-        GeneratedOutputPathSafety.EnsureRegularFile(path, label);
+        // One refreshed leaf observation supplies both the regular-file check
+        // and its state. Ancestors and the leaf are still checked before open,
+        // after open and after the exact byte read.
+        GeneratedOutputPathSafety.EnsureSafeAncestors(path, includeLeaf: false, label);
         var info = new FileInfo(path);
         info.Refresh();
+        if (info.Attributes != (FileAttributes)(-1) && (info.Attributes & FileAttributes.ReparsePoint) != 0)
+            throw new IOException($"The {label} '{path}' passes through symbolic link or reparse point '{path}'.");
+        if (!info.Exists || (info.Attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint | FileAttributes.Device)) != 0)
+            throw new IOException($"The {label} '{path}' must be a regular non-reparse file.");
         return new FileState(
             info.Length,
             info.LastWriteTimeUtc.Ticks,

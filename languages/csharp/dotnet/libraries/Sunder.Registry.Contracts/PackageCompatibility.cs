@@ -77,7 +77,6 @@ public sealed record RegistryPackageCompatibilityConflict(
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPackageResolutionPolicy(
     [property: JsonRequired] RegistryPolicyIdentity PackagePolicy,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity Checkpoint,
     IReadOnlyList<RegistryPackageCompatibilityRequirement> Requirements,
     IReadOnlyList<RegistryPackageRestoreProvenance> RestoreProvenance,
     IReadOnlyList<RegistryOptionalPackageDecision> OptionalPackages,
@@ -92,17 +91,3 @@ public sealed record RegistryPackageResolutionPolicy(
     [JsonRequired] public IReadOnlyList<RegistryOptionalPackageDecision> OptionalPackages { get => _optionalPackages; init => _optionalPackages = PolicyCollections.Freeze(value); }
     [JsonRequired] public IReadOnlyList<RegistryPlatformPolicyDecision> PlatformCatalogs { get => _platformCatalogs; init => _platformCatalogs = PolicyCollections.Freeze(value); }
 }
-
-/// <summary>Administrator-only policy diagnostics, excluding credentials, public keys and storage locations.</summary>
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record RegistryPolicyStatusV1(
-    [property: JsonRequired] string Code,
-    [property: JsonRequired] bool PublicReady,
-    [property: JsonRequired] bool ExternalAligned,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity? AppliedCheckpoint,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity? PrimaryCheckpoint,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity? MirrorCheckpoint,
-    [property: JsonRequired] RegistryPolicyIdentity? PackagePolicy,
-    [property: JsonRequired] RegistryPolicyIdentity? PublicationAuthorityPolicy,
-    [property: JsonRequired] RegistryPolicyIdentity? AuthorizationPolicy,
-    [property: JsonRequired] long? AuthorizationGeneration);

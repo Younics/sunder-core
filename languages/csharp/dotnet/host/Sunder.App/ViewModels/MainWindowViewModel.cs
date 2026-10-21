@@ -738,7 +738,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         _railCollectionPresenter.Rebuild(
             _shellLayout.GetSlots(),
             createHostedViews,
-            stabilizedViewIds
+            stabilizedViewIds,
+            stabilizedViewIds?.Where(_packageViewHostService.IsViewActivationRetained).ToHashSet(StringComparer.OrdinalIgnoreCase)
         );
         _packageViewPreloader.RetainHotbarViews();
         NotifyLayoutStateChanged();

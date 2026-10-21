@@ -19,7 +19,7 @@ const requestedOutputDirectory = takeOption("--results-directory")
   ?? (project === undefined ? "artifacts/test-results/dotnet" : `artifacts/test-results/local/${project}/${primaryLane ?? "full"}`);
 const build = takeFlag("--build");
 if (requestedArguments.some((argument) => ["--filter", "--logger", "-l", "--results-directory", "-m", "--maxcpucount"].includes(argument))) {
-  throw new Error("The Core .NET reporter owns filtering, logging, result paths, and serialized MSBuild execution.");
+  throw new Error("The Core .NET reporter owns filtering, logging, and result paths.");
 }
 const allDotnetTests = declarations.filter((test) => test.framework === "dotnet");
 const operatingSystem = currentOperatingSystem();
@@ -63,7 +63,6 @@ for (const projectPath of projectPaths) {
     "--nologo",
     "--no-restore",
     ...(!build ? ["--no-build"] : []),
-    "-m:1",
     "--blame-hang",
     "--blame-hang-timeout",
     hangTimeout,

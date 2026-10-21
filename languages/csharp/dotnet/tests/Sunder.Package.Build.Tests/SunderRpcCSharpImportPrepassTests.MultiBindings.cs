@@ -22,8 +22,8 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
-            [SunderService(SunderServiceExposure.Public)] public interface FirstService { ValueTask<TextReply> DescribeAsync(CancellationToken token = default); }
-            [SunderService(SunderServiceExposure.Public)] public interface SecondService { ValueTask<NumberReply> DescribeAsync(CancellationToken token = default); }
+            [SunderService(SunderServiceExposure.Public, ServiceId = "shared")] public interface FirstService { ValueTask<TextReply> DescribeAsync(CancellationToken token = default); }
+            [SunderService(SunderServiceExposure.Public, ServiceId = "shared")] public interface SecondService { ValueTask<NumberReply> DescribeAsync(CancellationToken token = default); }
             [SunderService(SunderServiceExposure.Public)] public interface OwnerService { ValueTask<string> OwnerAsync(); }
             public sealed record TextReply(string Value);
             public sealed record NumberReply(long Value);
@@ -34,7 +34,9 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using IFirstService = Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_First.ISharedService;
+            using ISecondService = Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Second.ISharedService;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Owner;
             using Sunder.Generated.Packages.Example_Dependency_Models;
             [SunderServiceProvider(typeof(IFirstService))]
             [SunderServiceProvider(typeof(ISecondService))]
@@ -80,8 +82,8 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
                 var first = Assert.Single(options.Providers, value => value.ContractId.EndsWith(".first", StringComparison.Ordinal));
                 var second = Assert.Single(options.Providers, value => value.ContractId.EndsWith(".second", StringComparison.Ordinal));
                 var owner = Assert.Single(options.Providers, value => value.ContractId.EndsWith(".owner", StringComparison.Ordinal));
-                Assert.Equal("text-1", (await first.Handler.InvokeUnaryAsync(null!, "first", "describe", empty)).GetProperty("value").GetString());
-                Assert.Equal(2L, (await second.Handler.InvokeUnaryAsync(null!, "second", "describe", empty)).GetProperty("value").GetInt64());
+                Assert.Equal("text-1", (await first.Handler.InvokeUnaryAsync(null!, "shared", "describe", empty)).GetProperty("value").GetString());
+                Assert.Equal(2L, (await second.Handler.InvokeUnaryAsync(null!, "shared", "describe", empty)).GetProperty("value").GetInt64());
                 Assert.Equal("caller.package:3", (await owner.Handler.InvokeUnaryAsync(new StackContributorSourceParityTests.ContentHost().Context(), "owner", "owner", empty)).GetString());
                 Assert.Equal(1, providerType.GetProperty("Created")!.GetValue(null));
                 var services = (IServiceProvider)options.OnShutdown!.Target!.GetType().GetProperty("Services", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(options.OnShutdown.Target)!;

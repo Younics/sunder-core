@@ -158,14 +158,14 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
             using System.Threading.Tasks;
             using Sunder.Sdk.Rpc;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Shared_Services;
+            using Sunder.Generated.Packages.Example_Shared_Services{{(owned ? "" : ".CExample_Shared_Content")}};
             using Sunder.Generated.Packages.Example_Shared_Internal;
             public static class StreamProbe
             {
                 public static object Create(ISunderRpcClient rpc)
                 {
                     var owner = {{(owned ? "new CExample_Shared_ContentClient(rpc)" : "new PackageServices(rpc)")}};
-                    return new State({{(owned ? "owner" : "owner.Content")}}, owner);
+                    return new State({{(owned ? "owner" : "owner.Example_Shared_Content.Content")}}, owner);
                 }
                 public static IAsyncEnumerable<SunderContent> Watch(object state, CancellationToken caller) => ((State)state).Client.WatchAsync(caller);
                 public static ValueTask Dispose(object state) => ((State)state).Owner.DisposeAsync();

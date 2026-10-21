@@ -142,9 +142,9 @@ public sealed class SunderRpcAuthoringAttributeTests
     }
 
     [Fact]
-    public void FrozenCSharpDeclarationsRemainHistoricalAndAreUnsupportedByTheCurrentSdk()
+    public void CurrentCSharpDeclarationsCompileAgainstTheCurrentSdk()
     {
-        var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "RpcV1Authoring", "parity", "valid");
+        var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "RpcV1Authoring", "current-parity", "csharp", "valid");
         Assert.True(Directory.Exists(fixtureRoot), $"Authoring fixture directory is missing: {fixtureRoot}");
 
         var trustedPlatformAssemblies = ((string?)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"))
@@ -172,7 +172,7 @@ public sealed class SunderRpcAuthoringAttributeTests
                 .Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
                 .ToArray();
 
-            Assert.Contains(errors, error => error.Id == "CS0246" && error.GetMessage().Contains("SunderRpc", StringComparison.Ordinal));
+            Assert.True(errors.Length == 0, string.Join(Environment.NewLine, errors.Select(error => error.ToString())));
         }
     }
 

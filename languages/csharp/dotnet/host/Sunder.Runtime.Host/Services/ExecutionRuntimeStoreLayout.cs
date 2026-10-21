@@ -55,6 +55,18 @@ internal sealed class ExecutionRuntimeStoreLayout
     public string TombstoneRootPath { get; }
     public string GarbageCollectionMarkRootPath { get; }
 
+    // Observation evidence is independent of vendor-install receipts and GC tombstones.
+    // Keep it beneath the existing strict lease lock subtree, not among live lease documents.
+    public string ExecutionObservationRootPath => Path.Combine(LockRootPath, "execution-observations");
+    public string ExecutionObservationCaptureRootPath => Path.Combine(ExecutionObservationRootPath, "captures");
+    public string ExecutionObservationCleanupRootPath => Path.Combine(ExecutionObservationRootPath, "cleanup");
+
+    public string GetExecutionObservationCapturePath(string leaseId)
+        => Path.Combine(ExecutionObservationCaptureRootPath, ValidateTransactionId(leaseId) + ".json");
+
+    public string GetExecutionObservationCleanupPath(string leaseId)
+        => Path.Combine(ExecutionObservationCleanupRootPath, ValidateTransactionId(leaseId) + ".json");
+
     public IReadOnlyList<string> DurableRootPaths =>
     [
         RootPath,

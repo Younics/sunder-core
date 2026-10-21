@@ -263,8 +263,6 @@ public sealed record RegistryResolveUpdatesResponse(
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPolicyIdentity? PackagePolicy { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    public RegistryPolicyCheckpointIdentity? PolicyCheckpoint { get; init; }
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
     private IReadOnlyList<RegistryPackageCompatibilityConflict> _compatibilityConflicts = [];
     public IReadOnlyList<RegistryPackageCompatibilityConflict> CompatibilityConflicts { get => _compatibilityConflicts; init => _compatibilityConflicts = PolicyCollections.FreezeBounded(value); }
@@ -393,8 +391,6 @@ public sealed record RegistryResolveInstallPlanResponse(
     /// <summary>Verified package policy for this plan; absence is not authorization.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPolicyIdentity? PackagePolicy { get; init; }
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    public RegistryPolicyCheckpointIdentity? PolicyCheckpoint { get; init; }
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPackageResolutionPolicy? ResolutionPolicy { get; init; }
     private IReadOnlyList<RegistryPackageCompatibilityConflict> _compatibilityConflicts = [];

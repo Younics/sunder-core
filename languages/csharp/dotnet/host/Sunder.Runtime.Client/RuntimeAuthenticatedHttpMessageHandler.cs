@@ -519,26 +519,38 @@ public sealed class RuntimeAuthenticatedHttpMessageHandler : DelegatingHandler
         }
         public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
         {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
             try
             {
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
                 return await inner.ReadAsync(buffer.AsMemory(offset, count), linked.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException exception) when (DeadlineExceeded)
             {
                 throw Timeout(exception);
             }
+            catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested
+                && exception.CancellationToken == linked.Token)
+            {
+                throw new OperationCanceledException(exception.Message, exception, cancellationToken);
+            }
         }
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
             try
             {
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineToken);
                 return await inner.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException exception) when (DeadlineExceeded)
             {
                 throw Timeout(exception);
+            }
+            catch (OperationCanceledException exception) when (cancellationToken.IsCancellationRequested
+                && exception.CancellationToken == linked.Token)
+            {
+                // Do not leak our private linked identity into the caller's
+                // cancellation/reconciliation policy, or relabel foreign faults.
+                throw new OperationCanceledException(exception.Message, exception, cancellationToken);
             }
         }
         public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);

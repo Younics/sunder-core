@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Sunder.Core.TestSupport;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -19,6 +20,10 @@ internal sealed class ExternalArtifactFactAttribute : FactAttribute
             Environment.GetEnvironmentVariable(requirementVariable),
             "1",
             StringComparison.Ordinal);
+        // The owning collector selects this lane with an isolated context rather
+        // than an ambient release-artifact flag. Keep normal skip-policy discovery.
+        selected |= requirementVariable == SdkCorpusInput.RequiredVariable
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(SdkCorpusInput.ContextVariable));
         if (!selected)
         {
             Skip = $"External artifact lane is not selected. Set {requirementVariable}=1 to require it.";
@@ -28,6 +33,9 @@ internal sealed class ExternalArtifactFactAttribute : FactAttribute
         {
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable)))
             {
+                // Corpus tests validate their context in the test body, so missing
+                // required inputs produce failed TRX cases rather than discovery errors.
+                if (requirementVariable == SdkCorpusInput.RequiredVariable) return;
                 throw new InvalidOperationException($"Selected external artifact lane requires {variable}.");
             }
         }

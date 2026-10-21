@@ -15,9 +15,15 @@ internal sealed class RuntimePackageUiService(
         var key = CreateAppTargetKey(appRid);
         for (var attempt = 0; attempt < 3; attempt++)
         {
-            var generation = sessions.GetSnapshot().SessionGeneration;
+            var snapshot = sessions.GetSnapshot();
+            var generation = snapshot.SessionGeneration;
             var sources = ResolveTargets(sessions.State.GetAppPackageSources(), key);
-            var created = snapshots.CreateSnapshots(sources, generation);
+            var allSources = sessions.State.GetActivePackageSources();
+            var created = snapshots.CreateSnapshots(sources, generation).Select(source => source with
+            {
+                ActivationFingerprint = AppActivationFingerprint.Create(snapshot.RuntimeInstanceId, source.PackageId, allSources, snapshot.SessionPackages,
+                    developmentAppContinuation: source.SourceKind == PackageSourceKind.Dev && source.Target.Kind == SunderPackageFormat.AvaloniaTargetKind),
+            }).ToArray();
             if (sessions.Generation == generation)
             {
                 return created;

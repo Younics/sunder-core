@@ -92,7 +92,7 @@ public sealed class PackageCompatibilityAuthorityTests
             [new("example.rpc", "1.0.0", 128, Descriptor, Abi, "owned", "package", Api, "1.0.0", restoredContent)]);
         var hash = SunderPackagePublicApiInventory.Parse(JsonSerializer.SerializeToUtf8Bytes(inventory,
             new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping })).PublicInventorySha256;
-        var resolution = new RegistryPackageResolutionPolicy(new(1, new('a', 64)), new(1, new('b', 64), 1, new('c', 64)), [],
+        var resolution = new RegistryPackageResolutionPolicy(new(1, new('a', 64)), [],
             [new("https://registry.example", new(inventory, hash), ">=1.0.0 <2.0.0", false, [])],
             omitted ? [new(id, Api, "omitted", null, "package-api.package-unavailable")] : [], []);
         return new(id, PackageSourceKind.Installed, "/fixture/consumer", ContentIdentity: ConsumerContent, Manifest: new()

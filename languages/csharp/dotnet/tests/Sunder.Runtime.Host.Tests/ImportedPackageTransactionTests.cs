@@ -95,8 +95,7 @@ public sealed class ImportedPackageTransactionTests
             var hash = SunderPackagePublicApiInventory.Parse(JsonSerializer.SerializeToUtf8Bytes(inventory,
                 new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping })).PublicInventorySha256;
             _inventory = new(inventory, hash);
-            Resolution = new(new(1, ActivePolicyTestContext.Hash("package-policy-1")),
-                new(1, ActivePolicyTestContext.Hash("checkpoint-1"), 1, ActivePolicyTestContext.Hash("topology")), [],
+            Resolution = new(new(1, ActivePolicyTestContext.Hash("package-policy-1")), [],
                 [new(ActivePolicyTestContext.Origin, _inventory, ">=1.0.0 <2.0.0", false, [])], [], []);
         }
 

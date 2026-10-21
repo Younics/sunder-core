@@ -195,7 +195,7 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
         var (load, probe) = LoadProjectionProbe(sources.Append(new("resources.cs", """
             using Sunder.Sdk.Services;
             using Sunder.Generated.Packages.Example_Shared_Models;
-            using Sunder.Generated.Packages.Example_Shared_Services;
+            using Sunder.Generated.Packages.Example_Shared_Services.CExample_Shared_Run_Control;
             public static class NullableResourceProbe
             {
                 public static object Create() => new ResourceResult { };

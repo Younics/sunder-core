@@ -13,7 +13,13 @@ internal static class GeneratedOutputPathSafety
             throw new IOException($"The {label} '{path}' has no filesystem root.");
         }
 
-        EnsureExistingDirectory(root, label);
+        // A captured read also owns the root proof. Like every other retained
+        // ancestor, it is checked afresh at both completion fences.
+        if (!SunderBuildReadSnapshot.HasDirectory(root))
+        {
+            EnsureExistingDirectory(root, label);
+            SunderBuildReadSnapshot.RecordDirectory(root);
+        }
         var relative = fullPath[root.Length..];
         var segments = relative.Split(
             [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
@@ -24,6 +30,7 @@ internal static class GeneratedOutputPathSafety
             current = Path.Combine(current, segments[index]);
             var isLeaf = index == segments.Length - 1;
             if (isLeaf && !includeLeaf) break;
+            if (!isLeaf && SunderBuildReadSnapshot.HasDirectory(current)) continue;
 
             if (!TryGetAttributes(current, out var attributes))
             {
@@ -41,6 +48,7 @@ internal static class GeneratedOutputPathSafety
             {
                 throw new IOException($"The {label} '{path}' has non-directory ancestor '{current}'.");
             }
+            if (!isLeaf) SunderBuildReadSnapshot.RecordDirectory(current);
         }
     }
 

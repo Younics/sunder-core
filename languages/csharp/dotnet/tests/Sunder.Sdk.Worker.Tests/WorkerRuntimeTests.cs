@@ -668,17 +668,38 @@ public sealed class WorkerRuntimeTests
         }
     }
 
-    [Fact]
-    public async Task Worker_IgnoresCancellationThatCrossesACompletedResponse()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Worker_IgnoresCancellationThatCrossesACompletedResponse(bool churnWhileActive)
     {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var handler = new TestRpcHandler
         {
-            Unary = static (_, _, _, request, _) => ValueTask.FromResult(request.Clone()),
+            Unary = async (_, _, method, request, token) =>
+            {
+                if (method == "wait") { entered.TrySetResult(); await release.Task.WaitAsync(token); }
+                return request.Clone();
+            },
         };
         await using var worker = new WorkerHarness(
-            _ => new SunderWorkerOptions([WorkerHarness.Registration(handler)]));
+            _ => new SunderWorkerOptions([WorkerHarness.Registration(handler)]),
+            WorkerLimits.Default with { MaximumRememberedHostIds = 2 });
         await worker.HandshakeAndActivateAsync();
-        await worker.SendInvocationAsync("completed1", "unary", "echo");
+        await worker.SendInvocationAsync("completed1", "unary", churnWhileActive ? "wait" : "echo");
+        if (churnWhileActive)
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var index = 0; index < 3; index++)
+            {
+                var id = "churn" + index;
+                await worker.SendInvocationAsync(id, "unary", "echo");
+                using var response = await worker.ReadAsync();
+                Assert.Equal(id, response.RootElement.GetProperty("id").GetString());
+            }
+            release.TrySetResult();
+        }
         using (var result = await worker.ReadAsync())
         {
             Assert.Equal("worker.result", result.RootElement.GetProperty("type").GetString());

@@ -88,18 +88,6 @@ internal static partial class SunderRpcAuthoringDocuments
         => ParseContractLock(SunderRpcDescriptorFileReader.ReadStableBytes(path, MaximumContractLockBytes, "Sunder contract lock"), allowDevelopmentRegistryOrigin);
 
     internal static SunderRpcContractLock ParseContractLock(byte[] bytes, bool allowDevelopmentRegistryOrigin = false)
-        => ParseContractLockCore(bytes, allowDevelopmentRegistryOrigin);
-
-    // One-shot unreleased V1 reselection input only. The result cannot be restored,
-    // compiled or committed: Update must replace every unpinned selected artifact
-    // and pass the ordinary strict reader before publishing the proposed lock.
-    internal static SunderRpcContractLock ReadContractLockForArtifactUpdate(
-        string path, string? packageId, bool allowDevelopmentRegistryOrigin)
-        => ParseContractLockCore(SunderRpcDescriptorFileReader.ReadStableBytes(path, MaximumContractLockBytes,
-            "Sunder contract lock update input"), allowDevelopmentRegistryOrigin, artifactUpdate: true, updatePackageId: packageId);
-
-    private static SunderRpcContractLock ParseContractLockCore(byte[] bytes, bool allowDevelopmentRegistryOrigin,
-        bool artifactUpdate = false, string? updatePackageId = null)
     {
         var root = ParseStrictDocument(bytes, MaximumContractLockBytes, "Sunder contract lock", ValidatePresentConsumerRoles);
         using (root)
@@ -113,7 +101,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 []);
             RequireInteger(document, "lockVersion", 1, "contract lock");
 
-            var artifacts = ReadPackageArtifacts(document, allowDevelopmentRegistryOrigin, artifactUpdate, updatePackageId);
+            var artifacts = ReadPackageArtifacts(document, allowDevelopmentRegistryOrigin);
             var packageImports = ReadPackageImports(document);
             var providerImports = ReadProviderImports(document);
             var platformImports = ReadPlatformImports(document, allowDevelopmentRegistryOrigin);
@@ -154,9 +142,7 @@ internal static partial class SunderRpcAuthoringDocuments
 
     private static IReadOnlyDictionary<string, SunderRpcLockedPackageArtifact> ReadPackageArtifacts(
         JsonElement root,
-        bool allowDevelopmentRegistryOrigin,
-        bool artifactUpdate = false,
-        string? updatePackageId = null)
+        bool allowDevelopmentRegistryOrigin)
     {
         var map = RequireProperty(root, "packageArtifacts", JsonValueKind.Object, "contract lock");
         var properties = ReadOrderedLockMap(map, "contract lock packageArtifacts");
@@ -167,8 +153,7 @@ internal static partial class SunderRpcAuthoringDocuments
             result.Add(property.Name, ReadPackageArtifact(
                 property.Name,
                 property.Value,
-                allowDevelopmentRegistryOrigin,
-                artifactUpdate && (updatePackageId is null || updatePackageId == property.Name)));
+                allowDevelopmentRegistryOrigin));
         }
         return result;
     }
@@ -176,16 +161,13 @@ internal static partial class SunderRpcAuthoringDocuments
     private static SunderRpcLockedPackageArtifact ReadPackageArtifact(
         string packageId,
         JsonElement value,
-        bool allowDevelopmentRegistryOrigin,
-        bool allowPriorSelectionForUpdate = false)
+        bool allowDevelopmentRegistryOrigin)
     {
         var label = $"contract lock package artifact '{packageId}'";
         if (value.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"The {label} must be an object.");
-        var priorSelection = allowPriorSelectionForUpdate
-            && !value.TryGetProperty("modelProjectionBytes", out _) && !value.TryGetProperty("modelProjectionSha256", out _);
-        if (!priorSelection && (!value.TryGetProperty("modelProjectionBytes", out _) || !value.TryGetProperty("modelProjectionSha256", out _)))
-            throw ContractLockError("package-api.model-projection-reselection-required",
-                $"The {label} is missing required model projection pins. Explicitly update the selected artifact with the current canonical candidate; Build/Restore never infer pins.");
+        if (!value.TryGetProperty("modelProjectionBytes", out _) || !value.TryGetProperty("modelProjectionSha256", out _))
+            throw ContractLockError("package-api.model-projection-invalid",
+                $"The {label} is missing required model projection pins. Restore the complete reviewed lock; commands never infer missing pins.");
         RequireObject(
             value,
             label,
@@ -208,7 +190,8 @@ internal static partial class SunderRpcAuthoringDocuments
                 "selectedPackageContentIdentity",
                 "publicContractCount",
                 "publicInventorySha256",
-                .. (priorSelection ? Array.Empty<string>() : new[] { "modelProjectionBytes", "modelProjectionSha256" }),
+                "modelProjectionBytes",
+                "modelProjectionSha256",
                 "contracts",
             ],
             ["registryOrigin"]);
@@ -236,8 +219,8 @@ internal static partial class SunderRpcAuthoringDocuments
             registryOrigin,
             publicContractCount,
             publicInventorySha256,
-            priorSelection ? 0 : RequireBoundedInteger(value, "modelProjectionBytes", 1, 4_194_304, label),
-            priorSelection ? string.Empty : RequireSha256(value, "modelProjectionSha256", label),
+            RequireBoundedInteger(value, "modelProjectionBytes", 1, 4_194_304, label),
+            RequireSha256(value, "modelProjectionSha256", label),
             contracts);
         ValidatePackagePublicInventory(artifact);
         return artifact;
@@ -329,7 +312,7 @@ internal static partial class SunderRpcAuthoringDocuments
             if (property.Value.ValueKind != JsonValueKind.Object) throw new InvalidDataException($"The {label} must be an object.");
             if (!property.Value.TryGetProperty("consumerRoles", out var roles))
                 throw ContractLockError("package-api.consumer-roles-migration-required",
-                    $"{label} is missing consumerRoles. Run MigrateSunderPackageApiConsumerRoles; omitted review preserves Runtime-only intent. Build/Restore never migrate.");
+                    $"{label} is missing consumerRoles. Restore a current lock with explicitly reviewed role intent; Build/Restore never infer roles.");
             var consumerRoles = ReadConsumerRoles(roles, label);
             RequireObject(
                 property.Value,

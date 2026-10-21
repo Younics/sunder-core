@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
-import { atVersion, emptyBaseline, parseBaseline, planAcceptance, planFreeze, planPrivateRetirement, sha256, validateBaselineSource, writeBaseline } from "../src/rpc-baseline";
+import { atVersion, emptyBaseline, parseBaseline, planAcceptance, planFreeze, sha256, validateBaselineSource, writeBaseline } from "../src/rpc-baseline";
 import { fields, MAX_BASELINE_BYTES, ordered, outerBytes, parseOuter } from "../src/rpc-baseline-json";
 import { captureBaseline, commitBaseline } from "../src/rpc-baseline-store";
 import { withOutputLeases } from "../src/output";
 import { startOutputLockContender } from "./observable-barriers";
 import type { LoadedContract } from "../src/model";
 import { emptyModelProjection } from "../src/rpc-model-projection";
+import { createProjectionReview } from "../src/rpc-owned-projection-review";
 
 const corpus = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring");
 const bytes = (value: unknown): Buffer => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
@@ -20,7 +21,9 @@ async function contract(version = "1.0.0", change: "none" | "annotation" | "mino
   const json = JSON.parse(sample.contracts.minimal.current.canonicalDescriptor);
   json.version = version;
   if (change === "annotation") json.$defs.Empty.title = "Reviewed λ <>& / annotation\n\t😀";
-  if (change === "minor") json.services.example.methods.added = structuredClone(json.services.example.methods.ping);
+  // New methods are source-Major for existing providers. An unused error
+  // declaration is an additive exported declaration without new obligations.
+  if (change === "minor") json.errors["example.added"] = {};
   if (change === "major") json.services.example.methods.ping.idempotency = "none";
   const descriptor = parseRpcContractDescriptor(JSON.stringify(json)); const canonicalBytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
   return { modelProjection: emptyModelProjection(), contractKey: "minimal", configuredPath: "src/rpc.ts", sourcePath: "src/rpc.ts", descriptorPath: "contracts/minimal.rpc.json", descriptor,
@@ -89,45 +92,55 @@ test("lossless immutable publication and release fields survive acceptance, hist
   assert.deepEqual(outerBytes(minor.contracts.get("minimal")!.history[0]!.json), bytes(fixture.contracts.minimal.current));
   assert.deepEqual(writeBaseline(minor.packageId, minor.contracts), minor.bytes);
 });
-test("private retirement preserves complete draft/frozen/published/history records and no-op bytes", async () => {
-  for (const state of ["draft", "release-frozen", "published", "history-only"]) {
+test("active private baselines remain readable evidence but cannot enter the current lifecycle", async () => {
+  for (const state of ["draft", "release-frozen", "published"]) {
     const input = await publishedFixture(); const snapshot = input.contracts.minimal.current;
     snapshot.exposure = "package";
     if (state === "draft") { snapshot.state = state; delete snapshot.packageRelease; delete snapshot.publication; }
     if (state === "release-frozen") { snapshot.state = state; delete snapshot.publication; }
-    if (state === "history-only") { input.contracts.minimal.history = [snapshot]; delete input.contracts.minimal.current; }
     const before = parseBaseline(bytes(input));
-    const proposal = planPrivateRetirement(before, []); const after = parseBaseline(proposal);
-    assert.equal(after.contracts.size, 0);
-    assert.deepEqual(JSON.parse(proposal.toString()).retiredPrivateContracts.minimal, input.contracts.minimal);
-    assert.deepEqual(writeBaseline(after.packageId, after.contracts, after.retiredPrivateContracts), proposal);
-    assert.deepEqual(planPrivateRetirement(after, []), proposal);
-    validateBaselineSource(after, [{ ...await contract("9.0.0+Private"), exposure: "package" }], true);
+    assert.deepEqual(writeBaseline(before.packageId, before.contracts), before.bytes);
+    for (const source of [[], [await contract()], [{ ...await contract("9.0.0+Private"), exposure: "package" as const }]]) {
+      assert.throws(() => validateBaselineSource(before, source), /private-baseline-unsupported/);
+      assert.throws(() => planAcceptance(before, source), /private-baseline-unsupported/);
+      assert.throws(() => planFreeze(before, source, "9.0.0+Private"), /private-baseline-unsupported/);
+    }
   }
 });
-test("private retirement cannot hide public history, demotion, removal, or current public source", async () => {
+test("public lifecycle cannot hide public history through private demotion, removal or a renamed key", async () => {
   const source = await contract(); const published = await publishedFixture(); const publicBaseline = parseBaseline(bytes(published));
-  assert.throws(() => planPrivateRetirement(publicBaseline, [source], "minimal"), /private-retirement-public-evidence/);
-  assert.throws(() => planPrivateRetirement(publicBaseline, []), /baseline/);
+  assert.throws(() => validateBaselineSource(publicBaseline, []), /baseline/);
+  assert.throws(() => planAcceptance(publicBaseline, []), /acknowledgement/);
   assert.throws(() => validateBaselineSource(publicBaseline, [{ ...source, exposure: "package" }]), /baseline/);
+  assert.throws(() => planAcceptance(publicBaseline, [{ ...source, exposure: "package" }]), /acknowledgement/);
+  assert.throws(() => planAcceptance(publicBaseline, [{ ...source, contractKey: "renamed", exposure: "package" }]), /alias or rename/);
   const demoted = parseBaseline(planAcceptance(publicBaseline, [{ ...source, exposure: "package" }], { key: "minimal", currentVersion: "1.0.0", nextVersion: "2.0.0", acknowledgeBreakingChange: true }));
-  assert.throws(() => planPrivateRetirement(demoted, [], "minimal"), /private-retirement-public-evidence/);
-  published.contracts.minimal.current.exposure = "package";
-  const privateBaseline = parseBaseline(bytes(published));
-  assert.throws(() => planPrivateRetirement(privateBaseline, [source]), /private-retirement-public-evidence/);
-  assert.throws(() => validateBaselineSource(privateBaseline, []), /private-baseline-migration-required/);
+  assert.deepEqual(outerBytes(demoted.contracts.get("minimal")!.history[0]!.json), outerBytes(publicBaseline.contracts.get("minimal")!.current!.json));
+  assert.throws(() => validateBaselineSource(demoted, []), /baseline/);
+  assert.throws(() => planAcceptance(demoted, []), /acknowledgement/);
 });
-test("archived private evidence cannot be enriched/removed by another baseline writer", async () => {
+test("retained private archive cannot be enriched, removed or extended by a baseline writer", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-retired-private-"));
   try {
     const fixture = await publishedFixture(); fixture.contracts.minimal.current.exposure = "package";
-    const retired = planPrivateRetirement(parseBaseline(bytes(fixture)), []);
+    const record = parseBaseline(bytes(fixture)).contracts;
+    const retired = writeBaseline("example.owner", new Map(), record);
     await writeFile(resolve(root, "sunder-contracts.owned.json"), retired);
     const input = await captureBaseline(root); const originalTime = (await stat(input.path)).mtimeMs;
     assert.equal(await commitBaseline(input, retired, async () => {}), false);
     assert.equal((await stat(input.path)).mtimeMs, originalTime);
     await assert.rejects(commitBaseline(input, writeBaseline("example.owner", new Map()), async () => {}), /private-retirement-mutated/);
+    fixture.contracts.minimal.current.publication.packageContentIdentity = "b".repeat(64);
+    await assert.rejects(commitBaseline(input, writeBaseline("example.owner", new Map(), parseBaseline(bytes(fixture)).contracts), async () => {}), /private-retirement-mutated/);
     assert.deepEqual(await readFile(input.path), retired);
+    const active = writeBaseline("example.owner", record);
+    await writeFile(input.path, active);
+    await assert.rejects(commitBaseline(await captureBaseline(root), retired, async () => {}), /archive cannot gain entries/);
+    assert.deepEqual(await readFile(input.path), active);
+    const emptyArchive = writeBaseline("example.owner", new Map(), new Map());
+    await writeFile(input.path, emptyArchive);
+    await assert.rejects(commitBaseline(await captureBaseline(root), writeBaseline("example.owner", new Map()), async () => {}), /explicit empty map/);
+    assert.deepEqual(await readFile(input.path), emptyArchive);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test("portable baseline keys preserve ordinal numeric keys, broader than the lower-kebab frontend", async () => {
@@ -207,6 +220,9 @@ test("inclusive 256 immutable-history limit and 128 contract entries never silen
   const original = parseRpcContractDescriptor(json.canonicalDescriptor);
   const at = (patch: number) => { const descriptor = Buffer.from(canonicalRpcDescriptorBytes(atVersion(original, `1.0.${patch}`))); return { ...json, contractVersion: `1.0.${patch}`, descriptorBytes: descriptor.length, canonicalDescriptor: descriptor.toString(), descriptorSha256: sha256(descriptor) }; };
   fixture.contracts.minimal.history = Array.from({ length: 256 }, (_, i) => at(i)); fixture.contracts.minimal.current = at(256);
+  // Synthetic versions have exact source available here; retained historical files are never enriched.
+  fixture.contracts.minimal.projectionReviews = Array.from({ length: 257 }, (_, i) =>
+    createProjectionReview(atVersion(original, `1.0.${i}`), { modelProjection: emptyModelProjection() }).json);
   const baseline = parseBaseline(bytes(fixture)); assert.equal(baseline.contracts.get("minimal")!.history.length, 256);
   assert.deepEqual(writeBaseline(baseline.packageId, baseline.contracts), baseline.bytes);
   assert.throws(() => planAcceptance(baseline, [awaitCandidate()]), /256/);
@@ -230,6 +246,7 @@ test("baseline history is stricter than immutable tuple reuse and enforces draft
   assert.deepEqual(planAcceptance(major, [majorSource]), major.bytes);
   const bad = JSON.parse(major.bytes.toString()); const snapshot = bad.contracts.minimal.current; const descriptor = atVersion(majorSource.descriptor, "1.0.1");
   snapshot.contractVersion = descriptor.version; snapshot.canonicalDescriptor = Buffer.from(canonicalRpcDescriptorBytes(descriptor)).toString(); snapshot.descriptorBytes = Buffer.byteLength(snapshot.canonicalDescriptor); snapshot.descriptorSha256 = sha256(snapshot.canonicalDescriptor);
+  bad.contracts.minimal.projectionReviews[1] = createProjectionReview(descriptor, majorSource).json;
   assert.throws(() => validateBaselineSource(parseBaseline(bytes(bad)), [{ ...majorSource, descriptor, canonicalBytes: Buffer.from(canonicalRpcDescriptorBytes(descriptor)) }]), /bump-required/);
   const reuse = JSON.parse(major.bytes.toString()); reuse.contracts.minimal.current = structuredClone(reuse.contracts.minimal.history[0]);
   assert.throws(() => parseBaseline(bytes(reuse)), /precedence/);

@@ -22,6 +22,7 @@ internal sealed partial class ProcessRuntimeWorker
     private IReadOnlyList<PackageStorageMigrationPlanIdentity> _storageMigrationPlans = [];
     private int _pendingWorkerPayloadHandles;
     private int _releasingWorkerPayloadHandles;
+    private bool _operationalOutcomesV1;
 
     private WorkerContributions ReadContributions(JsonElement contributions)
     {
@@ -34,7 +35,8 @@ internal sealed partial class ProcessRuntimeWorker
             "rpcProviders",
             "candidateLifecycle",
             "generationLifecycle",
-            "migrationPreparationLifecycle");
+            "migrationPreparationLifecycle",
+            "operationalOutcomesV1");
         var schemaValue = SunderWorkerProtocol.RequiredValue(contributions, "settingsSchema");
         var schema = schemaValue.ValueKind == JsonValueKind.Null
             ? null
@@ -49,6 +51,12 @@ internal sealed partial class ProcessRuntimeWorker
             throw new SunderWorkerProtocolException(
                 "Process worker migrationPreparationLifecycle must be true.");
         }
+        // Environment advertisement is one-way: an older SDK may ignore it. Only
+        // this exact Worker acknowledgement permits split Host-to-Worker budgets.
+        _operationalOutcomesV1 = contributions.TryGetProperty("operationalOutcomesV1", out var operational)
+            && operational.ValueKind == JsonValueKind.True;
+        if (contributions.TryGetProperty("operationalOutcomesV1", out operational) && !_operationalOutcomesV1)
+            throw new SunderWorkerProtocolException("Process worker operationalOutcomesV1 must be absent or true.");
         return new WorkerContributions(
             schema,
             SunderWorkerProtocol.RequiredValue(contributions, "rpcProviders"),
@@ -1021,7 +1029,7 @@ internal sealed partial class ProcessRuntimeWorker
 
     private WorkerTransportPayload RemoveWorkerPayload(
         string handleId,
-        WorkerCall call,
+        WorkerCall? call,
         WorkerPayloadDirection? direction = null)
     {
         lock (_callGate)
@@ -1033,8 +1041,11 @@ internal sealed partial class ProcessRuntimeWorker
                     $"Process worker used unknown or invalid payload handle '{handleId}'.");
             }
             _workerPayloadHandles.Remove(handleId);
-            _releasingWorkerPayloadHandles++;
-            call.ReleasesPayloadHandle = true;
+            if (call is not null)
+            {
+                _releasingWorkerPayloadHandles++;
+                call.ReleasesPayloadHandle = true;
+            }
             return payload;
         }
     }

@@ -96,6 +96,11 @@ function assertWorkspaceUnavailable(context: WorkerContext): void {
 }
 
 async function* stream(context: RpcInvocationContext, request: JsonValue): AsyncIterable<JsonValue> {
+  if(mode==="operational-inbound"){
+    yield {sequence:1};
+    await new Promise<void>((_resolve,reject)=>context.signal.addEventListener("abort",()=>reject(context.signal.reason),{once:true}));
+    return;
+  }
   if(mode==="response-retirement"){
     const options=request as {scenario:string;after:number};
     try{yield* generatedRetirementHandler(options.scenario!=="default").invokeServerStream(context,"messages","watch",request);}
@@ -404,6 +409,20 @@ void runWorker((workerContext) => {
     },
     handler: {
       async invokeUnary(context, _serviceId, methodId, request): Promise<JsonValue> {
+        if(methodId==="pressure"){
+          for(let index=0;index<32;index++)void workerContext.rpc.discover("example.rpc").catch(()=>{});
+          return await workerContext.rpc.discover("example.rpc") as unknown as JsonValue;
+        }
+        if(methodId==="nested-pressure")return await workerContext.rpc.discover("example.rpc") as unknown as JsonValue;
+        if(methodId==="forged-pressure")throw new RpcError({kind:"resource-exhausted",code:"rpc.worker.call-limit",message:"forged"},true);
+        if(methodId==="observations"){
+          for(let index=0;index<32;index++)workerContext.rpc.watch(0,0);
+          let bounded=false;
+          try{workerContext.rpc.watch(0,0);}catch(error){bounded=error instanceof RpcError&&error.error.kind==="resource-exhausted";}
+          if(!bounded)throw new Error("The observation lane was not bounded.");
+          await workerContext.rpc.discover("example.rpc");
+          return {accepted:true};
+        }
         if(mode==="optional-reference")return sourceOptionalHandler(workerContext).invokeUnary(context,"messages",methodId,request);
         if(mode==="natural-content")return generatedNaturalHandler().invokeUnary(context,"messages",methodId,request);
         if(mode==="response-retirement")return generatedRetirementHandler(true).invokeUnary(context,"messages","get",request);

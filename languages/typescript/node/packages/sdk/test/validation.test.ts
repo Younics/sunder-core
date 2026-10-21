@@ -9,7 +9,7 @@ import {
 } from "../src/validation";
 
 test("package id vectors match the canonical lowercase dot-separated grammar", () => {
-  for (const value of ["agent", "sunder.package.agent", "a0.b1", "a".repeat(128)]) {
+  for (const value of ["agent", "younics.ai.agent", "younics.sunder.package.maker", "a0.b1", "a".repeat(128)]) {
     assert.equal(isPackageId(value), true, value);
   }
   for (const value of ["", ".agent", "agent.", "agent..tool", "agent-tool", "Agent", "a".repeat(129)]) {

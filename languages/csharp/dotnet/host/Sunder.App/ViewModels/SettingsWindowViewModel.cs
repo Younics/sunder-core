@@ -396,8 +396,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
     }
 
-    internal void DetachHostedPackageSettingsView()
+    internal void DetachHostedPackageSettingsView(bool preserveRetainedActivation = false)
     {
+        if (preserveRetainedActivation && _selection.SelectedSection?.PackageId is { } packageId
+            && _packageViewHostService.IsPackageActivationRetained(packageId)) return;
         _selectionLoadRequest.Invalidate();
         ReleaseStagedHostedSettingsView();
         HostedSettingsView = null;

@@ -9,6 +9,7 @@ using Sunder.Package.Format;
 using Sunder.Package.Projections;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -21,6 +22,49 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
     private const string ProviderPackageId = "test.worker.interop";
     private const string CallerPackageId = "sunder.interop.dotnet.self.caller";
     private const string CallerStateKey = "interop.dotnet-to-dotnet";
+
+    [Fact]
+    [Trait("Category", "CurrentRidExecutionRuntime")]
+    public async Task OfficialCurrentRidDotNetRuntime_LifecycleFaultDrainsRealSdkHandlerBeforeDisposal()
+    {
+        const string packageId = "sunder.interop.lifecycle";
+        var receipt = await executionRuntimes.EnsureDotNetAsync("10.0.12");
+        var root = CurrentRidRuntimeHostTestSupport.CreateRoot("dotnet-lifecycle-fault");
+        var paths = new RuntimePackagePaths(Path.Combine(root, "runtime-host"));
+        var transfers = new RuntimeContentTransferStore(paths);
+        var logs = new RecordingLogSink();
+        var host = CurrentRidRuntimeHostTestSupport.CreateHost(paths, new InstalledPackageStore(paths),
+            transfers, executionRuntimes, logs.CreateLogger<RuntimePackageSessionTestHost>());
+        try
+        {
+            var package = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
+                CurrentRidRuntimeHostTestSupport.GetInteropWorkerDevPackage(), Path.Combine(root, "provider"), packageId);
+            await host.InitializeAsync();
+            var load = await host.LoadStartupDevPackagesAsync([package]);
+            Assert.True(load.Success, string.Join(Environment.NewLine, load.Errors));
+            var loaded = host.ActiveSession.LoadedPackageMap[packageId];
+            CurrentRidRuntimeHostTestSupport.AssertRuntimeLaunch(loaded, receipt, executionRuntimes);
+            var worker = Assert.IsType<ProcessRuntimeWorker>(loaded.Worker);
+            var provider = Assert.Single(host.RpcCatalog.GetSnapshot().Providers);
+            var context = new SunderRpcInvocationContext("caller.package", "1.0.0", provider,
+                DateTimeOffset.UtcNow.AddMinutes(1), 1, CancellationToken.None);
+            var invocation = worker.InvokeUnaryAsync(provider.ProviderId, context, "messages", "send",
+                JsonSerializer.SerializeToElement(new { message = "fault" }), CancellationToken.None).AsTask();
+            var fault = await Assert.ThrowsAsync<ProcessRuntimeGenerationFaultException>(() =>
+                worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(15)));
+            Assert.Equal("worker.lifecycle-faulted", fault.Code);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => invocation.WaitAsync(TimeSpan.FromSeconds(15)));
+            await worker.StopAsync().WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(["handler-drained", "lifecycle-stopped", "services-disposed"],
+                await File.ReadAllLinesAsync(Path.Combine(worker.WorkspaceRootPath, "lifecycle-cleanup.txt")));
+        }
+        finally
+        {
+            await host.ShutdownAsync();
+            transfers.Dispose();
+            CurrentRidRuntimeHostTestSupport.DeleteDirectory(root);
+        }
+    }
 
     [Fact]
     [Trait("Category", "CurrentRidExecutionRuntime")]
@@ -456,8 +500,10 @@ internal static class CurrentRidRuntimeHostTestSupport
         var configure = Path.Combine(nodeRoot, "fixtures", "runtime-backed-worker", "src", "worker.ts");
         var entry = Path.Combine(Path.GetDirectoryName(destinationRoot)!, "node-caller-entry.mjs");
         var errorLog = Path.Combine(Path.GetDirectoryName(destinationRoot)!, "node-caller-error.log");
-        var output = Path.Combine(destinationRoot, "payload", "runtime", "shared", "bin", "worker.cjs");
-        Assert.True(File.Exists(output), "The runtime-backed fixture's shared module layout changed.");
+        // A composed dev package factors the module into shared; an exact-RID leaf
+        // retains it under its target. Replace the one producer-owned entry in either form.
+        var output = Assert.Single(new[] { "shared", PackageTargetSelection.GetCurrentRuntimeIdentifier() }
+            .Select(rid => Path.Combine(destinationRoot, "payload", "runtime", rid, "bin", "worker.cjs")), File.Exists);
         // The generated provider entry binds Self to its authored package id. Rebranding that
         // binary as a caller must fail. This independently permissioned low-level RPC probe
         // uses its own Worker entry, without a provider's generated Self token or registration.

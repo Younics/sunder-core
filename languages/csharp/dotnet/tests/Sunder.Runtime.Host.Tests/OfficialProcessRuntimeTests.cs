@@ -10,7 +10,7 @@ using Xunit;
 namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
-public sealed class OfficialProcessRuntimeTests(
+public sealed partial class OfficialProcessRuntimeTests(
     OfficialRuntimeFixture fixture)
     : IClassFixture<OfficialRuntimeFixture>
 {
@@ -99,6 +99,7 @@ public sealed class OfficialProcessRuntimeTests(
                 Assert.DoesNotContain("NVM_DIR", startInfo.Environment.Keys);
                 Assert.DoesNotContain("NODE_PATH", startInfo.Environment.Keys);
                 Assert.DoesNotContain(AmbientRuntimePoison.SentinelName, startInfo.Environment.Keys);
+                Assert.Equal("1", startInfo.Environment["SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"]);
                 Assert.Equal(
                     ExpectedWorkerEnvironmentNames(),
                     startInfo.Environment.Keys
@@ -484,6 +485,7 @@ public sealed class OfficialProcessRuntimeTests(
             "SUNDER_PACKAGE_ID",
             "SUNDER_PACKAGE_VERSION",
             "SUNDER_SESSION_ID",
+            "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1",
             "SUNDER_WORKER_PROTOCOL",
             "SUNDER_WORKER_TEMP_ROOT",
             "TEMP",

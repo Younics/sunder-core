@@ -50,6 +50,15 @@ internal static class AppSessionLog
         Exception? exception = null)
         => Write(level, message, exception, visibleInDeveloperLog: true, DeveloperLogEntryScope.Package, packageId);
 
+    internal static void WritePolicySupervisionDiagnostic(string message)
+    {
+        // Supervision must never wait for UI log subscribers, Trace listeners or
+        // file I/O. The bounded queue is best-effort; terminal evidence is also
+        // included in the watchdog's fail-fast message.
+        EnsureProcessorStarted();
+        Entries.TryWrite(AppSessionLogEntry.Write(PackageLogLevel.Information, message, exception: null));
+    }
+
     public static async Task FlushAsync(CancellationToken cancellationToken = default)
     {
         EnsureProcessorStarted();

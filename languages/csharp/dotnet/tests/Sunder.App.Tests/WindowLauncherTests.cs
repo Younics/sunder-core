@@ -1,5 +1,6 @@
 using Sunder.App.Models;
 using Sunder.App.Services;
+using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Xunit;
@@ -75,9 +76,48 @@ public sealed class WindowLauncherTests
         Assert.Equal(0, dispatcher.InvocationCount);
     }
 
+    [Fact]
+    public async Task ClosingPresentationKeepsAcknowledgedOwnerReleaseAvailableAndDoesNotDisposeOnStageFailure()
+    {
+        using var transport = new RuntimeClientTransport(() => null);
+        await using var queue = new BackgroundProcessQueueService();
+        var developer = new AppPackageDeveloperServices(transport, new ThrowingRuntimeApiClientFactory(), queue, new TrackingUiDispatcher());
+        using var harness = CreateHarness(queue, developerServices: developer);
+        harness.Launcher.CloseForShutdown();
+        var owner = new StagedOwner();
+        var backend = (IAppPackageDevelopmentBackend)developer;
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => backend.ReleaseOwnerAsync(owner, default));
+        Assert.False(owner.Committed);
+        Assert.Equal(0, owner.Disposals);
+        owner.Reject = false;
+        await backend.ReleaseOwnerAsync(owner, default);
+        Assert.True(owner.Committed);
+        Assert.Equal(1, owner.Disposals);
+    }
+
+    private sealed class StagedOwner : IDevPackageOwnerSession
+    {
+        internal bool Reject = true;
+        internal bool Committed;
+        internal int Disposals;
+        public Task<DevPackageOwnerLeaseResponse> AcquireAsync(IReadOnlyList<string> folders, bool watch, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Cleanup must not acquire a replacement owner.");
+        public Task ReleaseAsync(CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Cleanup must use acknowledged release.");
+        public async Task<RuntimePackageSnapshot?> ReleaseStagedAsync(Func<PackageLifecycleStageResult, CancellationToken, Task> retireActivations, CancellationToken cancellationToken = default)
+        {
+            await retireActivations(new("withdrawal", [], [], Reject ? ["Activation retirement was not acknowledged."] : [], []), cancellationToken);
+            Committed = true;
+            return CreateSnapshot();
+        }
+        public ValueTask DisposeAsync() { Assert.True(Committed); Disposals++; return ValueTask.CompletedTask; }
+    }
+
     private static WindowLauncherHarness CreateHarness(
         BackgroundProcessQueueService? queue = null,
-        IUiDispatcher? uiDispatcher = null)
+        IUiDispatcher? uiDispatcher = null,
+        AppPackageDeveloperServices? developerServices = null)
     {
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(rootPath);
@@ -93,7 +133,8 @@ public sealed class WindowLauncherTests
             packagesWindowFactory: null!,
             stacksWindowFactory: null!,
             uiDispatcher: uiDispatcher,
-            backgroundProcessQueue: queue);
+            backgroundProcessQueue: queue,
+            developerServices: developerServices);
 
         return new WindowLauncherHarness(launcher, rootPath);
     }

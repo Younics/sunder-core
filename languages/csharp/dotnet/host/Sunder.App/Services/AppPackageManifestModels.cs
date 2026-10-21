@@ -66,6 +66,7 @@ internal sealed record AppLoadedPackageHandle(
     PackageProjectionAcquisition? ProjectionLease = null)
 {
     public string PackageId => Package.PackageId;
+    internal AppPackageLoadAdmission? LoadAdmission { get; init; }
 }
 
 internal static class AppPackageManifestReader

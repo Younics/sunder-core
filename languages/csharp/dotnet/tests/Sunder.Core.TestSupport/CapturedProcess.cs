@@ -12,11 +12,15 @@ public sealed class CapturedProcess : IAsyncDisposable
     private readonly TaskCompletionSource<int> _exited = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Task _outputPump;
     private readonly Task _errorPump;
+    private readonly int? _maximumOutputCharacters;
+    private int _outputCharacters;
+    private int _outputLimitExceeded;
     private int _disposeStarted;
 
-    private CapturedProcess(Process process)
+    private CapturedProcess(Process process, int? maximumOutputCharacters)
     {
         Process = process;
+        _maximumOutputCharacters = maximumOutputCharacters;
         Process.EnableRaisingEvents = true;
         Process.Exited += (_, _) => _exited.TrySetResult(Process.ExitCode);
         if (Process.HasExited) _exited.TrySetResult(Process.ExitCode);
@@ -32,16 +36,19 @@ public sealed class CapturedProcess : IAsyncDisposable
 
     public Task<int> ExitTask => _exited.Task;
 
-    public string StandardOutput => string.Join(Environment.NewLine, _standardOutput);
+    public string StandardOutput => _maximumOutputCharacters is null ? string.Join(Environment.NewLine, _standardOutput) : string.Concat(_standardOutput);
 
-    public string StandardError => string.Join(Environment.NewLine, _standardError);
+    public string StandardError => _maximumOutputCharacters is null ? string.Join(Environment.NewLine, _standardError) : string.Concat(_standardError);
 
     public string Diagnostics
         => $"pid={Id}; exited={SafeHasExited()}; exitCode={SafeExitCode()}{Environment.NewLine}stdout:{Environment.NewLine}{StandardOutput}{Environment.NewLine}stderr:{Environment.NewLine}{StandardError}";
 
-    public static CapturedProcess Start(ProcessStartInfo startInfo)
+    public static CapturedProcess Start(ProcessStartInfo startInfo) => Start(startInfo, maximumOutputCharacters: null);
+
+    public static CapturedProcess Start(ProcessStartInfo startInfo, int? maximumOutputCharacters)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
+        if (maximumOutputCharacters is <= 0) throw new ArgumentOutOfRangeException(nameof(maximumOutputCharacters));
         if (startInfo.UseShellExecute)
         {
             throw new ArgumentException("Captured processes require UseShellExecute=false.", nameof(startInfo));
@@ -51,7 +58,7 @@ public sealed class CapturedProcess : IAsyncDisposable
         startInfo.CreateNoWindow = true;
         var process = Process.Start(startInfo)
                       ?? throw new InvalidOperationException($"Could not start process '{startInfo.FileName}'.");
-        return new CapturedProcess(process);
+        return new CapturedProcess(process, maximumOutputCharacters);
     }
 
     public async Task WaitForOutputAsync(
@@ -121,6 +128,8 @@ public sealed class CapturedProcess : IAsyncDisposable
                 Diagnostics,
                 exception);
         }
+        if (Volatile.Read(ref _outputLimitExceeded) != 0)
+            throw new ProcessFixtureException("Process output exceeded its capture bound.", Diagnostics);
         return new CapturedProcessResult(exitCode, StandardOutput, StandardError);
     }
 
@@ -173,6 +182,26 @@ public sealed class CapturedProcess : IAsyncDisposable
     {
         try
         {
+            if (_maximumOutputCharacters is { } maximum)
+            {
+                // Chunk reads bound even one unterminated line. Only callers opting into
+                // bounded diagnostics use this path; existing line-based harnesses retain their format.
+                var buffer = new char[4096];
+                int count;
+                while ((count = await reader.ReadAsync(buffer).ConfigureAwait(false)) != 0)
+                {
+                    if (Interlocked.Add(ref _outputCharacters, count) > maximum)
+                    {
+                        Interlocked.Exchange(ref _outputLimitExceeded, 1);
+                        try { if (!Process.HasExited) Process.Kill(entireProcessTree: true); }
+                        catch (InvalidOperationException) when (Process.HasExited) { }
+                        break;
+                    }
+                    destination.Enqueue(new string(buffer, 0, count));
+                    _outputChanged.Release();
+                }
+                return;
+            }
             while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
             {
                 destination.Enqueue(line);

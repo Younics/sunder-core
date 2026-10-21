@@ -13,6 +13,7 @@ internal sealed class RuntimeRpcHostCallerActivation : IRuntimeRpcCallerActivati
     private readonly object _gate = new();
     private readonly CancellationToken _retirementToken;
     private int _activeCalls;
+    private int _activeObservations;
 
     public RuntimeRpcHostCallerActivation(
         SunderRpcContractDescriptor descriptor,
@@ -52,26 +53,28 @@ internal sealed class RuntimeRpcHostCallerActivation : IRuntimeRpcCallerActivati
     public bool IsCurrent(PackageSessionLease sessionLease)
         => !_retirementToken.IsCancellationRequested;
 
-    public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease)
+    public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false)
     {
         lock (_gate)
         {
-            if (_retirementToken.IsCancellationRequested || _activeCalls >= maximumCalls)
+            ref var active = ref (observation ? ref _activeObservations : ref _activeCalls);
+            if (_retirementToken.IsCancellationRequested || active >= maximumCalls)
             {
                 lease = null;
                 return false;
             }
-            _activeCalls++;
-            lease = new RuntimeRpcActivationLease(_retirementToken, Release);
+            active++;
+            lease = new RuntimeRpcActivationLease(_retirementToken, () => Release(observation));
             return true;
         }
     }
 
-    private void Release()
+    private void Release(bool observation)
     {
         lock (_gate)
         {
-            if (_activeCalls > 0) _activeCalls--;
+            ref var active = ref (observation ? ref _activeObservations : ref _activeCalls);
+            if (active > 0) active--;
         }
     }
 }

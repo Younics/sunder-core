@@ -100,8 +100,8 @@ public sealed class ActivePackagePolicySynchronizerTests
         var plan = new RegistryResolveInstallPlanResponse(true,
             [new(ActivePolicyTestContext.Package.PackageId, null, "1.0.0", ActivePolicyTestContext.Package.PackageContentIdentity, RegistryPackageActionKinds.PackageInstall, null, [], [], [])], [], [], [], [])
         {
-            PackagePolicy = sample.Response.PackagePolicy, PolicyCheckpoint = sample.Response.Checkpoint,
-            ResolutionPolicy = new(sample.Response.PackagePolicy, sample.Response.Checkpoint, [], [], [], []),
+            PackagePolicy = sample.Response.PackagePolicy,
+            ResolutionPolicy = new(sample.Response.PackagePolicy, [], [], [], []),
         };
         await synchronizer.RefreshPlanAsync(Origin, plan, default);
         policy.Response = request => Allowed(request, 2);

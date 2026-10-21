@@ -1,6 +1,6 @@
 # Sunder RPC V1 Authoring Artifacts
 
-Status: normative Workstream A structural schemas for implementation-first RPC authoring.
+Normative structural schemas for implementation-first RPC authoring.
 
 Current C# source authoring uses only `Sunder.Sdk.Services`; RPC-prefixed declaration
 aliases are retired. Ordinary methods, generated interfaces and the qualified
@@ -14,12 +14,18 @@ The [generated-service shared handoff](GENERATED-SERVICE-HANDOFF.md) freezes the
 `retiredPrivateContracts`, and required project-export `packageVersion`. These
 schema-1 changes are deliberate pre-release closure changes. The handoff owns exact
 member order, migration commands/diagnostics, combined bounds and public-first
-classification guards. Format group validation is role-scoped; Package.Build and
-Node reader/writer and generated-service cutover remain their owning work.
+classification guards. Format group validation and generated use projection are role-scoped.
 
-Earlier implementation checkpoint: `GenerateSunderRpcBindingsTask` integrates package-authority imports into the initial C# semantic pass and final generated-member compilation. Hash-verified receipt consumption projects import groups and canonical reviewed-range/presence dependencies into manifests. Canonical exact-RID Worker leaves retain identical import evidence. Owned project exports preserve the producer lock hash; the amendment requires external App and Runtime grants to derive independently from reviewed lock intent. The historical lifecycle observations below apply to public evolution; they do not require current private contracts to allocate independent versions or pass Accept/Freeze.
+`GenerateSunderRpcBindingsTask` joins source/import compilation and hash-verified
+receipt projection into manifests. App and Runtime grants derive independently from
+reviewed intent. Public evolution uses reviewed baselines; private contracts follow
+package versions and do not require Accept/Freeze.
 
-The shared internal `SunderRpcContractCompatibility` classifier in `Sunder.Package.Format`, lossless C# owned-baseline lifecycle, and source-based Pack gate are implemented. Registry consumes the same version gate in preflight and under publication family/tuple locks. [Evolution rules and canonical recipes](evolution/README.md) specify the supported directional proofs, conservative `Major` cases, history floors, and allocation guards. No public NuGet package or public classifier API is added. Node now implements its independent production classifier, lossless package-owned baseline lifecycle, and source-verified Pack; see [Node execution status](#node-owned-lifecycle-execution-status). Registry authority records, publication-evidence import, and new prerelease allocation policy remain incomplete.
+Format's internal compatibility classifier is shared by C# tooling and Registry;
+Node has an independent implementation. [Evolution rules](evolution/README.md) own
+directional proofs, conservative Major cases, history floors and allocation guards.
+Registry validates publication authority under its family/tuple locks. New prerelease
+allocation remains unsupported; retaining historical prerelease evidence is separate.
 
 [Registry-authoritative platform catalogs](platform-catalog/README.md) use bounded Format and Node content validation, source-derived Core Check/Accept/Freeze/Export and explicit Registry publication-evidence import. The user-selected Registry establishes publication authority; catalogs have no signatures, signing keys or trust-generation metadata. Ordinary Stack source reproduces the complete shipped `2.0.0` descriptor/ABI tuple across all 48 definitions and six methods with unchanged hashes. SDK source builds generate the SDK-only Stack handler and required partial factory through a short-lived build-only tool process. Canonical package migration and deployment/release qualification remain distinct from this implemented authoring path.
 
@@ -27,7 +33,9 @@ Source-generated C# provider codecs preserve required `false`/zero/permitted nul
 
 Generated codecs support SDK-profile nullable and tagged record unions, including inferred authored constant tags, concrete variant roots, and recursive models. Whole-value and exactly-one-variant checks reuse the SDK validator; metadata supplies required synthetic tags and a `[ThreadStatic]` depth guard bounds recursive conversion. General scalar/array/map untagged unions remain unsupported by the SDK profile; no new profile is introduced. These results do not establish Registry publication or phase completion.
 
-The obsolete blanket C# nonempty-import generation gate is removed, not the downstream admission boundaries. Registry and Host still deny nonempty import groups, imported bundles, and optional dependencies pending Phases 2/3. Node tooling emits only explicit owned package-authority bundles, required dependencies, and empty import groups and denies import/optional inputs pending Phase 4. Generating or structurally validating an artifact is not publishing, installing, or activating it. The corpus and implementation checkpoint do not establish Phase 1 completion or final acceptance.
+Package/provider/platform imports and optional dependency intent are implemented
+across C#, Node, Registry and Host. Generated structural evidence is still distinct
+from publication authority, installed graph admission and activation permission.
 
 The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, and MAY are to be interpreted as described by RFC 2119 and RFC 8174 when they appear in uppercase.
 
@@ -207,6 +215,12 @@ Package-artifact contract records retain `artifactSource` as observed in the sel
 
 ### Owned Contracts
 
+The [reviewed public projection amendment](REVIEWED-PROJECTIONS.md) adds optional
+version-bound `projectionReviews` companions after `history`. New acceptance binds
+model names, service-reference/optional policies and method policies. Build/Freeze/
+Pack require current reviewed evidence; initial unreleased-source adoption is an
+explicit operation that preserves all historical snapshot/evidence bytes.
+
 `schemaVersion` is `1`. The root selects exactly one authority mode. Package mode requires `packageId` and semantically requires `authorityId` to equal it; platform mode forbids `packageId` and fixes `authorityId` to `sunder.core`. `contracts` is keyed by stable local contract key. Each value records contract identity, an optional active `current` snapshot, and append-only immutable `history`. Exposure is part of every snapshot so a later policy change cannot relabel frozen history. Absence of `current` represents an acknowledged whole-contract removal and requires nonempty history.
 
 Package mode additionally permits `retiredPrivateContracts` immediately after
@@ -239,45 +253,19 @@ The separate Core engineering `platform-contracts check|accept|freeze|export|imp
 
 ### Node Owned Lifecycle Execution Status
 
-This is the earlier independent-baseline implementation checkpoint. The
-[generated-service handoff](GENERATED-SERVICE-HANDOFF.md) supersedes its private
-version/lifecycle rules and Runtime-only consumer defaults; it does not rewrite the
-historical packed artifacts or their evidence.
+Node preserves canonical public descriptor/ABI snapshots and immutable history;
+private contracts follow package versions under the
+[generated-service amendment](GENERATED-SERVICE-HANDOFF.md). Public baseline limits
+remain 268,435,456 bytes, depth 16, 128 families/256 history entries and a
+2,097,152-value/property preparse budget. Package tools reject platform baselines.
 
-The actual V3 Node pipeline now reads/writes deterministic package-owned baselines
-losslessly, preserving canonical descriptor/ABI text, state, immutable history, and
-every admitted release/publication field. It enforces the existing 268,435,456-byte,
-depth-16 ceiling, 128-family/256-history limits, and a 2,097,152-value/property
-preparse budget; platform baselines remain rejected. The production classifier
-executes all 199 shared evolution cases with C# oracles and frozen expectations unchanged.
-
-Closed Node Check/Accept/Freeze commands validate the complete source set. Existing
-current/history overrides require an exact key/current/next pair and explicit
-acknowledgement for breaking/unclassified/exposure/removal changes. A genuinely new
-selected key allows next-only stable first acceptance. First Accept precedes generation
-and requires a valid exact lock and no prior baseline/receipt/export. Package and
-platform imports can be configured first, including from local archives/catalogs
-without a Registry. This fresh-only phase validates exact import materialization and
-stable source/lock inputs while deferring complete semantic/provider validation to
-first Accept. Existing accepted projects keep their full source-validation pipeline.
-Prior generated receipt/export/marker evidence cannot bootstrap a missing baseline. Earlier
-baseline-free development cannot adopt receipts; mode fallback is not freeze proof.
-
-Accepted and proposed versions use one source/contextual-types/bindings/runtime/
-manifest pipeline. Accept recompiles at proposed versions against the original
-physical baseline/absence fingerprint. Baseline-only leased writes perform no
-generated-output recovery/orphan cleanup and preserve no-op mtimes. Pack requires
-all current entries frozen/published and exact complete owned projection, including
-fresh source/Worker-byte verification for prebuilt leaves and post-archive input
-revalidation under the baseline lease. Own-member/null-prototype maps and all-context,
-provider-order-independent shared-handler checks preserve removal/type safety.
-
-The [Node source/release boundary](../../../../languages/typescript/node/packages/package-tool/README.md#owned-v3-source-and-releases)
-owns exact commands and reported packed omit-dev TS/JS lifecycle/Pack execution,
-including first contract `2.0.0` independently of package `7.6.5`. SDK runtime dependencies
-remain zero. Imports/restores, platform/optional admission, new prerelease allocation,
-publication-evidence import, and V2-template cutover remain pending; this execution
-status changes no schema, permission, or final acceptance gate.
+Public Check/Accept/Freeze validates the complete source set; breaking/removal overrides
+require exact current/next identities and acknowledgement. Prior generated evidence
+cannot bootstrap a missing public baseline. Baseline writes retain leases, original
+fingerprints, no-op mtimes and post-write input checks. Pack verifies current source,
+Worker bytes and exact owned/imported projection, including prebuilt leaves.
+Commands and consumer-role behavior are in the
+[Node lifecycle reference](../../../../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions).
 
 ### Cache Entry Receipt
 
@@ -305,21 +293,18 @@ Manifest bundle members `source` (`owned|imported`), `authorityKind` (`package|p
 
 These strict manifest models are a supported public type surface in the existing internally distributed `Sunder.Package.Format` library for Core/Registry/tooling consumers, not a new public NuGet package. Structural format validation does not itself establish Registry publication or Runtime authorization.
 
-Imported `contractKey` MUST equal the canonical `contractId`, automatically, with no per-contract alias. Its generated binding namespace is `Sunder.Generated.Rpc.Imports.C<encodedContractId>`: uppercase only the first character of each canonical lowercase dot-separated segment, join segments with `_`, and prefix `C`. Thus `example.rpc.v1.minimal` maps to `Sunder.Generated.Rpc.Imports.CExample_Rpc_V1_Minimal` and `sunder.stack.contributor` to `Sunder.Generated.Rpc.Imports.CSunder_Stack_Contributor`. The prefix supports digit-leading IDs; the encoding is injective on canonical lowercase IDs and ignores importing-package local name, version, and hash. Owned keys/names are unchanged. All key-sorted receipt arrays MUST be reordered after this projection.
+Imported `contractKey` MUST equal canonical `contractId`; receipt arrays retain their
+canonical ordering. Public generated APIs use the authority package's flat
+`Sunder.Generated.Packages.<PackageStem>_Services` and `_Models` namespaces, independent
+of import alias. Private wire-codec names are implementation output, not author APIs.
 
-Package `localName=weather` still generates the namespace-level class `Sunder.Generated.Rpc.WeatherPackageApi`; provider intent key `weatherForecast` still generates `IWeatherForecastService`. Those are package/provider intent names, NOT per-contract binding aliases. The aggregate imported provider interface inherits every descriptor service provider interface. Each facade property `C<encodedContractId>` returns `Sunder.Generated.Rpc.ImportApis.C<encodedContractId>.Contract`.
-
-The per-contract API namespace contains immutable `Provider` with no public `Endpoint`; `CatalogSnapshot` with `Revision`, `Sequence`, `ResetRequired`, and `IReadOnlyList<Provider> Providers`; `CatalogEvent` with `Revision`, `Sequence`, `Kind`, and `Provider? Provider`; `Client`; and `Contract`. `Client` has one property returning each descriptor service client. Descriptor service IDs use the lowercase member-ID grammar, which permits dots, hyphens, underscores, digit-leading IDs, and repeated separators, not just source-authoring lower-kebab keys. Encode the property as `S` plus `UpperInitial(serviceId)`, uppercasing only the ID's first character, then escaping each original `_` as `_5f`, `.` as `_2e`, and `-` as `_2d`. Escape original underscores first so inserted escape prefixes are not escaped again. This is injective on valid descriptor service IDs: `example` becomes `SExample`, `weather-forecast` becomes `SWeather_2dforecast`, and `1.foo` becomes `S1_2efoo`.
-
-```csharp
-ValueTask<CatalogSnapshot> ListAsync(CancellationToken cancellationToken = default);
-ValueTask<Provider?> GetAsync(Provider provider, CancellationToken cancellationToken = default);
-IAsyncEnumerable<CatalogEvent> WatchAsync(long afterRevision, long afterSequence, CancellationToken cancellationToken = default);
-Client CreateClient(ISunderRpcCallScope scope, Provider provider);
-ValueTask<Provider> ResolveSelectedPackageAsync(CancellationToken cancellationToken = default);
-```
-
-List/get/watch allow all authorized exact-contract providers, without selected-package/range/Active filtering. Get revalidates the supplied provider's exact activation endpoint and never substitutes a replacement. Watch preserves revision/sequence cursors, resets, and lifecycle events. Client construction MUST NOT create or dispose the supplied call scope.
+`IPackageApi` supplies selected-package service access. `IServiceProviders<TService>`
+supplies authorized catalog entries with `Service`, typed `Reference`, revision/sequence
+and reset/lifecycle semantics. Entries are borrowed; generated DI owns exact binding
+observation, cancellation and retirement. References never grant authority or retarget
+to another activation. The [ordinary-service guide](../../../../docs/package-development/ORDINARY-SERVICES.md)
+owns the current author-facing signatures. Advanced caller-owned scopes retain their
+explicit ownership contract.
 
 Only the selected-package resolver additionally requires exact package ID, package version satisfying `requestedVersionRange` by SemVer precedence and explicit `includePrerelease` policy, and `Active` state. Contract ID/version/`descriptorSha256`/`abiSha256` remain exact for every operation. Prereleases are excluded unless explicitly included; build metadata does not affect package-version precedence. The resolver MUST NOT filter by package content hash or equality to the restore-selected package version. Zero matches report `rpc.provider-not-found`; multiple matches report `rpc.provider-ambiguous`, with no ranking, retry, or endpoint replacement.
 
@@ -327,7 +312,11 @@ Only the selected-package resolver additionally requires exact package ID, packa
 
 The user explicitly selected Compatible Installation on 2026-09-11. Package dependencies MAY install an in-requested-range package version only with the exact locked imported contract ID/version/`descriptorSha256`/`abiSha256`. Every applicable reviewed range and prerelease policy MUST hold. ABI equality alone is insufficient when descriptor bytes/hash differ. A package patch retaining all exact imported RPC identities may satisfy the dependency without matching the restore-selected release/content. No compatible-schema substitution is permitted.
 
-Selected package and ultimate package-authority release/content are exact restore/build/inventory provenance, NOT install or routing hard pins. Different restore-selected artifact bytes across consumers MUST NOT by themselves cause installed release conflicts. Restore provenance and full public-inventory hash consistency remain mandatory; restore MUST NOT substitute a newer artifact or rewrite a lock. Installed artifacts remain individually validated and exactly recorded. Execution-runtime `.sunderruntime` exact pins and platform-catalog release/content constraints are independent.
+Selected package and ultimate authority release/content are exact restore/build
+provenance, NOT install or routing hard pins. Different restore snapshots alone
+MUST NOT cause installed release conflicts. Restore MUST preserve locked evidence;
+installed artifacts are individually validated and recorded. Host official-runtime
+bindings and exact platform-catalog constraints remain independent.
 
 Dependency contributors coalesce by package ID with `required` winning over `optional`, preserving the source `packageApiImports[].presence`. The current C# manifest projection preserves each selected artifact's canonical reviewed `requestedVersionRange` and rejects authored non-RPC dependency IDs that duplicate lock-derived IDs. Across consumers, range strings need not be identical, but one installed version MUST satisfy every applicable range/prerelease policy and all exact imported RPC identities for each required contract MUST agree. Content identity is not an install-coalescing equality requirement. A distinct ultimate package authority without an explicit selection and reviewed range is an unreviewed-range fail-closed/migration gate: implementations MUST NOT infer either a permissive range or an exact-equality range/content pin from the provenance snapshot. Dependency review MUST NOT implicitly grant uses/actions.
 
@@ -337,7 +326,15 @@ An optional branch may be omitted as a unit; its omission MUST NOT hide or disab
 
 `schemaVersion` is `1`; `authorityKind`, `authorityId`, `releaseVersion`, `contractCount`, and `contracts` are required. Authority is `platform` / `sunder.core`. The catalog records the stable coordinated Core release and complete sorted descriptor inventory with canonical descriptor text and both hashes. Every V1 platform baseline and catalog is nonempty and contains exactly one active `sunder.stack.contributor` record. The whole-catalog SHA-256 is computed externally and is never embedded in the catalog.
 
-Current C# `Create`/`Verify` and independent Node validation enforce those byte/inventory checks. Their objects are defensive immutable content snapshots with exact release/content and descriptor/version/ABI pins. Registry selection establishes authority. Core source operations derive the full Stack descriptor from the implemented adapter and internal typed wire models. Source and neutral generated transport must reach a two-pass fixed point. SDK builds use evaluated `@(Compile)` including `AutoGen` except their own transport output, `@(ReferencePathWithRefAssemblies)`, defines, nullable settings, configuration and target framework; explicit lifecycle commands retain their fixed Release context. [Transport publication rules](../../../../eng/platform-contracts/README.md#input-and-transaction-rules) require complete baseline agreement, input/membership revalidation and immutable marker-owned `obj` output. The older [migration check](../../../../eng/execution-runtimes/README.md#platform-catalog-boundary) verifies the SDK descriptor oracle's unchanged hashes; explicit `export` produces a catalog for administrator publication.
+Current C# and independent Node validation enforce these byte/inventory checks.
+Registry selection establishes authority; Core derives the Stack descriptor from
+source and a two-pass generated-transport fixed point. Evaluated compiler inputs,
+explicit lifecycle Release context, baseline agreement and immutable output are
+defined by the [engineering rules](../../../../eng/platform-contracts/README.md#input-and-transaction-rules).
+The [current source and baseline checks](../../../../eng/platform-contracts/README.md#stack-transport-source-generation)
+validate reviewed descriptor/ABI semantics; explicit export produces the catalog for
+publication. Protected migration captures remain byte-exact inert history and do
+not participate in current runtime/build acceptance.
 
 ## Raw Bytes And Canonical Text
 

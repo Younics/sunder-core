@@ -49,7 +49,7 @@ internal static class SunderRpcCSharpProjectedBindings
                 if (input.ModelProjection.ServiceReferences.TryGetValue(definition, out var reference))
                 {
                     if (!byId.TryGetValue(reference.ContractId, out var target)) throw new InvalidDataException("rpc-authoring.model-projection-invalid: The service reference target is not selected.");
-                    var serviceType = Editor.GeneratedPackageNames.ServiceInterface(target.AuthorityPackageId, reference.ServiceId);
+                    var serviceType = Editor.GeneratedPackageNames.ImportedServiceInterface(target.AuthorityPackageId, reference.ContractId, reference.ServiceId);
                     types.Add(definition, new("global::Sunder.Sdk.Services.ServiceReference<global::" + serviceType + ">", null));
                     continue;
                 }

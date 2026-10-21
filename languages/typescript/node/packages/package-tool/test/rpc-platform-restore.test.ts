@@ -50,8 +50,8 @@ for (const extension of ["ts", "js"]) test(`fresh complete ${extension} multi-pr
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Multi Provider", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
     const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; '
-      + 'export const stack=defineService({ping(request){return request;}},{implements:Implementations.stackContributor});'
-      + 'export const extension=defineService({ping(request){return request;}},{implements:Implementations.extension});';
+      + 'export const stack=defineService({examplePing(request){return request;}},{implements:Implementations.stackContributor});'
+      + 'export const extension=defineService({examplePing(request){return request;}},{implements:Implementations.extension});';
     const sourcePath = join(c.root, `src/rpc.${extension}`); await writeFile(sourcePath, source);
     let requests = 0;
     const command = (request: PackageApiRequest) => packageApiCommand(c.root, { ...request, cacheRoot: c.cache, platformCatalog: c.path,
@@ -260,7 +260,7 @@ for (const extension of ["ts", "js"]) test(`offline ${extension} platform provid
     await writeFile(join(c.root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "minimal-package-owned-baseline.json")));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Platform", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
-    const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const stack=defineService({ping(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.stackContributor});';
+    const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const stack=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.stackContributor});';
     await writeFile(join(c.root, `src/rpc.${extension}`), source);
     const options = { contractCacheRoot: c.cache };
     const loaded = await loadProjectWithOwnedFrame(c.root, options); const analysis = loaded.ownedRpc!;
@@ -315,7 +315,7 @@ for (const local of [false, true]) test(`platform commands select from ${local ?
     assert.equal((await command({ operation: "platform-implement", contractId: "sunder.stack.contributor" })).changed, false);
     assert.equal(requests, calls); assert.equal((await stat(c.lockPath)).mtimeMs, time);
     await assert.rejects(loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }), /handler-incomplete/u);
-    const source = empty + '\nimport {Implementations} from "#sunder/api"; export const stack=defineService({ping(request){return request;}},{implements:Implementations.stackContributor});';
+    const source = empty + '\nimport {Implementations} from "#sunder/api"; export const stack=defineService({examplePing(request){return request;}},{implements:Implementations.stackContributor});';
     await writeFile(join(c.root, "src/rpc.ts"), source);
     if (local) {
       await assert.rejects(stat(join(c.root, "sunder-contracts.owned.json")), { code: "ENOENT" });

@@ -51,7 +51,7 @@ public sealed partial class GenerateSunderRpcBindingsTask
         }
         var references = new Dictionary<SunderPackageRoleMembership, SunderPackageRoleReference[]>();
         var runtimeReferences = new Dictionary<SunderPackageRoleMembership, SunderPackageRoleReference[]>();
-        var roleCompilations = new Dictionary<SunderPackageRoleMembership, CSharpCompilation>();
+        var semanticAssemblies = new Dictionary<SunderPackageRoleMembership, IReadOnlySet<string>>();
         foreach (var role in hasApp ? new[] { SunderPackageRoleMembership.Worker, SunderPackageRoleMembership.App } : [SunderPackageRoleMembership.Worker])
         {
             var prefix = role == SunderPackageRoleMembership.App ? "roles/app/" : "roles/worker/";
@@ -98,8 +98,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
                 foreach (var error in errors) Log.LogError("package-authoring.role-compilation-invalid: " + error);
                 return false;
             }
-            roleCompilation = RemoveUnusedRoleUsings(roleCompilation, files, prefix);
-            roleCompilations[role] = roleCompilation;
+            roleCompilation = RemoveUnusedRoleUsings(roleCompilation, files, prefix, out var bodyAssemblies);
+            semanticAssemblies[role] = bodyAssemblies;
             references[role] = RoleReferences(roleCompilation);
             runtimeReferences[role] = RoleRuntimeReferences(roleCompilation);
         }
@@ -108,11 +108,11 @@ public sealed partial class GenerateSunderRpcBindingsTask
         {
             var planner = new SunderPackageDependencyPlanner(ProjectAssetsFile, ProjectFile, ProjectExtensionsPath, TargetFramework, RuntimeIdentifier,
                 PackageReferences, ProjectReferences, ProjectImports, ReferencePaths, RuntimeReferencePaths);
-            foreach (var (role, roleCompilation) in roleCompilations)
-                planner.UseAssemblies(role, SemanticAssemblies(roleCompilation).Concat(runtimeReferences[role].Select(reference => reference.Name))
+            foreach (var (role, bodyAssemblies) in semanticAssemblies)
+                planner.UseAssemblies(role, bodyAssemblies.Concat(runtimeReferences[role].Select(reference => reference.Name))
                     .Concat(role == SunderPackageRoleMembership.App ? markup.Assemblies : []), ReferencePaths.Concat(RuntimeReferencePaths).ToArray());
             planner.Complete();
-            foreach (var role in roleCompilations.Keys)
+            foreach (var role in semanticAssemblies.Keys)
             {
                 var dependency = planner.Project(role);
                 dependencies.Add(role, dependency);
@@ -124,6 +124,7 @@ public sealed partial class GenerateSunderRpcBindingsTask
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
             schemaVersion = 1,
+            compilationCacheRoot = Path.Combine(Path.GetDirectoryName(directory)!, "sunder-package-compilations"),
             packageId = compilation.ResolvedPackageId,
             projectIdentity = ProjectIdentity.Trim(),
             configuration = Configuration.Trim(),
@@ -225,6 +226,9 @@ public sealed partial class GenerateSunderRpcBindingsTask
         item.SetMetadata("SnapshotPath", Path.Combine(snapshot, RolePlanPath));
         item.SetMetadata("SnapshotGeneratedDirectory", snapshot);
         item.SetMetadata("SnapshotIntermediateOutputPath", Path.GetDirectoryName(snapshot)!);
+        item.SetMetadata("WorkerCompilationRoot", SunderRoleCompilationSnapshot.Publish(document.RootElement, snapshot, "worker"));
+        if (document.RootElement.GetProperty("hasApp").GetBoolean())
+            item.SetMetadata("AppCompilationRoot", SunderRoleCompilationSnapshot.Publish(document.RootElement, snapshot, "app"));
         item.SetMetadata("HasDependencyPlan", document.RootElement.GetProperty("workerDependencies").ValueKind == JsonValueKind.Null ? "false" : "true");
         PackageRolePlans = [item];
 
@@ -295,95 +299,22 @@ public sealed partial class GenerateSunderRpcBindingsTask
             .Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name)).ToArray();
     }
 
-    private static IEnumerable<string> SemanticAssemblies(CSharpCompilation compilation)
-    {
-        var names = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var tree in compilation.SyntaxTrees)
-        {
-            var model = compilation.GetSemanticModel(tree);
-            foreach (var node in tree.GetRoot().DescendantNodes(descendIntoChildren: node => node is not UsingDirectiveSyntax))
-            {
-                if (node is UsingDirectiveSyntax) continue;
-                if (node is TypeSyntax or ExpressionSyntax)
-                {
-                    Type(model.GetTypeInfo(node).Type);
-                    Type(model.GetTypeInfo(node).ConvertedType);
-                }
-                if (node is ExpressionSyntax or AttributeSyntax)
-                {
-                    var symbol = model.GetSymbolInfo(node).Symbol;
-                    Type(symbol?.ContainingType);
-                    if (symbol is IMethodSymbol method) foreach (var argument in method.TypeArguments) Type(argument);
-                }
-            }
-        }
-        return names;
-        void Type(ITypeSymbol? type)
-        {
-            if (type is IArrayTypeSymbol array) { Type(array.ElementType); return; }
-            if (type is not INamedTypeSymbol named) return;
-            if (!SymbolEqualityComparer.Default.Equals(named.ContainingAssembly, compilation.Assembly)) names.Add(named.ContainingAssembly.Identity.Name);
-            foreach (var argument in named.TypeArguments) if (!SymbolEqualityComparer.Default.Equals(argument, type)) Type(argument);
-        }
-    }
-
-    private static CSharpCompilation RemoveUnusedRoleUsings(CSharpCompilation compilation, List<SourceGeneratedFile> files, string prefix)
+    private static CSharpCompilation RemoveUnusedRoleUsings(CSharpCompilation compilation, List<SourceGeneratedFile> files, string prefix,
+        out IReadOnlySet<string> semanticAssemblies)
     {
         // Compiler hidden unused-import diagnostics can be suppressed for generated
         // trees/#line mappings. Use bound body symbols instead; namespace imports
         // themselves must not keep the other role's entire dependency alive.
-        var namespaces = new HashSet<string>(StringComparer.Ordinal);
-        var types = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var tree in compilation.SyntaxTrees)
+        var authored = files.Select((file, index) => (file, index))
+            .Where(item => item.file.RelativeOutputPath.StartsWith(prefix + "source/", StringComparison.Ordinal))
+            .ToDictionary(item => item.file.OutputPath, item => item.index, StringComparer.Ordinal);
+        var result = SunderPackageRoleUsingPruner.Prune(compilation, authored.Keys.ToHashSet(StringComparer.Ordinal));
+        semanticAssemblies = result.SemanticAssemblies;
+        foreach (var (path, updated) in result.UpdatedSources)
         {
-            var model = compilation.GetSemanticModel(tree);
-            foreach (var node in tree.GetRoot().DescendantNodes(descendIntoChildren: node => node is not UsingDirectiveSyntax))
-            {
-                if (node is UsingDirectiveSyntax) continue;
-                if (node is TypeSyntax or ExpressionSyntax)
-                {
-                    Type(model.GetTypeInfo(node).Type); Type(model.GetTypeInfo(node).ConvertedType);
-                }
-                if (node is ExpressionSyntax or AttributeSyntax)
-                {
-                    var symbol = model.GetSymbolInfo(node).Symbol;
-                    Type(symbol as ITypeSymbol); Type(symbol?.ContainingType);
-                    if (symbol?.ContainingNamespace is { IsGlobalNamespace: false } ns) namespaces.Add(ns.ToDisplayString());
-                }
-            }
-        }
-        foreach (var tree in compilation.SyntaxTrees.ToArray())
-        {
-            var index = files.FindIndex(file => file.OutputPath == tree.FilePath && file.RelativeOutputPath.StartsWith(prefix + "source/", StringComparison.Ordinal));
-            if (index < 0) continue;
-            var model = compilation.GetSemanticModel(tree);
-            var text = tree.GetText().ToString().ToCharArray();
-            foreach (var directive in tree.GetRoot().DescendantNodes().OfType<UsingDirectiveSyntax>())
-            {
-                var symbol = directive.Name is null ? null : model.GetSymbolInfo(directive.Name).Symbol;
-                var used = symbol switch
-                {
-                    INamespaceSymbol ns => namespaces.Any(name => name == ns.ToDisplayString() || name.StartsWith(ns.ToDisplayString() + ".", StringComparison.Ordinal)),
-                    INamedTypeSymbol type => types.Contains(TypeKey(type)),
-                    _ => true,
-                };
-                if (used) continue;
-                for (var position = directive.SpanStart; position < directive.Span.End; position++) if (text[position] is not ('\r' or '\n')) text[position] = ' ';
-            }
-            var updated = new string(text);
+            var index = authored[path];
             files[index] = files[index] with { Contents = Utf8NoBom.GetBytes(updated) };
-            compilation = compilation.ReplaceSyntaxTree(tree, CSharpSyntaxTree.ParseText(updated, (CSharpParseOptions)tree.Options, tree.FilePath));
         }
-        return compilation;
-
-        void Type(ITypeSymbol? type)
-        {
-            if (type is IArrayTypeSymbol array) { Type(array.ElementType); return; }
-            if (type is not INamedTypeSymbol named) return;
-            types.Add(TypeKey(named));
-            if (!named.ContainingNamespace.IsGlobalNamespace) namespaces.Add(named.ContainingNamespace.ToDisplayString());
-            foreach (var argument in named.TypeArguments) if (!SymbolEqualityComparer.Default.Equals(argument, type)) Type(argument);
-        }
-        static string TypeKey(INamedTypeSymbol type) => type.ContainingAssembly.Identity + ":" + type.OriginalDefinition.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        return result.Compilation;
     }
 }

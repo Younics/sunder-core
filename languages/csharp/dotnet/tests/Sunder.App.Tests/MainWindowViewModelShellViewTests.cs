@@ -1688,6 +1688,47 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task RetainedRuntimeBackedChat_KeepsVisibleBoundaryAndReopensRpcAcrossDevAddRemove()
+    {
+        var root = CreateTempDirectory();
+        var folder = CreateAppPackageSource(root, "agent");
+        File.WriteAllText(Path.Combine(folder, ShellLifecycleTestPackageModule.InvokeRuntimeDuringNavigationMarkerFileName), "");
+        var projectFolder = CreateAppPackageSource(Path.Combine(root, "project"), "project");
+        File.WriteAllText(Path.Combine(projectFolder, ShellLifecycleTestPackageModule.SkipViewMarkerFileName), "");
+        var handler = new PackageRuntimePingHandler();
+        using var transport = new RuntimeClientTransport(() => new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5199"), "test-token"), handler);
+        var host = TestAppPackageHost.Create(new AppPackageViewRegistry(), [], [], [], null,
+            getRuntimeConnectionInfo: transport.GetConnectionInfo, downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
+            uiDispatcher: new ImmediateUiDispatcher());
+        using var harness = CreateHarness(root, new ThrowingRuntimeApiClientFactory(), host, host);
+        var builder = CreateActiveAgentPackage();
+        var project = builder with { PackageId = "project", DisplayName = "Project", Views = [] };
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with { ActivationFingerprint = new('a', 64) };
+        var projectSource = RuntimeContractTestData.Snapshot("project", PackageSourceKind.Dev, projectFolder) with { ActivationFingerprint = new('b', 64), SessionGeneration = 2 };
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([builder], [source], 1), [source]);
+        var boundary = Assert.IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView);
+        var view = boundary.HostedView!;
+        var staged = harness.StagingSurface.StagedViews.Count;
+        Assert.Equal(1, handler.RpcRequestCount);
+        source = source with { SessionGeneration = 2 };
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([builder, project], [source, projectSource], 2), [source, projectSource]);
+        await host.WaitForRetirementsAsync();
+        Assert.Same(boundary, harness.ViewModel.MiddlePanel.HostedView);
+        Assert.Same(view, boundary.HostedView);
+        Assert.Equal(staged, harness.StagingSurface.StagedViews.Count);
+        Assert.Equal(1, handler.RpcRequestCount);
+        source = source with { SessionGeneration = 3 };
+        await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([builder], [source], 3), [source]);
+        await host.WaitForRetirementsAsync();
+        Assert.Same(boundary, harness.ViewModel.MiddlePanel.HostedView);
+        Assert.Equal(staged, harness.StagingSurface.StagedViews.Count);
+        var ping = (Task)view.GetType().GetMethod(nameof(ShellLifecycleThreadAffinedPackageView.InvokeRuntimePingAsync))!.Invoke(view, [CancellationToken.None])!;
+        await ping;
+        Assert.Equal(2, handler.RpcRequestCount);
+        Assert.Equal([1L, 2L, 2L, 3L], handler.OpenGenerations.ToArray());
+    }
+
+    [Fact]
     public async Task ApplyPackageLifecycleSnapshotAsync_StagesAllSelectionsBeforeExactOnceAttachmentAwareNavigation()
     {
         var rootPath = CreateTempDirectory();
@@ -3553,6 +3594,7 @@ public sealed class MainWindowViewModelShellViewTests
     private sealed class PackageRuntimePingHandler : HttpMessageHandler
     {
         private int _rpcRequestCount;
+        public System.Collections.Concurrent.ConcurrentQueue<long> OpenGenerations { get; } = new();
 
         public int RpcRequestCount => Volatile.Read(ref _rpcRequestCount);
 
@@ -3574,10 +3616,12 @@ public sealed class MainWindowViewModelShellViewTests
 
             if (request.RequestUri?.AbsolutePath == "/api/v1/rpc/app-sessions/open")
             {
+                using var body = System.Text.Json.JsonDocument.Parse(request.Content!.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult());
+                OpenGenerations.Enqueue(body.RootElement.GetProperty("sessionGeneration").GetInt64());
                 return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        "{\"sessionId\":\"test-app-session\"}",
+                        "{\"sessionId\":\"test-app-session-" + OpenGenerations.Count + "\"}",
                         System.Text.Encoding.UTF8,
                         "application/json"),
                 });

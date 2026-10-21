@@ -219,12 +219,12 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
             runtimeIdentifiers: [PackageTargetSelection.GetCurrentRuntimeIdentifier()], roles: ["runtime"],
             runtimeRequiredHostCapabilities: ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1",
                 SunderSdkCapabilities.Baseline11V1, SunderSdkCapabilities.DockerEnvironmentV1]);
-        var authority = ActivePolicyTestContext.Allowed(new("", [], [], null, null));
+        var authority = ActivePolicyTestContext.Allowed(new("", [], [], null));
         var plan = new RegistryResolveInstallPlanResponse(true, [published.PlanItem], [], [], [], [], fingerprint,
             fixture.Provider.GetRequiredService<TimeProvider>().GetUtcNow().AddMinutes(5))
         {
-            PackagePolicy = authority.PackagePolicy, PolicyCheckpoint = authority.Checkpoint,
-            ResolutionPolicy = new(authority.PackagePolicy, authority.Checkpoint, [], [], [], []),
+            PackagePolicy = authority.PackagePolicy,
+            ResolutionPolicy = new(authority.PackagePolicy, [], [], [], []),
         };
         registry.PlansByOrigin[new Uri(origin).GetLeftPart(UriPartial.Authority)] = plan;
         registry.Artifacts = published.ContentByUrl;

@@ -57,7 +57,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Graph;
             using Sunder.Generated.Packages.Example_Dependency_Models;
             [SunderServiceProvider(typeof(IGraphService))] public sealed partial class GraphProvider : IGraphService {
                 public ValueTask<GraphValue> EchoAsync(GraphValue request, CancellationToken cancellationToken = default) => ValueTask.FromResult(request);

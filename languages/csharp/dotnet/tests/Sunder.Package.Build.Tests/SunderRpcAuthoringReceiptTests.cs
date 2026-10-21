@@ -119,43 +119,34 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     }
 
     [Theory]
-    [InlineData("whole-package-public-api-import")]
-    [InlineData("explicit-package-provider-import")]
-    public void Write_RealImportsMatchEveryParityExpectedRecord(string shapeId)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Write_RealImportsMatchEveryCurrentReviewedRecord(bool providerOnly)
     {
-        using var parity = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/parity/expectations.json")));
-        var shape = parity.RootElement.GetProperty("executableShapes").EnumerateArray()
-            .Single(value => value.GetProperty("id").GetString() == shapeId);
-        var input = shape.GetProperty("input");
-        var providerOnly = input.TryGetProperty("lockBasePath", out var basePath);
-        var document = ReadJson(Fixture("authoring/parity/" + (providerOnly ? basePath : input.GetProperty("lockPath")).GetString()));
+        using var review = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/current-parity/import-receipt-records.json")));
+        var input = review.RootElement;
+        var document = ReadJson(Fixture("authoring/current-parity/" + input.GetProperty("lockPath").GetString()));
+        var binding = input.GetProperty("providerBinding");
         if (providerOnly)
         {
-            foreach (var transformation in input.GetProperty("lockTransformations").EnumerateArray())
-            {
-                var segments = transformation.GetProperty("path").GetString()!.Split('/');
-                Assert.Equal(3, segments.Length);
-                var map = document[segments[1]]!.AsObject();
-                if (transformation.GetProperty("operation").GetString() == "remove")
-                    Assert.True(map.Remove(segments[2]));
-                else
-                    map[segments[2]] = JsonNode.Parse(transformation.GetProperty("value").GetRawText());
-            }
+            document["packageImports"] = new JsonObject();
+            document["providerImports"]![binding.GetProperty("key").GetString()!] = new JsonObject
+            { ["packageId"] = "example.dependency", ["contractId"] = ContractId };
         }
         var contractLock = ReadLock(document);
         var imports = Prepare(contractLock);
         var compilation = providerOnly
-            ? Compile(imports, ProviderSource("LocalProvider", input.GetProperty("providerBinding").GetProperty("key").GetString()!,
-                input.GetProperty("providerBinding").GetProperty("providerId").GetString()!))
+            ? Compile(imports, ProviderSource("LocalProvider", binding.GetProperty("key").GetString()!, binding.GetProperty("providerId").GetString()!))
             : Compile(imports);
 
         var root = AssertReceipt(Write(contractLock, compilation, imports));
 
         Assert.Empty(compilation.Contracts);
-        var expected = ModelProjectionTestEvidence.CurrentImportReceiptExpectation(shape.GetProperty("expectedRecords"), contractLock);
-        Assert.Equal(expected.EnumerateObject().Select(property => property.Name), root.EnumerateObject().Skip(6).Select(property => property.Name));
-        foreach (var record in expected.EnumerateObject())
-            Assert.True(JsonElement.DeepEquals(record.Value, root.GetProperty(record.Name)), $"{shapeId}/{record.Name} differs from the parity oracle.");
+        var expected = input.GetProperty("common").EnumerateObject()
+            .Concat(input.GetProperty(providerOnly ? "provider" : "consumer").EnumerateObject()).ToArray();
+        Assert.Equal(expected.Select(property => property.Name).Order(StringComparer.Ordinal), root.EnumerateObject().Skip(6).Select(property => property.Name).Order(StringComparer.Ordinal));
+        foreach (var record in expected)
+            Assert.True(JsonElement.DeepEquals(record.Value, root.GetProperty(record.Name)), $"{record.Name} differs from the current reviewed record.");
         if (providerOnly)
         {
             Assert.Single(compilation.ImportedProviders);
@@ -167,7 +158,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
             var artifact = Assert.Single(root.GetProperty("packageArtifacts").EnumerateArray());
             Assert.Equal(2, artifact.GetProperty("publicContractCount").GetInt32());
             Assert.Equal(2, artifact.GetProperty("contracts").GetArrayLength());
-            foreach (var excluded in shape.GetProperty("excludedPublicInventoryContracts").EnumerateArray())
+            foreach (var excluded in input.GetProperty("excludedContracts").EnumerateArray())
             {
                 var excludedId = excluded.GetProperty("contractId").GetString();
                 Assert.DoesNotContain(imports.Contracts, contract => contract.ContractKey == excludedId);

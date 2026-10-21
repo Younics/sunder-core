@@ -2,6 +2,8 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
@@ -334,6 +336,122 @@ public sealed class InstalledPackagePolicyTests
     }
 
     [Fact]
+    public async Task BackgroundPersistenceQuiescenceJoinsAcceptedWriteBeforeGateRetirementAndRetainsDenial()
+    {
+        using var fault = new BlockingPolicyWrite();
+        using var fixture = new Fixture(fault);
+        var package = fixture.Package();
+        await fixture.Store.WriteAsync([package]);
+        fixture.Block();
+        await fixture.AllowAsync(package);
+        var retained = Assert.Single(await fixture.Context.Cache.CaptureInstalledAsync([package], default)).Policy!;
+        // Keep network refresh independent and in flight; draining the background
+        // writer must neither wait for it nor disable expiry enforcement.
+        var refreshEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        fixture.Context.Send = async (_, token) =>
+        {
+            refreshEntered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            throw new InvalidOperationException("Unreachable after refresh cancellation.");
+        };
+        var logs = new RecordingLogSink();
+        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new());
+        using var refresh = new RegistryPackagePolicySynchronizer(fixture.Context.Client, fixture.Context.Cache);
+        using var service = new ActivePackagePolicySynchronizer(fixture.Store, owner.State, owner, refresh,
+            new(fixture.Context.Cache), fixture.Context.Cache, fixture.Context.Clock, fixture.Context.Time,
+            logs.CreateLogger<ActivePackagePolicySynchronizer>(), installedPolicies: fixture.Metadata);
+        try
+        {
+            await service.StartAsync(default);
+            await fault.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var draining = service.StopPersistenceAsync(default);
+            Assert.False(draining.IsCompleted); // An accepted, cancellation-ignoring write still owns the drain.
+            using (var deadline = new CancellationTokenSource())
+            {
+                deadline.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => service.StopPersistenceAsync(deadline.Token));
+            }
+            Assert.False(draining.IsCompleted); // A cancelled wait is not a write/cleanup acknowledgement.
+            fault.Release.Set();
+            await draining.WaitAsync(TimeSpan.FromSeconds(5));
+            await refreshEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await fixture.Operations.ShutdownAsync(() => Task.CompletedTask);
+            // Periodic refresh/enforcement remain live, but the quiesced writer
+            // cannot attempt a new operation against the retired gate.
+            fixture.Context.Time.Advance(TimeSpan.FromSeconds(2));
+            Assert.False(service.ExecuteTask!.IsCompleted);
+            await service.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.DoesNotContain(logs.Entries, entry => entry.Level >= LogLevel.Error);
+
+            var restarted = new PackageLifecyclePolicyCache(fixture.Context.Paths, fixture.Context.Clock);
+            var coordinator = new PackageStoreCoordinator(fixture.Context.Paths, fixture.Store, new(fixture.Context.Paths), packagePolicies: restarted);
+            await coordinator.InitializeAsync();
+            await new InstalledPackagePolicyCoordinator(fixture.Store, coordinator, new(), restarted).ReconcileAsync(default);
+            var durable = Assert.Single(await fixture.Store.ListAsync());
+            Assert.Equal("PolicyBlocked", durable.Policy!.State);
+            Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, durable.Policy.ErrorCode);
+            Assert.Equal(retained.Snapshots.Single().Packages.Values.Single().Lease,
+                durable.Policy.Snapshots.Single().Packages.Values.Single().Lease);
+            Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked,
+                Assert.Throws<PackagePolicyDeniedException>(() => restarted.RequireActivation(Origin, retained.Package)).Code);
+        }
+        finally
+        {
+            fault.Release.Set();
+            await service.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task BackgroundPersistenceQuiescedBeforeStartNeverEntersRetiredGate()
+    {
+        using var fixture = new Fixture();
+        var logs = new RecordingLogSink();
+        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new());
+        using var refresh = new RegistryPackagePolicySynchronizer(fixture.Context.Client, fixture.Context.Cache);
+        using var service = new ActivePackagePolicySynchronizer(fixture.Store, owner.State, owner, refresh,
+            new(fixture.Context.Cache), fixture.Context.Cache, fixture.Context.Clock, fixture.Context.Time,
+            logs.CreateLogger<ActivePackagePolicySynchronizer>(), installedPolicies: fixture.Metadata);
+        await service.StopPersistenceAsync(default);
+        await fixture.Operations.ShutdownAsync(() => Task.CompletedTask);
+        try
+        {
+            await service.StartAsync(default);
+            await service.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.DoesNotContain(logs.Entries, entry => entry.Level >= LogLevel.Error);
+        }
+        finally { await service.StopAsync(default); }
+    }
+
+    [Fact]
+    public async Task IntegrityFenceWithoutNormalQuiescenceRemainsAnError()
+    {
+        using var fixture = new Fixture();
+        fixture.Operations.FenceForIntegrityFailure();
+        var logs = new RecordingLogSink();
+        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new());
+        using var refresh = new RegistryPackagePolicySynchronizer(fixture.Context.Client, fixture.Context.Cache);
+        using var service = new ActivePackagePolicySynchronizer(fixture.Store, owner.State, owner, refresh,
+            new(fixture.Context.Cache), fixture.Context.Cache, fixture.Context.Clock, fixture.Context.Time,
+            logs.CreateLogger<ActivePackagePolicySynchronizer>(), installedPolicies: fixture.Metadata);
+        try
+        {
+            await service.StartAsync(default);
+            await WaitForPersistenceFailureAsync();
+            var error = Assert.Single(logs.Entries, entry => entry.Level == LogLevel.Error);
+            Assert.Equal(nameof(RuntimeOperationRejectedException), error.Properties["FailureType"]);
+            await service.StopPersistenceAsync(default);
+        }
+        finally { await service.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(5)); }
+
+        async Task WaitForPersistenceFailureAsync()
+        {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (!logs.Entries.Any(entry => entry.Level == LogLevel.Error)) await Task.Delay(10, deadline.Token);
+        }
+    }
+
+    [Fact]
     public async Task MissingPolicyFieldCannotBeSilentlyReadAsAnOlderSchema()
     {
         using var fixture = new Fixture();
@@ -351,12 +469,13 @@ public sealed class InstalledPackagePolicyTests
         internal InstalledPackageStore Store { get; }
         internal PackageStoreCoordinator Coordinator { get; }
         internal InstalledPackagePolicyCoordinator Metadata { get; }
+        internal RuntimeOperationGate Operations { get; } = new();
         internal Fixture(IPackageStoreFaultInjector? fault = null)
         {
             RuntimeLocalState.EnsureInitialized(Context.Paths.RootPath);
             Store = new(Context.Paths);
             Coordinator = new(Context.Paths, Store, new(Context.Paths), fault, packagePolicies: Context.Cache);
-            Metadata = new(Store, Coordinator, new(), Context.Cache);
+            Metadata = new(Store, Coordinator, Operations, Context.Cache);
         }
         internal InstalledPackageRecord Package(string id = "example.package")
         {
@@ -380,6 +499,18 @@ public sealed class InstalledPackagePolicyTests
     }
     private sealed class PolicyCrash(PackagePolicyPersistencePoint at) : IPackagePolicyFaultInjector
     { public void Hit(PackagePolicyPersistencePoint point) { if (point == at) throw new IOException("Simulated policy write crash."); } }
+    private sealed class BlockingPolicyWrite : IPackageStoreFaultInjector, IDisposable
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal ManualResetEventSlim Release { get; } = new();
+        public void Hit(PackageStoreFaultPoint point)
+        {
+            if (point != PackageStoreFaultPoint.CatalogReplaced) return;
+            Entered.TrySetResult();
+            if (!Release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("Policy-write test barrier did not release.");
+        }
+        public void Dispose() => Release.Dispose();
+    }
     private sealed class IndeterminateFault(string path) : IPackageStoreFaultInjector
     { public void Hit(PackageStoreFaultPoint point) { if (point == PackageStoreFaultPoint.CatalogReplaced) throw new DurableWriteIndeterminateException(path, new IOException("Flush could not be proven.")); } }
     private sealed class PolicyLifetime : IHostApplicationLifetime

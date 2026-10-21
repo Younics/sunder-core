@@ -7,6 +7,8 @@ import { assertBaselineFreeEvidence, captureBaseline, commitBaseline, exists, ve
 import { hasPublicEvidence, writeBaseline, type OwnedBaseline, type OwnedSnapshot } from "./rpc-baseline";
 import { ordered, outerKeys, type Outer, type OuterObject } from "./rpc-baseline-json";
 import { readProjectDescriptorFile } from "./descriptor-files";
+import { parseModelProjectionDocument } from "./rpc-model-projection";
+import { validateReviewedArtifactProjections } from "./rpc-owned-projection-review";
 
 export interface PublicationImportOptions extends RegistryOriginOptions {
   readonly packagePath: string;
@@ -73,6 +75,7 @@ export async function importContractPublication(project: string, options: Public
   const tuples = (values: readonly PublishedContract[]): string => JSON.stringify(values.map(value => [value.contractId, value.version, value.descriptorSha256, value.abiSha256, value.exposure])
     .sort((a, b) => JSON.stringify(a) < JSON.stringify(b) ? -1 : JSON.stringify(a) > JSON.stringify(b) ? 1 : 0));
   if (!candidate.ownedContracts || tuples(ownedContracts) !== tuples(candidate.ownedContracts)) invalid("Registry owned bundle evidence differs from the canonical inspected archive.");
+  if (baseline) validateReviewedArtifactProjections(baseline, ownedContracts, parseModelProjectionDocument(candidate.modelProjectionBytes).contracts);
   const proposal = planPublication(baseline, { registryOrigin: origin, packageId: id, packageVersion: version,
     contentIdentity: text(expected.packageContentIdentity), publishedAtUtc: text(details.publishedAtUtc), ownedContracts });
   const verify = async (): Promise<void> => { options.signal?.throwIfAborted(); await candidate.revalidate(); await verifyAbsence(); };

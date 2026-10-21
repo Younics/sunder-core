@@ -28,7 +28,12 @@ internal static partial class SunderRpcAuthoringDocuments
         var reparsed = ParseOwnedPackageBaseline(bytes);
         ValidateOwnedSnapshotModels(baseline.Contracts, reparsed.Contracts);
         ValidateOwnedSnapshotModels(baseline.RetiredPrivateContracts, reparsed.RetiredPrivateContracts);
-        if (baseline.ExactBytes.Length != 0) ValidatePrivateArchiveTransition(ParseOwnedPackageBaseline(baseline.ExactBytes), reparsed);
+        if (baseline.ExactBytes.Length != 0)
+        {
+            var before = ParseOwnedPackageBaseline(baseline.ExactBytes);
+            ValidatePrivateArchiveTransition(before, reparsed);
+            ValidateImmutableProjectionReviews(before.Contracts, reparsed.Contracts);
+        }
         return bytes;
     }
 
@@ -52,6 +57,8 @@ internal static partial class SunderRpcAuthoringDocuments
                 AppendJsonString(output, key);
                 output.Append(": {\n");
                 StringProperty(output, 3, "contractId", contract.ContractId, comma: true);
+                var reviews = contract.History.Concat(contract.Current is { } active ? [active] : [])
+                    .Where(snapshot => snapshot.ProjectionReview is not null).Select(snapshot => snapshot.ProjectionReview!.ReviewJson).ToArray();
                 if (contract.Current is { } current)
                 {
                     output.Append("      \"current\": ");
@@ -60,7 +67,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 }
                 if (contract.History.Count == 0)
                 {
-                    Line(output, 3, "\"history\": []");
+                    Line(output, 3, "\"history\": []" + (reviews.Length != 0 ? "," : ""));
                 }
                 else
                 {
@@ -71,7 +78,13 @@ internal static partial class SunderRpcAuthoringDocuments
                         AppendDeterministicValue(output, contract.History[historyIndex].SnapshotJson, 4);
                         output.Append(historyIndex + 1 == contract.History.Count ? "\n" : ",\n");
                     }
-                    Line(output, 3, "]");
+                    Line(output, 3, reviews.Length != 0 ? "]," : "]");
+                }
+                if (reviews.Length != 0)
+                {
+                    output.Append("      \"projectionReviews\": ");
+                    AppendDeterministicValue(output, JsonSerializer.SerializeToElement(reviews), 3);
+                    output.Append('\n');
                 }
                 Line(output, 2, index + 1 == contracts.Length ? "}" : "},");
             }
@@ -115,7 +128,7 @@ internal static partial class SunderRpcAuthoringDocuments
         IReadOnlyList<SunderRpcCSharpCompiledContract> source)
     {
         foreach (var (key, value) in baseline.Contracts.Where(pair => pair.Value.Current is not null && !HasPublicEvidence(pair.Value)))
-            throw new InvalidDataException($"rpc-authoring.private-baseline-migration-required: '{key}' ({value.ContractId}) requires MigratePrivateSunderContracts before public lifecycle operations.");
+            throw new InvalidDataException($"rpc-authoring.private-baseline-unsupported: '{key}' ({value.ContractId}) is an unsupported active private baseline. Private contracts use the package version; restore the current reviewed baseline.");
         return source.Where(contract => contract.Exposure == SunderServiceExposure.Public || baseline.Contracts.Any(pair => HasPublicEvidence(pair.Value)
             && (pair.Key == contract.ContractKey || pair.Value.ContractId == contract.Descriptor.ContractId))).ToArray();
     }
@@ -189,12 +202,15 @@ internal static partial class SunderRpcAuthoringDocuments
             {
                 if (current.State == "draft")
                 {
-                    ValidateOwnedCandidateHistory(key, current.Descriptor, current.Exposure, contract!.History, preserveUnchangedPrerelease: true);
+                    ValidateOwnedCandidateHistory(key, current.Descriptor, current.Exposure, contract!.History, preserveUnchangedPrerelease: true, current.ProjectionReview);
                 }
                 continue;
             }
 
             var exposure = Exposure(candidate.Exposure);
+            if (current is { ProjectionReview: null } && OwnedWireMatches(current, candidate)
+                && (nextVersion is null || nextVersion == current.Descriptor.Version))
+                RequireReviewedProjection(key, current, candidate);
             var version = nextVersion ?? current?.Descriptor.Version ?? "1.0.0";
             RequireStableOwnedTransition(key, previous?.Descriptor.Version, version);
             var kind = previous is null ? SunderRpcContractChangeKind.Unchanged : ClassifyOwnedChange(previous, candidate);
@@ -216,10 +232,11 @@ internal static partial class SunderRpcAuthoringDocuments
                 version = SelectOwnedCandidateVersion(current, previous, candidate, kind, immutableHistory);
             }
             var descriptor = OwnedDescriptorAtVersion(candidate.Descriptor, version);
-            ValidateOwnedCandidateHistory(key, descriptor, exposure, immutableHistory, preserveUnchangedPrerelease: false);
+            var review = CreateProjectionReview(descriptor, candidate.ModelProjection, candidate.MethodPolicies);
+            ValidateOwnedCandidateHistory(key, descriptor, exposure, immutableHistory, preserveUnchangedPrerelease: false, review);
             contracts[key] = new(
                 descriptor.ContractId,
-                CreateOwnedDraftSnapshot(exposure, descriptor),
+                CreateOwnedDraftSnapshot(exposure, descriptor) with { ProjectionReview = review },
                 Array.AsReadOnly(immutableHistory.ToArray()));
         }
         return contracts;
@@ -295,11 +312,13 @@ internal static partial class SunderRpcAuthoringDocuments
         Func<JsonElement, string, string, bool, SunderRpcOwnedContractSnapshot> readSnapshot)
     {
         var active = baseline.Where(static pair => pair.Value.Current is not null).ToArray();
+        foreach (var (key, contract) in active)
+            if (source.TryGetValue(key, out var candidate)) RequireReviewedProjection(key, contract.Current!, candidate);
         if (source.Count != active.Length
             || active.Any(pair => !source.TryGetValue(pair.Key, out var candidate)
                                   || !OwnedSourceMatches(pair.Value.Current!, candidate)))
         {
-            throw new InvalidDataException("Release freeze requires source keys, exposure, and exact current descriptor/ABI bytes to match the owned baseline.");
+            throw new InvalidDataException("Release freeze requires source keys, exposure, exact current descriptor/ABI and reviewed source projection bytes to match the owned baseline.");
         }
         if (contractKey is not null && !active.Any(pair => pair.Key == contractKey))
         {
@@ -316,7 +335,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 // Later releases can reuse the exact contract without changing its original release evidence.
                 continue;
             }
-            ValidateOwnedCandidateHistory(key, current.Descriptor, current.Exposure, contract.History, preserveUnchangedPrerelease: false);
+            ValidateOwnedCandidateHistory(key, current.Descriptor, current.Exposure, contract.History, preserveUnchangedPrerelease: false, current.ProjectionReview);
             var output = new StringBuilder();
             Line(output, 0, "{");
             foreach (var property in current.SnapshotJson.EnumerateObject())
@@ -341,7 +360,7 @@ internal static partial class SunderRpcAuthoringDocuments
             using var document = ParseStrictDocument(Utf8NoBom.GetBytes(output.ToString()), MaximumOwnedBaselineBytes, "owned release freeze");
             contracts[key] = contract with
             {
-                Current = readSnapshot(document.RootElement, key, contract.ContractId, false),
+                Current = readSnapshot(document.RootElement, key, contract.ContractId, false) with { ProjectionReview = current.ProjectionReview },
             };
         }
         return contracts;
@@ -394,6 +413,9 @@ internal static partial class SunderRpcAuthoringDocuments
     }
 
     private static bool OwnedSourceMatches(SunderRpcOwnedContractSnapshot snapshot, SunderRpcCSharpCompiledContract candidate)
+        => OwnedWireMatches(snapshot, candidate) && SameReviewedProjection(snapshot.ProjectionReview, candidate);
+
+    private static bool OwnedWireMatches(SunderRpcOwnedContractSnapshot snapshot, SunderRpcCSharpCompiledContract candidate)
         => snapshot.Exposure == Exposure(candidate.Exposure)
            && snapshot.Descriptor.GetCanonicalUtf8().AsSpan().SequenceEqual(candidate.Descriptor.GetCanonicalUtf8())
            && snapshot.Descriptor.GetCanonicalAbiProjectionUtf8().AsSpan().SequenceEqual(candidate.Descriptor.GetCanonicalAbiProjectionUtf8());
@@ -402,13 +424,21 @@ internal static partial class SunderRpcAuthoringDocuments
         => expected is null ? actual is null
             : actual is not null && expected.State == actual.State && expected.Exposure == actual.Exposure
               && expected.Descriptor.GetCanonicalUtf8().AsSpan().SequenceEqual(actual.Descriptor.GetCanonicalUtf8())
-              && expected.Descriptor.GetCanonicalAbiProjectionUtf8().AsSpan().SequenceEqual(actual.Descriptor.GetCanonicalAbiProjectionUtf8());
+              && expected.Descriptor.GetCanonicalAbiProjectionUtf8().AsSpan().SequenceEqual(actual.Descriptor.GetCanonicalAbiProjectionUtf8())
+              && WriteDeterministicDocument(expected.SnapshotJson).AsSpan().SequenceEqual(WriteDeterministicDocument(actual.SnapshotJson))
+              && (expected.ProjectionReview is null ? actual.ProjectionReview is null
+                  : actual.ProjectionReview is not null && expected.ProjectionReview.ReviewKind == actual.ProjectionReview.ReviewKind
+                    && SameModelProjection(expected.ProjectionReview.ModelProjection, actual.ProjectionReview.ModelProjection)
+                    && SameMethodPolicies(expected.ProjectionReview.MethodPolicies, actual.ProjectionReview.MethodPolicies)
+                    && WriteDeterministicDocument(expected.ProjectionReview.ReviewJson).AsSpan().SequenceEqual(WriteDeterministicDocument(actual.ProjectionReview.ReviewJson)));
 
     private static SunderRpcContractChangeKind ClassifyOwnedChange(SunderRpcOwnedContractSnapshot previous, SunderRpcCSharpCompiledContract candidate)
     {
         // Exposure is outside the descriptor classifier and remains conservatively Major in either direction.
         if (previous.Exposure != Exposure(candidate.Exposure)) return SunderRpcContractChangeKind.Major;
         var kind = SunderRpcContractCompatibility.Classify(previous.Descriptor, candidate.Descriptor).Kind;
+        var sourceKind = ClassifyProjectionChange(previous, candidate.Descriptor, candidate.ModelProjection, candidate.MethodPolicies);
+        if (sourceKind > kind) kind = sourceKind;
         return !Enum.IsDefined(kind)
                || kind == SunderRpcContractChangeKind.Unchanged
                && !previous.Descriptor.GetCanonicalUtf8().AsSpan().SequenceEqual(candidate.Descriptor.GetCanonicalUtf8())
@@ -442,7 +472,8 @@ internal static partial class SunderRpcAuthoringDocuments
         SunderRpcContractDescriptor candidate,
         string exposure,
         IReadOnlyList<SunderRpcOwnedContractSnapshot> immutableHistory,
-        bool preserveUnchangedPrerelease)
+        bool preserveUnchangedPrerelease,
+        SunderRpcOwnedProjectionReview? projectionReview = null)
     {
         if (immutableHistory.Count == 0) return;
         var version = SemanticVersion.Parse(candidate.Version);
@@ -471,6 +502,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 throw new InvalidDataException($"Owned contract '{key}' exposure change is Major relative to immutable history '{snapshot.Descriptor.Version}'.");
             }
         }
+        ValidateProjectionReviewHistory(key, candidate, projectionReview, comparisons);
     }
 
     private static SunderRpcOwnedContractSnapshot CreateOwnedDraftSnapshot(

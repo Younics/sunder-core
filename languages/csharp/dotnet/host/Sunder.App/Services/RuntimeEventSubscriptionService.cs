@@ -525,13 +525,13 @@ public sealed class RuntimeEventSubscriptionService(
             client,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
-        var packageSources = await client.GetActivePackageUiSnapshotsAsync(
-            AppPackageTargetEnvironment.CurrentRid,
-            cancellationToken).ConfigureAwait(false);
-        ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+        var consistent = await ShellStartupCoordinator.LoadConsistentPackageUiStateAsync(
+            client, snapshot,
+            token => client.GetActivePackageUiSnapshotsAsync(AppPackageTargetEnvironment.CurrentRid, token),
+            cancellationToken: cancellationToken).ConfigureAwait(false);
         await ApplySnapshotAsync(
-            snapshot,
-            packageSources,
+            consistent.Snapshot,
+            consistent.PackageSources,
             request.ExplicitRetryPackageIds,
             cancellationToken).ConfigureAwait(false);
     }
@@ -581,7 +581,7 @@ public sealed class RuntimeEventSubscriptionService(
             packageSources,
             explicitRetryPackageIds,
             out var recoveryTransfer);
-        if (await TryApplySameGenerationMetadataAsync(snapshot, cancellationToken).ConfigureAwait(false))
+        if (await TryApplySameGenerationMetadataAsync(snapshot, packageSources, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -1022,11 +1022,12 @@ public sealed class RuntimeEventSubscriptionService(
                 return AppPackageRecoverySnapshotRead.Waiting;
             }
 
-            var packageSources = await client.GetActivePackageUiSnapshotsAsync(
-                    AppPackageTargetEnvironment.CurrentRid,
-                    cancellationToken)
-                .ConfigureAwait(false);
-            ShellStartupCoordinator.ValidatePackageSourceGeneration(snapshot, packageSources);
+            var consistent = await ShellStartupCoordinator.LoadConsistentPackageUiStateAsync(
+                client, snapshot,
+                token => client.GetActivePackageUiSnapshotsAsync(AppPackageTargetEnvironment.CurrentRid, token),
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+            snapshot = consistent.Snapshot;
+            var packageSources = consistent.PackageSources;
             var matchingSources = packageSources
                 .Where(source => string.Equals(
                     source.PackageId,
@@ -1229,12 +1230,13 @@ public sealed class RuntimeEventSubscriptionService(
         {
             return true;
         }
-        return snapshot.SessionGeneration > latest.SessionGeneration
-               && snapshot.EventSequence >= latest.EventSequence;
+        return snapshot.SessionGeneration > latest.SessionGeneration && snapshot.EventSequence >= latest.EventSequence
+            || snapshot.SessionGeneration == latest.SessionGeneration && snapshot.EventSequence > latest.EventSequence;
     }
 
     private async Task<bool> TryApplySameGenerationMetadataAsync(
         RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         CancellationToken cancellationToken)
     {
         Func<RuntimePackageSnapshot, CancellationToken, Task>? writeMetadataAsync;
@@ -1250,6 +1252,12 @@ public sealed class RuntimeEventSubscriptionService(
             {
                 return true;
             }
+
+            if ((_appliedPackageSources.Any(source => source.ActivationFingerprint is not null)
+                    || packageSources.Any(source => source.ActivationFingerprint is not null))
+                && !_appliedPackageSources.Select(source => (source.PackageId, source.ActivationFingerprint)).OrderBy(item => item.PackageId, StringComparer.Ordinal)
+                    .SequenceEqual(packageSources.Select(source => (source.PackageId, source.ActivationFingerprint)).OrderBy(item => item.PackageId, StringComparer.Ordinal)))
+                return false;
 
             _latestSnapshot = snapshot;
             writeMetadataAsync = _writeMetadataAsync;

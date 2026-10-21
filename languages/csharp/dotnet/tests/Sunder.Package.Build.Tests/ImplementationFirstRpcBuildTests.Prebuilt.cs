@@ -57,7 +57,10 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var text = (await File.ReadAllTextAsync(project)).Replace($"<RuntimeIdentifiers>{first}</RuntimeIdentifiers>",
             $"<RuntimeIdentifiers>{first};{second}</RuntimeIdentifiers><EnableRuntimePackDownload>false</EnableRuntimePackDownload><EnableAppHostPackDownload>false</EnableAppHostPackDownload>", StringComparison.Ordinal);
         text = text.Replace("</Project>", """
-            <PropertyGroup><SunderContractCacheRoot>$(MSBuildProjectDirectory)/.sunder/rpc-cache</SunderContractCacheRoot></PropertyGroup>
+            <PropertyGroup>
+              <SunderContractCacheRoot>$(MSBuildProjectDirectory)/.sunder/rpc-cache</SunderContractCacheRoot>
+              <SunderPackageRoleInputSourceRoot>$(MSBuildProjectDirectory)</SunderPackageRoleInputSourceRoot>
+            </PropertyGroup>
             <ItemGroup><Compile Remove="helper/**/*.cs" /><ProjectReference Include="helper/Helper.csproj" SunderPackageAssetRole="worker" /></ItemGroup>
             <ItemGroup Condition="'$(RuntimeIdentifier)' != ''">
               <Content Include="native/$(RuntimeIdentifier).txt" CopyToOutputDirectory="Always" CopyToPublishDirectory="Always"

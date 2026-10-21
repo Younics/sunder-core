@@ -88,32 +88,15 @@ missing bundle-use reference from another group. App providers and platform cons
 remain forbidden. Lock-to-receipt validation additionally checks the exact reviewed
 role projection; Format cannot reconstruct an omitted lock role from a manifest.
 
-### Explicit Consumer Migration
+### Current Consumer Selection
 
-Final Build, Check, Pack and Restore readers reject missing `consumerRoles`. A
-separate bounded internal migration reader alone may read the old closed entry shape.
-It may not be a permissive flag on the normal reader. Preserve all original lock
-selection/provenance/readiness fields and verify their normal semantics before any
-write. Known old missing intent is Runtime-only, never the new Add default. Retained
-role/use evidence must agree; conflicting or unrepresentable narrow intent fails.
-Only an explicitly supplied reviewed role set may broaden it.
-
-The owner command handoff is `MigrateSunderPackageApiConsumerRoles` (.NET) and
-`sunder-package api migrate-consumer-roles --project <root>` (Node). Without a package
-selection these migrate missing fields conservatively across the root. A reviewed
-override is targeted with existing `SunderPackageId` / positional package ID and
-`SunderPackageApiConsumerRoles` / `--consumer-roles`; accepted option values are
-exactly `app`, `runtime`, `app,runtime`. The same role option applies to new Add and
-targeted Update. Global operations reject a per-selection override. Missing-field
-migration is explicit, never a Restore side effect. A partially migrated input may be
-read only by that migration path; all output entries must satisfy the final schema.
-
-The operation reports each old/new role set, reparses the complete final proposal,
-checks aggregate role-scoped limits, and atomically replaces only the lock under its
-existing lease with original input/source/policy fingerprints rechecked. It does not
-refresh selected artifacts or acquire new authority. Already explicit roles are
-preserved unless targeted review changes them. No-op preserves bytes and mtime;
-failure leaves the original lock and generated tree intact.
+Build, Check, Pack and Restore readers reject missing `consumerRoles`. Restore a
+current reviewed lock rather than inferring missing intent. Normal Add and targeted
+Update accept `SunderPackageApiConsumerRoles` / `--consumer-roles` with exactly
+`app`, `runtime`, or `app,runtime`; global operations reject a per-selection override.
+The complete selection is reparsed and source-validated before atomic replacement
+under its lease. No-op preserves bytes and mtime; failure leaves the original lock
+and generated tree intact. The .NET pre-V1 role-migration operation is removed.
 
 ## Private Baseline Retirement
 
@@ -136,25 +119,16 @@ their original values, including versions unequal to their old package release.
 1. Parse and validate **all** active and archived records, descriptors, ABI projections,
    release/publication joins and immutable history before classification. Inspect
    every snapshot, not only `current` or the current source's exposure.
-2. An entry is retirement-eligible only if its entire current/history record is
-   package-exposure. Entries with a public current **or any public history** remain
-   in `contracts`. Do not split their history, relabel snapshots, or archive just a
-   private current to evade public evidence. History-only private records can be
-   retained in place or archived explicitly; they are not current release blockers.
-3. `MigratePrivateSunderContracts` (.NET) and
-   `sunder-package contracts migrate-private --project <root>` (Node) move eligible
-   entries under the same key, preserving the exact complete record. No version
-   allocation, Accept, Freeze, publication import, source rewrite or descriptor
-   regeneration is part of migration. The source/retained evidence must not identify
-   the selected entry as a current public contract. Public exposure transitions stay
-   explicit public lifecycle operations.
-4. Every unselected active record and every existing archived record is identical in
-   the proposal. Existing archive keys cannot be overwritten, merged, trimmed or
-   enriched; conflicting destinations fail. An already completed migration is a no-op.
-   Archive additions equal the removed active before-images, including every decoded
-   canonical descriptor/ABI byte and evidence value. Root identity cannot change.
-5. Normal Build/Check/Pack never rewrites a tracked baseline. A legacy active private
-   current that requires retirement produces migration guidance. Current public
+2. Retained archived entries contain package-exposure evidence only. Entries with a
+   public current **or any public history** remain in `contracts`. Do not split their
+   history, relabel snapshots, or archive a private current to evade public evidence.
+3. The .NET pre-V1 private-retirement writer is removed. Public exposure transitions
+   remain explicit public lifecycle operations; private services use package versions.
+4. Existing archived records cannot be overwritten, merged, trimmed, enriched or
+   supplemented. Their descriptor/ABI bytes and evidence remain immutable. Root
+   identity cannot change.
+5. Normal Build/Check/Pack never rewrites a tracked baseline. An unsupported active
+   private current requires restoration of the reviewed baseline. Current public
    contracts cannot disappear merely because the new source is private, renamed,
    removed or baseline-free. Match existing keys **and contract IDs** before the
    private fast path; use the existing public drift/removal/exposure review and
@@ -223,7 +197,7 @@ generic closed-shape and public compatibility diagnostics still apply elsewhere.
 | `package-api.consumer-roles-invalid` | Present invalid role value. Show the three exact allowed arrays; do not reinterpret it as legacy absence. |
 | `package-api.consumer-roles-migration-ambiguous` | Conflicting retained role/action evidence. Identify the selection and require explicit reviewed reconciliation. |
 | `package-api.consumer-roles-unavailable` | Canonical project has no role in the selected set. Require a matching role or explicit intent change. |
-| `rpc-authoring.private-baseline-migration-required` | Active legacy private current. Point to `MigratePrivateSunderContracts` / `contracts migrate-private`. |
+| `rpc-authoring.private-baseline-unsupported` | Unsupported active private current. Restore the current reviewed baseline. |
 | `rpc-authoring.private-retirement-public-evidence` | Attempt to retire any public current/history or a current public source match. Require the public lifecycle; preserve the full record. |
 | `rpc-authoring.private-retirement-conflict` | Destination key/identity collision prevents an exact before-image move. No overwrite or key-renaming repair. |
 | `rpc-authoring.private-retirement-mutated` | A proposed writer removes, changes or enriches an existing archived record. Preserve its original evidence. |

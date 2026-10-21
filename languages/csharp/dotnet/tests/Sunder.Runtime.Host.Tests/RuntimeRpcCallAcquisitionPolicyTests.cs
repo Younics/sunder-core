@@ -384,7 +384,7 @@ public sealed class RuntimeRpcCallAcquisitionPolicyTests
 
         public bool IsCurrent(PackageSessionLease sessionLease) => true;
 
-        public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease)
+        public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false)
         {
             lease = new RuntimeRpcActivationLease(CancellationToken.None, static () => { });
             return true;

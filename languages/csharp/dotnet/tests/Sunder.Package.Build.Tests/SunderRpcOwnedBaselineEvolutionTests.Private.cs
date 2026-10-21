@@ -36,25 +36,28 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
     [InlineData("release-frozen")]
     [InlineData("published")]
     [InlineData("history-only")]
-    public void PrivateRetirementMovesExactCompleteRecordsAndPreservesPublicHistory(string state)
+    public void RetainedPrivateArchiveValidatesDirectlyAndCannotBeChanged(string state)
     {
         var privateSource = Compile(Source.Replace("Exposure.Public", "Exposure.Package", StringComparison.Ordinal));
         var old = AtVersion(privateSource, "1.0.0");
         var historical = Snapshot(old, "published", "4.5.6");
         var current = state == "history-only" ? null : Snapshot(AtVersion(privateSource, "1.1.0"), state, "4.5.7");
         var baseline = Baseline(current, historical);
-        if (current is not null) Assert.Contains("private-baseline-migration-required", Assert.Throws<InvalidDataException>(() =>
+        if (current is not null) Assert.Contains("private-baseline-unsupported", Assert.Throws<InvalidDataException>(() =>
             SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, [privateSource])).Message, StringComparison.Ordinal);
-        var bytes = SunderRpcAuthoringDocuments.PlanPrivateBaselineRetirement(baseline, [privateSource], null);
-        var migrated = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(bytes);
-        Assert.Empty(migrated.Contracts); var archived = Assert.Single(migrated.RetiredPrivateContracts).Value;
+        // A synthetic retained before-image; no migration writer is involved.
+        var bytes = SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(new(Owner, new Dictionary<string, SunderRpcOwnedContractBaseline>(), [], "")
+        { RetiredPrivateContracts = baseline.Contracts, HasRetiredPrivateContracts = true });
+        var retained = SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(bytes);
+        Assert.Empty(retained.Contracts); var archived = Assert.Single(retained.RetiredPrivateContracts).Value;
         AssertSnapshotEqual(historical, Assert.Single(archived.History));
         if (current is not null) AssertSnapshotEqual(current, archived.Current!); else Assert.Null(archived.Current);
-        Assert.Equal(bytes, SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(migrated)); AssertSchema(bytes);
-        Assert.Equal(bytes, SunderRpcAuthoringDocuments.PlanPrivateBaselineRetirement(migrated, [privateSource], null));
-        SunderRpcAuthoringDocuments.ValidateCompiledContracts(migrated, [privateSource]);
+        Assert.Equal(bytes, SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(retained)); AssertSchema(bytes);
+        SunderRpcAuthoringDocuments.ValidateCompiledContracts(retained, [privateSource]);
         Assert.Contains("private-retirement-mutated", Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(
-            migrated with { RetiredPrivateContracts = new Dictionary<string, SunderRpcOwnedContractBaseline>() })).Message, StringComparison.Ordinal);
+            retained with { RetiredPrivateContracts = new Dictionary<string, SunderRpcOwnedContractBaseline>() })).Message, StringComparison.Ordinal);
+        Assert.Contains("private-retirement-mutated", Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(
+            baseline with { Contracts = retained.Contracts, RetiredPrivateContracts = retained.RetiredPrivateContracts, HasRetiredPrivateContracts = true })).Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -63,8 +66,9 @@ public sealed partial class SunderRpcOwnedBaselineEvolutionTests
         var published = Snapshot(Original.Value, "published");
         var privateSource = Compile(Source.Replace("Exposure.Public", "Exposure.Package", StringComparison.Ordinal));
         var baseline = Baseline(Snapshot(AtVersion(privateSource, "2.0.0")), published);
-        Assert.Contains("private-retirement-public-evidence", Assert.Throws<InvalidDataException>(() =>
-            SunderRpcAuthoringDocuments.PlanPrivateBaselineRetirement(baseline, [privateSource], Key)).Message, StringComparison.Ordinal);
+        Assert.Contains("private-retirement-mutated", Assert.Throws<InvalidDataException>(() =>
+            SunderRpcAuthoringDocuments.ValidatePrivateArchiveTransition(baseline, baseline with
+            { Contracts = new Dictionary<string, SunderRpcOwnedContractBaseline>(), RetiredPrivateContracts = baseline.Contracts, HasRetiredPrivateContracts = true })).Message, StringComparison.Ordinal);
         Assert.Contains("baseline-drift", Assert.Throws<InvalidDataException>(() =>
             SunderRpcAuthoringDocuments.ValidateCompiledContracts(baseline, [privateSource with { ContractKey = "renamed" }])).Message, StringComparison.Ordinal);
         Assert.Contains("baseline-drift", Assert.Throws<InvalidDataException>(() =>

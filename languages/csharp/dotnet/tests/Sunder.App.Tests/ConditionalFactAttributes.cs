@@ -50,6 +50,8 @@ internal sealed class ExternalArtifactFactAttribute : FactAttribute
             Environment.GetEnvironmentVariable(requirementVariable),
             "1",
             StringComparison.Ordinal);
+        selected |= requirementVariable == Sunder.Core.TestSupport.SdkCorpusInput.RequiredVariable
+            && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(Sunder.Core.TestSupport.SdkCorpusInput.ContextVariable));
         if (!selected)
         {
             Skip = $"External artifact lane is not selected. Set {requirementVariable}=1 to require it.";
@@ -59,6 +61,7 @@ internal sealed class ExternalArtifactFactAttribute : FactAttribute
         {
             if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable)))
             {
+                if (requirementVariable == Sunder.Core.TestSupport.SdkCorpusInput.RequiredVariable) return;
                 throw new InvalidOperationException($"Selected external artifact lane requires {variable}.");
             }
         }

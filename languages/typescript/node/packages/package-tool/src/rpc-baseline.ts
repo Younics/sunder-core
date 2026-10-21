@@ -3,12 +3,14 @@ import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isPackageI
 import type { LoadedContract } from "./model";
 import { classify, compareVersions, minimumOwnedVersion, ordinal, validateVersion, versionParts, type ChangeKind } from "./rpc-evolution";
 import { fields, invalid, object, ordered, outerBytes, outerKeys, parseOuter, string, type Outer, type OuterObject } from "./rpc-baseline-json";
+import { createProjectionReview, readProjectionReview, sameReviewedProjection, projectionChange, requireReviewedProjection, validateProjectionReviewHistory, type OwnedProjectionReview } from "./rpc-owned-projection-review";
 
 export interface OwnedSnapshot {
   readonly state: "draft" | "release-frozen" | "published";
   readonly exposure: "package" | "public";
   readonly descriptor: RpcContractDescriptor;
   readonly json: OuterObject;
+  readonly projectionReview?: OwnedProjectionReview;
 }
 export interface OwnedContract { readonly contractId: string; readonly current?: OwnedSnapshot; readonly history: readonly OwnedSnapshot[] }
 export interface OwnedBaseline { readonly packageId: string; readonly contracts: ReadonlyMap<string, OwnedContract>; readonly retiredPrivateContracts?: ReadonlyMap<string, OwnedContract>; readonly bytes: Buffer; readonly sha256: string }
@@ -57,15 +59,29 @@ export function parseBaseline(bytes: Buffer): OwnedBaseline {
   const contracts = new Map<string, OwnedContract>(); const ids = new Set<string>();
   for (const key of keys) {
     if (!portableKey(key)) invalid("invalid portable contract key");
-    const value = fields(map[key], ["contractId", "history"], ["current"], ["contractId", "current", "history"]);
+    const value = fields(map[key], ["contractId", "history"], ["current", "projectionReviews"], ["contractId", "current", "history", "projectionReviews"]);
     const id = packageId(value.contractId); if (ids.has(id)) invalid("duplicate contract identity"); ids.add(id);
     if (!Array.isArray(value.history) || value.history.length > 256) invalid("history must be an array of at most 256 entries");
     const history = value.history.map((item) => snapshot(item, id, owner, false));
-    const current = value.current === undefined ? undefined : snapshot(value.current, id, owner, true);
+    let current = value.current === undefined ? undefined : snapshot(value.current, id, owner, true);
     const all = current ? [...history, current] : history;
     if (retired && all.some(item => item.exposure !== "package")) throw new Error(`rpc-authoring.private-retirement-public-evidence: ${key} contains public evidence; use the public lifecycle.`);
     if (!all.length) invalid("removed contract must retain nonempty immutable history");
     for (let i = 1; i < all.length; i++) if (compareVersions(all[i]!.descriptor.version, all[i - 1]!.descriptor.version) <= 0) invalid("current/history versions must be in strictly increasing SemVer precedence order");
+    if (value.projectionReviews !== undefined) {
+      if (!Array.isArray(value.projectionReviews) || !value.projectionReviews.length || value.projectionReviews.length > 257) invalid("projectionReviews must have 1..257 entries; omit when absent");
+      let previous: string | undefined;
+      for (const item of value.projectionReviews) {
+        const reviewVersion = version(object(item).contractVersion);
+        if (previous !== undefined && compareVersions(reviewVersion, previous) <= 0) invalid("projection reviews must have strictly increasing semantic versions");
+        previous = reviewVersion;
+        const index = history.findIndex(entry => entry.descriptor.version === reviewVersion);
+        const retained = index >= 0 ? history[index] : current?.descriptor.version === reviewVersion ? current : undefined;
+        if (!retained) invalid("projection review has no exact retained snapshot");
+        const reviewed = Object.freeze({ ...retained, projectionReview: readProjectionReview(item, retained.descriptor) });
+        if (index >= 0) history[index] = reviewed; else current = reviewed;
+      }
+    }
     contracts.set(key, Object.freeze({ contractId: id, ...(current ? { current } : {}), history: Object.freeze(history) }));
   }
   return contracts;
@@ -76,9 +92,12 @@ export function parseBaseline(bytes: Buffer): OwnedBaseline {
   return { packageId: owner, contracts, ...(retiredPrivateContracts === undefined ? {} : { retiredPrivateContracts }), bytes: Buffer.from(bytes), sha256: sha256(bytes) };
 }
 export function writeBaseline(owner: string, contracts: ReadonlyMap<string, OwnedContract>, retiredPrivateContracts?: ReadonlyMap<string, OwnedContract>): Buffer {
-  const records = (values: ReadonlyMap<string, OwnedContract>): OuterObject => ordered([...values].sort(([a], [b]) => ordinal(a, b)).map(([key, contract]) => [key, ordered([
+  const records = (values: ReadonlyMap<string, OwnedContract>): OuterObject => ordered([...values].sort(([a], [b]) => ordinal(a, b)).map(([key, contract]) => {
+    const reviews = [...contract.history, ...contract.current ? [contract.current] : []].flatMap(entry => entry.projectionReview ? [entry.projectionReview.json] : []);
+    return [key, ordered([
     ["contractId", contract.contractId], ...(contract.current ? [["current", contract.current.json] as const] : []), ["history", contract.history.map(entry => entry.json)],
-  ])]));
+    ...reviews.length ? [["projectionReviews", reviews] as const] : [],
+  ])] as const; }));
   const bytes = outerBytes(ordered([
     ["schemaVersion", 1], ["authorityKind", "package"], ["authorityId", owner], ["packageId", owner],
     ["contracts", records(contracts)], ...(retiredPrivateContracts === undefined ? [] : [["retiredPrivateContracts", records(retiredPrivateContracts)] as const]),
@@ -88,7 +107,11 @@ export function writeBaseline(owner: string, contracts: ReadonlyMap<string, Owne
     const actual = parsedMap.get(key)!;
     const matches = (a: OwnedSnapshot | undefined, b: OwnedSnapshot | undefined): boolean => !a ? !b : !!b && a.state === b.state && a.exposure === b.exposure
       && Buffer.from(canonicalRpcDescriptorBytes(a.descriptor)).equals(Buffer.from(canonicalRpcDescriptorBytes(b.descriptor)))
-      && Buffer.from(canonicalRpcAbiProjectionBytes(a.descriptor)).equals(Buffer.from(canonicalRpcAbiProjectionBytes(b.descriptor)));
+      && Buffer.from(canonicalRpcAbiProjectionBytes(a.descriptor)).equals(Buffer.from(canonicalRpcAbiProjectionBytes(b.descriptor)))
+      && outerBytes(a.json).equals(outerBytes(b.json))
+      && (a.projectionReview === undefined ? b.projectionReview === undefined : b.projectionReview !== undefined
+        && a.projectionReview.reviewKind === b.projectionReview.reviewKind && sameReviewedProjection(a.projectionReview, b.projectionReview)
+        && outerBytes(a.projectionReview.json).equals(outerBytes(b.projectionReview.json)));
     if (!matches(contract.current, actual.current) || contract.history.length !== actual.history.length || contract.history.some((item, i) => !matches(item, actual.history[i]))) invalid("model disagrees with retained lossless snapshot JSON");
   }
   return bytes;
@@ -103,11 +126,17 @@ function draft(exposure: OwnedSnapshot["exposure"], descriptor: RpcContractDescr
   ]) };
 }
 export function sourceMatches(snapshot: OwnedSnapshot, source: LoadedContract): boolean {
+  return wireMatches(snapshot, source) && sameReviewedProjection(snapshot.projectionReview, source);
+}
+function wireMatches(snapshot: OwnedSnapshot, source: LoadedContract): boolean {
   return snapshot.exposure === source.exposure && Buffer.from(canonicalRpcDescriptorBytes(snapshot.descriptor)).equals(source.canonicalBytes)
     && abiHash(canonicalRpcAbiProjectionBytes(snapshot.descriptor)) === source.abiSha256;
 }
 function ownedChange(previous: OwnedSnapshot, candidate: LoadedContract): ChangeKind {
-  return previous.exposure !== candidate.exposure ? "Major" : classify(previous.descriptor, candidate.descriptor).kind;
+  if (previous.exposure !== candidate.exposure) return "Major";
+  const wire = classify(previous.descriptor, candidate.descriptor).kind, source = projectionChange(previous, candidate);
+  const kinds: readonly ChangeKind[] = ["Unchanged", "Patch", "Minor", "Major"];
+  return kinds.indexOf(source) > kinds.indexOf(wire) ? source : wire;
 }
 function candidatesByKey(baseline: OwnedBaseline, candidates: readonly LoadedContract[], key?: string): Map<string, LoadedContract> {
   if (key !== undefined && !portableKey(key) || candidates.length > 128) invalid("invalid source/selected contract key or count");
@@ -125,7 +154,7 @@ function candidatesByKey(baseline: OwnedBaseline, candidates: readonly LoadedCon
   return source;
 }
 // Lifecycle is intentionally stricter than validateVersion's immutable reuse.
-export function validateLifecycleHistory(candidate: RpcContractDescriptor, exposure: OwnedSnapshot["exposure"], history: readonly OwnedSnapshot[], preservePrerelease = false): void {
+export function validateLifecycleHistory(candidate: RpcContractDescriptor, exposure: OwnedSnapshot["exposure"], history: readonly OwnedSnapshot[], preservePrerelease = false, review?: OwnedProjectionReview): void {
   if (!history.length) return;
   const version = versionParts(candidate.version); const highest = history.at(-1)!;
   const comparisons = history.filter((item) => item === highest || versionParts(item.descriptor.version).core[0] === version.core[0]);
@@ -136,22 +165,23 @@ export function validateLifecycleHistory(candidate: RpcContractDescriptor, expos
   if (compareVersions(candidate.version, highest.descriptor.version) <= 0) invalid("next version must follow all immutable history; issued versions cannot be reused");
   const errors = validateVersion(candidate, history.map((item) => item.descriptor)); if (errors.length) invalid(errors.join("; "));
   for (const item of comparisons) if (item.exposure !== exposure && compareVersions(candidate.version, minimumOwnedVersion(item.descriptor.version, "Major")) < 0) invalid("exposure change is Major relative to immutable history");
+  validateProjectionReviewHistory(candidate, review, comparisons);
 }
 export function validateBaselineSource(baseline: OwnedBaseline, candidates: readonly LoadedContract[], release = false): void {
   const source = candidatesByKey(baseline, publicLifecycleCandidates(baseline, candidates));
-  for (const [key, entry] of baseline.contracts) if (entry.current && !hasPublicEvidence(entry))
-    throw new Error(`rpc-authoring.private-baseline-migration-required: ${key}: run sunder-package contracts migrate-private --project <root>. Build/Check/Pack never rewrites the baseline.`);
   const active = [...baseline.contracts].filter(([, entry]) => entry.current);
-  if (active.length !== source.size || active.some(([key, entry]) => !source.has(key) || !sourceMatches(entry.current!, source.get(key)!))) invalid("source keys, exposure and exact descriptor/ABI must match the complete current baseline; run contracts accept");
+  if (active.length !== source.size || active.some(([key, entry]) => !source.has(key) || !wireMatches(entry.current!, source.get(key)!))) invalid("source keys, exposure and exact descriptor/ABI must match the complete current baseline; run contracts accept");
+  for (const [key, entry] of active) requireReviewedProjection(key, entry.current!, source.get(key)!);
   for (const [, entry] of active) {
     if (entry.current!.state === "draft") {
       if (release) invalid("release packing requires every current contract, including declaration-only contracts, to be release-frozen or published; run contracts freeze");
-      validateLifecycleHistory(entry.current!.descriptor, entry.current!.exposure, entry.history, true);
+      validateLifecycleHistory(entry.current!.descriptor, entry.current!.exposure, entry.history, true, entry.current!.projectionReview);
     }
   }
 }
 export interface AcceptOptions { readonly key?: string; readonly currentVersion?: string; readonly nextVersion?: string; readonly acknowledgeBreakingChange?: boolean }
 export function planAcceptance(baseline: OwnedBaseline, candidates: readonly LoadedContract[], options: AcceptOptions = {}): Buffer {
+  if (Object.keys(options).some(key => !["key", "currentVersion", "nextVersion", "acknowledgeBreakingChange"].includes(key))) invalid("unknown contracts review option");
   writeBaseline(baseline.packageId, baseline.contracts, baseline.retiredPrivateContracts);
   const { key, currentVersion, nextVersion, acknowledgeBreakingChange = false } = options;
   const source = candidatesByKey(baseline, publicLifecycleCandidates(baseline, candidates), key);
@@ -177,10 +207,11 @@ export function planAcceptance(baseline: OwnedBaseline, candidates: readonly Loa
       continue;
     }
     if (current && sourceMatches(current, candidate) && (nextVersion === undefined || nextVersion === current.descriptor.version)) {
-      if (current.state === "draft") validateLifecycleHistory(current.descriptor, current.exposure, entry!.history, true);
+      if (current.state === "draft") validateLifecycleHistory(current.descriptor, current.exposure, entry!.history, true, current.projectionReview);
       continue;
     }
     let selectedVersion = nextVersion ?? current?.descriptor.version ?? "1.0.0";
+    if (current && !current.projectionReview && wireMatches(current, candidate) && (nextVersion === undefined || nextVersion === current.descriptor.version)) requireReviewedProjection(name, current, candidate);
     stableTransition(previous?.descriptor.version, selectedVersion);
     const kind = previous ? ownedChange(previous, candidate) : "Unchanged";
     if (previous && (kind === "Major" || entry!.history.some((item) => versionParts(item.descriptor.version).core[0] === versionParts(previous.descriptor.version).core[0] && ownedChange(item, candidate) === "Major"))) acknowledge(name);
@@ -197,10 +228,11 @@ export function planAcceptance(baseline: OwnedBaseline, candidates: readonly Loa
       selectedVersion = minimum;
     }
     const descriptor = atVersion(candidate.descriptor, selectedVersion);
-    validateLifecycleHistory(descriptor, candidate.exposure, history);
-    contracts.set(name, { contractId: descriptor.contractId, current: draft(candidate.exposure, descriptor), history });
+    const projectionReview = createProjectionReview(descriptor, candidate);
+    validateLifecycleHistory(descriptor, candidate.exposure, history, false, projectionReview);
+    contracts.set(name, { contractId: descriptor.contractId, current: { ...draft(candidate.exposure, descriptor), projectionReview }, history });
   }
-  return writeBaseline(baseline.packageId, contracts, baseline.retiredPrivateContracts);
+  return writeBaselineProposal(baseline, contracts);
 }
 export function planFreeze(baseline: OwnedBaseline, candidates: readonly LoadedContract[], packageVersion: string, key?: string): Buffer {
   version(packageVersion); candidatesByKey(baseline, candidates, key); validateBaselineSource(baseline, candidates);
@@ -209,38 +241,45 @@ export function planFreeze(baseline: OwnedBaseline, candidates: readonly LoadedC
   for (const [name, entry] of contracts) {
     const current = entry.current;
     if (key !== undefined && key !== name || !current || current.state !== "draft") continue;
-    validateLifecycleHistory(current.descriptor, current.exposure, entry.history);
+    validateLifecycleHistory(current.descriptor, current.exposure, entry.history, false, current.projectionReview);
     const json = ordered([...outerKeys(current.json).map((field): [string, Outer] => [field, field === "state" ? "release-frozen" : current.json[field]!]), ["packageRelease", ordered([["packageId", baseline.packageId], ["packageVersion", packageVersion]])]]);
     contracts.set(name, { ...entry, current: { ...current, state: "release-frozen", json } });
   }
-  return writeBaseline(baseline.packageId, contracts, baseline.retiredPrivateContracts);
+  return writeBaselineProposal(baseline, contracts);
 }
 export function hasPublicEvidence(entry: OwnedContract): boolean {
   return entry.current?.exposure === "public" || entry.history.some(item => item.exposure === "public");
 }
+function writeBaselineProposal(baseline: OwnedBaseline, contracts: ReadonlyMap<string, OwnedContract>): Buffer {
+  const bytes = writeBaseline(baseline.packageId, contracts, baseline.retiredPrivateContracts);
+  validateImmutableProjectionReviews(baseline, parseBaseline(bytes));
+  return bytes;
+}
+export function validateImmutableProjectionReviews(before: OwnedBaseline, after: OwnedBaseline): void {
+  for (const [key, entry] of before.contracts) {
+    if (!hasPublicEvidence(entry)) continue;
+    for (const snapshot of [...entry.history, ...entry.current ? [entry.current] : []]) {
+      if (snapshot.state === "draft") continue;
+      const next = after.contracts.get(key);
+      const retained = next?.contractId === entry.contractId ? [...next.history, ...next.current ? [next.current] : []].find(value => value.descriptor.version === snapshot.descriptor.version) : undefined;
+      if (!retained) throw new Error(`rpc-authoring.immutable-evidence-mutated: Retain complete frozen history for '${key}'.`);
+      const json = snapshot.state === "release-frozen" && retained.state === "published"
+        ? ordered(outerKeys(retained.json).filter(name => name !== "publication").map(name => [name, name === "state" ? "release-frozen" : retained.json[name]!])) : retained.json;
+      if (!outerBytes(snapshot.json).equals(outerBytes(json))) throw new Error(`rpc-authoring.immutable-evidence-mutated: Preserve complete snapshot/release/publication evidence for '${key}'.`);
+      if (snapshot.projectionReview) {
+        if (!retained.projectionReview || !outerBytes(snapshot.projectionReview.json).equals(outerBytes(retained.projectionReview.json)))
+          throw new Error(`rpc-authoring.immutable-projection-review-mutated: Preserve exact frozen projection review for '${key}'.`);
+      } else if (retained.projectionReview)
+        throw new Error(`rpc-authoring.source-projection-history-unavailable: Cannot backfill historical or published projection evidence for '${key}' from current source.`);
+    }
+  }
+}
 /** Public identity matching happens before the baseline-free private fast path. */
 export function publicLifecycleCandidates(baseline: OwnedBaseline, candidates: readonly LoadedContract[]): readonly LoadedContract[] {
+  for (const [key, entry] of baseline.contracts) if (entry.current && !hasPublicEvidence(entry))
+    throw new Error(`rpc-authoring.private-baseline-unsupported: '${key}' (${entry.contractId}) is an unsupported active private baseline. Private contracts use the package version; restore the current reviewed baseline.`);
   return candidates.filter(candidate => candidate.exposure === "public" || [...baseline.contracts].some(([key, entry]) =>
     hasPublicEvidence(entry) && (key === candidate.contractKey || entry.contractId === candidate.descriptor.contractId)));
-}
-export function planPrivateRetirement(baseline: OwnedBaseline, candidates: readonly LoadedContract[], key?: string): Buffer {
-  const contracts = new Map(baseline.contracts); const retired = new Map(baseline.retiredPrivateContracts);
-  if (key !== undefined && !contracts.has(key) && !retired.has(key)) invalid("selected contract key is absent");
-  for (const [name, entry] of contracts) {
-    if (key !== undefined && key !== name) continue;
-    if (hasPublicEvidence(entry)) {
-      if (key === name) throw new Error(`rpc-authoring.private-retirement-public-evidence: ${name} contains public current/history; use contracts accept.`);
-      continue;
-    }
-    if (candidates.some(candidate => candidate.exposure === "public" && (candidate.contractKey === name || candidate.descriptor.contractId === entry.contractId)))
-      throw new Error(`rpc-authoring.private-retirement-public-evidence: ${name} identifies current public source; use contracts accept.`);
-    if (retired.has(name) || [...retired.values()].some(value => value.contractId === entry.contractId))
-      throw new Error(`rpc-authoring.private-retirement-conflict: ${name}: destination key/identity already exists; no overwrite is allowed.`);
-    retired.set(name, entry); contracts.delete(name);
-  }
-  validateBaselineSource({ ...baseline, contracts: new Map([...baseline.contracts].filter(([, entry]) => hasPublicEvidence(entry))) }, candidates);
-  if (contracts.size === baseline.contracts.size) return baseline.bytes;
-  return writeBaseline(baseline.packageId, contracts, retired);
 }
 function stableTransition(previous: string | undefined, next: string): void {
   if (versionParts(next).prerelease || previous && versionParts(previous).prerelease) invalid("cannot allocate a changed prerelease baseline; explicit prerelease progression policy is not defined");

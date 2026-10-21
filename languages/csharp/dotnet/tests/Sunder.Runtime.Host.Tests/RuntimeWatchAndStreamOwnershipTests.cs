@@ -379,6 +379,89 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         TryDeleteDirectory(parent);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task DevWatcher_RemovingOrRebindingOneOwnerCancelsItsPendingStageWhileOtherOwnersStayLive(bool rebind, bool commitInFlight)
+    {
+        var first = CreateDevPackageFolder();
+        var second = CreateDevPackageFolder();
+        var replacement = rebind ? CreateDevPackageFolder() : null;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discarded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stages = 0;
+        var commits = 0;
+        var events = new RuntimeEventStreamService();
+        await using var watcher = new DevPackageWatchService(
+            async (request, token) =>
+            {
+                if (Interlocked.Increment(ref stages) == 1)
+                {
+                    Assert.Equal(["first"], request.PackageIds);
+                    if (!commitInFlight)
+                    {
+                        using var registration = token.Register(() => canceled.TrySetResult());
+                        entered.TrySetResult();
+                        await release.Task; // A late candidate must be discarded even if staging ignores cancellation.
+                    }
+                    return new("withdrawn-owner", [], [], [], request.PackageIds);
+                }
+                Assert.Equal(["second"], request.PackageIds);
+                return new("live-owner", [], [], [], request.PackageIds);
+            },
+            async (stage, token) =>
+            {
+                if (stage == "withdrawn-owner")
+                {
+                    Assert.True(commitInFlight);
+                    using var registration = token.Register(() => canceled.TrySetResult());
+                    entered.TrySetResult();
+                    await release.Task; // A stale commit response can also arrive after withdrawal.
+                    return CreateReloadResult(false, "stage is stale because its source owner changed");
+                }
+                Assert.Equal("live-owner", stage);
+                Interlocked.Increment(ref commits);
+                committed.TrySetResult();
+                return CreateReloadResult(true);
+            },
+            (stage, _) =>
+            {
+                Assert.Equal("withdrawn-owner", stage);
+                discarded.TrySetResult();
+                return Task.FromResult(true);
+            },
+            events, NullLogger<DevPackageWatchService>.Instance,
+            (delay, token) => Task.Delay(delay == DevPackageWatchService.DebounceDelay ? TimeSpan.FromMilliseconds(50) : TimeSpan.Zero, token));
+        try
+        {
+            await watcher.SynchronizeAsync([new("first", first), new("second", second)]);
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(first), "first edit");
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await watcher.SynchronizeAsync(rebind ? [new("first", replacement!), new("second", second)] : [new("second", second)]);
+            await canceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            release.TrySetResult();
+            await discarded.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(0, Volatile.Read(ref commits));
+            Assert.DoesNotContain(events.GetSnapshot().Events, item => item.Kind == RuntimeEventKind.DevReloadCompleted && item.Success == false);
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(second), "still owned");
+            await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, Volatile.Read(ref commits));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await watcher.DisposeAsync();
+            TryDeleteDirectory(Path.GetDirectoryName(first)!);
+            TryDeleteDirectory(Path.GetDirectoryName(second)!);
+            if (replacement is not null) TryDeleteDirectory(Path.GetDirectoryName(replacement)!);
+        }
+    }
+
     [Fact]
     public async Task DevWatcher_StaleGenerationResultIsPublishedAsFailure()
     {
@@ -471,6 +554,127 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             finishPublication.TrySetResult();
             await watcher.DisposeAsync();
             TryDeleteDirectory(parent);
+        }
+    }
+
+    [Fact]
+    public async Task DevWatcher_CompletedTransactionUsesStrictStageWithoutDebounceOrStabilityDelay()
+    {
+        var folder = CreateDevPackageFolder();
+        var journal = folder + ".sunder-output-transaction.json";
+        File.WriteAllText(journal, "publication in progress");
+        var logs = new RecordingLogSink();
+        var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var staging = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseStage = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stageCount = 0;
+        var discarded = 0;
+        CancellationToken stageToken = default;
+        await using var watcher = new DevPackageWatchService(
+            async (request, token) =>
+            {
+                Assert.False(File.Exists(journal));
+                var validation = await Sunder.Package.Format.SunderPackageArchiveInspector.ValidateExtractedPackageAsync(folder, token);
+                Assert.True(validation.Success, string.Join(" | ", validation.Errors));
+                Interlocked.Increment(ref stageCount);
+                stageToken = token;
+                staging.TrySetResult();
+                await releaseStage.Task.WaitAsync(token);
+                return CreateStage(request.PackageIds);
+            },
+            (_, _) => { committed.TrySetResult(); return Task.FromResult(CreateReloadResult(true)); },
+            (_, _) => { Interlocked.Increment(ref discarded); return Task.FromResult(true); },
+            new RuntimeEventStreamService(), logs.CreateLogger<DevPackageWatchService>(),
+            (_, token) =>
+            {
+                waiting.TrySetResult();
+                // No debounce or stability delay is ever allowed to finish. A
+                // completed publication must make progress by canceling/bypassing
+                // these waits, regardless of pre-journal native event ordering.
+                return Task.Delay(Timeout.InfiniteTimeSpan, token);
+            });
+        try
+        {
+            await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
+            File.SetLastWriteTimeUtc(GetDevPackagePayloadPath(folder), DateTime.UtcNow);
+            await waiting.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            File.Delete(journal);
+            await staging.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // A delayed child notification observes the same published files;
+            // parent Changed must not recreate its watcher and replay events.
+            File.SetLastWriteTimeUtc(GetDevPackagePayloadPath(folder), File.GetLastWriteTimeUtc(GetDevPackagePayloadPath(folder)));
+            Directory.SetLastWriteTimeUtc(folder, DateTime.UtcNow);
+            await WaitUntilAsync(() => logs.Entries.Any(entry => entry.Message.Contains("Coalesced delayed notification", StringComparison.Ordinal)));
+            Assert.False(stageToken.IsCancellationRequested);
+            releaseStage.TrySetResult();
+            await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(1, Volatile.Read(ref stageCount));
+            Assert.Equal(0, Volatile.Read(ref discarded));
+        }
+        finally
+        {
+            releaseStage.TrySetResult();
+            await watcher.DisposeAsync();
+            TryDeleteDirectory(Path.GetDirectoryName(folder)!);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevWatcher_InterruptedStagingCarriesDirtyPackagesForwardAndDiscardsCanceledCandidate(bool withdrawFirst)
+    {
+        var first = CreateDevPackageFolder();
+        var second = CreateDevPackageFolder();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var committed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discarded = new List<string>();
+        var attempts = 0;
+        await using var watcher = new DevPackageWatchService(
+            async (request, token) =>
+            {
+                if (Interlocked.Increment(ref attempts) == 1)
+                {
+                    Assert.Equal(["first"], request.PackageIds);
+                    using var registration = token.Register(() => canceled.TrySetResult());
+                    entered.TrySetResult();
+                    await release.Task;
+                    return new("interrupted", [], [], [], request.PackageIds);
+                }
+                Assert.Equal(withdrawFirst ? ["second"] : new[] { "first", "second" }, request.PackageIds.Order(StringComparer.Ordinal));
+                return new("latest", [], [], [], request.PackageIds);
+            },
+            (stage, _) =>
+            {
+                Assert.Equal("latest", stage);
+                committed.TrySetResult();
+                return Task.FromResult(CreateReloadResult(true));
+            },
+            (stage, _) => { discarded.Add(stage); return Task.FromResult(true); },
+            new RuntimeEventStreamService(), NullLogger<DevPackageWatchService>.Instance,
+            (delay, token) => Task.Delay(delay == DevPackageWatchService.DebounceDelay ? TimeSpan.FromMilliseconds(50) : TimeSpan.Zero, token));
+        try
+        {
+            await watcher.SynchronizeAsync([new("first", first), new("second", second)]);
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(first), "first edit");
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(second), "second edit");
+            await canceled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (withdrawFirst) await watcher.SynchronizeAsync([new("second", second)]);
+            release.TrySetResult();
+            await committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(["interrupted"], discarded);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await watcher.DisposeAsync();
+            TryDeleteDirectory(Path.GetDirectoryName(first)!);
+            TryDeleteDirectory(Path.GetDirectoryName(second)!);
         }
     }
 

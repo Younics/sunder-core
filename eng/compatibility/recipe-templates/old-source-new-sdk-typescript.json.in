@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "referenceId": "<reviewed-reference-id>",
+  "corpusId": "<reviewed-corpus-id>",
+  "kind": "old-source-new-sdk",
+  "owner": "Sunder.Package.Templates.Tests",
+  "command": { "runner": "dotnet-test", "entryPoint": "languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj", "arguments": [] },
+  "reportFormat": "trx",
+  "requiredTests": ["Sunder.Package.Templates.Tests.PackageTemplateTests.RetainedTypeScriptBuildsWithSelectedCandidateTools"],
+  "timeoutSeconds": 1800
+}

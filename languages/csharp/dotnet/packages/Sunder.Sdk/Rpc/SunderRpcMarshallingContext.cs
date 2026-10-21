@@ -22,6 +22,7 @@ public sealed partial class SunderRpcMarshallingContext : IAsyncDisposable
     private readonly SunderRpcEndpointReference? _target;
     private readonly SunderRpcInvocationContext? _invocation;
     private readonly SunderRpcServiceBindingLifetime? _serviceBindingLifetime;
+    private readonly OperationScope? _operation;
     private readonly Dictionary<SunderContent, SunderRpcContentReference> _outgoing = new(ReferenceEqualityComparer.Instance);
     private readonly Dictionary<SunderRpcContentReference, SunderContent> _incoming = [];
     private readonly SemaphoreSlim _registrationGate = new(1, 1);
@@ -36,7 +37,9 @@ public sealed partial class SunderRpcMarshallingContext : IAsyncDisposable
         _owner = owner;
         _scope = scope;
         _target = target;
-        Client = scope;
+        _operation = new(this, scope, target);
+        Client = _operation;
+        _owner.NormalizeDisposalFailure = error => SunderRpcDispatchEvidence.AfterDispatch(error);
         _receiver = receiver;
         _serviceBindingLifetime = serviceBindings;
         JsonOptions = CreateOptions();
@@ -140,6 +143,12 @@ public sealed partial class SunderRpcMarshallingContext : IAsyncDisposable
             System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(exception.Cause).Throw();
             throw;
         }
+        catch (Exception error)
+        {
+            var normalized = _operation?.Normalize(error) ?? error;
+            if (!ReferenceEquals(normalized, error)) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(normalized).Throw();
+            throw;
+        }
         finally { _responseStreamAttempt = null; _outgoing.Clear(); ClearOutgoingReferences(); _valueGate.Release(); }
     }
 
@@ -160,9 +169,17 @@ public sealed partial class SunderRpcMarshallingContext : IAsyncDisposable
             linked.Token.ThrowIfCancellationRequested();
             return result!;
         }
-        catch
+        catch (Exception error)
         {
-            await Task.WhenAll(_incoming.Values.Select(static content => content.DisposeAsync().AsTask())).ConfigureAwait(false);
+            try { await Task.WhenAll(_incoming.Values.Select(static content => content.DisposeAsync().AsTask())).ConfigureAwait(false); }
+            catch (Exception cleanup)
+            {
+                var failedCleanup = _operation?.Normalize(cleanup) ?? cleanup;
+                if (!ReferenceEquals(failedCleanup, cleanup)) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failedCleanup).Throw();
+                throw;
+            }
+            var normalized = _operation?.Normalize(error) ?? error;
+            if (!ReferenceEquals(normalized, error)) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(normalized).Throw();
             throw;
         }
         finally { _incoming.Clear(); ClearIncomingReferences(); _valueGate.Release(); }
@@ -186,7 +203,8 @@ public sealed partial class SunderRpcMarshallingContext : IAsyncDisposable
     private void Check()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        _owner.Token.ThrowIfCancellationRequested();
+        if (_operation is not null) _operation.ThrowIfCancelled(_owner.Token);
+        else _owner.Token.ThrowIfCancellationRequested();
         CheckRequiredReferences();
     }
 

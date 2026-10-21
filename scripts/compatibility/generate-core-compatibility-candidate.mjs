@@ -5,40 +5,56 @@ import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const ledgerRelativePath = "eng/compatibility/core-compatibility-candidate.json";
+// The migration ledger is protected history. No mode of this generator writes it.
+export const currentCandidatePath = "eng/compatibility/core-current-compatibility-candidate.json";
+const ledgerRelativePath = currentCandidatePath;
 const ledgerPath = resolve(repositoryRoot, ledgerRelativePath);
 const cliProjectRelativePath = "languages/csharp/dotnet/host/Sunder.Cli/Sunder.Cli.csproj";
 const cliAssemblyRelativePath = "languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll";
 const cliAssembly = resolve(repositoryRoot, cliAssemblyRelativePath);
 const nodeWorkspaceRelativePath = "languages/typescript/node";
-const arguments_ = process.argv.slice(2);
-const write = arguments_.includes("--write");
-const check = arguments_.includes("--check");
-if (write === check) fail("Specify exactly one of --write or --check.");
-if (arguments_.some((argument) => argument !== "--write" && argument !== "--check")) {
-  fail("Only --write or --check is supported.");
-}
-buildCandidateInputs();
-if (!existsSync(cliAssembly)) fail(`CLI assembly was not found: ${cliAssembly}`);
-
-const candidate = generateCandidate();
-const generated = `${JSON.stringify(candidate, null, 2)}\n`;
-if (write) {
-  writeFileSync(ledgerPath, generated, "utf8");
-  process.stdout.write(`Wrote ${ledgerRelativePath}\n`);
-} else {
-  if (!existsSync(ledgerPath)) fail(`Compatibility candidate is missing: ${ledgerRelativePath}`);
-  const current = readFileSync(ledgerPath, "utf8").replaceAll("\r\n", "\n");
-  if (current !== generated) {
-    fail(
-      `${ledgerRelativePath} is stale. Regenerate it with:\n`
-      + "node scripts/compatibility/generate-core-compatibility-candidate.mjs --write",
-    );
+export function parseCandidateArguments(args) {
+  if (args.length !== 3 || !["--write", "--check"].includes(args[0]) || args[1] !== "--source-commit"
+      || !/^[0-9a-f]{40}$/u.test(args[2])) {
+    fail("Usage: node scripts/compatibility/generate-core-compatibility-candidate.mjs --write|--check --source-commit <exact-clean-commit>");
   }
-  process.stdout.write(`Verified ${ledgerRelativePath}\n`);
+  return { write: args[0] === "--write", sourceCommit: args[2] };
 }
 
-function generateCandidate() {
+export function requireCleanCandidateSource(sourceCommit, readGit = gitLines) {
+  if (!/^[0-9a-f]{40}$/u.test(sourceCommit)) fail("An exact clean source commit is required; no inferred source pins.");
+  if (readGit(["rev-parse", "--verify", `${sourceCommit}^{commit}`]).join("") !== sourceCommit
+      || readGit(["merge-base", sourceCommit, "HEAD"]).join("") !== sourceCommit) {
+    fail("The selected source must be an exact ancestor commit of this checkout.");
+  }
+  const paths = ["--", ".", `:(exclude)${currentCandidatePath}`];
+  if (readGit(["status", "--porcelain", "--untracked-files=all", ...paths]).length !== 0
+      || readGit(["diff", "--name-only", sourceCommit, ...paths]).length !== 0) {
+    fail("Current candidate requires clean reviewed source matching --source-commit; only the new current candidate output may differ.");
+  }
+}
+
+function main() {
+  const { write, sourceCommit } = parseCandidateArguments(process.argv.slice(2));
+  // Fail before any build or output write when exact source is unavailable.
+  requireCleanCandidateSource(sourceCommit);
+  buildCandidateInputs();
+  if (!existsSync(cliAssembly)) fail(`CLI assembly was not found: ${cliAssembly}`);
+  const generated = `${JSON.stringify(generateCandidate(sourceCommit), null, 2)}\n`;
+  requireCleanCandidateSource(sourceCommit);
+  if (write) {
+    writeFileSync(ledgerPath, generated, "utf8");
+    process.stdout.write(`Wrote UNFROZEN / UNRELEASED ${ledgerRelativePath}\n`);
+  } else {
+    if (!existsSync(ledgerPath)) fail(`Current compatibility candidate is missing: ${ledgerRelativePath}`);
+    if (readFileSync(ledgerPath, "utf8") !== generated) {
+      fail(`${ledgerRelativePath} is stale; review current inputs and use --write --source-commit ${sourceCommit}.`);
+    }
+    process.stdout.write(`Verified UNFROZEN / UNRELEASED ${ledgerRelativePath}\n`);
+  }
+}
+
+function generateCandidate(sourceCommit) {
   const coordinated = readText("languages/csharp/dotnet/Directory.Build.props");
   const developerVersion = matchRequired(
     coordinated,
@@ -71,9 +87,12 @@ function generateCandidate() {
   const projectionFormatPath = "languages/csharp/dotnet/libraries/Sunder.Package.Format/SunderPackageProjectionFormat.cs";
 
   return {
-    schemaVersion: 1,
-    candidateId: "sunder-core-v1-pre-implementation-first-migration",
-    status: "phase-0-reopened-migration-oracle",
+    schemaVersion: 2,
+    candidateId: "sunder-core-current",
+    status: "UNFROZEN",
+    releaseState: "UNRELEASED",
+    sourceCommit,
+    qualification: "Current-source observation only; native, cold, retained-artifact and release qualification remain required.",
     generatedBy: "scripts/compatibility/generate-core-compatibility-candidate.mjs",
     generatorSha256: sourceFingerprint("scripts/compatibility/generate-core-compatibility-candidate.mjs").sha256,
     decisions: {
@@ -109,12 +128,8 @@ function generateCandidate() {
           effect: "Sunder.Sdk.Stacks no longer references or packages Sunder.Sdk.Worker.",
         },
       ],
-      pendingCutovers: [
-        "implementation-first-csharp-and-node-rpc-authoring",
-        "protocol-project-package-and-authored-descriptor-retirement",
-        "source-derived-signed-platform-contract-catalog",
-      ],
-      rationale: "The technical V1 reset remains evidence while implementation-first RPC authoring replaces descriptor-first Protocol projects without changing immutable semantic contract tuples.",
+      pendingCutovers: [],
+      rationale: "Current implementation-first source, explicit package/platform authorities and generated roles define this observation. Protected migration ledgers are inert and do not supply current expectations.",
     },
     publicArtifacts: {
       coordinatedVersion: developerVersion,
@@ -164,14 +179,14 @@ function generateCandidate() {
         authentication: "Bearer token required by RuntimeBearerAuthenticationMiddleware for every route",
         rateLimit: "none",
         endpoints: collectRuntimeEndpoints(),
-        statusAndErrorMetadata: "Minimal APIs do not declare complete OpenAPI response metadata; exact implementations are frozen by source hash and the Runtime Problem Details golden inventory.",
+        statusAndErrorMetadata: "Minimal APIs do not declare complete OpenAPI response metadata; source fingerprints and the Runtime Problem Details golden inventory describe the selected current implementation.",
         metadataSources: runtimeHttpMetadataSources(),
       },
       host: {
         authentication: "Bearer token required by Host Supervisor middleware for every route",
         rateLimit: "none",
         endpoints: collectHostEndpoints(),
-        statusAndErrorMetadata: "Exact Host endpoint, gateway, authentication, and response implementations are frozen by source hash.",
+        statusAndErrorMetadata: "Source fingerprints describe the selected current Host endpoint, gateway, authentication, and response implementations.",
         metadataSources: hostHttpMetadataSources(),
       },
       registryClients: {
@@ -274,7 +289,7 @@ function generateCandidate() {
       supportedRids: readQuotedArray(packageFormatPath, "Rids"),
       executables: ["Sunder.App", "Sunder.Host.Supervisor", "Sunder.Runtime.Host", "sunder"],
       payloadPolicy: {
-        pdb: "included for authored managed payload files; Host-owned framework PDBs are excluded",
+        pdb: "excluded from runtime package payloads",
         xmlDocumentation: "excluded from public developer NuGet and runtime package payloads",
         evidence: {
           publicDeveloperNuget: sourceFingerprint("languages/csharp/dotnet/Directory.Build.props"),
@@ -290,37 +305,17 @@ function generateCandidate() {
       registryOperationMetadata: "Registry-server-owned; no Registry endpoint-name heuristic exists in Core",
       cloudFront: "not present in Core source or configuration",
     },
-    phase2Deltas: [
-      "Reset RPC descriptor semantics to one DescriptorVersion V1 selected by the unversioned DescriptorVersion constant.",
-      "Added Sunder.Host.Contracts and Sunder.Package.Build to the existing .NET API baseline gate.",
-      "Aligned @sunder/sdk/browser resourceProfile declarations with the injected bridge object.",
-      "Replaced Runtime message-based RPC validation classification with structured validator metadata.",
-      "Applied duplicate-property rejection to Stack manifest and content-index metadata.",
-      "Added direct old/future schema rejection coverage.",
-      "Versioned the local Stack index and replaced silent corruption fallback with preserved explicit rejection.",
-      "Added explicit public/internal C# RPC binding accessibility with public compatibility defaults and fail-closed MSBuild validation.",
-      "Excluded generated XML documentation companions from public developer NuGets and runtime package payloads while retaining authored managed PDBs.",
-      "Removed the public Stack Worker registration convenience surface and the Sunder.Sdk.Stacks dependency on Sunder.Sdk.Worker.",
-    ],
-    allowedFutureDeltas: [
-      "implementation-first-csharp-and-node-rpc-authoring",
-      "protocol-project-package-and-authored-descriptor-retirement",
-      "source-derived-signed-platform-contract-catalog",
-    ],
+    allowedFutureDeltas: [],
     verificationGates: [
-      "node scripts/compatibility/generate-core-compatibility-candidate.mjs --check",
+      `node scripts/compatibility/generate-core-compatibility-candidate.mjs --check --source-commit ${sourceCommit}`,
       "dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj --no-restore",
       "dotnet test languages/csharp/dotnet/tests/Sunder.Registry.Contracts.Tests/Sunder.Registry.Contracts.Tests.csproj --no-restore",
       "dotnet test languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj --no-restore",
       "dotnet test languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj --no-restore",
       "dotnet test languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj --no-restore",
       "dotnet test languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/Sunder.Package.Templates.Tests.csproj --no-restore",
-      "python3 scripts/release/test_verify_nuget_package_set.py",
-      "bash scripts/release/resolve-github-release.fixture.sh",
-      "bash scripts/release/upload-github-release-assets.fixture.sh",
-      "bash scripts/release/verify-release-promotion.fixture.sh",
-      "bash scripts/release/verify-production-acceptance.fixture.sh",
-      "node --test scripts/release/verify-release-promotion-workflows.test.mjs",
+      "python3 -B -m unittest discover -s scripts/test/release -p 'test_*.py'",
+      "node --test scripts/test/release/*.test.mjs",
       "npm test --prefix languages/typescript/node",
       "dotnet build Sunder.Core.slnx --no-restore",
       "dotnet test Sunder.Core.slnx -c Release --no-restore --no-build",
@@ -943,9 +938,10 @@ function collectTemplates() {
           })),
       },
       roles: {
-        runtime: "canonical unsuffixed framework-dependent Worker V1 project with a managed module entry point",
-        app: "optional role-isolated Avalonia App project",
-        protocol: "package-local non-package contract project",
+        authored: "one canonical unsuffixed Library project",
+        runtime: "generated isolated exact-RID framework-dependent Worker V1 role with a managed module entry point",
+        app: "optional generated isolated Avalonia App role",
+        protocol: "no authored Protocol project or artifact",
       },
       roleMetadataSources: [
         sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/Sunder.Package.Template.csproj`),
@@ -1244,4 +1240,8 @@ function compareOrdinal(left, right) {
 
 function fail(message) {
   throw new Error(message);
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
 }

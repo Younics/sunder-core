@@ -12,6 +12,7 @@ import { DEFAULT_CONTRACT_CACHE } from "./rpc-contract-cache";
 import { packageApiCommand, type PackageApiRequest } from "./rpc-package-commands";
 import { importContractPublication } from "./rpc-publication";
 import { consumerRoles } from "./rpc-contract-lock";
+import { editPrivateProjectMetadata, type PrivateMetadataEdit } from "./metadata-edit";
 
 async function main(): Promise<void> {
   const [command, ...rawArguments] = process.argv.slice(2);
@@ -23,11 +24,20 @@ async function main(): Promise<void> {
     help();
     return;
   }
+  if (command === "metadata") {
+    // The JSON request is carried on stdin, never interpolated into a shell command.
+    if (argumentsList.length !== 3 || argumentsList[0] !== "edit" || argumentsList[1] !== "--project" || registryOptions.allowDevelopmentRegistryOrigin)
+      throw new Error("metadata edit requires --project and a bounded private metadata JSON request on stdin.");
+    const chunks: Buffer[] = []; let size = 0;
+    for await (const chunk of process.stdin) { const bytes = Buffer.from(chunk as Uint8Array); if ((size += bytes.length) > 67_108_864) throw new Error("Metadata request exceeds 64 MiB."); chunks.push(bytes); }
+    await editPrivateProjectMetadata(resolve(argumentsList[2]!), JSON.parse(Buffer.concat(chunks).toString()) as PrivateMetadataEdit);
+    process.stdout.write("Saved private source metadata; rebuild to regenerate current-owner output.\n");
+    return;
+  }
   if (command === "api" || command === "platform") {
     const { project, request } = command === "platform" ? parsePlatformApi(argumentsList) : parsePackageApi(argumentsList);
     const result = await packageApiCommand(project, { ...request, ...registryOptions });
     process.stdout.write(result.changed ? "Committed package API lock changes. Run generate/build to refresh outputs.\n" : "Package API lock is unchanged.\n");
-    for (const change of result.roleChanges ?? []) process.stdout.write(`${change.packageId}: consumer roles ${change.before?.join(",") ?? "missing (legacy runtime)"} -> ${change.after.join(",")}\n`);
     for (const artifact of result.lock.packageArtifacts.values()) {
       const consumer = result.lock.packageImports.get(artifact.packageId);
       process.stdout.write(`${artifact.packageId} ${artifact.selectedPackageVersion}; range=${artifact.requestedVersionRange}; prerelease=${artifact.includePrerelease}; presence=${consumer?.presence ?? "provider-only"}; contracts=${artifact.publicContractCount}\n`);
@@ -137,7 +147,7 @@ function parsePlatformApi(args: readonly string[]): { project: string; request: 
 
 function parsePackageApi(args: readonly string[]): { project: string; request: PackageApiRequest } {
   const operation = args[0];
-  if (operation !== "add" && operation !== "update" && operation !== "remove" && operation !== "list" && operation !== "require" && operation !== "unrequire" && operation !== "implement" && operation !== "unimplement" && operation !== "migrate-consumer-roles") throw new Error("api requires add, update, remove, list, require, unrequire, implement, unimplement, or migrate-consumer-roles.");
+  if (operation !== "add" && operation !== "update" && operation !== "remove" && operation !== "list" && operation !== "require" && operation !== "unrequire" && operation !== "implement" && operation !== "unimplement") throw new Error("api requires add, update, remove, list, require, unrequire, implement, or unimplement.");
   const positional: string[] = []; const values = new Map<string, string>(); const seen = new Set<string>(); let prerelease: boolean | undefined;
   for (let index = 1; index < args.length; index++) {
     const argument = args[index]!;
@@ -150,7 +160,7 @@ function parsePackageApi(args: readonly string[]): { project: string; request: P
     const value = requiredValue(args, ++index, argument); if (!value.trim()) throw new Error("Package API values must be nonempty."); values.set(argument, value);
   }
   const count = operation === "list" ? 0 : ["require", "unrequire", "implement", "unimplement"].includes(operation) ? 2 : 1;
-  if (operation === "update" || operation === "migrate-consumer-roles" ? positional.length > 1 : positional.length !== count) throw new Error("Package API command has missing or extra target arguments.");
+  if (operation === "update" ? positional.length > 1 : positional.length !== count) throw new Error("Package API command has missing or extra target arguments.");
   const presence = values.get("--presence"); if (presence !== undefined && presence !== "required" && presence !== "optional") throw new Error("Package presence must be exactly required or optional.");
   return { project: resolve(values.get("--project") ?? process.cwd()), request: { operation,
     ...(positional[0] === undefined ? {} : { packageId: positional[0] }), ...(positional[1] === undefined ? {} : { contractId: positional[1] }),
@@ -199,9 +209,9 @@ function parseRestore(args: readonly string[]): { projectPath: string; options: 
   } };
 }
 
-function parseContracts(args: readonly string[]): { operation: "check" | "accept" | "freeze" | "migrate-private"; projectPath: string; options: AcceptOptions } {
+function parseContracts(args: readonly string[]): { operation: "check" | "accept" | "freeze"; projectPath: string; options: AcceptOptions } {
   const operation = args[0];
-  if (operation !== "check" && operation !== "accept" && operation !== "freeze" && operation !== "migrate-private") throw new Error("contracts requires check, accept, freeze, or migrate-private.");
+  if (operation !== "check" && operation !== "accept" && operation !== "freeze") throw new Error("contracts requires check, accept, or freeze.");
   let key: string | undefined; let project = process.cwd(); let currentVersion: string | undefined; let nextVersion: string | undefined; let acknowledgeBreakingChange = false;
   const seen = new Set<string>();
   for (let index = 1; index < args.length; index++) {
@@ -263,7 +273,7 @@ function requiredValue(argumentsList: readonly string[], index: number, option: 
 }
 
 function help(): void {
-  process.stdout.write("Services: schemaVersion 3 uses services: { module: 'src/services.ts' } (or checked .js). Export defineService definitions; Worker bootstrap and #sunder/api are generated. Private versions follow the full package SemVer and need no Accept/Freeze. Public services retain explicit review.\n\nMigrations: contracts migrate-private [key] --project <root> archives complete eligible legacy private records. api migrate-consumer-roles [package] --project <root> preserves omitted legacy Runtime-only intent; targeted --consumer-roles app|runtime|app,runtime explicitly reviews widening. Add defaults to both; targeted Update preserves intent unless that option is supplied.\n\n");
+  process.stdout.write("Services: schemaVersion 3 uses services: { module: 'src/services.ts' } (or checked .js). Export defineService definitions; Worker bootstrap and #sunder/api are generated. Private versions follow the full package SemVer and need no Accept/Freeze. Public services retain explicit source projection review; missing historical projection evidence requires restoring the reviewed baseline or accepting a new Major tuple.\n\nConsumer roles: api add defaults to app,runtime; targeted api update preserves intent unless --consumer-roles app|runtime|app,runtime is supplied. Every lock requires explicit role intent and immutable projection pins.\n\n");
   process.stdout.write("Development Registry: --development-registry explicitly permits canonical http://localhost[:nondefault-port]/ origins for this invocation, including offline generation/build/pack. Other HTTP hosts and locked-origin overrides remain rejected. HTTPS is the default.\n\n");
   process.stdout.write("Platform providers: platform implement <contract> [--platform-catalog <catalog.json>] [--registry <origin>] [--local-name <key>] | platform update [contract] | platform unimplement <contract> | platform list\nSelect an explicit local catalog for Registry-independent development, or a Registry for published catalogs. Versions follow the coordinated SDK line. Local updates require --platform-catalog; targeted --registry updates can bind a local selection, but cannot override an existing Registry origin.\n\n");
   process.stdout.write("Package APIs: api add <package> --version <range> [--candidate <archive>] [--registry <origin>] [--presence required|optional] | api update [package] | api remove <package> | api list | api require|unrequire|implement|unimplement <package> <contract>\nLocal candidate selection requires no Registry. Use --platform-catalog with candidates that import Core APIs. Use --project, --cache-root, and explicit --include-prerelease/--exclude-prerelease as applicable. Add/implement support --local-name for the generated facade/provider key. Ordinary generation/build is offline; SUNDER_CONTRACT_CACHE selects a nondefault build cache.\n\n");

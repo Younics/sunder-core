@@ -5,7 +5,7 @@ import type { LoadedContract } from "./model";
 import type { OwnedBaseline } from "./rpc-baseline";
 import { hasPublicEvidence } from "./rpc-baseline";
 import { applicableUseActions, canonicalServiceType, type SourceRoleUse } from "./rpc-owned-uses";
-import { emptyModelProjection, readModelProjection, modelProjectionOuter, serviceReferenceSchema, readMethodPolicies, methodPoliciesOuter, type RpcMethodPolicies, type RpcModelProjection, type RpcServiceReferenceProjection } from "./rpc-model-projection";
+import { emptyModelProjection, readModelProjection, modelProjectionOuter, portableModelName, serviceReferenceSchema, readMethodPolicies, methodPoliciesOuter, type RpcMethodPolicies, type RpcModelProjection, type RpcServiceReferenceProjection } from "./rpc-model-projection";
 
 type Data = null | boolean | number | string | Data[] | { [key: string]: Data };
 type RecordData = { [key: string]: Data };
@@ -37,6 +37,18 @@ export function serviceKey(name: string): string {
 }
 export const pascal = (name: string): string => serviceKey(name.replaceAll(".", "-")).split("-").map(part => part[0]!.toUpperCase() + part.slice(1)).join("");
 export const camel = (name: string): string => { const value = pascal(name); return value[0]!.toLowerCase() + value.slice(1); };
+
+/** Imported handlers have one stable, contract-local spelling regardless of service count. */
+export function importedProviderMethodNames(descriptor: RpcContractDescriptor): ReadonlyMap<string, string> {
+  const result = new Map<string, string>(); const names = new Map<string, string>();
+  for (const [serviceId, service] of Object.entries(descriptor.services)) for (const methodId of Object.keys(service.methods)) {
+    const identity = `${serviceId}/${methodId}`; const name = camel(serviceId) + pascal(methodId);
+    const previous = names.get(name.toLowerCase());
+    if (previous !== undefined) throw new Error(`rpc-authoring.generated-name-collision: '${previous}' and '${identity}' normalize to '${name}' in the provider scope of contract '${descriptor.contractId}'.`);
+    names.set(name.toLowerCase(), identity); result.set(identity, name);
+  }
+  return result;
+}
 
 /** The only Node service frontend. TS and checked JS share the same semantic graph. */
 export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoot: string, owner: string, packageVersion: string,
@@ -101,7 +113,7 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
       const applicable=applicableUseActions(contract),actions=policy.actions??applicable;
       if(policy.required!==undefined&&typeof policy.required!=="boolean"||!Array.isArray(actions)||!actions.length||new Set(actions).size!==actions.length||actions.some(action=>!applicable.includes(action as typeof applicable[number])))return fail(item,"Runtime actions must be a nonempty applicable subset and required must be Boolean.","runtime-use-invalid");
       const target={contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,serviceId};
-      uses.push({role:"runtime",...target,serviceType:canonicalServiceType(contract.imported.authorityId,serviceId),required:policy.required===true,actions:applicable.filter(action=>actions.includes(action))});
+      uses.push({role:"runtime",...target,serviceType:canonicalServiceType(contract.imported.authorityId,contract.descriptor.contractId,serviceId),required:policy.required===true,actions:applicable.filter(action=>actions.includes(action))});
       metadata.push({service:target,...policy});
     }
     return {uses,metadata};
@@ -238,7 +250,8 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
       metadata = result;
     } else if (metadataNode) metadata = literal(metadataNode);
     const options = record(metadata, call);
-    only(options, ["exposure", "contractId", "serviceId", "providerId", "audience", "includeSchemaDialect", "appUse", "runtimeUse", "constraints", "errors", "methods", "declarationOnly"], call);
+    only(options, ["exposure", "contractId", "serviceId", "providerId", "audience", "includeSchemaDialect", "appUse", "runtimeUse", "constraints", "values", "errors", "methods", "declarationOnly"], call);
+    if (implementation && options.values !== undefined) fail(call, "Value names belong on the owning service declaration, not an implementation.", "model-projection-invalid");
     if (options.exposure !== undefined && options.exposure !== "package" && options.exposure !== "public") fail(call, "Exposure must be package or public.");
     for (const flag of ["declarationOnly", "includeSchemaDialect"]) if (options[flag] !== undefined && typeof options[flag] !== "boolean") fail(call, `${flag} must be a boolean.`);
     let key = serviceKey(symbol.name); let inherited: SourceService | undefined; let importedContract: LoadedContract | undefined; let importKey: string | undefined;
@@ -327,6 +340,18 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
       return symbol;
     };
     const facets = record(options.constraints, call); const usedFacets = new Set<string>();
+    const valueNames = new Map<string, { name?: string; publicName?: string }>(); const usedValues = new Map<string, ts.Symbol>();
+    const values = record(options.values, call);
+    if (Object.keys(values).length > 256) fail(call, "Value naming metadata exceeds the 256-definition limit.", "source-limit-exceeded");
+    for (const [sourceName, value] of Object.entries(values)) {
+      const names = record(value, call); only(names, ["name", "publicName"], call);
+      if (!Object.keys(names).length) fail(call, `Value '${sourceName}' requires name or publicName metadata.`, "model-projection-invalid");
+      if (names.name !== undefined && (typeof names.name !== "string" || !/^[A-Za-z0-9._-]{1,128}$/u.test(names.name)))
+        fail(call, `Value '${sourceName}' needs a wire definition name of 1–128 ASCII letters, digits, dots, hyphens or underscores.`, "value-invalid");
+      if (names.publicName !== undefined && !portableModelName(names.publicName))
+        fail(call, `Value '${sourceName}' needs an exact portable publicName of 1–128 ASCII identifier characters, excluding reserved C#/TypeScript keywords.`, "model-projection-invalid");
+      valueNames.set(sourceName, names as { name?: string; publicName?: string });
+    }
     const sdkType = (type: ts.Type, name: string): boolean => {
       const seen = new Set<ts.Symbol>();
       const follows = (symbol: ts.Symbol | undefined): boolean => {
@@ -409,21 +434,36 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
       if(sdkType(type,"SunderContent"))naturalContent=true;
       const identity = !inline ? sourceSymbol(type, node) : undefined;
       if (identity) {
+        const names = valueNames.get(identity.name);
+        if (names) {
+          if (importedNames.has(identity)) return fail(node, "Imported model names come from the selected projection and cannot be overridden.", "model-projection-invalid");
+          const previous = usedValues.get(identity.name);
+          if (previous && previous !== identity) return fail(node, `Value naming key '${identity.name}' identifies distinct source declarations; use unambiguous source names.`, "identity-collision");
+          usedValues.set(identity.name, identity);
+        }
+        // Wire keys and public names have independent defaults. Public overrides
+        // never change wire keys; explicit spellings are not normalized.
+        const name = names?.publicName ?? importedNames.get(identity) ?? pascal(identity.name);
+        const definition = names?.name ?? importedNames.get(identity) ?? pascal(identity.name);
+        if (!portableModelName(name)) return fail(identity.declarations?.[0] ?? node, `Model '${identity.name}' does not have a portable public model name.`, "model-projection-invalid");
         let projected = modelSymbols.get(identity);
+        if (projected && projected.name !== name) {
+          const source = projected.use.getSourceFile(); const position = source.getLineAndCharacterOfPosition(projected.use.getStart(source));
+          return fail(node, `Source model '${identity.name}' projects to '${name}' here but '${projected.name}' at ${source.fileName}:${position.line + 1}:${position.character + 1}; use the same publicName in every owning service.`, "identity-collision");
+        }
         if (projected && projected.type !== type && identity.declarations?.some(declaration => (ts.isTypeAliasDeclaration(declaration) || ts.isInterfaceDeclaration(declaration)) && declaration.typeParameters?.length)) {
           const source = projected.use.getSourceFile(); const position = source.getLineAndCharacterOfPosition(projected.use.getStart(source));
           return fail(node, `Model '${projected.name}' has a different constructed source identity at ${source.fileName}:${position.line + 1}:${position.character + 1}; use concrete named aliases.`, "identity-collision");
         }
         const known = named.get(identity); if (known) return { $ref: `#/$defs/${known}` };
         if (!projected) {
-          const name = importedNames.get(identity) ?? pascal(identity.name); const previous = modelNames.get(name.toLowerCase());
+          const previous = modelNames.get(name.toLowerCase());
           if (previous && previous.symbol !== identity) {
             const location = previous.location.getSourceFile(); const position = location.getLineAndCharacterOfPosition(previous.location.getStart(location));
             return fail(identity.declarations?.[0] ?? node, `Model '${name}' conflicts with a distinct source declaration at ${location.fileName}:${position.line + 1}:${position.character + 1}.`, "identity-collision");
           }
           projected = { name, location: identity.declarations![0]!, type, use: node }; modelSymbols.set(identity, projected); modelNames.set(name.toLowerCase(), { symbol: identity, location: projected.location });
         }
-        const definition = projected.name;
         if (Object.hasOwn(defs, definition)) return fail(node, `Definition '${definition}' collides with a generated value.`, "identity-collision");
         named.set(identity, definition); models[definition] = projected.name; defs[definition] = {};
         if (expression) sourceModels.set(projected.name, expression);
@@ -498,8 +538,9 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
     }
     const ownMethods: ServiceMethod[] = []; const procedures: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     const methodOptions = record(options.methods, call);
+    const importedMethodNames = importedContract && importedProviderMethodNames(importedContract.descriptor);
     const existingMethods = inherited?.methods ?? (importedContract ? Object.entries(importedContract.descriptor.services).flatMap(([id, service]) => Object.entries(service.methods).map(([wireName, method]) => ({
-      name: Object.keys(importedContract!.descriptor.services).length === 1 ? camel(wireName) : camel(id) + pascal(wireName), wireName, serviceId: id,
+      name: importedMethodNames!.get(`${id}/${wireName}`)!, wireName, serviceId: id,
       parameters: [{ name: "request", optional: false }], control: "context" as const, stream: method.kind === "server-stream", unit: false, directRequest: true,
     }))) : undefined);
     const members = checker.getPropertiesOfType(methodsType);
@@ -572,6 +613,7 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
       errorDescriptors[code] = { ...error, ...(detailsSchema ? { detailsSchema } : {}) };
     }
     if (Object.keys(facets).some(path => !usedFacets.has(path))) fail(call, "Semantic constraint key does not identify a supported source member.");
+    for (const sourceName of valueNames.keys()) if (!usedValues.has(sourceName)) fail(call, `Value naming key '${sourceName}' does not identify a reachable named source value.`, "model-projection-invalid");
     const parseDescriptor = (): RpcContractDescriptor => { try { return parseRpcContractDescriptor(JSON.stringify({
       ...(options.includeSchemaDialect ? { $schema: "https://json-schema.org/draft/2020-12/schema" } : {}), descriptorVersion: 1, schemaProfile: "sunder.rpc.values.v1",
       contractId, version: contractVersion, errors: errorDescriptors, $defs: defs, services: { [String(serviceId)]: { methods: procedures } },

@@ -92,10 +92,26 @@ public sealed class AppWebBridgeTests
             Assert.Equal(providerDescriptor.Sha256, discoveredProvider.GetProperty("descriptorSha256").GetString());
             Assert.Equal(providerDescriptor.AbiSha256, discoveredProvider.GetProperty("abiSha256").GetString());
             Assert.False(discoveredProvider.TryGetProperty("contractSha256", out _));
-            Assert.False(discoveredProvider.TryGetProperty("endpointReference", out _));
-            Assert.False(discoveredProvider.TryGetProperty("activationId", out _));
+            Assert.Equal(rpc.ActivationId, discoveredProvider.GetProperty("activationId").GetGuid());
+            Assert.Equal(1, discoveredProvider.GetProperty("activationEpoch").GetInt64());
+            Assert.Equal(1, discoveredProvider.GetProperty("sessionGeneration").GetInt64());
             var providerHandle = discoveredProvider.GetProperty("providerHandle").GetString();
             Assert.NotNull(providerHandle);
+            Assert.Equal(providerHandle, discoveredProvider.GetProperty("endpointReference").GetString());
+            Assert.DoesNotContain(InvocationRpcClient.EndpointReference, webView.Scripts.Single(), StringComparison.Ordinal);
+
+            // Portable locator metadata does not grant document invocation authority.
+            // Only the receiver-local, nonce/document-bound handle can dispatch.
+            webView.ClearScripts();
+            await bridge.HandleMessageAsync(Request(bridge.SessionNonce, origin, "b_raw_endpoint", "rpc.invoke", new
+            {
+                providerHandle = InvocationRpcClient.EndpointReference,
+                serviceId = "example", methodId = "ping", request = new { message = "forged handle" },
+            }));
+            var rawEndpoint = ReadResponse(Assert.Single(webView.Scripts)).GetProperty("error");
+            Assert.Equal("rpc.bridge.provider-handle", rawEndpoint.GetProperty("code").GetString());
+            Assert.Equal("not-dispatched", rawEndpoint.GetProperty("dispatchState").GetString());
+            Assert.Equal(0, rpc.InvokeCalls);
 
             webView.ClearScripts();
             await bridge.HandleMessageAsync(Request(
@@ -235,6 +251,83 @@ public sealed class AppWebBridgeTests
         finally
         {
             if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("navigation")]
+    [InlineData("disposal")]
+    [InlineData("live")]
+    public async Task CancelledReplyNativeFailureIsDiscardedOnlyAfterItsExactDocumentRetires(string boundary)
+    {
+        var root = CreateRoot();
+        await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html></html>");
+        try
+        {
+            await using var server = await AppWebContentServer.StartAsync(root, Target(), CancellationToken.None);
+            using var webView = new TestWebView();
+            var rpc = new DeadlineRpcClient();
+            await using var bridge = new AppWebBridge(webView, server, rpc, EmptyCatalog(root), new ExternalBrowserService(), _ => { });
+            await bridge.EstablishAsync(server.BaseUri);
+            var origin = server.Origin.GetLeftPart(UriPartial.Authority);
+            var originalNonce = bridge.SessionNonce;
+            var sendStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var nativeResult = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var responseAttempts = 0;
+            webView.EvaluateScript = script =>
+            {
+                if (script.StartsWith("window.__sunderReceive?.(", StringComparison.Ordinal)
+                    && ReadResponse(script).GetProperty("requestId").GetString() == "b_1"
+                    && Interlocked.Increment(ref responseAttempts) == 1)
+                {
+                    sendStarted.TrySetResult();
+                    return nativeResult.Task;
+                }
+                return Task.FromResult<string?>("true");
+            };
+            using var caller = new CancellationTokenSource();
+            using var replacementCaller = new CancellationTokenSource();
+            var request = bridge.HandleMessageAsync(Request(originalNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }), caller.Token);
+            Task? replacement = null;
+            try
+            {
+                await rpc.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                caller.Cancel();
+                await sendStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (boundary == "navigation")
+                {
+                    await bridge.NavigationStartingAsync();
+                    Assert.NotEqual(originalNonce, bridge.SessionNonce);
+                    await bridge.EstablishAsync(server.GetRouteUri("/workspace"));
+                    replacement = bridge.HandleMessageAsync(Request(bridge.SessionNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }), replacementCaller.Token);
+                    Assert.Equal(1, bridge.PendingRequestCount);
+                }
+                else if (boundary == "disposal") await bridge.DisposeAsync();
+
+                var failure = new InvalidOperationException("Unable to invoke script before any page was loaded.");
+                nativeResult.SetException(failure);
+                if (boundary == "live")
+                    Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => request.WaitAsync(TimeSpan.FromSeconds(5))));
+                else await request.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.Equal(1, responseAttempts); // Neither replay the old send nor retarget its terminal response.
+                if (replacement is not null)
+                {
+                    Assert.False(replacement.IsCompleted);
+                    Assert.Equal(1, bridge.PendingRequestCount);
+                }
+            }
+            finally
+            {
+                nativeResult.TrySetResult("true");
+                caller.Cancel();
+                replacementCaller.Cancel();
+                if (replacement is not null) await replacement.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            Assert.Equal(0, bridge.PendingRequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 
@@ -1709,6 +1802,7 @@ public sealed class AppWebBridgeTests
         private int _invokeCalls;
 
         public int InvokeCalls => Volatile.Read(ref _invokeCalls);
+        public Guid ActivationId { get; } = Guid.NewGuid();
 
         public string? LastEndpointReference { get; private set; }
 
@@ -1728,7 +1822,7 @@ public sealed class AppWebBridgeTests
                     providerDescriptor.Version,
                     providerDescriptor.Sha256,
                     providerDescriptor.AbiSha256,
-                    Guid.NewGuid(),
+                    ActivationId,
                     1,
                     1,
                     new SunderRpcEndpointReference(EndpointReference),

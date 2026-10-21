@@ -16,11 +16,7 @@
     "watermark": {
       "registryOrigin": "https://registry.example",
       "packagePolicyRevision": 42,
-      "packagePolicyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "checkpointSequence": 99,
-      "checkpointDigest": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "topologyGeneration": 1,
-      "topologyFingerprint": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      "packagePolicyFingerprint": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     },
     "responseNonce": "0123456789abcdef0123456789abcdef",
     "responseSha256": "6666666666666666666666666666666666666666666666666666666666666666",

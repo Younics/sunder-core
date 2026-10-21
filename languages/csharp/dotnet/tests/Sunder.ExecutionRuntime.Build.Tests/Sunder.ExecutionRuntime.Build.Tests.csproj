@@ -6,9 +6,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\..\packages\Sunder.Sdk.Stacks\Contracts\sunder.stack.contributor.rpc.json"
-          Link="Fixtures\PlatformCatalog\real-stack.rpc.json"
-          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\tools\Sunder.ExecutionRuntime.Build\Sunder.ExecutionRuntime.Build.csproj"
           Link="Fixtures\PlatformCatalog\BuildTool.csproj"
           CopyToOutputDirectory="PreserveNewest" />

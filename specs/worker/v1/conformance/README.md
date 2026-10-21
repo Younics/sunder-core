@@ -5,3 +5,10 @@
 The normative shutdown order is worker-originated ordinary-call drain, scope/content-handle cleanup, `OnShutdown`, logging-lane close/drain, then flushed shutdown acknowledgement. A language binding cannot claim corpus conformance while omitting a category or reordering those steps.
 
 Changes to protocol behavior or expected values must be reviewed here rather than copied into language-specific fixtures.
+
+The `operationalOutcomes` matrix defines the closed provider-reported operational outcomes accepted by Host.
+These are not authenticated forwarding of worker error codes/messages or dispatch claims. Host always assigns
+the enclosing call's dispatch/retry metadata; a nested rejection does not authorize replay of an outer mutation.
+The .NET worker regression exercises the real local admission cap, authenticated Host pressure, and forged SDK
+exceptions over the worker transport. Process regressions exercise Host admission, sibling recovery, independent
+finite/observation bounds, and rejection of unknown outcomes, details, and dispatch claims.

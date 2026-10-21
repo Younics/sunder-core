@@ -147,14 +147,14 @@ public sealed partial class PackageOperationServiceTests
             notificationCenter);
 
         var operation = (await service.EnqueueRegistrySourceAdoptionAsync(
-            "sunder.package.agent",
-            "Sunder Agent",
+            "younics.ai.agent",
+            "AI Agent",
             new Uri("https://registry.example/")))!;
 
         await WaitForConditionAsync(() => queue.GetProcess(operation.ProcessId)?.State == BackgroundProcessState.Completed);
 
         var request = Assert.IsType<RuntimeRegistrySourceAdoptionRequest>(runtimeClient.LastSourceAdoptionRequest);
-        Assert.Equal("sunder.package.agent", request.PackageId);
+        Assert.Equal("younics.ai.agent", request.PackageId);
         Assert.Equal("https://registry.example/", request.RegistryOrigin);
         Assert.Equal("latest", request.Tag);
         Assert.Null(request.Version);

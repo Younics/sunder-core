@@ -57,34 +57,25 @@ internal sealed partial class ProcessRuntimeWorker
                 _sessionGeneration.Value);
             lock (_callGate)
             {
-                if (_hostCalls.Count + _pendingHostCalls + _contributionCalls.Count
-                    >= _policy.MaxOutstandingHostCalls)
-                {
-                    throw new InvalidOperationException(
-                        "The process worker outstanding Host-call limit was reached.");
-                }
+                RequireHostCallCapacityUnderGate(HostCallKind.Unary);
                 _contributionCalls.Add(call.Id, call);
             }
-        }
-
-        try
-        {
-            QueueEnvelope(new
+            try
             {
-                type = requestType,
-                id = call.Id,
-                activationId = _activationId.ToString("N"),
-                sessionGeneration = call.SessionGeneration,
-                value,
-            });
-        }
-        catch
-        {
-            lock (_callGate)
-            {
-                _contributionCalls.Remove(call.Id);
+                QueueEnvelope(new
+                {
+                    type = requestType,
+                    id = call.Id,
+                    activationId = _activationId.ToString("N"),
+                    sessionGeneration = call.SessionGeneration,
+                    value,
+                });
             }
-            throw;
+            catch
+            {
+                lock (_callGate) _contributionCalls.Remove(call.Id);
+                throw;
+            }
         }
 
         using var registration = cancellationToken.UnsafeRegister(

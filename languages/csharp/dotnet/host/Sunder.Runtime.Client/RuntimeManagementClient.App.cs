@@ -78,6 +78,16 @@ public sealed partial class RuntimeManagementClient
         await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
     }
 
+    public Task<PackageLifecycleStageResult> StageDevPackageOwnerReleaseAsync(
+        string ownerId, DevPackageOwnerReleaseStageRequest request, CancellationToken token = default)
+        => SendDevPackageOwnerAsync<DevPackageOwnerReleaseStageRequest, PackageLifecycleStageResult>(HttpMethod.Post,
+            $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/release/stage", request, token);
+
+    public Task<DevPackageOwnerReleaseResult> CommitDevPackageOwnerReleaseAsync(
+        string ownerId, DevPackageOwnerReleaseCommitRequest request, CancellationToken token = default)
+        => SendDevPackageOwnerAsync<DevPackageOwnerReleaseCommitRequest, DevPackageOwnerReleaseResult>(HttpMethod.Post,
+            $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/release/commit", request, token);
+
     public Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(
         long afterSequenceId = 0,
         CancellationToken token = default)

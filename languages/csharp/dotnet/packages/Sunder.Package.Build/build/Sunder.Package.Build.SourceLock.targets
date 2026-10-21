@@ -47,7 +47,11 @@
                     Log.LogMessage(
                         MessageImportance.Low,
                         $"SUNDER_SOURCE_LOCK_WAITING {Context} pid={processId} path={fullPath}");
-                    var deadline = DateTime.UtcNow.AddMinutes(2);
+                    // A full workspace queues multiple owner configurations behind
+                    // native package builds on shared MSBuild nodes. Keep waiting
+                    // bounded without treating a healthy multi-minute build as a
+                    // stale lease; the dependency wait below remains cancellable.
+                    var deadline = DateTime.UtcNow.AddMinutes(10);
                     while (stream is null)
                     {
                         try
@@ -199,6 +203,15 @@
 
   <Target Name="_BuildSunderPackageBuildTaskUnderSourceLock"
           Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
+    <!-- Resolve shared dependencies before taking the output lease. In a broad
+         parallel graph their node can be busy with consumers waiting for another
+         owner configuration. Cache reference resolution in the SAME inner state
+         used below, so no dependency request is made while that lease is held.
+         This target performs no owner compilation or output copying. -->
+    <MSBuild Projects="$(MSBuildProjectFullPath)"
+             Targets="ResolveReferences"
+             BuildInParallel="false"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=false;BuildProjectReferences=true" />
     <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
                                              LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
                                              Context="owner-build $(MSBuildProjectFullPath)"

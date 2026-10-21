@@ -12,8 +12,6 @@ internal sealed partial class RegistryActivePolicyClient
         Set(request.PlatformCatalogs, RegistryPolicyLimits.MaximumPlatformSubjects, PlatformKey, PlatformIdentity);
         Require(request.Packages.Count + request.PlatformCatalogs.Count > 0, "At least one policy subject is required.");
         Require(request.MinimumPackagePolicy is null || request.MinimumPackagePolicy.Revision > 0 && Hash(request.MinimumPackagePolicy.Fingerprint), "Invalid package policy floor.");
-        Require(request.MinimumCheckpoint is null || request.MinimumCheckpoint.Sequence > 0 && Hash(request.MinimumCheckpoint.Digest)
-            && request.MinimumCheckpoint.TopologyGeneration > 0 && Hash(request.MinimumCheckpoint.TopologyFingerprint), "Invalid checkpoint floor.");
     }
 
     internal static void ValidatePackage(RegistryPackagePolicyDecision value)

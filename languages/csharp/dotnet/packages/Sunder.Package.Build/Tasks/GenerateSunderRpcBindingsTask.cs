@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Sunder.Package.Build.Rpc.Authoring;
@@ -846,6 +847,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         Action<SunderRpcCSharpCompilationResult>? validateSelection = null)
     {
         inputSnapshot ??= new SunderRpcInputSnapshot();
+        using var reads = new SunderBuildReadSnapshot();
         var sources = ReadSourceFiles(projectDirectory, inputSnapshot);
         if (sources is null) return null;
         var ownedContractsPath = ResolveProjectFile(
@@ -874,8 +876,17 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
         ValidateSourceDocumentDimensions();
         var references = ResolveReferencePaths(projectDirectory);
         if (references is null) return null;
-        if (inputSnapshot is not null)
-            foreach (var reference in references) inputSnapshot.Read(reference, int.MaxValue, "C# RPC compilation reference");
+        var referenceSnapshots = new Dictionary<string, PortableExecutableReference>(PathComparer);
+        long referenceBytes = 0;
+        foreach (var reference in references)
+        {
+            var bytes = inputSnapshot!.Read(reference, int.MaxValue, "C# RPC compilation reference");
+            if (referenceSnapshots.Count < 512 && referenceBytes + bytes.Length <= 128L * 1024 * 1024)
+            {
+                referenceSnapshots.Add(reference, MetadataReference.CreateFromImage(System.Collections.Immutable.ImmutableArray.CreateRange(bytes), filePath: reference));
+                referenceBytes += bytes.Length;
+            }
+        }
         var defineConstants = DefineConstants
             .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Distinct(StringComparer.Ordinal)
@@ -894,7 +905,7 @@ public sealed partial class GenerateSunderRpcBindingsTask : Microsoft.Build.Util
             AllowUnboundImportedProviderKeys: allowUnboundImportedProviderKeys,
             AssemblyName: AssemblyName,
             GenerateServiceInterfaces: GeneratePackageRoles,
-            ImportedPackageApis: imports.PackageApis);
+            ImportedPackageApis: imports.PackageApis) { ReferenceSnapshots = referenceSnapshots };
         var compiler = new SunderRpcCSharpSourceCompiler();
         var resourceInputs = GeneratePackageRoles ? Sunder.Package.Build.Authoring.SunderPackageResourcePlanner.Read(projectDirectory,
             ResourceItems.GroupBy(item => item.GetMetadata("ResourceKind"), StringComparer.Ordinal).Select(group => (group.Key, group.ToArray())).ToArray()) : [];

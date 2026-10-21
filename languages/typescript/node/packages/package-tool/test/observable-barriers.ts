@@ -1,6 +1,6 @@
 import { watch } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 
 export interface ObservableOperation<T> {
@@ -70,7 +70,7 @@ export async function waitForProcessOutputLockAttempt(
   diagnostics: () => string,
 ): Promise<void> {
   if (pid === undefined) throw new Error("Output-lock contender has no process id.");
-  const markerRoot = resolve(tmpdir(), "sunder-generated-output", "processes");
+  const markerRoot = resolve(homedir(), ".sunder", "generated-output", "processes");
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {

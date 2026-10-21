@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
@@ -183,14 +184,20 @@ public sealed partial class RuntimeRpcBrokerTests
             [predicate with { Contract = predicate.Contract with { DescriptorSha256 = new('f', 64) } }]));
     }
 
-    [Fact]
-    public void RetainedPackagePrivateAppObligationRejectsAnExactForeignPublicProvider()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task UnplannedProviderLossIsPackageLocalAndTrackedRetirementSurvivesProviderRecovery(bool tracked, bool web)
     {
         using var permissions = new RuntimeRpcPermissionStore(new(CreateRoot()));
         var readiness = new RuntimeRpcReadinessEvaluator(permissions); var descriptor = Contract();
-        var source = new RuntimePackageSource("app.package", PackageSourceKind.Dev, CreateRoot(), Manifest: new()
+        var target = new SunderPackageTargetManifest { Role = "app", Rid = "osx-arm64", Kind = web ? "web" : "avalonia",
+            EntryPoint = web ? "index.html" : "lib/App.dll", TargetFramework = web ? null : "net10.0", SdkVersion = "1.1.0", RequiredHostCapabilities = [] };
+        var source = new RuntimePackageSource("app.package", PackageSourceKind.Dev, CreateRoot(), ContentIdentity: new('a', 64), Manifest: new()
         {
             Id = "app.package", Version = "1.0.0",
+            Targets = [target],
             ContractBundles = [new() { ContractId = descriptor.ContractId, Version = descriptor.Version, DescriptorSha256 = descriptor.Sha256,
                 AbiSha256 = descriptor.AbiSha256, Exposure = SunderPackageFormat.PackageContractExposure }],
             UsesContracts = [new() { Role = "app", ContractId = descriptor.ContractId, ContractVersion = descriptor.Version,
@@ -203,5 +210,120 @@ public sealed partial class RuntimeRpcBrokerTests
         var owner = CreatePackage("app.package", descriptor, new TestHandler(), false, providerAudience: "owner");
         Assert.True(readiness.AppPredicatesSatisfied(CreateSession(owner, foreign), "1.0.0", true, null, predicates, ownerOnly));
         Assert.False(readiness.AppPredicatesSatisfied(CreateSession(foreign), "1.0.0", true, null, predicates, ownerOnly));
+
+        using var policy = new ActivePolicyTestContext();
+        var runtime = new PackageSessionState(NullLogger.Instance, () => { }, _ => { });
+        var snapshots = new RequiredProviderSnapshots(source);
+        var process = new RequiredProviderProcess();
+        var logs = new RecordingLogSink();
+        var protocol = new RuntimeProtocolDescriptor();
+        using var sessions = new AppProcessPolicySessions(policy.Paths, protocol, snapshots, new(policy.Cache), policy.Cache,
+            policy.Clock, policy.Time, process, logs.CreateLogger<AppProcessPolicySessions>(), runtime, readiness);
+        var peer = new AppPolicyPeer(123, null);
+        var identity = new RuntimeAppProcessIdentity(peer.ProcessId, "birth", new('b', 64), "test", Guid.NewGuid(), protocol.RuntimeInstanceId);
+        try
+        {
+            await runtime.PublishSessionAsync(CreateSession(owner, foreign));
+            var opened = await sessions.OpenAsync(new(identity), peer, default);
+            var request = new RuntimeAppPolicySessionRequest(opened.SessionId, identity.AppGenerationId, protocol.RuntimeInstanceId);
+            var load = new RuntimeAppPackageLoadPermitRequest(request, new(source.PackageId, "1.0.0", source.ContentIdentity!))
+            {
+                SnapshotId = new('a', 32), AppActivationId = tracked ? Guid.NewGuid() : null,
+                AppTarget = tracked ? PackageTargetSelection.ToDescriptor(target) : null,
+            };
+            var permit = await sessions.PermitAsync(load, peer, default);
+            Assert.True(permit.Allowed);
+            var authority = tracked ? sessions.RequireCallerPermit(peer, source, load.AppActivationId!.Value,
+                permit.PermitId, load.AppTarget!) : null;
+            using var inFlight = authority?.Acquire();
+            snapshots.Source = null;
+            Assert.False((await sessions.HeartbeatAsync(request, peer, default)).ShutdownRequired);
+
+            // Ordinary provider failure must never become OS-process termination.
+            // Tracked activations retire exactly; legacy callers fail availability
+            // checks without blocking unrelated packages or losing security subjects.
+            await runtime.PublishSessionAsync(CreateSession(foreign));
+            // Availability retirement belongs to lifecycle enforcement, not the
+            // authenticated heartbeat's independent security-proof path.
+            await sessions.EnforceAsync(default);
+            var status = await sessions.HeartbeatAsync(request, peer, default);
+            Assert.False(status.ShutdownRequired);
+            Assert.Equal(RuntimeAppPolicySessionStates.Active, status.State);
+            Assert.Throws<RuntimeUnavailableException>(() => sessions.RequireLoaded(peer, source));
+            if (tracked)
+            {
+                var retirement = Assert.Single(status.Retirements);
+                Assert.Equal(load.AppActivationId, retirement.AppActivationId);
+                Assert.Equal(permit.PermitId, retirement.LoadPermitId);
+                Assert.False(authority!.IsActive);
+                Assert.True(authority.RetirementToken.IsCancellationRequested);
+                using var cancelledCleanup = new CancellationTokenSource();
+                var retiring = sessions.RetireActivationAsync(new(request, retirement.AppActivationId, retirement.LoadPermitId), peer, cancelledCleanup.Token);
+                Assert.False(retiring.IsCompleted);
+                Assert.False((await sessions.HeartbeatAsync(request, peer, default)).ShutdownRequired);
+                cancelledCleanup.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => retiring);
+                Assert.Single((await sessions.HeartbeatAsync(request, peer, default)).Retirements);
+                inFlight!.Dispose();
+            }
+            else Assert.Empty(status.Retirements);
+            Assert.Equal(source.PackageId, Assert.Single(status.LoadedPackages).PackageId);
+            var persistedPath = Directory.EnumerateFiles(Path.Combine(policy.Paths.RootPath,
+                Sunder.Runtime.LocalState.RuntimeV1StateDescriptor.AppPolicySessionsDirectory), "*.json").Single();
+            var record = JsonSerializer.Deserialize<AppPolicySessionFile>(File.ReadAllText(persistedPath),
+                new JsonSerializerOptions(RegistryActivePolicyClient.Json) { IncludeFields = true })!;
+            Assert.Null(record.Cause);
+            var retained = Assert.Single(Assert.Single(record.Loaded).RequiredProviders);
+            Assert.Equal(predicates[0].ConsumerPackageId, retained.ConsumerPackageId);
+            Assert.Equal(predicates[0].ConsumerRole, retained.ConsumerRole);
+            Assert.Equal(predicates[0].Contract, retained.Contract);
+            Assert.Equal(predicates[0].Actions, retained.Actions);
+            Assert.Equal(ownerOnly, Assert.Single(record.Loaded).OwnerOnlyContracts);
+            var unrelated = source with { PackageId = "unrelated.package", ContentIdentity = new('e', 64),
+                Manifest = new() { Id = "unrelated.package", Version = "1.0.0" } };
+            snapshots.Source = unrelated;
+            Assert.True((await sessions.PermitAsync(new(request, new(unrelated.PackageId, "1.0.0", unrelated.ContentIdentity!))
+                { SnapshotId = new('a', 32) }, peer, default)).Allowed);
+            sessions.RequireLoaded(peer, unrelated);
+            policy.Clock.Advance(TimeSpan.FromSeconds(10));
+            await sessions.EnforceAsync(default);
+            Assert.Equal(0, process.Terminations);
+            Assert.True(File.Exists(persistedPath));
+
+            await runtime.PublishSessionAsync(CreateSession(owner, foreign));
+            snapshots.Source = source;
+            if (tracked)
+            {
+                // Recovery cannot revive a fenced activation or erase cleanup debt.
+                Assert.Single((await sessions.HeartbeatAsync(request, peer, default)).Retirements);
+                await Assert.ThrowsAsync<PackagePolicyDeniedException>(() => sessions.PermitAsync(load, peer, default));
+                var retired = await sessions.RetireActivationAsync(new(request, load.AppActivationId!.Value, permit.PermitId!), peer, default);
+                Assert.Equal("retired", retired.State);
+                Assert.Empty((await sessions.HeartbeatAsync(request, peer, default)).Retirements);
+                Assert.True((await sessions.PermitAsync(load with { AppActivationId = Guid.NewGuid() }, peer, default)).Allowed);
+                Assert.False(authority!.IsActive);
+            }
+            else sessions.RequireLoaded(peer, source);
+            process.State = AppPolicyProcessState.ExitProven;
+            await sessions.EnforceAsync(default);
+            Assert.False(File.Exists(persistedPath));
+        }
+        finally { await runtime.ClearActiveSessionAsync(); }
+    }
+
+    private sealed class RequiredProviderSnapshots(RuntimePackageSource source) : IAppPolicySnapshotSource
+    {
+        internal RuntimePackageSource? Source { get; set; } = source;
+        public RuntimePackageSource? PolicySource(string snapshotId) => snapshotId == new string('a', 32) ? Source : null;
+    }
+
+    private sealed class RequiredProviderProcess : IAppPolicyProcessController, IAppPolicyProcessHandle
+    {
+        internal AppPolicyProcessState State = AppPolicyProcessState.Alive;
+        internal int Terminations;
+        public IAppPolicyProcessHandle Attach(RuntimeAppProcessIdentity identity, AppPolicyPeer peer, bool recovery) => this;
+        public AppPolicyProcessState Probe() => State;
+        public void Terminate() => Terminations++;
+        public void Dispose() { }
     }
 }

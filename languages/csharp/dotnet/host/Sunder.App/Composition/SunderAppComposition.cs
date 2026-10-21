@@ -72,6 +72,7 @@ internal static class SunderAppComposition
         services.AddSingleton<AppPackageShellViewService>();
         services.AddSingleton<IPackageShellViewService>(provider => provider.GetRequiredService<AppPackageShellViewService>());
         services.AddSingleton<AppPackageSettingsNavigationService>();
+        services.AddSingleton<AppPackageDeveloperServices>();
         services.AddSingleton<IPackageSettingsNavigationService>(provider => provider.GetRequiredService<AppPackageSettingsNavigationService>());
 
         services.AddSingleton<ThemeManager>();
@@ -82,13 +83,17 @@ internal static class SunderAppComposition
         services.AddSingleton(provider => new AppProcessPolicySupervisor(provider.GetRequiredService<AppRuntimeProcessTransport>(), () =>
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
-                if (application.ApplicationLifetime is Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop) desktop.Shutdown(1);
+                if (application is App app) app.RequestPolicyShutdown();
             })));
         services.AddSingleton(provider => new PackageViewHostServiceFactory(
             provider.GetRequiredService<AppPackageShellViewService>(), provider.GetRequiredService<AppPackageSettingsNavigationService>(),
             provider.GetRequiredService<AppRuntimeProcessTransport>().Transport, provider.GetRequiredService<NotificationCenterService>(),
             provider.GetRequiredService<BackgroundProcessQueueService>(), provider.GetRequiredService<AppPackageResourceAssemblyRegistry>(),
-            provider.GetRequiredService<IUiDispatcher>()) { PackagePolicy = provider.GetRequiredService<AppProcessPolicySupervisor>() });
+            provider.GetRequiredService<IUiDispatcher>())
+        {
+            PackagePolicy = provider.GetRequiredService<AppProcessPolicySupervisor>(),
+            DeveloperServices = provider.GetRequiredService<AppPackageDeveloperServices>(),
+        });
         services.AddSingleton<WindowLauncherFactory>();
         services.AddSingleton<MainWindowFactory>();
         services.AddSingleton<SettingsWindowFactory>();

@@ -15,6 +15,10 @@ public sealed record SessionPackageDescriptor(
     int FailureCount,
     IReadOnlyList<PackageRpcContractUseDescriptor>? RpcContractUses = null)
 {
+    /// <summary>Full content identity of the actual validated source in this Runtime snapshot; absent on older Hosts.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceContentIdentity { get; init; }
+
     private IReadOnlyList<PackageRpcContractUseDescriptor> _rpcContractUses =
         RuntimeContractCollections.Freeze(RpcContractUses ?? []);
 

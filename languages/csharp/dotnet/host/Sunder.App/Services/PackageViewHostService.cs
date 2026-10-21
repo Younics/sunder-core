@@ -30,7 +30,7 @@ public sealed record PackageSettingsViewDescriptor(
     string DisplayName,
     string? Summary);
 
-public sealed class PackageViewHostService : IAsyncDisposable
+public sealed partial class PackageViewHostService : IAsyncDisposable
 {
     public static PackageViewHostService Empty { get; } = new(
         new AppPackageViewRegistry(),
@@ -56,6 +56,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     private readonly PackageIconGenerationCoordinator _iconCoordinator;
     private readonly AppPackageGenerationRetirementQueue _retirementOwner;
     private readonly AppPackageLifecycleCoordinator _lifecycleCoordinator;
+    private readonly IAppPackagePolicy _packagePolicy;
     private string? _sessionFolder;
     private event EventHandler<PackageViewHostFaultEventArgs>? PackageFaultedHandlers;
     private event Action<AppPackageUiRecoveryRequest>? PackageUiRecoveryRequestedHandlers;
@@ -81,9 +82,12 @@ public sealed class PackageViewHostService : IAsyncDisposable
         TimeSpan? retirementDrainBudget = null,
         string? packageContentCacheRoot = null,
         Action<Exception>? fatalCleanupFaultHandler = null,
-        IAppPackagePolicy? packagePolicy = null)
+        IAppPackagePolicy? packagePolicy = null,
+        IAppPackageDevelopmentBackend? developerServices = null,
+        string? runtimeStateRootPath = null)
     {
         _sessionFolder = sessionFolder;
+        _packagePolicy = packagePolicy ?? UnavailableAppPackagePolicy.Instance;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         viewRegistry.SetUiDispatcher(_uiDispatcher);
         _propagateFatalCleanupFault = fatalCleanupFaultHandler
@@ -121,7 +125,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             ?? (downloadPackageUiSnapshotAsync is null
                 ? AppLocalState.GetPath("package-content-cache")
                 : Path.Combine(EnsureSessionFolder(), "package-content-cache"));
-        _snapshotCache = new AppPackageSnapshotCache(EnsureSessionFolder, DownloadSnapshotAsync, resolvedContentCacheRoot);
+        _snapshotCache = new AppPackageSnapshotCache(EnsureSessionFolder, DownloadSnapshotAsync, resolvedContentCacheRoot, runtimeStateRootPath);
         async ValueTask RetireGenerationAndAttributionsAsync(AppPackageGeneration generation)
         {
             var registrations = generation.SnapshotPackageAssemblies();
@@ -136,6 +140,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
             _quarantineCoordinator.UnregisterPendingCandidate(generation);
             _faultAttribution.Unregister(generation.Id, registrations);
+            lock (_boundarySyncRoot) _boundariesByGeneration.Remove(generation.Id);
         }
 
         _retirementOwner = new AppPackageGenerationRetirementQueue(
@@ -158,7 +163,9 @@ public sealed class PackageViewHostService : IAsyncDisposable
             backgroundProcessQueue,
             getRuntimeConnectionInfo,
             _uiDispatcher,
-            packagePolicy);
+            packagePolicy,
+            developerServices,
+            RegisterActivation);
         var initialGeneration = _generationBuilder.CreateInitialGeneration(
             viewRegistry,
             disabledPackageIds,
@@ -184,6 +191,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             _iconCoordinator,
             _retirementOwner,
             _lifecycleGate);
+        _packagePolicy.SetRetirementHandler((requirements, token) =>
+            RetireRequestedActivationsAsync(requirements, developerServices, token));
     }
 
     public event EventHandler<PackageViewHostFaultEventArgs>? PackageFaulted
@@ -209,6 +218,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
     internal int CachedSnapshotCount => _snapshotCache.Count;
 
     internal int RetirementFailureCount => _retirementOwner.FailureCount;
+    internal bool IsStopping => _lifecycleGate.IsDisposed;
 
     internal int QuarantinedRetirementCount => _retirementOwner.QuarantinedCount;
 
@@ -258,7 +268,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         Func<RuntimeConnectionInfo?> getRuntimeConnectionInfo,
         IUiDispatcher uiDispatcher,
         CancellationToken cancellationToken = default,
-        IAppPackagePolicy? packagePolicy = null)
+        IAppPackagePolicy? packagePolicy = null,
+        IAppPackageDevelopmentBackend? developerServices = null)
         => await CreateForPackagesCoreAsync(
             activePackages,
             packageSources,
@@ -269,7 +280,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
             resourceAssemblyRegistry,
             getRuntimeConnectionInfo,
             uiDispatcher,
-            cancellationToken, packagePolicy).ConfigureAwait(false);
+            cancellationToken, packagePolicy, developerServices).ConfigureAwait(false);
 
     private static async Task<PackageViewHostService> CreateForPackagesCoreAsync(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
@@ -282,7 +293,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
         IUiDispatcher? uiDispatcher,
         CancellationToken cancellationToken,
-        IAppPackagePolicy? packagePolicy = null)
+        IAppPackagePolicy? packagePolicy = null,
+        IAppPackageDevelopmentBackend? developerServices = null)
     {
         AppPackageSessionDirectories.ScheduleStaleSessionCleanup();
         var sessionFolder = activePackages.Count > 0 ? AppPackageSessionDirectories.CreateSessionFolder() : null;
@@ -299,7 +311,8 @@ public sealed class PackageViewHostService : IAsyncDisposable
             resourceAssemblyRegistry: resourceAssemblyRegistry,
             getRuntimeConnectionInfo: getRuntimeConnectionInfo,
             uiDispatcher: uiDispatcher,
-            packagePolicy: packagePolicy);
+            packagePolicy: packagePolicy,
+            developerServices: developerServices);
 
         try
         {
@@ -364,6 +377,22 @@ public sealed class PackageViewHostService : IAsyncDisposable
         ThrowIfDisposed();
         return CurrentGeneration.State.IsPackageDisabled(packageId);
     }
+
+    internal string GetAppReadiness(string packageId, RuntimePackageStamp stamp, string? activationFingerprint = null,
+        string? sourceContentIdentity = null)
+    {
+        var generation = CurrentGeneration;
+        if (generation.RuntimeStamp != stamp || !generation.Composition.ServicesPublished) return "Pending";
+        if (generation.State.IsPackageDisabled(packageId)) return "Quarantined";
+        var handle = generation.State.GetLoadedPackage(packageId);
+        return handle is null || activationFingerprint is not null && handle.Source.ActivationFingerprint != activationFingerprint
+            || sourceContentIdentity is not null && handle.Source.SourceContentIdentity != sourceContentIdentity
+            ? "Pending" : "Activated";
+    }
+
+    internal bool IsPackageActivationRetained(string packageId) => CurrentGeneration.Composition.IsRetainedPackage(packageId);
+    internal bool IsViewActivationRetained(string viewId) => CurrentGeneration.ViewRegistry.GetPackageId(viewId) is { } packageId
+        && IsPackageActivationRetained(packageId);
 
     internal Task PrewarmPackageIconsAsync(
         RuntimePackageSnapshot snapshot,
@@ -753,7 +782,11 @@ public sealed class PackageViewHostService : IAsyncDisposable
                 generation.Composition.RecordCleanupOutcome(
                     releasedBoundary.CleanupOutcome);
                 UnregisterBoundary(generationId, releasedBoundary);
-            });
+            })
+        {
+            ActivationOwnerId = generation.ActivationGroups.SingleOrDefault(group =>
+                group.OwnedActivationIds.Contains(packageId, StringComparer.OrdinalIgnoreCase))?.Composition.ActivationOwnerId,
+        };
         RegisterBoundary(generationId, boundary);
         if (packageQuarantined)
         {
@@ -857,7 +890,10 @@ public sealed class PackageViewHostService : IAsyncDisposable
                     view.ViewId,
                     viewId,
                     StringComparison.OrdinalIgnoreCase)))
-                ?.PackageId;
+                 ?.PackageId;
+        if (packageId is not null && generation.Composition.IsRetainedPackage(packageId)
+            && generation.Composition.ViewFacade.IsViewPrepared(viewId))
+            return Task.CompletedTask;
         if (packageId is not null
             && (generation.State.IsPackageDisabled(packageId)
                 || generation.ViewRegistry.IsViewQuarantined(packageId, viewId)))
@@ -1280,17 +1316,33 @@ public sealed class PackageViewHostService : IAsyncDisposable
 
     private void AttachFaultForwarder(AppPackageGeneration generation)
     {
-        generation.Composition.FaultNotifier.PackageFaulted += Composition_OnPackageFaulted;
-        generation.Composition.PackageStateChanged += Composition_OnPackageStateChanged;
+        lock (_boundarySyncRoot)
+        {
+            var retained = _boundariesByGeneration.Values.SelectMany(entries => entries)
+                .Select(reference => reference.TryGetTarget(out var boundary) ? boundary : null)
+                .OfType<HostedPackageViewBoundary>()
+                .Where(boundary => generation.Composition.IsRetainedPackage(boundary.PackageId)
+                    && ReferenceEquals(boundary.HostedView, generation.Composition.ViewFacade.GetOrCreateView(boundary.ViewId)))
+                .Distinct().Select(boundary => new WeakReference<HostedPackageViewBoundary>(boundary)).ToArray();
+            if (retained.Length != 0)
+            {
+                if (!_boundariesByGeneration.TryGetValue(generation.Id, out var entries)) _boundariesByGeneration[generation.Id] = entries = [];
+                entries.AddRange(retained);
+            }
+        }
+        foreach (var group in generation.ActivationGroups)
+        {
+            group.Composition.FaultNotifier.PackageFaulted += Composition_OnPackageFaulted;
+            group.Composition.PackageStateChanged += Composition_OnPackageStateChanged;
+        }
     }
 
     private void DetachFaultForwarder(AppPackageGeneration generation)
     {
-        generation.Composition.FaultNotifier.PackageFaulted -= Composition_OnPackageFaulted;
-        generation.Composition.PackageStateChanged -= Composition_OnPackageStateChanged;
-        lock (_boundarySyncRoot)
+        foreach (var group in generation.ActivationGroups)
         {
-            _boundariesByGeneration.Remove(generation.Id);
+            group.Composition.FaultNotifier.PackageFaulted -= Composition_OnPackageFaulted;
+            group.Composition.PackageStateChanged -= Composition_OnPackageStateChanged;
         }
     }
 
@@ -1325,6 +1377,7 @@ public sealed class PackageViewHostService : IAsyncDisposable
         PackageViewHostService owner,
         AppPackageGeneration generation)
     {
+        internal IReadOnlySet<string> RetainedPackageIds => generation.Composition.RetainedPackageIds;
         public async Task StabilizeViewAsync(
             string viewId,
             IReadOnlyDictionary<string, string?>? parameters = null,

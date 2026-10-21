@@ -8,12 +8,14 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class PackageRuntimePrerequisiteService(
     RegistryPackagePlanResolver registryPlans, RuntimeContentTransferStore transfers, RuntimeSessionOwner sessions,
     SunderPackageArchiveInstaller installer, LocalExecutionRuntimeBindingResolver local,
-    ExecutionRuntimeInstallationService installation, InstalledPackageStore installed)
+    ExecutionRuntimeInstallationService installation, InstalledPackageStore installed,
+    DevelopmentImportAuthorityStore developmentImports)
 {
     public async Task<RuntimePackageRuntimePrerequisitePlan> PreviewAsync(RuntimePackageRuntimePrerequisiteRequest request, CancellationToken token)
     {
-        if (request is null || (request.Registry is null ? 0 : 1) + (request.Local is null ? 0 : 1) + (request.Adoption is null ? 0 : 1) != 1)
-            throw new RuntimeValidationException("Select exactly one Registry, adoption, or uploaded package source.");
+        if (request is null || (request.Registry is null ? 0 : 1) + (request.Local is null ? 0 : 1) + (request.Adoption is null ? 0 : 1)
+            + (request.DevelopmentFolder is null ? 0 : 1) != 1)
+            throw new RuntimeValidationException("Select exactly one Registry, adoption, uploaded package, or development folder source.");
         RuntimePackageRuntimePrerequisitePlan result;
         if (request.Adoption is { } adoption)
         {
@@ -31,9 +33,56 @@ internal sealed class PackageRuntimePrerequisiteService(
             if (!resolution.Plan.Success) throw new RuntimeConflictException(string.Join("; ", resolution.Plan.Errors));
             result = await InspectRegistryAsync([resolution], token);
         }
+        else if (request.DevelopmentFolder is { } folder) result = await InspectDevelopmentAsync(folder, token);
         else result = await InspectUploadsAsync(request.Local!, token);
         CheckExpectation(result, request.ExpectedSourceFingerprint is null ? null : new(request.ExpectedSourceFingerprint, Rid));
         return result;
+    }
+
+    internal async Task<RuntimePackageRuntimePrerequisitePlan> InspectDevelopmentAsync(string folder, CancellationToken token)
+    {
+        if (string.IsNullOrWhiteSpace(folder) || folder.Length > 4096 || !Path.IsPathFullyQualified(folder))
+            throw new RuntimeValidationException("Select an absolute built canonical development folder on the Host.");
+        folder = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(folder, token);
+        if (!validation.Success || validation.Manifest is null || validation.ContentIndex is null)
+            throw new RuntimePackageValidationException("Build the canonical development folder before loading: " + string.Join(" | ", validation.Errors));
+        var manifest = validation.Manifest;
+        var manifestHash = RuntimeRpcPackageMetadata.GetManifestSha256(validation.ContentIndex);
+        DevelopmentImportAuthority? imports = null;
+        if (PackageCompatibilityAuthority.NeedsEvidence(manifest))
+        {
+            try
+            {
+                imports = await developmentImports.ResolveAsync(new(manifest.Id!, PackageSourceKind.Dev, folder,
+                    Manifest: manifest, ContentIndex: validation.ContentIndex), token);
+            }
+            catch (Exception error) when (error is InvalidDataException or System.Text.Json.JsonException)
+            {
+                throw new RuntimePackageValidationException("Development import evidence is missing or invalid. Run 'sunder dev package prepare-imports <folder>' "
+                    + "with exact local --candidate/--platform-catalog inputs or an explicit --registry, then load again.");
+            }
+        }
+        if ((manifest.Targets ?? []).Any(value => value?.Role == SunderPackageFormat.RuntimeHostRole)
+            && !(manifest.Targets ?? []).Any(value => value?.Role == SunderPackageFormat.RuntimeHostRole && value.Rid == Rid))
+            throw new RuntimePackageValidationException($"Build the canonical development package for the Host's exact RID '{Rid}' before loading.");
+        var contentIdentity = Hash(validation.ContentIndex);
+        var requirements = new List<RuntimePackageRuntimePrerequisite>();
+        foreach (var target in (manifest.Targets ?? []).OfType<SunderPackageTargetManifest>().Where(value => value.Rid == Rid))
+        {
+            var errors = SunderSdkCompatibilityProfile.Validate(manifest.Id, new(target.Role!, target.Rid!), target);
+            if (errors.Count != 0) throw new RuntimePackageValidationException(string.Join(" | ", errors));
+            if (target.ExecutionRuntime is not { } runtime) continue;
+            var requirement = new RuntimeExecutionRuntimeRequirement(runtime.Id!, runtime.VersionRange!, runtime.ModuleAbi!);
+            var receipt = await local.FindHealthyAsync(requirement, Rid, token).ConfigureAwait(false);
+            var install = receipt is null ? await installation.PreviewAsync(new(requirement, true), token).ConfigureAwait(false) : null;
+            requirements.Add(new(new(manifest.Id!, manifest.Version!, contentIdentity, target.Role!, Rid), manifestHash, requirement,
+                receipt is not null, receipt is null ? ExecutionRuntimeErrorCodes.Missing : null, receipt?.Identity.ToContract(), install));
+        }
+        return Result(Hash(new { Folder = folder, Content = contentIdentity, Imports = imports, Rid }), requirements)
+            with { DevelopmentPackageId = manifest.Id, Message = requirements.All(value => value.Satisfied)
+                ? "Development package runtimes are ready. Revalidate this source before acquiring its owner lease."
+                : "Review and install the required runtimes before loading this development folder." };
     }
 
     internal async Task<RuntimePackageRuntimePrerequisitePlan> InspectRegistryAsync(

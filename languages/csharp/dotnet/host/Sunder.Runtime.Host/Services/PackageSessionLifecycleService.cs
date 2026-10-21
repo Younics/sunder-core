@@ -16,6 +16,7 @@ internal sealed partial class PackageSessionLifecycleService
     private readonly ILogger<PackageSessionLifecycleService> _logger;
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy;
     private readonly TimeProvider _timeProvider;
+    private readonly AppProcessPolicySessions? _appPolicies;
 
     public PackageSessionLifecycleService(
         RuntimeSessionOwner sessions,
@@ -26,7 +27,8 @@ internal sealed partial class PackageSessionLifecycleService
         PackageLifecycleStageStore stages,
         ILogger<PackageSessionLifecycleService> logger,
         RuntimeLifecyclePolicyOptions? lifecyclePolicy = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        AppProcessPolicySessions? appPolicies = null)
     {
         _sessions = sessions;
         _gate = gate;
@@ -37,6 +39,7 @@ internal sealed partial class PackageSessionLifecycleService
         _logger = logger;
         _lifecyclePolicy = lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _appPolicies = appPolicies;
     }
 
     public IReadOnlyList<ActivePackageDescriptor> GetActivePackages() => _sessions.GetSnapshot().ActivePackages;
@@ -149,9 +152,20 @@ internal sealed partial class PackageSessionLifecycleService
             current?.LastError);
     }
 
-    public async Task<PackageLifecycleStageResult> StageAsync(
+    public Task<PackageLifecycleStageResult> StageAsync(
         PackageLifecycleStageRequest request,
         CancellationToken cancellationToken = default)
+        => StageCoreAsync(request, developmentWorkerContinuation: false, cancellationToken);
+
+    internal Task<PackageLifecycleStageResult> StageWatchedAsync(
+        PackageLifecycleStageRequest request,
+        CancellationToken cancellationToken = default)
+        => StageCoreAsync(request, developmentWorkerContinuation: true, cancellationToken);
+
+    private async Task<PackageLifecycleStageResult> StageCoreAsync(
+        PackageLifecycleStageRequest request,
+        bool developmentWorkerContinuation,
+        CancellationToken cancellationToken)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
@@ -169,6 +183,8 @@ internal sealed partial class PackageSessionLifecycleService
         var currentSources = _sessions.State.GetActivePackageSources();
         var sources = _sessions.Sources.Snapshot();
         var reloadFolders = ResolveReloadFolders(sources, request.PackageIds, errors);
+        if (developmentWorkerContinuation && sources.ActiveDevOverlays.Any(overlay => DevPackageWatchService.IsPublicationInProgress(overlay.Folder)))
+            errors.Add("Dev package output publication is still in progress.");
         if (errors.Count > 0)
         {
             return PackageLifecycleStageResult.Failed(errors[0], currentPackages, warnings, errors);
@@ -180,6 +196,8 @@ internal sealed partial class PackageSessionLifecycleService
             operationToken);
         warnings.AddRange(loaded.Warnings);
         errors.AddRange(loaded.Errors);
+        if (developmentWorkerContinuation && sources.ActiveDevOverlays.Any(overlay => DevPackageWatchService.IsPublicationInProgress(overlay.Folder)))
+            errors.Add("Dev package output publication changed while the reload was being prepared.");
         if (loaded.Session is null || errors.Count > 0)
         {
             if (loaded.Session is not null) await loaded.Session.DisposeAsync();
@@ -209,7 +227,10 @@ internal sealed partial class PackageSessionLifecycleService
                 warnings,
                 errors,
                 baseGeneration,
-                stageId);
+                stageId,
+                retainWorkersExcept: developmentWorkerContinuation ? []
+                    : sources.ActiveDevOverlays.Where(overlay => reloadFolders.Contains(overlay.Folder)).Select(overlay => overlay.PackageId).ToArray(),
+                developmentWorkerContinuation: developmentWorkerContinuation);
         }
         catch (Exception exception)
         {
@@ -219,36 +240,23 @@ internal sealed partial class PackageSessionLifecycleService
             const string message = "Package lifecycle stage preparation failed.";
             return PackageLifecycleStageResult.Failed(message, currentPackages, warnings, [message]);
         }
-        var createdAtUtc = _timeProvider.GetUtcNow();
-        var expiresAtUtc = createdAtUtc + _lifecyclePolicy.PendingStageLifetime;
-        _stages.Add(stageId, new PendingPackageLifecycleStage(
-            candidate,
-            impacted,
-            baseGeneration,
-            createdAtUtc,
-            expiresAtUtc));
-        _sessions.RegisterStage(
-            stageId,
-            baseGeneration + 1,
-            baseGeneration,
-            RuntimePackageStageKind.PackageSession,
-            createdAtUtc,
-            expiresAtUtc);
-        return new PackageLifecycleStageResult(
-            stageId,
-            stagedPackages,
-            warnings,
-            errors,
-            impacted);
+        return RegisterPreparedStage(candidate, impacted);
     }
 
-    public async Task<PackageLifecycleOperationResult> CommitStageAsync(
+    public Task<PackageLifecycleOperationResult> CommitStageAsync(
         string stageId,
         CancellationToken cancellationToken = default)
+        => CommitStageCoreAsync(stageId, null, cancellationToken);
+
+    internal async Task<PackageLifecycleOperationResult> CommitStageCoreAsync(
+        string stageId, string? releaseOwnerId, CancellationToken cancellationToken)
     {
+        if (releaseOwnerId is null) await WaitForAppRetirementAsync(stageId, cancellationToken);
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
         await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
+        if (_stages.Get(stageId) is { } pending && pending.ReleaseOwnerId != releaseOwnerId)
+            throw new RuntimeAuthenticationException("This lifecycle stage requires its development owner credentials.");
         if (!_stages.TryTake(stageId, out var stage))
         {
             var statusMessage = _sessions.GetStageStatus(stageId)?.Message;
@@ -257,7 +265,8 @@ internal sealed partial class PackageSessionLifecycleService
                 _sessions.State.GetActivePackages(),
                 errors: statusMessage is null ? null : [statusMessage]);
         }
-        if (stage.BaseGeneration != _sessions.Generation)
+        _appPolicies?.ForgetRetirementStage(stageId);
+        if (stage.BaseGeneration != _sessions.Generation || !_sessions.Sources.IsCurrent(stage.Candidate.Sources))
         {
             await _publisher.DiscardAsync(stage.Candidate);
             var message = $"Package lifecycle stage '{stageId}' is stale because the active package session changed before commit.";
@@ -268,6 +277,13 @@ internal sealed partial class PackageSessionLifecycleService
         _sessions.MarkStageCommitting(stageId);
         try
         {
+            if (stage.SourcesOnly)
+            {
+                _sessions.Sources.Replace(stage.Candidate.Sources);
+                await stage.Candidate.Session.DisposeAsync();
+                _sessions.MarkStageCommitted(stageId, _sessions.Stamp, true, false, "Development owner released; effective source graph retained.");
+                return new(true, "Development owner released; effective source graph retained.", _sessions.GetSnapshot().ActivePackages, [], [], []) { CommittedStamp = _sessions.Stamp };
+            }
             var publication = await _publisher.BeginPublishAsync(stage.Candidate, operationToken);
             var committedPublication = await _publisher.CommitAsync(publication, operationToken);
             var warnings = stage.Candidate.Warnings.Concat(committedPublication.CleanupWarnings).ToArray();
@@ -315,6 +331,7 @@ internal sealed partial class PackageSessionLifecycleService
         operation.CancellationToken.ThrowIfCancellationRequested();
         await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
         if (!_stages.TryTake(stageId, out var stage)) return false;
+        _appPolicies?.ForgetRetirementStage(stageId);
         await _publisher.DiscardAsync(stage.Candidate);
         _sessions.MarkStageDiscarded(stageId);
         return true;
@@ -327,7 +344,8 @@ internal sealed partial class PackageSessionLifecycleService
         IReadOnlyCollection<string> reloadFolders,
         CancellationToken cancellationToken,
         PackageSessionSourceSnapshot? candidateSources = null,
-        bool allowPackageErrors = false)
+        bool allowPackageErrors = false,
+        bool unplannedWithdrawal = false)
     {
         var warnings = new List<string>();
         var errors = new List<string>();
@@ -366,7 +384,9 @@ internal sealed partial class PackageSessionLifecycleService
                 errors,
                 baseGeneration,
                 cancellationToken,
-                pending => pendingPublication = pending);
+                pending => pendingPublication = pending,
+                retainWorkersExcept: sources.ActiveDevOverlays.Where(overlay => reloadFolders.Contains(overlay.Folder)).Select(overlay => overlay.PackageId).ToArray(),
+                unplannedWithdrawal: unplannedWithdrawal);
             warnings.AddRange(publication.CleanupWarnings);
         }
         catch (OperationCanceledException)
@@ -426,7 +446,8 @@ internal sealed partial class PackageSessionLifecycleService
                 warnings,
                 errors,
                 baseGeneration,
-                operationToken);
+                operationToken,
+                retainWorkersExcept: []);
             warnings.AddRange(publication.CleanupWarnings);
         }
         catch (OperationCanceledException)

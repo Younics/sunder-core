@@ -11,7 +11,13 @@ internal sealed record PreparedPackageSession(
     IReadOnlyList<string> Errors,
     long BaseGeneration,
     string? StageId,
-    bool RequiresPackageStoreCommit);
+    bool RequiresPackageStoreCommit)
+{
+    internal IReadOnlyCollection<string>? RetainWorkersExcept { get; init; }
+    internal bool DevelopmentWorkerContinuation { get; init; }
+    internal bool UnplannedWithdrawal { get; init; }
+    internal bool AppSourceWithdrawal { get; init; }
+}
 
 internal sealed class PendingPackageSessionPublication(
     PreparedPackageSession candidate,
@@ -19,6 +25,7 @@ internal sealed class PendingPackageSessionPublication(
 {
     private readonly object _gate = new();
     private Task? _candidateStartTask;
+    internal IDisposable? AppAdmissionFence { get; init; }
 
     public PreparedPackageSession Candidate { get; } = candidate;
 
@@ -80,7 +87,8 @@ internal sealed class PackageSessionPublisher(
     RuntimeRpcCatalog? rpcCatalog = null,
     RuntimeRpcPermissionStore? rpcPermissions = null,
     RuntimeRpcReadinessEvaluator? rpcReadiness = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    AppProcessPolicySessions? appPolicies = null)
 {
     private readonly RuntimeLifecyclePolicyOptions _lifecyclePolicy = ValidateLifecyclePolicy(
         lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions());
@@ -93,7 +101,10 @@ internal sealed class PackageSessionPublisher(
         IReadOnlyList<string> errors,
         long baseGeneration,
         string? stageId = null,
-        bool requiresPackageStoreCommit = false)
+        bool requiresPackageStoreCommit = false,
+        IReadOnlyCollection<string>? retainWorkersExcept = null,
+        bool developmentWorkerContinuation = false,
+        bool unplannedWithdrawal = false)
     {
         if (rpcReadiness is not null) session.RequiredProviderPlan = rpcReadiness.Plan(session);
         return new PreparedPackageSession(
@@ -103,7 +114,12 @@ internal sealed class PackageSessionPublisher(
             errors.ToArray(),
             baseGeneration,
             stageId,
-            requiresPackageStoreCommit);
+            requiresPackageStoreCommit)
+        {
+            RetainWorkersExcept = requiresPackageStoreCommit ? null : retainWorkersExcept,
+            DevelopmentWorkerContinuation = !requiresPackageStoreCommit && developmentWorkerContinuation,
+            UnplannedWithdrawal = unplannedWithdrawal,
+        };
     }
 
     public async Task<PackageSessionPublicationResult> PublishAsync(
@@ -117,7 +133,9 @@ internal sealed class PackageSessionPublisher(
         string? committedStoreTransactionId = null,
         Func<Task>? candidateGenerationCommitted = null,
         Func<Task>? previousWorkersQuiesced = null,
-        Func<CancellationToken, Task>? storageActivationPreparing = null)
+        Func<CancellationToken, Task>? storageActivationPreparing = null,
+        IReadOnlyCollection<string>? retainWorkersExcept = null,
+        bool unplannedWithdrawal = false)
     {
         PreparedPackageSession candidate;
         try
@@ -129,7 +147,9 @@ internal sealed class PackageSessionPublisher(
                 errors,
                 expectedGeneration,
                 stageId: committedStoreTransactionId,
-                requiresPackageStoreCommit: committedStoreTransactionId is not null);
+                requiresPackageStoreCommit: committedStoreTransactionId is not null,
+                retainWorkersExcept: retainWorkersExcept,
+                unplannedWithdrawal: unplannedWithdrawal);
         }
         catch
         {
@@ -156,8 +176,19 @@ internal sealed class PackageSessionPublisher(
         CancellationToken cancellationToken)
     {
         var preparationStarted = Stopwatch.GetTimestamp();
+        IDisposable? appFence = null;
         try
         {
+            if (!sessions.Sources.IsCurrent(candidate.Sources)) throw new RuntimeStaleGenerationException("The development owner sources changed after stage preparation.");
+            if (!candidate.UnplannedWithdrawal && appPolicies is not null)
+                appFence = await appPolicies.FencePublicationAsync(candidate.Session, cancellationToken, candidate.AppSourceWithdrawal);
+            if (candidate.RetainWorkersExcept is { } forced)
+            {
+                using var current = sessions.State.AcquireLease();
+                if (current.Generation != candidate.BaseGeneration) throw new RuntimeStaleGenerationException("The Runtime changed before worker retention preparation.");
+                await candidate.Session.RetainUnchangedWorkersAsync(current.Session, forced, cancellationToken,
+                    candidate.DevelopmentWorkerContinuation).ConfigureAwait(false);
+            }
             var publication = await sessions.PreparePublicationAsync(
                 candidate.Session,
                 candidate.BaseGeneration,
@@ -167,10 +198,12 @@ internal sealed class PackageSessionPublisher(
                 "Prepared package session publication for generation {SessionGeneration} in {ElapsedMilliseconds} ms",
                 publication.CandidateGeneration,
                 Stopwatch.GetElapsedTime(preparationStarted).TotalMilliseconds);
-            return new PendingPackageSessionPublication(candidate, publication);
+            return new PendingPackageSessionPublication(candidate, publication) { AppAdmissionFence = appFence };
         }
         catch (Exception exception)
         {
+            appFence?.Dispose();
+            candidate.Session.CancelRetentionReservation();
             candidate.Session.StartupTrace?.TryFail(
                 exception is OperationCanceledException ? "canceled" : "failed");
             logger.LogWarning(
@@ -235,6 +268,7 @@ internal sealed class PackageSessionPublisher(
         Func<Task>? previousWorkersQuiesced = null,
         Func<CancellationToken, Task>? storageActivationPreparing = null)
     {
+        using var appFence = pending.AppAdmissionFence;
         var candidate = pending.Candidate;
         var publicationStarted = Stopwatch.GetTimestamp();
         using var publicationScope = logger.BeginScope(
@@ -576,6 +610,7 @@ internal sealed class PackageSessionPublisher(
 
     public async Task DiscardAsync(PendingPackageSessionPublication pending)
     {
+        using var appFence = pending.AppAdmissionFence;
         pending.Candidate.Session.StartupTrace?.TryFail("discarded");
         rpcCatalog?.DiscardCandidateSession(pending.Candidate.Session);
         if (pending.Publication.Committed)
@@ -798,6 +833,7 @@ internal sealed class PackageSessionPublisher(
             && faults.Count == 0
             && sessions.TryRestoreRejectedPublication(publication))
         {
+            publication.PreviousSession.CompleteRetentionRollback();
             logger.LogInformation(
                 "Restored the previous package session after generation {SessionGeneration} was rejected in {ElapsedMilliseconds} ms without worker recovery",
                 publication.CandidateGeneration,
@@ -872,6 +908,7 @@ internal sealed class PackageSessionPublisher(
                 PublishRecovery();
             }
             sessions.EnqueueRestoredPackageRecoveries(publication, drainingRecoveries);
+            previousSession.CompleteRetentionRollback();
             logger.LogInformation(
                 "Recovered the previous package session after generation {SessionGeneration} was rejected in {ElapsedMilliseconds} ms",
                 publication.CandidateGeneration,

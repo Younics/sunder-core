@@ -55,10 +55,12 @@ public sealed class SunderRpcResourceLifetime : IDisposable, IAsyncDisposable
         }
         ISunderRpcCallScope? scope = null;
         SunderRpcResourceOwner? owner = null;
+        var creation = new SunderRpcDispatchOperation();
         try
         {
+            SunderRpcDispatchEvidence.ThrowIfCancelled(cancellation.Token, creation);
             scope = await client.CreateCallScopeAsync(options, cancellation.Token).ConfigureAwait(false);
-            cancellation.Token.ThrowIfCancellationRequested();
+            SunderRpcDispatchEvidence.ThrowIfCancelled(cancellation.Token, creation);
             owner = new(scope, scope.DeadlineUtc, cancellation, Remove);
             lock (_gate)
             {
@@ -66,17 +68,25 @@ public sealed class SunderRpcResourceLifetime : IDisposable, IAsyncDisposable
                 _owners.Add(owner);
             }
             owner.ObserveCancellation();
-            owner.Token.ThrowIfCancellationRequested();
+            SunderRpcDispatchEvidence.ThrowIfCancelled(owner.Token, creation);
             return new(owner, scope, target, client, bindings);
         }
-        catch
+        catch (Exception error)
         {
-            if (owner is not null) await owner.DisposeAsync().ConfigureAwait(false);
-            else
+            try
             {
-                try { if (scope is not null) await scope.DisposeAsync().ConfigureAwait(false); }
-                finally { cancellation.Dispose(); }
+                if (owner is not null) await owner.DisposeAsync().ConfigureAwait(false);
+                else
+                {
+                    try { if (scope is not null) await scope.DisposeAsync().ConfigureAwait(false); }
+                    finally { cancellation.Dispose(); }
+                }
             }
+            catch (Exception cleanup) { System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(SunderRpcDispatchEvidence.AfterDispatch(cleanup)).Throw(); }
+            // Only the local SDK guards above own this creation attempt. A
+            // public client's scope factory cannot recycle another call's proof.
+            var normalized = SunderRpcDispatchEvidence.IsFor(error, creation) ? error : SunderRpcDispatchEvidence.WithoutProof(error);
+            if (!ReferenceEquals(normalized, error)) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(normalized).Throw();
             throw;
         }
         finally
@@ -160,6 +170,7 @@ internal sealed class SunderRpcResourceOwner : IAsyncDisposable
     }
 
     internal CancellationToken Token { get; }
+    internal Func<Exception, Exception>? NormalizeDisposalFailure { get; set; }
 
     internal void RetainParticipant(SunderRpcServiceBinding binding)
     {
@@ -272,6 +283,6 @@ internal sealed class SunderRpcResourceOwner : IAsyncDisposable
             finally { _cancellation.Dispose(); _removed(this); }
             completion.TrySetResult();
         }
-        catch (Exception exception) { completion.TrySetException(exception); }
+        catch (Exception exception) { completion.TrySetException(NormalizeDisposalFailure?.Invoke(exception) ?? exception); }
     }
 }

@@ -247,7 +247,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             : new SunderRpcOwnedPackageBaseline(frame.PackageId, new Dictionary<string, SunderRpcOwnedContractBaseline>(), [], Hash([]));
         if (baseline.Sha256 != frame.OwnedBaselineSha256 || baseline.PackageId != frame.PackageId) throw Invalid("Owned baseline changed.");
         foreach (var entry in baseline.Contracts.Where(entry => entry.Value.Current is not null && !SunderRpcAuthoringDocuments.HasPublicEvidence(entry.Value)))
-            throw Invalid($"rpc-authoring.private-baseline-migration-required: '{entry.Key}' requires MigratePrivateSunderContracts.");
+            throw Invalid($"rpc-authoring.private-baseline-unsupported: '{entry.Key}' requires the current reviewed baseline.");
         var currentLock = SunderRpcAuthoringDocuments.ReadContractLock(Child(input.GetMetadata("SourceRoot"), frame.ContractLock), AllowDevelopmentRegistryOrigin);
         var presentRoles = new HashSet<string>(evidence.RolePlan.HasApp ? new[] { "app", "runtime" } : ["runtime"], StringComparer.Ordinal);
         var projections = evidence.RolePlan.Roles.Select(role =>
@@ -273,6 +273,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask
         {
             if (requireFrozen && contract.Current!.State is not ("release-frozen" or "published")) throw Invalid("Prebuilt packing requires frozen/published owned APIs.");
             if (!expected.Contracts.TryGetValue(key, out var descriptor) || !descriptor.GetCanonicalUtf8().AsSpan().SequenceEqual(contract.Current!.Descriptor.GetCanonicalUtf8())) throw Invalid("Owned descriptor/ABI identity differs from the reviewed baseline.");
+            SunderRpcAuthoringDocuments.RequireReviewedProjection(key, contract.Current!, descriptor, expected.ModelProjections[key], expected.MethodPolicies[key]);
             var bundle = expected.Manifest.ContractBundles!.Single(value => value!.ContractId == descriptor.ContractId)!;
             if (bundle.Exposure != contract.Current!.Exposure.ToString().ToLowerInvariant()) throw Invalid("Owned API exposure differs from the reviewed baseline.");
         }

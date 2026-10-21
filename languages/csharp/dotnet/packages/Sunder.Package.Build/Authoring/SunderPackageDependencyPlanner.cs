@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Build.Framework;
 using Sunder.Package.Build.Tasks;
+using Sunder.Package.Format;
 using Sunder.Sdk.Storage;
 
 namespace Sunder.Package.Build.Authoring;
@@ -16,6 +17,7 @@ internal sealed partial class SunderPackageDependencyPlanner
     private readonly JsonObject _assets;
     private readonly JsonObject _libraries;
     private readonly string _framework;
+    private readonly string _frameworkAlias;
     private readonly string _runtimeTarget;
     private readonly Dictionary<string, string> _keys;
     private readonly Dictionary<string, SunderPackageRoleMembership> _owners = new(StringComparer.OrdinalIgnoreCase);
@@ -34,36 +36,62 @@ internal sealed partial class SunderPackageDependencyPlanner
         _project = Path.GetFullPath(project); _directory = Path.GetDirectoryName(_project)!;
         _extensions = Path.GetFullPath(extensions, _directory); _projectReferences = projectReferences;
         _compileReferences = compileReferences ?? []; _runtimeReferences = runtimeReferences ?? [];
-        _assets = JsonNode.Parse(Read(assetsPath)) as JsonObject ?? throw Invalid("The restored assets file must be an object.");
-        if (_assets["version"]?.GetValue<int>() != 3) throw Invalid("Only NuGet assets format 3 is supported.");
-        if ((_assets["logs"] as JsonArray)?.Any(log => log?["level"]?.GetValue<string>() == "Error") == true) throw Invalid("The restored graph contains errors.");
+        var bytes = Read(assetsPath, 64 * 1024 * 1024);
+        // The same closed version/alias contract is used by native qualification.
+        // Strict preflight retains duplicate/case-collision and numeric/UTF-8 bounds.
+        using var parsed = SunderRpcAuthoringJson.ParseRegistryMetadata(bytes, 64 * 1024 * 1024);
+        var restoredAssets = new SunderNuGetAssets(parsed.RootElement, message => Invalid(message));
+        var selectedFramework = restoredAssets.SelectFramework(framework);
+        restoredAssets.ValidateRestoreFramework(selectedFramework);
+        _assets = JsonNode.Parse(bytes)!.AsObject();
         _libraries = Object(_assets, "libraries");
         if (_libraries.Count > 8192) throw Invalid("The restored dependency graph exceeds its library budget.");
-        var frameworks = Object(Object(_assets, "project"), "frameworks");
-        _framework = frameworks.SingleOrDefault(pair => pair.Key == framework || pair.Value?["targetAlias"]?.GetValue<string>() == framework).Key
-            ?? throw Invalid("The restored graph does not contain the evaluated target framework.");
+        _framework = selectedFramework.Key; _frameworkAlias = selectedFramework.Alias;
         _runtimeTarget = _framework + "/" + rid;
         var targets = Object(_assets, "targets");
         if (targets[_framework] is not JsonObject || targets[_runtimeTarget] is not JsonObject)
             throw Invalid($"Restore must include the selected framework/RID '{_runtimeTarget}'.");
+        var parsedLibraries = restoredAssets.Object(parsed.RootElement, "libraries");
+        foreach (var targetName in new[] { _framework, _runtimeTarget })
+            foreach (var library in parsed.RootElement.GetProperty("targets").GetProperty(targetName).EnumerateObject())
+            {
+                _ = Id(library.Name);
+                var kind = restoredAssets.LibraryKind(library.Value);
+                if (!parsedLibraries.TryGetProperty(library.Name, out var restored) || restoredAssets.LibraryKind(restored) != kind)
+                    throw Invalid("A selected target library is missing or disagrees with the restored library kind.");
+                restoredAssets.ValidateTargetLibrary(library.Value);
+            }
+        if (Object(_assets, "projectFileDependencyGroups")[_framework] is not JsonArray directDependencies
+            || directDependencies.Any(item => item is not JsonValue value || !value.TryGetValue<string>(out _)))
+            throw Invalid("The selected project dependency group must be a string array.");
+        if (Object(Object(_assets, "project"), "restore")["originalTargetFrameworks"] is { } originalFrameworks
+            && (originalFrameworks is not JsonArray aliases || aliases.Any(item => item is not JsonValue value || !value.TryGetValue<string>(out _))
+                || !aliases.Any(item => item!.GetValue<string>() == _frameworkAlias)))
+            throw Invalid("The original target frameworks do not contain the selected alias.");
         _keys = Object(targets, _runtimeTarget).ToDictionary(pair => Id(pair.Key), pair => pair.Key, StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in _libraries)
         {
-            if (value?["type"]?.GetValue<string>() == "project")
+            _ = Id(key);
+            var library = parsedLibraries.GetProperty(key);
+            var kind = restoredAssets.LibraryKind(library);
+            if (kind == "project")
             {
-                var path = value["msbuildProject"]?.GetValue<string>() ?? value["path"]!.GetValue<string>();
+                var path = restoredAssets.Text(library, library.TryGetProperty("msbuildProject", out _) ? "msbuildProject" : "path");
                 _projectKeys.Add(Path.GetFullPath(path, _directory), key);
             }
-            else if (value?["type"]?.GetValue<string>() == "package")
+            else
             {
-                var relative = value["path"]!.GetValue<string>();
+                _ = restoredAssets.Text(library, "sha512");
+                if (!library.TryGetProperty("files", out var files) || files.ValueKind != JsonValueKind.Array
+                    || files.EnumerateArray().Any(file => file.ValueKind != JsonValueKind.String))
+                    throw Invalid("Restored package files must be a string array.");
+                var relative = restoredAssets.Text(library, "path");
                 if (!PackageStorageValidation.IsValidRelativePath(relative)) throw Invalid("A package cache path is not portable.");
                 var matches = Object(_assets, "packageFolders").Select(folder => Path.GetFullPath(Path.Combine(folder.Key, relative)))
                     .Where(Directory.Exists).ToArray();
                 if (matches.Length == 0) throw Invalid($"Restored package '{key}' is absent from the package cache.");
                 _packagePaths.Add(key, matches[0]);
             }
-            else throw Invalid($"Unsupported restored library kind in '{key}'.");
         }
         foreach (var item in packageReferences)
         {
@@ -148,12 +176,27 @@ internal sealed partial class SunderPackageDependencyPlanner
             else if (entry.Value?["dependencies"] is JsonObject dependencies)
                 foreach (var dependency in dependencies.ToArray()) if (!selectedIds.Contains(dependency.Key)) dependencies.Remove(dependency.Key);
         var restore = Object(project, "restore");
+        if (restore.ContainsKey("originalTargetFrameworks")) restore["originalTargetFrameworks"] = new JsonArray(_frameworkAlias);
         foreach (var entry in Object(restore, "frameworks").ToArray())
         {
             if (entry.Key != _framework) { Object(restore, "frameworks").Remove(entry.Key); continue; }
             if (entry.Value?["projectReferences"] is JsonObject projects)
                 foreach (var reference in projects.ToArray())
                     if (!_projectKeys.TryGetValue(Path.GetFullPath(reference.Key, _directory), out var key) || !selected.Contains(key)) projects.Remove(reference.Key);
+        }
+        // These optional NuGet groups use the same framework pivot. Preserve
+        // their selected metadata, never another alias's package selections.
+        if (document["centralTransitiveDependencyGroups"] is { } central)
+        {
+            if (central is not JsonObject groups) throw Invalid("Central transitive dependency groups must be an object.");
+            foreach (var group in groups.ToArray())
+                if (group.Key != _framework) groups.Remove(group.Key);
+                else if (group.Value is JsonObject dependencies)
+                {
+                    foreach (var dependency in dependencies.ToArray())
+                        if (!selectedIds.Contains(dependency.Key)) dependencies.Remove(dependency.Key);
+                }
+                else throw Invalid("A central transitive dependency group must be an object.");
         }
         var compile = new HashSet<string>(StringComparer.Ordinal);
         var runtime = new HashSet<string>(StringComparer.Ordinal);
@@ -233,10 +276,10 @@ internal sealed partial class SunderPackageDependencyPlanner
         _constraints[key] = role;
     }
 
-    private byte[] Read(string path)
+    private byte[] Read(string path, int maximumBytes = 268_435_456)
     {
         path = Path.GetFullPath(path, _directory);
-        var bytes = SunderRpcDescriptorFileReader.ReadStableBytes(path, 268_435_456, "restored package input");
+        var bytes = SunderRpcDescriptorFileReader.ReadStableBytes(path, maximumBytes, "restored package input");
         var evidence = new SunderPackageFileEvidence(path, Hash(bytes));
         if (_inputs.TryGetValue(path, out var previous) && previous != evidence) throw Invalid("A restored package input changed during analysis.");
         if (_inputs.Count >= 65536 && !_inputs.ContainsKey(path)) throw Invalid("The restored dependency input set exceeds its file budget.");
@@ -244,7 +287,13 @@ internal sealed partial class SunderPackageDependencyPlanner
     }
     private static string AssetPath(string directory, string relative)
         => PackageStorageValidation.IsValidRelativePath(relative) ? Path.GetFullPath(Path.Combine(directory, relative)) : throw Invalid("A restored asset path is not portable.");
-    private static string Id(string key) => key[..key.LastIndexOf('/')];
+    private static string Id(string key)
+    {
+        var separator = key.IndexOf('/');
+        if (separator <= 0 || separator == key.Length - 1 || separator != key.LastIndexOf('/') || key.Trim() != key)
+            throw Invalid("A restored library key must contain one package/project ID and version.");
+        return key[..separator];
+    }
     private static JsonObject Object(JsonObject value, string name) => value[name] as JsonObject ?? throw Invalid($"Restored graph is missing '{name}'.");
     private static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
     private static InvalidDataException Invalid(string message, string code = "dependency-plan-invalid") => new("package-authoring." + code + ": " + message);

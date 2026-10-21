@@ -170,7 +170,8 @@ internal sealed class ShellPackageViewPresentationCoordinator : IDisposable
                             detachAuxiliaryPackageViews?.Invoke();
                             _packageLifecyclePresenter.CommitPreparedLifecycleChanges(
                                 presentation,
-                                stabilizedViewIds);
+                                stabilizedViewIds,
+                                candidate.RetainedPackageIds);
                             shellPresentationCommitted = true;
                         }
                         finally

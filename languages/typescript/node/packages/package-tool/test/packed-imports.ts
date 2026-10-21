@@ -23,7 +23,7 @@ export async function exercisePackedImports(tool: string, extension: string, nod
     await writeFile(resolve(root, "sunder-contracts.owned.json"), await readFile(resolve(corpus, "authoring/conformance/valid/minimal-package-owned-baseline.json")));
     await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Packed Imports", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
-    await writeFile(resolve(root, `src/rpc.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation=defineService({ping(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.extension});');
+    await writeFile(resolve(root, `src/rpc.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.extension});');
     const cache = resolve(root, "cache"); const toolRoot = dirname(tool);
     await exec(process.execPath, ["-e", `const fs=require("node:fs"),path=require("node:path");
       const {parseContractLock}=require(path.join(process.argv[1],"rpc-contract-lock.js"));

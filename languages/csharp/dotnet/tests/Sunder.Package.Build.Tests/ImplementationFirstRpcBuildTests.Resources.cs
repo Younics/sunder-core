@@ -51,6 +51,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 }
                 """, StringComparison.Ordinal);
         await File.WriteAllTextAsync(Path.Combine(root, "Mixed.cs"), source);
+        foreach (var role in new[] { "App", "Worker", "Shared" }) await WriteEditAsync(role, "initial");
         var xaml = Path.Combine(root, "GreetingView.axaml");
         await File.WriteAllTextAsync(xaml, """
             <UserControl xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -101,12 +102,42 @@ public sealed partial class ImplementationFirstRpcBuildTests
         AssertRegexRole(Path.Combine(worker, "ResourceRoles.dll"), "WorkerPattern", "AppPattern");
         AssertRegexRole(Path.Combine(app, "ResourceRoles.App.dll"), "AppPattern", "WorkerPattern");
         Assert.DoesNotContain("CommunityToolkit.Mvvm", AssemblyReferences(Path.Combine(worker, "ResourceRoles.dll")));
-        await ProbeXamlAsync();
+        await ProbeXamlAsync("initial");
         var dev = Path.Combine(root, "bin/Debug/net10.0/sunder-dev"); var before = HashTree(dev);
         var originalXaml = await File.ReadAllTextAsync(xaml);
         var timestamps = new[] { File.GetLastWriteTimeUtc(Path.Combine(app, "ResourceRoles.App.dll")), File.GetLastWriteTimeUtc(Path.Combine(worker, "ResourceRoles.dll")) };
         AssertSuccess(await Build());
         Assert.Equal(timestamps, new[] { File.GetLastWriteTimeUtc(Path.Combine(app, "ResourceRoles.App.dll")), File.GetLastWriteTimeUtc(Path.Combine(worker, "ResourceRoles.dll")) });
+        var appAssembly = Path.Combine(app, "ResourceRoles.App.dll");
+        var workerAssembly = Path.Combine(worker, "ResourceRoles.dll");
+        foreach (var role in new[] { "App", "Worker", "Shared", "AXAML" })
+        {
+            var oldApp = await File.ReadAllBytesAsync(appAssembly);
+            var oldWorker = await File.ReadAllBytesAsync(workerAssembly);
+            var oldAppTime = File.GetLastWriteTimeUtc(appAssembly);
+            var oldWorkerTime = File.GetLastWriteTimeUtc(workerAssembly);
+            if (role == "AXAML")
+                await File.WriteAllTextAsync(xaml, originalXaml.Replace("x:Name=\"Status\"", "x:Name=\"Status\" Margin=\"1\"", StringComparison.Ordinal));
+            else await WriteEditAsync(role, "changed");
+            AssertSuccess(await Build());
+            var newApp = await File.ReadAllBytesAsync(appAssembly);
+            var newWorker = await File.ReadAllBytesAsync(workerAssembly);
+            if (role == "Worker")
+            {
+                Assert.Equal(oldApp, newApp);
+                Assert.Equal(oldAppTime, File.GetLastWriteTimeUtc(appAssembly));
+            }
+            else Assert.False(oldApp.AsSpan().SequenceEqual(newApp), role + " edit did not change the App assembly.");
+            if (role is "App" or "AXAML")
+            {
+                Assert.Equal(oldWorker, newWorker);
+                Assert.Equal(oldWorkerTime, File.GetLastWriteTimeUtc(workerAssembly));
+            }
+            else Assert.False(oldWorker.AsSpan().SequenceEqual(newWorker), role + " edit did not change the Worker assembly.");
+        }
+        await ProbeXamlAsync("changed");
+        before = HashTree(dev);
+        originalXaml = await File.ReadAllTextAsync(xaml);
         await File.WriteAllTextAsync(Path.Combine(root, "Mixed.cs"), source.Replace("^compiled binding$", "[", StringComparison.Ordinal));
         var invalidRegex = await Build(); Assert.NotEqual(0, invalidRegex.ExitCode);
         Assert.Equal(before, HashTree(dev));
@@ -140,6 +171,13 @@ public sealed partial class ImplementationFirstRpcBuildTests
 
         Task<ProcessResult> Build() => RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]);
 
+        Task WriteEditAsync(string role, string value) => File.WriteAllTextAsync(Path.Combine(root, role + "Edit.cs"), $$"""
+            using Sunder.Sdk.Packaging;
+            namespace Example.Generated;
+            [SunderPackageCodeRole(SunderPackageCodeRole.{{role}})]
+            public static class {{role}}Edit { public static string Value => "{{value}}"; }
+            """);
+
         static void AssertRegexRole(string path, string present, string absent)
         {
             using var stream = File.OpenRead(path); using var pe = new PEReader(stream);
@@ -155,7 +193,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             return metadata.AssemblyReferences.Select(handle => metadata.GetString(metadata.GetAssemblyReference(handle).Name)).ToArray();
         }
 
-        async Task ProbeXamlAsync()
+        async Task ProbeXamlAsync(string expectedEdit)
         {
             var probe = scope.CreateDirectory("probe"); var probeProject = Path.Combine(probe, "Probe.csproj");
             await File.WriteAllTextAsync(probeProject, $$"""
@@ -172,7 +210,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
                   </ItemGroup>
                 </Project>
                 """);
-            await File.WriteAllTextAsync(Path.Combine(probe, "Program.cs"), """
+            await File.WriteAllTextAsync(Path.Combine(probe, "Program.cs"), $$"""
                 extern alias worker;
                 using Avalonia;
                 using Avalonia.Headless;
@@ -182,6 +220,10 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 using Sunder.Sdk.Abstractions;
                 using Sunder.Sdk.Rpc;
                 using System.Reflection;
+                const string expectedEdit = {{System.Text.Json.JsonSerializer.Serialize(expectedEdit)}};
+                if (Example.Generated.AppEdit.Value != expectedEdit || worker::Example.Generated.WorkerEdit.Value != expectedEdit
+                    || Example.Generated.SharedEdit.Value != expectedEdit || worker::Example.Generated.SharedEdit.Value != expectedEdit)
+                    throw new Exception("A role-local/shared C# edit did not reach its executable output.");
                 var formatter = new worker::Example.Generated.BackendFormatter();
                 if (formatter.Format("activated") != "activated" || formatter.Format("bad1") != "invalid") throw new Exception("The Worker regex did not execute.");
                 AppBuilder.Configure<Application>().UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = true }).SetupWithoutStarting();

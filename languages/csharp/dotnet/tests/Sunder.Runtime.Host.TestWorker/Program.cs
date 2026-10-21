@@ -212,6 +212,19 @@ object[] storageMigrations = mode is
         },
     ]
     : [];
+var advertisedContributions = new Dictionary<string, object?>
+{
+    ["settingsSchema"] = settingsSchema,
+    ["storageMigrations"] = storageMigrations,
+    ["callbackHandlers"] = mode is "v1-callback-mismatch" or "v1-retained-recovery" ? new[] { "fixture.callback" } : Array.Empty<string>(),
+    ["authHandler"] = false,
+    ["rpcProviders"] = hello.RootElement.GetProperty("providers"),
+    ["candidateLifecycle"] = false,
+    ["generationLifecycle"] = false,
+    ["migrationPreparationLifecycle"] = true,
+};
+if (mode != "legacy-budgets" && Environment.GetEnvironmentVariable("SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1") == "1")
+    advertisedContributions.Add("operationalOutcomesV1", true);
 await WriteFrameAsync(output, new
 {
     type = "worker.ready",
@@ -223,23 +236,12 @@ await WriteFrameAsync(output, new
     activationId = hello.RootElement.GetProperty("activationId").GetString(),
     sessionId = hello.RootElement.GetProperty("sessionId").GetString(),
     resourceProfileHash,
-    contributions = new
-    {
-        settingsSchema,
-        storageMigrations,
-        callbackHandlers = mode == "v1-callback-mismatch"
-            ? ["fixture.callback"]
-            : Array.Empty<string>(),
-        authHandler = false,
-        rpcProviders = hello.RootElement.GetProperty("providers"),
-        candidateLifecycle = false,
-        generationLifecycle = false,
-        migrationPreparationLifecycle = true,
-    },
+    contributions = advertisedContributions,
 });
 
 (string Id, byte[] Body)? shutdownBufferedWorkerCall = null;
 string? shutdownBufferedWorkerCallScopeId = null;
+long committedSessionGeneration = 0;
 if (mode == "v1-ready-buffered-discover")
 {
     shutdownBufferedWorkerCall = CreateShutdownBufferedWorkerCall(mode);
@@ -285,6 +287,7 @@ while (true)
     }
     if (type == "host.commit-generation")
     {
+        committedSessionGeneration = root.GetProperty("sessionGeneration").GetInt64();
         if (mode is "commit-hang" or "commit-shutdown-hang") continue;
         if (packageId == "generation.failing.package") return 42;
         if (TryGetGenerationCommitStartedPath(packageId, packageVersion, out var commitStartedPath))
@@ -329,7 +332,7 @@ while (true)
         });
         continue;
     }
-    if (type == "host.callback-start" && mode == "v1-callback-mismatch")
+    if (type == "host.callback-start" && mode is "v1-callback-mismatch" or "v1-retained-recovery")
     {
         var value = root.GetProperty("value");
         await WriteFrameAsync(output, new
@@ -340,11 +343,29 @@ while (true)
             sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
             value = new
             {
-                packageId = "wrong.package",
+                packageId = mode == "v1-callback-mismatch" ? "wrong.package" : packageId,
                 callbackSessionId = value.GetProperty("callbackSessionId").GetString(),
                 flow = "browser",
                 launchUrl = "https://example.invalid/callback",
-                message = "mismatched",
+                message = mode == "v1-callback-mismatch" ? "mismatched" : "started",
+            },
+        });
+        continue;
+    }
+    if (type == "host.callback-complete" && mode == "v1-retained-recovery")
+    {
+        await WriteFrameAsync(output, new
+        {
+            type = "worker.callback-completed",
+            id = root.GetProperty("id").GetString(),
+            activationId = root.GetProperty("activationId").GetString(),
+            sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
+            value = new
+            {
+                packageId,
+                callbackSessionId = root.GetProperty("value").GetProperty("callbackSessionId").GetString(),
+                state = "completed",
+                message = "completed",
             },
         });
         continue;
@@ -434,6 +455,29 @@ while (true)
                     : null,
             });
         }
+        if (mode == "v1-retained-recovery")
+        {
+            // Exercise package-owned work during initial and recovery activation,
+            // before publication, with the exact new Worker birth identity.
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.state-set",
+                id = "retentionActivation",
+                key = "retention.activation",
+                value = new
+                {
+                    kind = "inline",
+                    value = JsonSerializer.Serialize(new
+                    {
+                        activationId = hello.RootElement.GetProperty("activationId").GetString(),
+                        sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
+                    }),
+                },
+            });
+            using (await ReadExpectedHostResultAsync(input, "retentionActivation"))
+            {
+            }
+        }
         if (mode == "v1-shutdown-buffered-scoped-discover")
         {
             await WriteFrameAsync(output, new
@@ -453,6 +497,8 @@ while (true)
             type = "worker.activated",
             sessionGeneration = root.GetProperty("sessionGeneration").GetInt64(),
         });
+        if (mode == "unknown-worker-cancel")
+            await WriteFrameAsync(output, new { type = "worker.cancel", id = "never-admitted" });
         if (mode is "v1-shutdown-buffered-get-provider"
             or "v1-shutdown-buffered-discover"
             or "v1-shutdown-buffered-scoped-discover"
@@ -467,7 +513,6 @@ while (true)
         }
         if (mode == "v1-generation-fault")
         {
-            await Task.Delay(100);
             await WriteFrameAsync(output, new
             {
                 type = "worker.generation-fault",
@@ -484,6 +529,7 @@ while (true)
             {
                 contentRoot = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_CONTENT_ROOT"),
                 temporaryRoot = Environment.GetEnvironmentVariable("SUNDER_WORKER_TEMP_ROOT"),
+                operationalOutcomes = Environment.GetEnvironmentVariable("SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"),
                 workspaceRoot,
                 workspaceEnvironment = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKSPACE_ROOT"),
                 legacyContentPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_CONTENT_PATH"),
@@ -760,7 +806,7 @@ while (true)
             });
             continue;
         }
-        if (mode == "late-worker-cancel")
+        if (mode is "late-worker-cancel" or "completed-id-expired-history")
         {
             await WriteFrameAsync(output, new
             {
@@ -770,11 +816,81 @@ while (true)
             });
             using var response = await ReadFrameAsync(input);
             if (response.RootElement.GetProperty("type").GetString() is not ("host.result" or "host.error")) return 65;
+            if (mode == "completed-id-expired-history")
+            {
+                for (var index = 0; index < 3; index++)
+                {
+                    var churnId = "churn" + index;
+                    await WriteFrameAsync(output, new { type = "worker.discover", id = churnId, contractId = "example.rpc" });
+                    using var churn = await ReadExpectedHostResultAsync(input, churnId);
+                }
+            }
             await WriteFrameAsync(output, new { type = "worker.cancel", id = "lateCancel1" });
+        }
+        if (mode is "late-worker-cancel-history" or "duplicate-active-after-history")
+        {
+            // Keep a nested Host call live while more than the configured two
+            // completion-history slots turn over. Complete it only after churn.
+            var nested = new
+            {
+                type = "worker.invoke", id = "lateCancel1",
+                endpointReference = root.GetProperty("context").GetProperty("provider").GetProperty("endpointReference").GetString(),
+                serviceId = "messages", methodId = "send", request = new { message = "held" },
+            };
+            await WriteFrameAsync(output, nested);
+            using var invocation = await ReadFrameAsync(input);
+            if (invocation.RootElement.GetProperty("type").GetString() != "host.invoke") return 69;
+            for (var index = 0; index < 3; index++)
+            {
+                var churnId = "churn" + index;
+                await WriteFrameAsync(output, new { type = "worker.discover", id = churnId, contractId = "example.rpc" });
+                using var response = await ReadExpectedHostResultAsync(input, churnId);
+            }
+            if (mode == "duplicate-active-after-history")
+            {
+                await WriteFrameAsync(output, nested);
+                continue;
+            }
+            await WriteFrameAsync(output, new { type = "worker.result", id = invocation.RootElement.GetProperty("id").GetString(), value = new { accepted = true } });
+            using var terminal = await ReadExpectedHostResultAsync(input, "lateCancel1");
+            await WriteFrameAsync(output, new { type = "worker.cancel", id = "lateCancel1" });
+        }
+        if (mode == "v1-publication-discovery")
+        {
+            var callId = "publicationDiscovery" + id;
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.discover",
+                id = callId,
+                contractId = "example.rpc",
+            });
+            using var response = await ReadFrameAsync(input);
+            await WriteStatusAsync("publication-discovery-" + root.GetProperty("request").GetProperty("message").GetString() + ".json",
+                response.RootElement);
         }
         if (method == "wait")
         {
             await WriteStatusAsync("host-invoke-wait-entered.json", new { id, kind, method });
+            continue;
+        }
+        if (mode.StartsWith("admission-", StringComparison.Ordinal)
+            && root.GetProperty("request").GetProperty("message").GetString() == "overloaded")
+        {
+            await ProbeAdmissionAsync(input, output, root, mode == "admission-malformed");
+        }
+        if (mode.StartsWith("operational-", StringComparison.Ordinal)
+            && root.GetProperty("request").GetProperty("message").GetString() == "overloaded")
+        {
+            var outcome = mode["operational-".Length..];
+            var failure = new Dictionary<string, object?>
+            {
+                ["kind"] = "operational",
+                ["code"] = outcome is "details" or "dispatch" ? "resource-exhausted" : outcome,
+                ["message"] = "worker-secret=must-not-reach-caller",
+            };
+            if (outcome == "details") failure["details"] = new { forged = true };
+            if (outcome == "dispatch") failure["dispatchState"] = "not-dispatched";
+            await WriteFrameAsync(output, new { type = "worker.error", id, error = failure });
             continue;
         }
         if (mode == "response-limit"
@@ -1028,6 +1144,17 @@ while (true)
     }
     if (type == "host.shutdown")
     {
+        if (mode == "v1-generation-fault-on-shutdown")
+        {
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.generation-fault",
+                activationId = Environment.GetEnvironmentVariable("SUNDER_ACTIVATION_ID"),
+                sessionGeneration = committedSessionGeneration,
+                code = "worker.test-fault",
+                message = "The test worker reported a bounded fault.",
+            });
+        }
         if (mode is "shutdown-hang" or "candidate-shutdown-hang" or "commit-shutdown-hang" or "migration-preparation-shutdown-hang")
         {
             await Task.Delay(Timeout.InfiniteTimeSpan);
@@ -1070,7 +1197,7 @@ while (true)
             await Task.Delay(Timeout.InfiniteTimeSpan);
             return 0;
         }
-        if (mode == "v1-logging")
+        if (mode is "v1-logging" or "v1-generation-fault" or "v1-generation-fault-on-shutdown")
         {
             await WriteFrameAsync(output, new
             {
@@ -1089,6 +1216,7 @@ while (true)
             {
             }
         }
+        if (mode is "v1-generation-fault" or "v1-generation-fault-on-shutdown") return 70;
         await WriteFrameAsync(output, new
         {
             type = "worker.shutdown-ack",
@@ -1343,6 +1471,91 @@ static async Task RunV1LoggingAsync(Stream input, Stream output)
     }
 
     await WriteStatusAsync("v1-logging.json", new { accepted = true });
+}
+
+static async Task ProbeAdmissionAsync(Stream input, Stream output, JsonElement invocation, bool malformed)
+{
+    const string watchId = "admissionWatch";
+    const string pendingId = "admissionPending";
+    await WriteFrameAsync(output, new { type = "worker.watch", id = watchId, afterRevision = 0, afterSequence = 0 });
+    await WriteFrameAsync(output, new { type = "worker.discover", id = "admissionDiscovery", contractId = "example.rpc" });
+    var discovered = false;
+    var watching = false;
+    while (!discovered || !watching)
+    {
+        using var response = await ReadFrameAsync(input);
+        var root = response.RootElement;
+        var id = root.GetProperty("id").GetString();
+        if (id == "admissionDiscovery")
+        {
+            if (root.GetProperty("type").GetString() != "host.result") throw new InvalidDataException("Discovery had no finite-work headroom.");
+            discovered = true;
+        }
+        if (id == watchId) watching = true;
+    }
+    await WriteFrameAsync(output, new { type = "worker.payload-allocate", id = "admissionUpload", length = 3 });
+    string payloadHandle;
+    string payloadPath;
+    while (true)
+    {
+        using var response = await ReadFrameAsync(input);
+        if (response.RootElement.GetProperty("id").GetString() != "admissionUpload") continue;
+        var value = response.RootElement.GetProperty("value");
+        payloadHandle = value.GetProperty("handleId").GetString()!;
+        payloadPath = value.GetProperty("filePath").GetString()!;
+        await File.WriteAllBytesAsync(payloadPath, "abc"u8.ToArray());
+        break;
+    }
+    await WriteFrameAsync(output, new
+    {
+        type = "worker.invoke", id = pendingId,
+        endpointReference = invocation.GetProperty("context").GetProperty("provider").GetProperty("endpointReference").GetString(),
+        serviceId = "messages", methodId = "wait", request = new { message = "held" }, deadlineUtc = (string?)null,
+    });
+    string nestedId;
+    while (true)
+    {
+        using var response = await ReadFrameAsync(input);
+        if (response.RootElement.GetProperty("type").GetString() != "host.invoke") continue;
+        nestedId = response.RootElement.GetProperty("id").GetString()!;
+        break;
+    }
+    if (malformed)
+    {
+        await WriteFrameAsync(output, new { type = "worker.discover", id = "admissionRejected", contractId = "example.rpc", forbidden = true });
+        using var unexpected = await ReadFrameAsync(input);
+        throw new InvalidDataException("Host accepted a malformed request at the admission boundary.");
+    }
+    await WriteFrameAsync(output, new { type = "worker.discover", id = "admissionRejected", contractId = "example.rpc" });
+    await WriteFrameAsync(output, new { type = "worker.watch", id = "admissionRejectedWatch", afterRevision = 0, afterSequence = 0 });
+    await WriteFrameAsync(output, new
+    {
+        type = "worker.state-set", id = "admissionRejectedPayload", key = "rejected",
+        value = new { kind = "payload", handleId = payloadHandle, length = 3, sha256 = Convert.ToHexStringLower(SHA256.HashData("abc"u8)) },
+    });
+    var rejections = new Dictionary<string, JsonElement>();
+    while (rejections.Count < 3)
+    {
+        using var response = await ReadFrameAsync(input);
+        var root = response.RootElement;
+        var id = root.GetProperty("id").GetString()!;
+        if (id is "admissionRejected" or "admissionRejectedWatch" or "admissionRejectedPayload") rejections.Add(id, root.GetProperty("error").Clone());
+    }
+    rejections.Add("payloadReleased", JsonSerializer.SerializeToElement(!File.Exists(payloadPath)));
+    await WriteStatusAsync("admission-probe.json", rejections);
+    await WriteFrameAsync(output, new { type = "worker.cancel", id = pendingId });
+    await WriteFrameAsync(output, new { type = "worker.cancel", id = watchId });
+    var terminals = new HashSet<string>();
+    while (terminals.Count < 2)
+    {
+        using var response = await ReadFrameAsync(input);
+        var root = response.RootElement;
+        var id = root.GetProperty("id").GetString()!;
+        var type = root.GetProperty("type").GetString();
+        if (type == "host.cancel" && id == nestedId)
+            await WriteFrameAsync(output, new { type = "worker.error", id, error = new { kind = "cancelled", code = "rpc.call.cancelled", message = "cancelled" } });
+        else if (id is pendingId or watchId && type is "host.error" or "host.complete") terminals.Add(id);
+    }
 }
 
 static async Task<bool> ReleaseWithSaturatedRpcLaneAsync(

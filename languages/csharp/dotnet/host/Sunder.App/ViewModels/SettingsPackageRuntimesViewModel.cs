@@ -521,7 +521,7 @@ public sealed record InstalledPackageRuntimeItem(InstalledExecutionRuntimeSummar
             .Concat(Removal.Usage.RunningPackageIds).Distinct(StringComparer.OrdinalIgnoreCase));
     public bool CanRemove => Runtime.PackageReferenceCount == 0 && Removal is { Success: true, CanUninstall: true };
     public string RemovalReason => CanRemove ? "Unused runtime can be removed." : Removal?.Message ?? "Refresh to check complete usage before removing.";
-    public string Details => $"{Runtime.Identity.Rid} · {Runtime.Identity.ModuleAbi}\nSource: {RuntimeManagementUi.Source(Runtime.Identity)}\nInstalled: {Runtime.InstalledAtUtc.ToLocalTime():g}\nVendor checksum: {Runtime.Identity.VendorChecksumAlgorithm} {Runtime.Identity.VendorChecksumDigest}\n{Runtime.Support.Message}";
+    public string Details => $"Source: {RuntimeManagementUi.Source(Runtime.Identity)}\nPlatform: {Runtime.Identity.Rid}\nSize: {RegistryPackageChangePreflight.FormatBytes(Runtime.Size)}\nInstalled: {Runtime.InstalledAtUtc.ToLocalTime():g}";
 }
 
 public sealed record AvailablePackageRuntimeItem(RuntimeExecutionRuntimeCatalogEntry Entry)
@@ -529,7 +529,7 @@ public sealed record AvailablePackageRuntimeItem(RuntimeExecutionRuntimeCatalogE
     public string Title => RuntimeManagementUi.Identity(Entry.Artifact.Identity);
     public string Summary => $"{RuntimeManagementUi.Source(Entry.Artifact.Identity)} · {Entry.Artifact.Support.State} · {RegistryPackageChangePreflight.FormatBytes(Entry.Artifact.Distribution.DownloadSize)}";
     public string InstallText => "Install Compatible Runtime";
-    public string Details => $"{Entry.Artifact.Distribution.DownloadUrl}\n{Entry.Artifact.Identity.Rid} · {Entry.Artifact.Identity.ModuleAbi}\nSunder resolves a supported release in this major version line. Review the exact version and incremental download before installing.\n{Entry.Artifact.Support.Message}";
+    public string Details => $"Source: {RuntimeManagementUi.Source(Entry.Artifact.Identity)}\nPlatform: {Entry.Artifact.Identity.Rid}\nDownload: {RegistryPackageChangePreflight.FormatBytes(Entry.Artifact.Distribution.DownloadSize)}";
 }
 
 public sealed record PreparedPackageRuntimeItem(RuntimeExecutionRuntimePreparedUpdate Update)

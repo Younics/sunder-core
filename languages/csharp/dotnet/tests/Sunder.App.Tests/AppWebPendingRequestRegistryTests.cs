@@ -194,6 +194,14 @@ public sealed class AppWebPendingRequestRegistryTests
 
         Assert.All(tokens, static token => Assert.True(token.IsCancellationRequested));
         Assert.All(detached, static request => Assert.True(request.IsDisposed));
+        for (var index = 0; index < detached.Length; index++)
+        {
+            // A late native HTTP cancellation reaches the bridge's catch filter
+            // after retirement disposed the request. The token must stay readable
+            // and cancelled, not throw and turn ordinary retirement into an error.
+            Assert.Equal(tokens[index], detached[index].Token);
+            Assert.True(detached[index].Token.IsCancellationRequested);
+        }
     }
 
     private static AppWebPendingRequest CreatePendingRequest()

@@ -20,12 +20,29 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var sourceSdk = sdkMode == "source";
         var packedVersion = sdkMode == "packed" ? "1.1.0-editor-workspace.g" + Guid.NewGuid().ToString("N") : null;
         var feed = packedVersion is null ? null : scope.CreateDirectory("feed");
-        if (packedVersion is not null) await PackEditorSdkAsync(feed!, packedVersion);
-        var project = await CreateEditorWorkspaceFixtureAsync(root, packedVersion, feed);
-        var package = Path.GetDirectoryName(project)!;
-        AssertSuccess(await RunDotnetAsync(root, ["restore", project, "--disable-parallel", "--nologo", "-v:quiet"]));
+        var thirdPartyFeed = packedVersion is null ? null : scope.CreateDirectory("third-party-feed");
+        var packages = packedVersion is null ? null : ResolvePhysicalTemporaryPath(scope.CreateDirectory("packages"));
+        var prepared = new Dictionary<string, EditorWorkspacePackage>(StringComparer.OrdinalIgnoreCase);
         if (packedVersion is not null)
-            AssertSuccess(await RunDotnetAsync(root, ["restore", project, "--locked-mode", "--disable-parallel", "--source", feed!, "--nologo", "-v:quiet"]));
+        {
+            await PackEditorSdkAsync(feed!, packedVersion, Run);
+            prepared = PrepareEditorWorkspacePackages(feed!, thirdPartyFeed!, packedVersion);
+        }
+        var project = await CreateEditorWorkspaceFixtureAsync(root, packedVersion, feed, thirdPartyFeed, packages);
+        var package = Path.GetDirectoryName(project)!;
+        AssertSuccess(await Run(root, ["restore", project, "--disable-parallel", "--nologo", "-v:quiet",
+            $"-flp:LogFile={scope.GetPath("restore-first.log")};Verbosity=normal",
+            .. (packages is null ? Array.Empty<string>() : new[] { "--packages", packages })]));
+        if (packedVersion is not null)
+        {
+            AssertEditorWorkspaceRestore(project, packages!, prepared);
+            var lockPath = Path.Combine(package, "packages.lock.json");
+            var locked = await File.ReadAllBytesAsync(lockPath);
+            AssertSuccess(await Run(root, ["restore", project, "--locked-mode", "--disable-parallel", "--source", feed!,
+                "--packages", packages!, "--nologo", "-v:quiet", $"-flp:LogFile={scope.GetPath("restore-locked.log")};Verbosity=normal"]));
+            Assert.Equal(locked, await File.ReadAllBytesAsync(lockPath));
+            AssertEditorWorkspaceRestore(project, packages!, prepared);
+        }
         var authoring = AuthoringInputs(root);
         var probe = scope.CreateDirectory("workspace probe");
         var probeProject = Path.Combine(probe, "WorkspaceProbe.csproj");
@@ -45,8 +62,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
             """);
         await File.WriteAllTextAsync(Path.Combine(probe, "Program.cs"), await File.ReadAllTextAsync(Path.Combine(FindRepositoryRoot(),
             "languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/Fixtures/EditorWorkspaceProbe.cs.txt")));
-        AssertSuccess(await RunDotnetAsync(probe, ["build", probeProject, "--disable-build-servers", "--nologo", "-v:quiet"]));
-        AssertSuccess(await RunDotnetAsync(root, [Path.Combine(probe, "bin/Debug/net10.0/WorkspaceProbe.dll"), project, sourceSdk.ToString()]));
+        AssertSuccess(await Run(probe, ["build", probeProject, "--disable-build-servers", "--nologo", "-v:quiet"]));
+        AssertSuccess(await Run(root, [Path.Combine(probe, "bin/Debug/net10.0/WorkspaceProbe.dll"), project, sourceSdk.ToString()]));
         Assert.Equal(authoring, AuthoringInputs(root));
         Assert.Empty(Directory.EnumerateFiles(Path.Combine(root, "source library"), "*.dll", SearchOption.AllDirectories));
         Assert.False(File.Exists(Path.Combine(package, "bin/Debug/net10.0/EditorWorkspace.dll")));
@@ -60,11 +77,11 @@ public sealed partial class ImplementationFirstRpcBuildTests
             var baselinePath = Path.Combine(package, "sunder-contracts.owned.json");
             Assert.False(File.Exists(baselinePath));
             await File.WriteAllTextAsync(sourcePath, source.Replace("GreetAsync", "WelcomeAsync", StringComparison.Ordinal));
-            AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
+            AssertSuccess(await Run(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
             Assert.False(File.Exists(baselinePath));
             await File.WriteAllTextAsync(sourcePath, source);
-            AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
-            AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
+            AssertSuccess(await Run(root, ["build", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet"]));
+            AssertSuccess(await Run(root, ["msbuild", project, "-t:PackSunderPackage", "-nodeReuse:false", "-nologo", "-v:quiet"]));
             var archive = Path.Combine(package, "bin/Debug/net10.0/EditorWorkspace.7.6.5.sunderpkg");
             var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, scope.GetPath("extracted"));
             Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
@@ -74,13 +91,25 @@ public sealed partial class ImplementationFirstRpcBuildTests
             var editorRoot = Path.Combine(package, "obj/Debug/net10.0/sunder-design-time");
             var snapshots = Directory.GetFiles(Path.Combine(editorRoot, "sunder-editor-snapshots"), "*.cs", SearchOption.AllDirectories);
             Assert.NotEmpty(snapshots);
-            AssertSuccess(await RunDotnetAsync(root, ["clean", project, "--disable-build-servers", "--nologo", "-v:quiet"]));
+            AssertSuccess(await Run(root, ["clean", project, "--disable-build-servers", "--nologo", "-v:quiet"]));
             Assert.False(Directory.Exists(Path.Combine(editorRoot, "sunder-rpc")));
             Assert.All(snapshots, path => Assert.True(File.Exists(path)));
         }
+
+        async Task<ProcessResult> Run(string directory, IReadOnlyList<string> arguments)
+        {
+            // Retain the active phase if the unchanged test watchdog terminates the
+            // process. Everything, including package preparation, stays inside this test.
+            var log = scope.GetPath("commands.log");
+            await File.AppendAllTextAsync(log, $"{DateTimeOffset.UtcNow:O} START [{directory}] dotnet {string.Join(' ', arguments)}\n");
+            var result = await RunDotnetAsync(directory, arguments);
+            await File.AppendAllTextAsync(log, $"{DateTimeOffset.UtcNow:O} EXIT {result.ExitCode}\n{result.StandardOutput}\n{result.StandardError}\n");
+            return result;
+        }
     }
 
-    private static async Task<string> CreateEditorWorkspaceFixtureAsync(string root, string? packedVersion, string? feed)
+    private static async Task<string> CreateEditorWorkspaceFixtureAsync(
+        string root, string? packedVersion, string? feed, string? thirdPartyFeed, string? packages)
     {
         var package = Path.Combine(root, "package with spaces");
         var library = Path.Combine(root, "source library");
@@ -113,13 +142,13 @@ public sealed partial class ImplementationFirstRpcBuildTests
             </UserControl>
             """);
         var sdkReferences = packedVersion is not null
-            ? $"<PackageReference Include=\"Sunder.Sdk.Worker\" Version=\"{packedVersion}\" /><PackageReference Include=\"Sunder.Sdk.Avalonia\" Version=\"{packedVersion}\" /><PackageReference Include=\"Sunder.Package.Build\" Version=\"{packedVersion}\" PrivateAssets=\"all\" />"
+            ? $"<PackageReference Include=\"Sunder.Sdk.Worker\" Version=\"[{packedVersion}]\" /><PackageReference Include=\"Sunder.Sdk.Avalonia\" Version=\"[{packedVersion}]\" /><PackageReference Include=\"Sunder.Package.Build\" Version=\"[{packedVersion}]\" PrivateAssets=\"all\" />"
             : string.Join(Environment.NewLine, new[] { "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }.Select(name =>
                 $"<ProjectReference Include=\"{SecurityElement.Escape(Path.Combine(repository, "languages/csharp/dotnet/packages", name, name + ".csproj"))}\" />"));
         var project = Path.Combine(package, "EditorWorkspace.csproj");
         var sourceTooling = packedVersion is null
             ? "<SunderPackageBuildTaskSourceIsImmutable>false</SunderPackageBuildTaskSourceIsImmutable>"
-            : "<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>";
+            : $"<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile><RestorePackagesPath>{SecurityElement.Escape(packages)}</RestorePackagesPath>";
         var buildImport = packedVersion is null
             ? $"<Import Project=\"{SecurityElement.Escape(Path.Combine(repository, "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.targets"))}\" />"
             : "";
@@ -129,6 +158,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 <TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
                 <Version>7.6.5</Version><SunderPackageProject>true</SunderPackageProject><NuGetAudit>false</NuGetAudit>
                 <RuntimeIdentifiers>{{RuntimeInformation.RuntimeIdentifier}}</RuntimeIdentifiers><SelfContained>false</SelfContained><UseAppHost>false</UseAppHost>
+                <!-- Match the thin framework-dependent package recipe before the first
+                     restore can import Sunder.Package.Build's buildTransitive props. -->
+                <EnableRuntimePackDownload>false</EnableRuntimePackDownload><EnableAppHostPackDownload>false</EnableAppHostPackDownload>
                 {{sourceTooling}}
               </PropertyGroup>
               <ItemGroup>
@@ -144,22 +176,23 @@ public sealed partial class ImplementationFirstRpcBuildTests
         if (packedVersion is not null)
             await File.WriteAllTextAsync(Path.Combine(root, "NuGet.Config"), $$"""
                 <configuration>
-                  <config><add key="globalPackagesFolder" value="{{SecurityElement.Escape(Path.GetFullPath(Path.Combine(root, "..", "packages")))}}" /></config>
-                  <packageSources><clear /><add key="local" value="{{SecurityElement.Escape(feed)}}" /><add key="public" value="https://api.nuget.org/v3/index.json" /></packageSources>
-                  <packageSourceMapping><clear /><packageSource key="local"><package pattern="Sunder.*" /></packageSource><packageSource key="public"><package pattern="*" /></packageSource></packageSourceMapping>
+                  <config><add key="globalPackagesFolder" value="{{SecurityElement.Escape(packages)}}" /></config>
+                  <fallbackPackageFolders><clear /></fallbackPackageFolders>
+                  <packageSources><clear /><add key="local" value="{{SecurityElement.Escape(feed)}}" /><add key="third-party" value="{{SecurityElement.Escape(thirdPartyFeed)}}" /></packageSources>
+                  <packageSourceMapping><clear /><packageSource key="local"><package pattern="Sunder.*" /></packageSource><packageSource key="third-party"><package pattern="*" /></packageSource></packageSourceMapping>
                 </configuration>
                 """);
         return project;
     }
 
-    private static async Task PackEditorSdkAsync(string feed, string version)
+    private static async Task PackEditorSdkAsync(string feed, string version, Func<string, IReadOnlyList<string>, Task<ProcessResult>> run)
     {
         var repository = FindRepositoryRoot();
         var configuration = "EditorWorkspace-" + Guid.NewGuid().ToString("N");
-        foreach (var name in new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.Package.Build" })
+        foreach (var name in EditorWorkspaceSdkPackages)
         {
             var project = Path.Combine(repository, "languages/csharp/dotnet/packages", name, name + ".csproj");
-            AssertSuccess(await RunDotnetAsync(repository, ["pack", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet", "-o", feed,
+            AssertSuccess(await run(repository, ["pack", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet", "-o", feed,
                 $"-p:Configuration={configuration}", $"-p:SunderDeveloperPackageVersion={version}",
                 $"-p:SunderDeveloperPackageVersionRange=[{version}]", "-p:GeneratePackageOnBuild=false"]));
             Assert.True(File.Exists(Path.Combine(feed, name + "." + version + ".nupkg")));

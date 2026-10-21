@@ -85,8 +85,9 @@ downloading SDK runtime/apphost packs that Sunder's managed launch does not use.
 or selected with `-p:SunderCliPath=...`. Forward `-- --watch` to reload changed
 development output. Runtime acquisition is explicit through Sunder; a missing
 managed runtime is not replaced with a direct Worker launch or hidden download.
-Single-project signed-prebuilt packing remains fail-closed until its role-input
-provenance is qualified; ordinary Pack builds current source.
+Qualified prebuilt packing consumes exact retained role-input evidence without
+rebuilding; ordinary Pack builds current source. See the
+[prebuilt contract](https://github.com/Younics/sunder-core/blob/main/docs/package-development/PREBUILT-ROLE-INPUTS.md).
 
 ## Optional Stack Contributor
 

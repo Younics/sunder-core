@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Owned collector execution evidence transported independently of the SDK candidate",
+  "type": "object", "additionalProperties": false,
+  "required": ["schemaVersion", "kind", "context", "executions"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "kind": { "const": "https://sunderapp.io/acceptance/sdk-corpus-lane/v1" },
+    "context": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "sdkVersion", "artifactSourceCommit", "workflowPath", "workflowRef", "workflowSha", "runId", "runAttempt", "job", "lane", "operatingSystem", "architecture", "actualRid"],
+      "properties": {
+        "repository": { "const": "Younics/sunder-core" },
+        "sdkVersion": { "type": "string", "minLength": 5, "maxLength": 128 },
+        "artifactSourceCommit": { "$ref": "#/$defs/commit" },
+        "workflowPath": { "const": ".github/workflows/sunder-sdk-release.yml" },
+        "workflowRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "workflowSha": { "$ref": "#/$defs/commit" },
+        "runId": { "$ref": "#/$defs/number" },
+        "runAttempt": { "$ref": "#/$defs/number" },
+        "job": { "const": "compatibility-corpus" },
+        "lane": { "enum": ["portable", "win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"] },
+        "operatingSystem": { "enum": ["Windows", "Linux", "macOS"] },
+        "architecture": { "enum": ["X64", "ARM64"] },
+        "actualRid": { "enum": ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"] }
+      }
+    },
+    "executions": {
+      "type": "array", "minItems": 1, "maxItems": 4096,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["referenceId", "corpusId", "corpusKind", "executionId", "before", "after", "report", "resultsSha256", "exitCode"],
+        "properties": {
+          "referenceId": { "$ref": "supported-releases.schema.json#/$defs/id" },
+          "corpusId": { "$ref": "supported-releases.schema.json#/$defs/id" },
+          "corpusKind": { "enum": ["old-package-new-host", "old-source-new-sdk", "new-feature-old-host"] },
+          "executionId": { "type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$" },
+          "before": { "$ref": "#/$defs/bindings" },
+          "after": { "$ref": "#/$defs/bindings" },
+          "report": { "$ref": "supported-releases.schema.json#/$defs/file" },
+          "resultsSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+          "exitCode": { "const": 0 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "commit": { "type": "string", "pattern": "^[a-f0-9]{40}$", "maxLength": 40 },
+    "number": { "type": "string", "pattern": "^[1-9][0-9]{0,15}$", "maxLength": 16 },
+    "bindings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["qualificationSha256", "referenceSha256", "recipeSha256", "corpusSha256", "candidateSha256", "entryPointSha256", "commandSha256"],
+      "properties": {
+        "qualificationSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+        "referenceSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+        "recipeSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+        "corpusSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+        "candidateSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+        "entryPointSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" },
+        "commandSha256": { "$ref": "supported-releases.schema.json#/$defs/sha256" }
+      }
+    }
+  }
+}

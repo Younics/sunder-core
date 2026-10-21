@@ -86,7 +86,7 @@ internal sealed class AppPackageGenerationPublisher
                     }
                     catch
                     {
-                        candidate.Composition.UnpublishServices();
+                        candidate.RevokeUnretainedServices();
                         _detachGeneration(candidate);
                         Volatile.Write(ref _currentGeneration, previousGeneration);
                         _attachGeneration(previousGeneration);
@@ -98,8 +98,10 @@ internal sealed class AppPackageGenerationPublisher
                         throw;
                     }
 
-                    previousGeneration.Composition.UnpublishServices();
-                    candidate.Composition.PublishServices();
+                    candidate.CommitRetainedActivations();
+                    previousGeneration.RevokeUnretainedServices();
+                    candidate.CommitDataHandoffs();
+                    candidate.PublishServices();
                     retiredGeneration = previousGeneration;
                     HasCommittedGeneration = true;
                 });
@@ -158,6 +160,18 @@ internal sealed class AppPackageGenerationPublisher
 
     public void DetachCurrentGeneration()
         => _detachGeneration(CurrentGeneration);
+
+    internal void FenceActivationForRetirement(AppPackageGeneration activation, Action detachViews)
+    {
+        lock (_commitGate)
+        {
+            // A candidate may already have captured this live activation. Serialize
+            // fencing with its commit and force any pending candidate to re-read.
+            _latestCandidateRequestId++;
+            activation.Composition.UnpublishServices();
+            detachViews();
+        }
+    }
 
     internal void Supersede(long requestId)
     {

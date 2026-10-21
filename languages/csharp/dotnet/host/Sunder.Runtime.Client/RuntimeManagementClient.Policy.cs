@@ -15,6 +15,10 @@ public sealed partial class RuntimeManagementClient
     public Task<RuntimeAppPolicySessionStatus> ShutdownAppPolicySessionAsync(RuntimeAppPolicySessionRequest request, CancellationToken token = default)
         => PostAsync<RuntimeAppPolicySessionRequest, RuntimeAppPolicySessionStatus>($"app-policy-sessions/{Uri.EscapeDataString(request.SessionId)}/shutdown", request, token);
 
+    public Task<RuntimeAppActivationRetirementResult> RetireAppActivationAsync(RuntimeAppActivationRetirementRequest request, CancellationToken token = default)
+        => PostAsync<RuntimeAppActivationRetirementRequest, RuntimeAppActivationRetirementResult>(
+            $"app-policy-sessions/{Uri.EscapeDataString(request.Session.SessionId)}/activations/{request.AppActivationId:D}/retire", request, token);
+
     public RuntimeManagementClient(Uri runtimeUrl, RuntimeClientPolicyOptions policy)
         : this(() => RuntimeConnectionInfoStore.LoadFor(runtimeUrl), policy: policy)
     {

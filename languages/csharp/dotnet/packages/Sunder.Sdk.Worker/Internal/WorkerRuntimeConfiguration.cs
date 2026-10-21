@@ -35,32 +35,22 @@ internal sealed record WorkerRuntimeConfiguration(
             options.SecretMigrations,
             CreateCandidateStart(options),
             CreateGenerationCommit(options),
-            CreateMigrationPreparation(options),
+            options.OnBeforeStorageMigrations,
             CreateActivation(options, context),
             CreateShutdown(options));
     }
 
-    private static Func<CancellationToken, ValueTask>? CreateCandidateStart(
-        SunderWorkerOptions options)
+    // Lifecycle callbacks report failures to the runtime owner. Only that owner can
+    // establish that admitted work has drained before invoking composition cleanup.
+    private static Func<CancellationToken, ValueTask>? CreateCandidateStart(SunderWorkerOptions options)
     {
         if (options.Composition is null && options.OnCandidateStarted is null) return null;
         return async cancellationToken =>
         {
-            try
-            {
-                if (options.Composition is not null)
-                {
-                    await options.Composition.PrepareCandidateAsync(cancellationToken).ConfigureAwait(false);
-                }
-                if (options.OnCandidateStarted is not null)
-                {
-                    await options.OnCandidateStarted(cancellationToken).ConfigureAwait(false);
-                }
-            }
-            catch (Exception exception)
-            {
-                await ThrowAfterCompositionCleanupAsync(options.Composition, exception).ConfigureAwait(false);
-            }
+            if (options.Composition is not null)
+                await options.Composition.PrepareCandidateAsync(cancellationToken).ConfigureAwait(false);
+            if (options.OnCandidateStarted is not null)
+                await options.OnCandidateStarted(cancellationToken).ConfigureAwait(false);
         };
     }
 
@@ -70,81 +60,30 @@ internal sealed record WorkerRuntimeConfiguration(
         if (options.Composition is null && options.OnGenerationCommitted is null) return null;
         return async (generation, cancellationToken) =>
         {
-            try
-            {
-                if (options.Composition is not null)
-                {
-                    await options.Composition.CommitGenerationAsync(generation, cancellationToken).ConfigureAwait(false);
-                }
-                if (options.OnGenerationCommitted is not null)
-                {
-                    await options.OnGenerationCommitted(generation, cancellationToken).ConfigureAwait(false);
-                }
-            }
-            catch (Exception exception)
-            {
-                await ThrowAfterCompositionCleanupAsync(options.Composition, exception).ConfigureAwait(false);
-            }
-        };
-    }
-
-    private static Func<SunderWorkerMigrationPreparationContext, CancellationToken, ValueTask>?
-        CreateMigrationPreparation(SunderWorkerOptions options)
-    {
-        if (options.OnBeforeStorageMigrations is null) return null;
-        return async (context, cancellationToken) =>
-        {
-            try
-            {
-                await options.OnBeforeStorageMigrations(context, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception exception)
-            {
-                await ThrowAfterCompositionCleanupAsync(options.Composition, exception).ConfigureAwait(false);
-            }
+            if (options.Composition is not null)
+                await options.Composition.CommitGenerationAsync(generation, cancellationToken).ConfigureAwait(false);
+            if (options.OnGenerationCommitted is not null)
+                await options.OnGenerationCommitted(generation, cancellationToken).ConfigureAwait(false);
         };
     }
 
     private static Func<ISunderRpcClient, CancellationToken, ValueTask>? CreateActivation(
-        SunderWorkerOptions options,
-        SunderWorkerContext context)
+        SunderWorkerOptions options, SunderWorkerContext context)
     {
-        if (options.StateMigrations.Count == 0
-            && options.SecretMigrations.Count == 0
-            && options.Composition is null
-            && options.OnActivated is null)
-        {
-            return null;
-        }
+        if (options.StateMigrations.Count == 0 && options.SecretMigrations.Count == 0
+            && options.Composition is null && options.OnActivated is null) return null;
         return async (_, cancellationToken) =>
         {
-            try
-            {
-                if (options.StateMigrations.Count > 0)
-                {
-                    await ((IPackageStorageKeyMigrator)context.Storage.State).MigrateKeysAsync(
-                        options.StateMigrations,
-                        cancellationToken).ConfigureAwait(false);
-                }
-                if (options.SecretMigrations.Count > 0)
-                {
-                    await ((IPackageStorageKeyMigrator)context.Secrets).MigrateKeysAsync(
-                        options.SecretMigrations,
-                        cancellationToken).ConfigureAwait(false);
-                }
-                if (options.Composition is not null)
-                {
-                    await options.Composition.ActivateAsync(context, cancellationToken).ConfigureAwait(false);
-                }
-                if (options.OnActivated is not null)
-                {
-                    await options.OnActivated(context, cancellationToken).ConfigureAwait(false);
-                }
-            }
-            catch (Exception exception)
-            {
-                await ThrowAfterCompositionCleanupAsync(options.Composition, exception).ConfigureAwait(false);
-            }
+            if (options.StateMigrations.Count > 0)
+                await ((IPackageStorageKeyMigrator)context.Storage.State).MigrateKeysAsync(
+                    options.StateMigrations, cancellationToken).ConfigureAwait(false);
+            if (options.SecretMigrations.Count > 0)
+                await ((IPackageStorageKeyMigrator)context.Secrets).MigrateKeysAsync(
+                    options.SecretMigrations, cancellationToken).ConfigureAwait(false);
+            if (options.Composition is not null)
+                await options.Composition.ActivateAsync(context, cancellationToken).ConfigureAwait(false);
+            if (options.OnActivated is not null)
+                await options.OnActivated(context, cancellationToken).ConfigureAwait(false);
         };
     }
 
@@ -158,57 +97,28 @@ internal sealed record WorkerRuntimeConfiguration(
             try
             {
                 if (options.OnShutdown is not null)
-                {
                     await options.OnShutdown(context, cancellationToken).ConfigureAwait(false);
-                }
             }
             catch (Exception exception)
             {
                 callbackFailure = exception;
             }
+            // An expired cleanup budget does not authorize starting another stage.
+            if (cancellationToken.IsCancellationRequested && callbackFailure is not null
+                && callbackFailure is not OperationCanceledException)
+                ExceptionDispatchInfo.Capture(callbackFailure).Throw();
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 if (options.Composition is not null)
-                {
                     await options.Composition.ShutdownAsync(context, cancellationToken).ConfigureAwait(false);
-                }
             }
             catch (Exception exception)
             {
-                throw callbackFailure is null
-                    ? exception
-                    : new AggregateException(
-                        "Worker shutdown callback and composition cleanup both failed.",
-                        callbackFailure,
-                        exception);
+                throw callbackFailure is null ? exception : new AggregateException(
+                    "Worker shutdown callback and composition cleanup both failed.", callbackFailure, exception);
             }
-            if (callbackFailure is not null)
-            {
-                ExceptionDispatchInfo.Capture(callbackFailure).Throw();
-            }
+            if (callbackFailure is not null) ExceptionDispatchInfo.Capture(callbackFailure).Throw();
         };
-    }
-
-    private static async ValueTask ThrowAfterCompositionCleanupAsync(
-        SunderWorkerComposition? composition,
-        Exception failure)
-    {
-        try
-        {
-            if (composition is not null)
-            {
-                await composition.ShutdownAsync(
-                    new SunderWorkerShutdownContext("lifecycle-failed"),
-                    CancellationToken.None).ConfigureAwait(false);
-            }
-        }
-        catch (Exception cleanupFailure)
-        {
-            throw new AggregateException(
-                "Worker lifecycle callback and composition cleanup both failed.",
-                failure,
-                cleanupFailure);
-        }
-        ExceptionDispatchInfo.Capture(failure).Throw();
     }
 }

@@ -45,6 +45,13 @@ internal sealed class PackageSessionLease : IDisposable
     internal PackageActivationIdentity GetPackageActivationIdentity(ActiveLoadedPackage package)
         => new(Identity, package.RuntimeActivationId);
 
+    // Called only by the acquiring owner before handing the lease to work.
+    internal void Own(IDisposable lifetime)
+    {
+        var release = _release ?? throw new ObjectDisposedException(nameof(PackageSessionLease));
+        _release = () => { try { release(); } finally { lifetime.Dispose(); } };
+    }
+
     public CancellationTokenSource CreateLinkedCancellation(
         CancellationToken requestCancellation,
         CancellationToken hostCancellation = default)

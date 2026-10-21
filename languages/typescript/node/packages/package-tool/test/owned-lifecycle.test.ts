@@ -15,7 +15,7 @@ import { withOutputLeases } from "../src/output";
 import { generatedProviders, invocation, fixtureSource, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
-const cli = resolve(__dirname, "../../dist/cli.js");
+const cli = resolve(__dirname, "../src/cli.js");
 const lock = `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`;
 function source(limit = 10, title = "Input", exposure = "public", idle = true, reversed = false): string {
   const echo = `export const echo=defineService({
@@ -78,8 +78,10 @@ test("contractsCommand rejects unknown JavaScript operations before filesystem a
   const root = await project();
   try {
     const missing = resolve(root, "missing");
-    const operations: readonly unknown[] = ["publish", "accept ", "Freeze", "", "constructor", "__proto__", undefined, null, false, 0, {}, { toString() { throw new Error("Must not coerce an operation"); } }];
+    const operations: readonly unknown[] = ["migrate-private", "publish", "accept ", "Freeze", "", "constructor", "__proto__", undefined, null, false, 0, {}, { toString() { throw new Error("Must not coerce an operation"); } }];
     for (const operation of operations) await assert.rejects(contractsCommand(operation as never, missing), /Unknown contracts operation/);
+    for (const operation of ["check", "accept", "freeze"] as const)
+      await assert.rejects(contractsCommand(operation, missing, { adoptInitialSourceProjection: true } as never), /Unknown contracts review option/);
     await contractsCommand("accept", root); const before = await baseline(root); const beforeStat = await stat(resolve(root, "sunder-contracts.owned.json"));
     for (const operation of operations) await assert.rejects(contractsCommand(operation as never, root), /Unknown contracts operation/);
     assert.deepEqual((await baseline(root)).bytes, before.bytes); assert.equal((await stat(resolve(root, "sunder-contracts.owned.json"))).mtimeMs, beforeStat.mtimeMs);
@@ -121,22 +123,26 @@ for (const extension of ["ts", "js"]) test(`actual ${extension.toUpperCase()} CL
     await writeFile(resolve(root, `src/rpc.${extension}`), source(10, "Reviewed λ", "public", true, true));
     await run(root, "contracts", "check");
     await writeFile(resolve(root, `src/rpc.${extension}`), source(20, "Reviewed λ"));
-    await run(root, "contracts", "accept"); assert.equal(await contractVersion(root), "1.1.0");
-    await run(root, "contracts", "freeze");
-    await writeFile(resolve(root, `src/rpc.${extension}`), source(20, "Patch after minor"));
-    await run(root, "contracts", "accept"); assert.equal(await contractVersion(root), "1.1.1");
-    await run(root, "contracts", "freeze");
-    await writeFile(resolve(root, `src/rpc.${extension}`), source(5, "Patch after minor"));
+    // Wire request widening is still an exported-source Major. Current review
+    // must not infer caller/provider source compatibility from wire containment.
     await assert.rejects(run(root, "contracts", "accept"), /acknowledgement/);
-    await run(root, "contracts", "accept", "echo", "--current-version", "1.1.1", "--next-version", "2.0.0", "--acknowledge-breaking-change");
-    assert.equal(await contractVersion(root), "2.0.0"); await run(root, "contracts", "check"); await run(root, "contracts", "freeze");
-    await run(root, "build"); assert.equal((await workerIdentity(root)).contractVersion, "2.0.0");
+    await run(root, "contracts", "accept", "echo", "--current-version", "1.0.1", "--next-version", "2.0.0", "--acknowledge-breaking-change");
+    assert.equal(await contractVersion(root), "2.0.0");
+    await run(root, "contracts", "freeze");
+    await writeFile(resolve(root, `src/rpc.${extension}`), source(20, "Patch after Major"));
+    await run(root, "contracts", "accept"); assert.equal(await contractVersion(root), "2.0.1");
+    await run(root, "contracts", "freeze");
+    await writeFile(resolve(root, `src/rpc.${extension}`), source(5, "Patch after Major"));
+    await assert.rejects(run(root, "contracts", "accept"), /acknowledgement/);
+    await run(root, "contracts", "accept", "echo", "--current-version", "2.0.1", "--next-version", "3.0.0", "--acknowledge-breaking-change");
+    assert.equal(await contractVersion(root), "3.0.0"); await run(root, "contracts", "check"); await run(root, "contracts", "freeze");
+    await run(root, "build"); assert.equal((await workerIdentity(root)).contractVersion, "3.0.0");
     // Package versions are independent. Reuse keeps original evidence and tuples.
     const configPath = resolve(root, "sunder.package.json"); const config = JSON.parse(await readFile(configPath, "utf8"));
     await writeFile(configPath, JSON.stringify({ ...config, version: "7.6.6" })); const beforeReuse = (await baseline(root)).bytes;
     await run(root, "contracts", "freeze"); assert.deepEqual((await baseline(root)).bytes, beforeReuse);
     await run(root, "package"); const nextManifest = JSON.parse(await readFile(resolve(root, "dist/package/manifest/sunder-package.json"), "utf8"));
-    assert.equal(nextManifest.version, "7.6.6"); assert.equal(nextManifest.provides[0].contractVersion, "2.0.0");
+    assert.equal(nextManifest.version, "7.6.6"); assert.equal(nextManifest.provides[0].contractVersion, "3.0.0");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 test("closed contracts CLI rejects flags, extra keys, booleans with values, duplicates and publication commands", async () => {

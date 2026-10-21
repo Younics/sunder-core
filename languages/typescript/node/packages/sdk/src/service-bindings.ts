@@ -229,6 +229,9 @@ export class ServiceBindingLifetime {
   }
   #queryFailed(error: unknown, contractId: string, epoch: number): void {
     if (epoch !== this.#epoch || this.#stopping.signal.aborted) return;
+    // Finite pressure does not invalidate catalog continuity or exact bindings.
+    // Failure of the observer itself still invalidates the observation epoch.
+    if (serviceFailureKind(error) === "resource-exhausted") return;
     if (serviceFailureKind(error) === "permission-denied") {
       const contract = this.#contracts.get(contractId)!; contract.snapshot = undefined; contract.identities.clear();contract.error = error;
       for (const binding of this.#bindings.values()) if (binding.snapshot.contractId === contractId) this.#retire(binding, error);

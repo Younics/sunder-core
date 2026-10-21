@@ -17,6 +17,16 @@ public static class SunderSdkCapabilities
     public const string SettingsViewsV1 = "settings-views.v1";
     /// <summary>Settings navigation contracts.</summary>
     public const string SettingsNavigationV1 = "settings-navigation.v1";
+    /// <summary>App activation-owned development overlay sessions.</summary>
+    public const string PackageDevelopmentV1 = "package-development.v1";
+    /// <summary>Nullable, Host-source-bound observations of Runtime and applied development revisions.</summary>
+    public const string PackageDevelopmentRevisionsV1 = "package-development-revisions.v1";
+    /// <summary>App observations of Host-owned cleanup evidence for exact worker executions.</summary>
+    public const string WorkerExecutionObservationsV1 = "worker-execution-observations.v1";
+    /// <summary>User navigation to package-filtered developer logs.</summary>
+    public const string PackageLogNavigationV1 = "package-log-navigation.v1";
+    /// <summary>Host-owned accepted App state work and pre-retirement settlement.</summary>
+    public const string AppStateUpdatesV1 = "app-state-updates.v1";
     /// <summary>Activation-scoped worker background service contracts.</summary>
     public const string BackgroundServicesV1 = "background-services.v1";
     /// <summary>Staged worker generation lifecycle contracts.</summary>

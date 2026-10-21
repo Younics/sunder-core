@@ -59,7 +59,7 @@ internal sealed partial class SunderWorkerRuntime
         long sessionGeneration;
         lock (Gate)
         {
-            if (_phase != RuntimePhase.Active || _sessionGeneration is null)
+            if ((_phase != RuntimePhase.Active && !IsLifecycleStoppingUnderGate) || _sessionGeneration is null)
             {
                 throw new WorkerProtocolException("Host invocation arrived before activation.");
             }
@@ -108,20 +108,34 @@ internal sealed partial class SunderWorkerRuntime
             methodId);
         lock (Gate)
         {
+            if (IsLifecycleStoppingUnderGate)
+            {
+                authority.Revoke();
+                cancellation.Dispose();
+                if (_invocations.ContainsKey(id) || _contributions.ContainsKey(id) || _rememberedHostIds.Contains(id))
+                    throw new WorkerProtocolException($"Host reused duplicate invocation id '{id}'.");
+                // Already-written Host requests can cross the generation-fault report.
+                // Never dispatch them into retired package code. The Host cancels these
+                // calls when it observes the report and completes them at retirement.
+                RememberHostId(id);
+                return;
+            }
             if (_phase != RuntimePhase.Active)
             {
                 authority.Revoke();
                 cancellation.Dispose();
                 throw new WorkerProtocolException("Host invocation arrived while the worker was stopping.");
             }
-            if (_rememberedHostIds.Contains(id))
+            if (_invocations.ContainsKey(id) || _contributions.ContainsKey(id) || _rememberedHostIds.Contains(id))
             {
                 authority.Revoke();
                 cancellation.Dispose();
                 throw new WorkerProtocolException($"Host reused duplicate invocation id '{id}'.");
             }
-            RememberHostId(id);
-            if (_invocations.Count >= _limits.MaximumInboundCalls)
+            var laneLimit = kind == InboundInvocationKind.ServerStream
+                ? _limits.MaximumInboundStreams
+                : _limits.MaximumInboundCalls;
+            if (_invocations.Values.Count(item => item.Kind == kind) >= laneLimit)
             {
                 authority.Revoke();
                 cancellation.Dispose();
@@ -130,7 +144,7 @@ internal sealed partial class SunderWorkerRuntime
             _invocations.Add(id, invocation);
         }
 
-        invocation.Operation = RunInvocationAsync(
+        _ = RunInvocationAsync(
             invocation,
             registration.Handler,
             serviceId,
@@ -183,12 +197,23 @@ internal sealed partial class SunderWorkerRuntime
         finally
         {
             _currentInvocationId.Value = previousInvocationId;
+            Task cancellation;
+            lock (Gate)
+            {
+                invocation.CancellationSealed = true;
+                cancellation = invocation.CancellationOperation ?? Task.CompletedTask;
+            }
+            await cancellation.ConfigureAwait(false);
+            invocation.Authority.Revoke();
+            invocation.Cancellation.Dispose();
             lock (Gate)
             {
                 _invocations.Remove(invocation.Id);
+                // A live invocation can outlast the bounded completion history.
+                // Start its cancellation-crossing window only when it finishes.
+                RememberHostId(invocation.Id);
             }
-            invocation.Authority.Revoke();
-            invocation.Cancellation.Dispose();
+            invocation.Completion.TrySetResult();
         }
     }
 
@@ -327,6 +352,23 @@ internal sealed partial class SunderWorkerRuntime
             kind = "cancelled";
             code = "rpc.call.cancelled";
             message = "The RPC call was cancelled.";
+        }
+        else if (_environment.OperationalOutcomesV1
+                 && exception is SunderRpcException { IsHostAuthenticated: true } operational
+                 && operational.Error.Kind is SunderRpcErrorKind.ResourceExhausted
+                     or SunderRpcErrorKind.Unavailable or SunderRpcErrorKind.DeadlineExceeded)
+        {
+            // This is a provider-reported operational outcome, not forwarded Host authority.
+            // In particular, a nested NotDispatched/Safe rejection says nothing about whether
+            // this enclosing handler has already performed a mutation. The Host owns that stamp.
+            kind = "operational";
+            code = operational.Error.Kind switch
+            {
+                SunderRpcErrorKind.ResourceExhausted => "resource-exhausted",
+                SunderRpcErrorKind.Unavailable => "unavailable",
+                _ => "deadline-exceeded",
+            };
+            message = "The provider could not complete the RPC operation.";
         }
         else if (exception is SunderRpcException rpcException
                  && rpcException.Error.Kind == SunderRpcErrorKind.Domain
@@ -468,7 +510,10 @@ internal sealed partial class SunderWorkerRuntime
         public SunderRpcInvocationContext Context { get; } = context;
         public string ServiceId { get; } = serviceId;
         public string MethodId { get; } = methodId;
-        public Task Operation { get; set; } = Task.CompletedTask;
+        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task Operation => Completion.Task;
+        public Task? CancellationOperation { get; set; }
+        public bool CancellationSealed { get; set; }
         public bool HostCancelled { get; set; }
     }
 }

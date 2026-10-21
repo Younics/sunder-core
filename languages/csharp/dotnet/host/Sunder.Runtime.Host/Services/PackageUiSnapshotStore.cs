@@ -225,7 +225,7 @@ internal sealed class PackageUiSnapshotStore : IDisposable, IAppPolicySnapshotSo
             PackageTargetSelection.ToDescriptor(targetSource.Target),
             snapshotObject.ContentHash,
             snapshotId,
-            uri) { PolicySubject = PolicySubject(source) };
+            uri) { PolicySubject = PolicySubject(source), SourceContentIdentity = source.ContentIdentity };
     }
 
     private PackageUiSnapshotDescriptor CreateInstalledProjectionSnapshot(
@@ -320,6 +320,7 @@ internal sealed class PackageUiSnapshotStore : IDisposable, IAppPolicySnapshotSo
         {
             ProjectionReference = ToDescriptor(alias.Projection!.Reference),
             PolicySubject = PolicySubject(targetSource.Source),
+            SourceContentIdentity = targetSource.Source.ContentIdentity,
         };
 
     private void Remove(string id, bool force = false)

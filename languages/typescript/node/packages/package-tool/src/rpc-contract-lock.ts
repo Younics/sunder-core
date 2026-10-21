@@ -72,14 +72,6 @@ function map(value: OuterObject, field: string): readonly (readonly [string, Out
 }
 
 export function parseContractLock(bytes: Buffer, allowDevelopment = false): ContractLock {
-  return parseLock(bytes, allowDevelopment, false);
-}
-/** Selection-only reader for an explicit V1 reselection. Unpinned artifacts are
- * not cache requirements/readiness; the proposed lock must pass the strict reader. */
-export function parseContractLockForReselection(bytes: Buffer, allowDevelopment = false): ContractLock {
-  return parseLock(bytes, allowDevelopment, true);
-}
-function parseLock(bytes: Buffer, allowDevelopment: boolean, allowUnpinned: boolean): ContractLock {
   if (typeof allowDevelopment !== "boolean") return contractError("package-api.registry-origin-invalid", "Development Registry mode must be an explicit Boolean.");
   if (bytes.length > 33_554_432) invalid("Contract lock exceeds its byte bound.");
   const root = fields(parseOuter(bytes), ["lockVersion", "packageArtifacts", "packageImports", "providerImports", "platformImports"]);
@@ -105,9 +97,8 @@ function parseLock(bytes: Buffer, allowDevelopment: boolean, allowUnpinned: bool
   };
   for (const [packageId, raw] of map(root, "packageArtifacts")) {
     id(packageId);
-    const priorSelection = allowUnpinned && !Object.hasOwn(raw,"modelProjectionBytes") && !Object.hasOwn(raw,"modelProjectionSha256");
     const order = ["requestedVersionRange", "includePrerelease", "selectedPackageVersion", "selectedPackageContentIdentity", "registryOrigin", "publicContractCount", "publicInventorySha256",
-      ...(priorSelection ? [] : ["modelProjectionBytes", "modelProjectionSha256"]), "contracts"];
+      "modelProjectionBytes", "modelProjectionSha256", "contracts"];
     const value = fields(raw, order.filter(key => key !== "registryOrigin"), ["registryOrigin"], order);
     const requestedVersionRange = string(value.requestedVersionRange); const includePrerelease = bool(value.includePrerelease);
     const selectedPackageVersion = version(value.selectedPackageVersion); const selectedPackageContentIdentity = digest(value.selectedPackageContentIdentity);
@@ -128,7 +119,7 @@ function parseLock(bytes: Buffer, allowDevelopment: boolean, allowUnpinned: bool
     }
     const artifact: PackageArtifact = { packageId, requestedVersionRange, includePrerelease, selectedPackageVersion, selectedPackageContentIdentity,
       registryOrigin: optionalRegistryOrigin(value, allowDevelopment), publicContractCount: integer(value.publicContractCount, 1, 128), publicInventorySha256: digest(value.publicInventorySha256),
-      modelProjectionBytes: priorSelection ? 0 : integer(value.modelProjectionBytes, 1, 4_194_304), modelProjectionSha256: priorSelection ? "" : digest(value.modelProjectionSha256), contracts };
+      modelProjectionBytes: integer(value.modelProjectionBytes, 1, 4_194_304), modelProjectionSha256: digest(value.modelProjectionSha256), contracts };
     if (contracts.size !== artifact.publicContractCount) invalid("Public inventory count mismatch.");
     const inventoryHash = createHash("sha256").update("sunder.package-public-api-inventory.v1\0").update(inventoryBytes(artifact)).digest("hex");
     if (inventoryHash !== artifact.publicInventorySha256) contractError("rpc-authoring.hash-mismatch", "Complete public inventory hash mismatch.");
@@ -136,7 +127,7 @@ function parseLock(bytes: Buffer, allowDevelopment: boolean, allowUnpinned: bool
   }
   const consumerNames = new Set<string>(); const providerNames = new Set<string>(); const providerTuples = new Set<string>(); const platformTuples = new Set<string>();
   for (const [packageId, raw] of map(root, "packageImports")) {
-    if (!Object.hasOwn(raw, "consumerRoles")) contractError("package-api.consumer-roles-migration-required", `${packageId}: run sunder-package api migrate-consumer-roles --project <root>. Omitted review preserves Runtime-only intent; Restore/Build does not migrate.`);
+    if (!Object.hasOwn(raw, "consumerRoles")) contractError("package-api.consumer-roles-invalid", `${packageId}: explicit consumerRoles intent is required; restore the current reviewed lock.`);
     const value = fields(raw, ["localName", "presence", "requiredContracts", "consumerRoles"]); const artifact = artifacts.get(id(packageId));
     if (!artifact) invalid("Consumer intent has no artifact.");
     const localName = name(value.localName); unique(consumerNames, localName.toLowerCase(), "package-api.local-name-collision");

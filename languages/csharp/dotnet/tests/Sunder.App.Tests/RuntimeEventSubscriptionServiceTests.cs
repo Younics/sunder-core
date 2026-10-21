@@ -10,6 +10,22 @@ namespace Sunder.App.Tests;
 public sealed class RuntimeEventSubscriptionServiceTests
 {
     [Fact]
+    public async Task SameGenerationImportReadinessFingerprintChangeRequiresLifecycleRatherThanMetadataOnly()
+    {
+        var runtimeId = Guid.NewGuid();
+        await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
+        var source = CreateSource("hash-a", 1) with { ActivationFingerprint = new('a', 64) };
+        var lifecycle = 0;
+        var metadata = 0;
+        service.InitializePresentation(CreateSnapshot(runtimeId, 1), [source], (_, _, _, _) => { lifecycle++; return Task.CompletedTask; },
+            (_, _) => { metadata++; return Task.CompletedTask; });
+        await service.ApplySnapshotAsync(CreateSnapshot(runtimeId, 1) with { EventSequence = 2 },
+            [source with { ActivationFingerprint = new('b', 64) }]);
+        Assert.Equal(1, lifecycle);
+        Assert.Equal(0, metadata);
+    }
+
+    [Fact]
     public async Task Factory_CreatesIndependentSubscriptionStateForEachStartupAttempt()
     {
         var factory = new RuntimeEventSubscriptionServiceFactory(
@@ -76,6 +92,36 @@ public sealed class RuntimeEventSubscriptionServiceTests
 
         Assert.Equal(0, lifecycleWrites);
         Assert.Equal([metadata], metadataWrites);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public async Task ApplySnapshotAsync_MismatchedSourcesCannotWriteOrPoisonTheGeneration(long sourceGeneration)
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        await using var service = new RuntimeEventSubscriptionService(
+            new ThrowingRuntimeClientFactory(),
+            new DeveloperLogService());
+        var lifecycleWrites = 0;
+        var metadataWrites = 0;
+        service.InitializePresentation(
+            CreateSnapshot(runtimeInstanceId, 1),
+            [CreateSource("hash-a", 1)],
+            (_, _, _, _) => { lifecycleWrites++; return Task.CompletedTask; },
+            (_, _) => { metadataWrites++; return Task.CompletedTask; });
+        var snapshot = CreateSnapshot(runtimeInstanceId, 2);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.ApplySnapshotAsync(snapshot, [CreateSource("hash-a", sourceGeneration)]));
+
+        Assert.Equal(0, lifecycleWrites);
+        Assert.Equal(0, metadataWrites);
+        Assert.Equal(0, service.TerminalOutcomeCount);
+        await service.ApplySnapshotAsync(snapshot, [CreateSource("hash-a", 2)]);
+        await service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 2));
+        Assert.Equal(1, lifecycleWrites);
+        Assert.Equal(0, metadataWrites);
     }
 
     [Fact]
@@ -179,6 +225,42 @@ public sealed class RuntimeEventSubscriptionServiceTests
         Assert.Equal(AppPackageUiRecoveryPresentationOutcome.ContentChanged, changed);
         Assert.Equal(AppPackageUiRecoveryPresentationOutcome.TimedOut, timedOut);
         Assert.Equal(0, Volatile.Read(ref writes));
+    }
+
+    [Fact]
+    public async Task ForcePackageRecoveryPresentationAsync_PublicationDuringSourceReadDoesNotRetryRetiredContent()
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        var package = CreateActiveAppPackage();
+        var initial = CreateSnapshot(runtimeInstanceId, 1, [package]);
+        var updated = CreateSnapshot(runtimeInstanceId, 2, [package]);
+        var originalSource = CreateSource("hash-a", 1);
+        var updatedSource = CreateSource("hash-b", 2);
+        var factory = new StreamingRuntimeClientFactory(initial);
+        var sourceReads = 0;
+        factory.Client.GetActivePackageUiSnapshotsAsyncCallback = _ =>
+        {
+            if (++sourceReads == 1)
+            {
+                factory.Client.SetSnapshot(updated);
+                return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([originalSource]);
+            }
+            return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([updatedSource]);
+        };
+        await using var service = new RuntimeEventSubscriptionService(factory, new DeveloperLogService());
+        var writes = 0;
+        service.InitializePresentation(initial, [originalSource], (_, _, _, _) =>
+        {
+            writes++;
+            return Task.CompletedTask;
+        });
+
+        var outcome = await service.ForcePackageRecoveryPresentationAsync(
+            "agent", "hash-a", TimeSpan.FromSeconds(2));
+
+        Assert.Equal(AppPackageUiRecoveryPresentationOutcome.ContentChanged, outcome);
+        Assert.Equal(0, writes);
+        Assert.Equal(2, sourceReads);
     }
 
     [Fact]
@@ -679,6 +761,57 @@ public sealed class RuntimeEventSubscriptionServiceTests
             .WaitAsync(TimeSpan.FromSeconds(3));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PresentationWorker_PublicationDuringSourceReadCommitsOnlyAConfirmedGeneration(
+        bool sourceReadSeesPublication)
+    {
+        var runtimeInstanceId = Guid.NewGuid();
+        var initial = CreateSnapshot(runtimeInstanceId, 1, [CreateActiveAppPackage()]);
+        var second = CreateSnapshot(runtimeInstanceId, 2, [CreateActiveAppPackage()]);
+        var third = CreateSnapshot(runtimeInstanceId, 3, [CreateActiveAppPackage()]);
+        var secondSource = CreateSource("hash-b", 2);
+        var thirdSource = CreateSource("hash-c", 3);
+        var factory = new StreamingRuntimeClientFactory(initial);
+        var sourceReads = 0;
+        factory.Client.GetActivePackageUiSnapshotsAsyncCallback = _ =>
+        {
+            if (Interlocked.Increment(ref sourceReads) == 1)
+            {
+                // The event initiating this refresh described generation 2. Generation 3
+                // is published while its source request is in flight, before confirmation.
+                factory.Client.SetSnapshot(third);
+                return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>(
+                    [sourceReadSeesPublication ? thirdSource : secondSource]);
+            }
+            return Task.FromResult<IReadOnlyList<PackageUiSnapshotDescriptor>>([thirdSource]);
+        };
+        using var developerLog = new DeveloperLogService();
+        developerLog.Enable(startPackageLogStreaming: false);
+        await using var service = new RuntimeEventSubscriptionService(factory, developerLog);
+        var writes = new List<(RuntimePackageSnapshot Snapshot, IReadOnlyList<PackageUiSnapshotDescriptor> Sources)>();
+        await service.StartAsync(initial, [CreateSource("hash-a", 1)], (snapshot, sources, _, _) =>
+        {
+            writes.Add((snapshot, sources));
+            return Task.CompletedTask;
+        });
+        service.ReleasePresentation();
+        await factory.Client.StreamStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        factory.Client.Publish(second);
+
+        await service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 3))
+            .WaitAsync(TimeSpan.FromSeconds(3));
+        var write = Assert.Single(writes);
+        Assert.Equal(third, write.Snapshot);
+        Assert.Equal(thirdSource, Assert.Single(write.Sources));
+        Assert.Equal(2, Volatile.Read(ref sourceReads));
+        Assert.Equal(3, factory.Client.SnapshotRequestCount);
+        Assert.Equal(0, service.TerminalOutcomeCount);
+        Assert.DoesNotContain(developerLog.Snapshot(), entry => entry.Source == "runtime.presentation");
+    }
+
     [Fact]
     public async Task ApplySnapshotAsync_RetriesDisabledPackageOnlyForChangedContentOrExplicitRetry()
     {
@@ -1090,6 +1223,10 @@ public sealed class RuntimeEventSubscriptionServiceTests
             GetRuntimePackageSnapshotAsyncCallback
         { get; set; }
 
+        public Func<CancellationToken, Task<IReadOnlyList<PackageUiSnapshotDescriptor>>>?
+            GetActivePackageUiSnapshotsAsyncCallback
+        { get; set; }
+
         public IReadOnlyList<PackageUiSnapshotDescriptor> PackageSources { get; set; } = [];
 
         public IReadOnlyList<RuntimeEventDescriptor> ReplayEvents { get; set; } = [];
@@ -1193,7 +1330,8 @@ public sealed class RuntimeEventSubscriptionServiceTests
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetActivePackageUiSnapshotsAsync(
             string appRid,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(PackageSources);
+            => GetActivePackageUiSnapshotsAsyncCallback?.Invoke(cancellationToken)
+                ?? Task.FromResult(PackageSources);
 
         public Task<IReadOnlyList<PackageUiSnapshotDescriptor>> GetStagedPackageUiSnapshotsAsync(
             string stageId,

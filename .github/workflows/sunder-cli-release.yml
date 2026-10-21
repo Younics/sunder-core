@@ -2,383 +2,128 @@ name: Sunder CLI Release
 
 on:
   push:
-    tags:
-      - "cli/v*"
+    tags: ["cli/v*"]
 
 permissions: {}
-
 concurrency:
-  group: sunder-release-draft-${{ github.ref_name }}
+  group: sunder-release-${{ github.ref_name }}
   cancel-in-progress: false
-
 env:
   DOTNET_VERSION: "10.0.100"
 
 jobs:
   prepare:
-    name: Prepare release metadata
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.release.outputs.version }}
-      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
     steps:
-      - name: Validate release tag
-        id: release
-        shell: bash
-        run: |
-          set -euo pipefail
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - id: release
+        run: python3 -B scripts/release/github_release.py metadata "$GITHUB_REF_NAME"
 
-          tag="${GITHUB_REF_NAME}"
-          if [[ ! "$tag" =~ ^cli/v((0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)$ ]]; then
-            echo "CLI release tags must use SemVer format, for example cli/v0.1.0 or cli/v0.1.0-beta.1." >&2
-            exit 1
-          fi
-
-          version="${BASH_REMATCH[1]}"
-          is_prerelease="false"
-          if [[ "$version" == *-* ]]; then
-            is_prerelease="true"
-            prerelease="${version#*-}"
-            IFS='.' read -ra identifiers <<< "$prerelease"
-            for identifier in "${identifiers[@]}"; do
-              if [[ "$identifier" =~ ^[0-9]+$ && "$identifier" == 0* && "$identifier" != "0" ]]; then
-                echo "Numeric SemVer prerelease identifiers must not contain leading zeroes." >&2
-                exit 1
-              fi
-            done
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=$is_prerelease" >> "$GITHUB_OUTPUT"
-
-  cli-tests:
-    name: CLI tests
+  test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Restore CLI tests
-        run: dotnet restore languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj --locked-mode
-
-      - name: Run CLI tests
-        run: dotnet test languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj -c Release --no-restore
+      - run: dotnet restore languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj --locked-mode
+      - run: dotnet test languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj -c Release --no-restore --logger trx
 
   package:
-    name: Package ${{ matrix.runtime }}
-    needs:
-      - prepare
-      - cli-tests
+    needs: [prepare, test]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runtime: win-x64
-            os: windows-2022
-          - runtime: win-arm64
-            os: windows-11-arm
-          - runtime: linux-x64
-            os: ubuntu-24.04
-          - runtime: linux-arm64
-            os: ubuntu-24.04-arm
-          - runtime: osx-x64
-            os: macos-15-intel
-          - runtime: osx-arm64
-            os: macos-14
+          - {rid: win-x64, os: windows-2022}
+          - {rid: win-arm64, os: windows-11-arm}
+          - {rid: linux-x64, os: ubuntu-24.04}
+          - {rid: linux-arm64, os: ubuntu-24.04-arm}
+          - {rid: osx-x64, os: macos-15-intel}
+          - {rid: osx-arm64, os: macos-15}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
           persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Publish CLI
+      - name: Publish and smoke the actual CLI
         shell: pwsh
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RID: ${{ matrix.rid }}
         run: |
           $ErrorActionPreference = "Stop"
-
-          $version = "${{ needs.prepare.outputs.version }}"
-          $runtime = "${{ matrix.runtime }}"
-          $projectPath = "languages/csharp/dotnet/host/Sunder.Cli/Sunder.Cli.csproj"
-          $publishDir = "artifacts/publish/cli/$runtime"
-          $assetDir = "artifacts/release/cli/$runtime"
-
-          # The earlier test restore validates committed non-RID locks; this transient graph adds one release RID.
-          dotnet restore $projectPath -r $runtime -p:Configuration=Release -p:RestoreLockedMode=false
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          dotnet publish $projectPath `
-            -c Release `
-            -r $runtime `
-            --no-restore `
-            --self-contained true `
-            -p:Version=$version `
-            -p:InformationalVersion=$version `
-            -p:ContinuousIntegrationBuild=true `
-            -p:PublishSingleFile=true `
-            -p:PublishTrimmed=false `
-            -o $publishDir
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          if (-not $IsWindows) {
-            $executablePath = Join-Path $publishDir "sunder"
-            if (Test-Path -LiteralPath $executablePath) {
-              chmod +x $executablePath
-            }
-          } else {
-            $executablePath = Join-Path $publishDir "sunder.exe"
-          }
-
-          if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) {
-            throw "Published CLI executable was not found at '$executablePath'."
-          }
-
-          $versionOutput = (& $executablePath version --json | Out-String)
-          if ($LASTEXITCODE -ne 0) { throw "Produced CLI failed the version smoke." }
-          $versionResult = $versionOutput | ConvertFrom-Json
-          if ($versionResult.schemaVersion -ne 1 -or $versionResult.exitCode -ne 0 -or $versionResult.data.version -ne $version) {
-            throw "Produced CLI did not report release version '$version'."
-          }
-          $helpOutput = (& $executablePath --help | Out-String)
-          if ($LASTEXITCODE -ne 0 -or [String]::IsNullOrWhiteSpace($helpOutput)) {
-            throw "Produced CLI failed the text help smoke."
-          }
-          $jsonOutput = (& $executablePath --help --json | Out-String)
-          if ($LASTEXITCODE -ne 0) { throw "Produced CLI failed the JSON help smoke." }
-          $json = $jsonOutput | ConvertFrom-Json
-          if ($json.schemaVersion -ne 1 -or $json.exitCode -ne 0 -or -not $json.success) {
-            throw "Produced CLI returned an invalid JSON help envelope."
-          }
-
-          New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
+          $project = "languages/csharp/dotnet/host/Sunder.Cli/Sunder.Cli.csproj"
+          $output = "artifacts/publish/cli/$env:RID"
+          dotnet restore $project -r $env:RID -p:Configuration=Release -p:RestoreLockedMode=false "-p:NuGetLockFilePath=obj/packages.$env:RID.lock.json"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          dotnet publish $project -c Release -r $env:RID --no-restore --self-contained true `
+            -p:Version=$env:VERSION -p:InformationalVersion=$env:VERSION `
+            -p:IncludeSourceRevisionInInformationalVersion=false -p:ContinuousIntegrationBuild=true `
+            -p:PublishSingleFile=true -p:PublishTrimmed=false -p:RestoreLockedMode=false `
+            "-p:NuGetLockFilePath=obj/packages.$env:RID.lock.json" -o $output
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $binary = Join-Path $output $(if ($IsWindows) { "sunder.exe" } else { "sunder" })
+          if (-not $IsWindows) { chmod +x $binary }
+          $result = (& $binary version --json | Out-String) | ConvertFrom-Json
+          if ($LASTEXITCODE -or $result.exitCode -ne 0 -or $result.data.version -ne $env:VERSION) { throw "CLI version smoke failed" }
+          $help = (& $binary --help | Out-String)
+          if ($LASTEXITCODE -or [string]::IsNullOrWhiteSpace($help)) { throw "CLI help smoke failed" }
+          $helpJson = (& $binary --help --json | Out-String) | ConvertFrom-Json
+          if ($LASTEXITCODE -or $helpJson.schemaVersion -ne 1 -or -not $helpJson.success) { throw "CLI JSON help smoke failed" }
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
           if ($IsWindows) {
-            $assetPath = Join-Path $assetDir "sunder-cli-$version-$runtime.zip"
-            if (Test-Path -LiteralPath $assetPath) { Remove-Item -LiteralPath $assetPath -Force }
-            Compress-Archive -Path (Join-Path $publishDir "*") -DestinationPath $assetPath
+            Compress-Archive -Path "$output/*" -DestinationPath "artifacts/release/sunder-cli-$env:VERSION-$env:RID.zip"
           } else {
-            $assetPath = Join-Path $assetDir "sunder-cli-$version-$runtime.tar.gz"
-            if (Test-Path -LiteralPath $assetPath) { Remove-Item -LiteralPath $assetPath -Force }
-            tar -czf $assetPath -C $publishDir .
+            tar -czf "artifacts/release/sunder-cli-$env:VERSION-$env:RID.tar.gz" -C $output .
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
-          $producedAssets = @(Get-ChildItem -LiteralPath $assetDir -File)
-          if ($producedAssets.Count -ne 1 -or $producedAssets[0].FullName -cne (Resolve-Path -LiteralPath $assetPath).Path) {
-            throw "CLI packaging did not produce exactly the expected archive '$assetPath'."
-          }
-
-      - name: Upload CLI artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-cli-${{ matrix.runtime }}
-          path: artifacts/release/cli/${{ matrix.runtime }}/sunder-cli-${{ needs.prepare.outputs.version }}-${{ matrix.runtime }}.${{ startsWith(matrix.runtime, 'win-') && 'zip' || 'tar.gz' }}
+          name: sunder-cli-${{ matrix.rid }}
+          path: artifacts/release/*
           if-no-files-found: error
-          retention-days: 90
 
-  create-draft:
-    name: Create and byte-verify private GitHub draft
-    needs:
-      - prepare
-      - package
+  release:
+    needs: [prepare, package]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
+    environment: sunder-github-release-promotion
     permissions:
-      actions: read
       contents: write
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Download CLI artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          path: release-assets
           pattern: sunder-cli-*
-
-      - name: Create and verify draft release assets
-        id: publication
-        shell: bash
+          path: release-assets
+      - name: Publish verified immutable CLI assets
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          IS_PRERELEASE: ${{ needs.prepare.outputs.is_prerelease }}
         run: |
-          set -euo pipefail
-          shopt -s nullglob
-
-          tag="cli/v$VERSION"
-          bash scripts/release/verify-release-tag.sh "$tag"
-          expected_archive_names=(
-            "sunder-cli-$VERSION-win-x64.zip"
-            "sunder-cli-$VERSION-win-arm64.zip"
-            "sunder-cli-$VERSION-linux-x64.tar.gz"
-            "sunder-cli-$VERSION-linux-arm64.tar.gz"
-            "sunder-cli-$VERSION-osx-x64.tar.gz"
-            "sunder-cli-$VERSION-osx-arm64.tar.gz"
-          )
-          expected_archive_paths=(
-            "release-assets/sunder-cli-win-x64/${expected_archive_names[0]}"
-            "release-assets/sunder-cli-win-arm64/${expected_archive_names[1]}"
-            "release-assets/sunder-cli-linux-x64/${expected_archive_names[2]}"
-            "release-assets/sunder-cli-linux-arm64/${expected_archive_names[3]}"
-            "release-assets/sunder-cli-osx-x64/${expected_archive_names[4]}"
-            "release-assets/sunder-cli-osx-arm64/${expected_archive_names[5]}"
-          )
-          binaries=(release-assets/sunder-cli-*/*)
-          if [[ ${#binaries[@]} -ne ${#expected_archive_names[@]} ]]; then
-            echo "Expected exactly ${#expected_archive_names[@]} CLI release archives, found ${#binaries[@]}." >&2
-            exit 1
-          fi
-          for asset in "${expected_archive_paths[@]}"; do
-            test -f "$asset" || { echo "Missing exact CLI release archive: $asset" >&2; exit 1; }
-          done
-
-          expected_remote_names=(
-            "${expected_archive_names[@]}"
-            SHA256SUMS
-            release-provenance.json
-            release-sbom.spdx.json
-            toolchain.txt
-          )
-          created_release=false
-          verified_release=false
-          set +e
-          release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"
-          resolve_status=$?
-          set -e
-          if [[ $resolve_status -eq 4 ]]; then
-            create_args=(
-              release create "$tag"
-              --title "Sunder CLI $VERSION"
-              --notes "Automated Sunder CLI release for $VERSION."
-              --latest=false
-              --verify-tag
-            )
-            [[ "$IS_PRERELEASE" != "true" ]] || create_args+=(--prerelease)
-            gh "${create_args[@]}" --draft
-            created_release=true
-            for _ in {1..30}; do
-              if release_json="$(bash scripts/release/resolve-github-release.sh "$tag")"; then break; fi
-              release_json=''
-              sleep 2
-            done
-            [[ -n "$release_json" ]] || { echo "Created CLI draft was not discoverable through authenticated release listing." >&2; exit 1; }
-          elif [[ $resolve_status -ne 0 ]]; then
-            exit "$resolve_status"
-          fi
-          release_id="$(jq -r '.id' <<< "$release_json")"
-          jq -e --argjson release_id "$release_id" --arg tag "$tag" --argjson prerelease "$IS_PRERELEASE" '
-            .id == $release_id and .tag_name == $tag and .draft == true and .prerelease == $prerelease
-          ' <<< "$release_json" >/dev/null \
-            || { echo "CLI release identity, draft state, or prerelease state is unexpected." >&2; exit 1; }
-
-          cleanup_failed_draft() {
-            exit_code=$?
-            if [[ $exit_code -ne 0 && "$created_release" == true && "$verified_release" != true ]]; then
-              gh api --method DELETE "repos/$GH_REPO/releases/$release_id" >/dev/null 2>&1 || true
-            fi
-            exit "$exit_code"
-          }
-          trap cleanup_failed_draft EXIT
-          remote_asset_count="$(jq '.assets | length' <<< "$release_json")"
-          if [[ "$remote_asset_count" == 0 ]]; then
-            GITHUB_RELEASE_ID="$release_id" \
-              bash scripts/release/generate-release-evidence.sh release-assets "sunder-core=$GITHUB_SHA"
-            mapfile -t assets < <(find release-assets -type f | sort)
-            [[ ${#assets[@]} -eq ${#expected_remote_names[@]} ]] \
-              || { echo "CLI publication evidence inventory is incomplete." >&2; exit 1; }
-            bash scripts/release/upload-github-release-assets.sh "$release_id" "$tag" "${assets[@]}"
-            evidence_run_attempt="$GITHUB_RUN_ATTEMPT"
-          else
-            bash scripts/release/download-github-release-assets.sh "$release_id" "$tag" release-assets \
-              SHA256SUMS release-provenance.json release-sbom.spdx.json toolchain.txt
-            jq -e \
-              --arg repository "$GITHUB_REPOSITORY" \
-              --arg workflow_ref "$GITHUB_REPOSITORY/.github/workflows/sunder-cli-release.yml@refs/tags/$tag" \
-              --arg run_id "$GITHUB_RUN_ID" \
-              --argjson release_id "$release_id" \
-              --arg ref "refs/tags/$tag" \
-              --arg source_sha "$GITHUB_SHA" '
-                .invocation.repository == $repository
-                and .invocation.workflowRef == $workflow_ref
-                and .invocation.runId == $run_id
-                and .invocation.releaseId == $release_id
-                and .invocation.ref == $ref
-                and .invocation.sha == $source_sha
-                and .sources == [{name:"sunder-core",sha:$source_sha}]
-              ' release-assets/release-provenance.json >/dev/null \
-              || { echo "Existing CLI draft was verified by another publication run or source." >&2; exit 1; }
-            evidence_run_attempt="$(jq -r '.invocation.runAttempt' release-assets/release-provenance.json)"
-            [[ "$evidence_run_attempt" =~ ^[1-9][0-9]*$ ]] \
-              || { echo "Existing CLI publication attempt is invalid." >&2; exit 1; }
-          fi
-
-          bash scripts/release/verify-github-release-assets.sh \
-            "$release_id" "$tag" release-assets "${expected_remote_names[@]}"
-          verified_release=true
-          {
-            echo "release_id=$release_id"
-            echo "evidence_run_attempt=$evidence_run_attempt"
-          } >> "$GITHUB_OUTPUT"
-          trap - EXIT
-
-      - name: Capture exact verified publication bytes
-        id: handoff
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          EVIDENCE_RUN_ATTEMPT: ${{ steps.publication.outputs.evidence_run_attempt }}
-          RELEASE_ID: ${{ steps.publication.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          artifact_name="sunder-cli-publication-evidence-$RELEASE_ID-$EVIDENCE_RUN_ATTEMPT"
-          mkdir publication-evidence
-          bash scripts/release/download-github-release-assets.sh \
-            "$RELEASE_ID" "cli/v${{ needs.prepare.outputs.version }}" publication-evidence
-          encoded_name="$(jq -rn --arg value "$artifact_name" '$value | @uri')"
-          artifacts="$(gh api -H 'Accept: application/vnd.github+json' \
-            "repos/$GH_REPO/actions/runs/$GITHUB_RUN_ID/artifacts?name=$encoded_name")"
-          artifact_count="$(jq --arg name "$artifact_name" '[.artifacts[] | select(.name == $name and .expired == false)] | length' <<< "$artifacts")"
-          [[ "$artifact_count" -le 1 ]] || { echo "Publication handoff artifact is ambiguous." >&2; exit 1; }
-          {
-            echo "artifact_name=$artifact_name"
-            echo "upload=$([[ "$artifact_count" == 0 ]] && echo true || echo false)"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Upload immutable publication evidence
-        if: steps.handoff.outputs.upload == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: ${{ steps.handoff.outputs.artifact_name }}
-          path: publication-evidence/*
-          if-no-files-found: error
-          retention-days: 90
+          python3 -B scripts/release/github_release.py stage "$GITHUB_REF_NAME" --directory release-assets
+          python3 -B scripts/release/github_release.py finalize "$GITHUB_REF_NAME" --directory release-assets

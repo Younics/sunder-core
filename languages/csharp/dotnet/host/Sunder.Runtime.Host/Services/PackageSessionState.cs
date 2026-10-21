@@ -33,24 +33,56 @@ internal sealed class PackageSessionState(
 
     public PackageSessionLease AcquireLease()
     {
+        lock (_syncRoot) return AcquireLeaseUnderLock();
+    }
+
+    private PackageSessionLease AcquireLeaseUnderLock()
+    {
+        var entry = _activeEntry;
+        if (entry.Draining)
+        {
+            throw new RuntimeUnavailableException("The active package session is draining and is not accepting new requests.");
+        }
+        if (_packageRecoveryCommit is { SessionEntry: var committingEntry }
+            && ReferenceEquals(entry, committingEntry))
+        {
+            throw new RuntimeUnavailableException(
+                "The active package session is publishing a recovered generation and is not accepting new requests.");
+        }
+        if (!entry.AcceptingLeases)
+        {
+            throw new RuntimeUnavailableException("The active package session is still activating and is not accepting requests.");
+        }
+        return CreateLeaseUnderLock(entry);
+    }
+
+    // Null means no work was admitted for an exact continuing Worker during a
+    // publication drain. Classify under the same lock as ordinary admission so
+    // publication cannot turn a temporary fence into a false stale-birth error.
+    internal PackageSessionLease? AcquireRpcLease(RuntimeRpcPackageActivation caller)
+    {
         lock (_syncRoot)
         {
             var entry = _activeEntry;
-            if (entry.Draining)
+            var birth = new RuntimePackageGeneration(caller.Package.RuntimeActivationId, caller.ActivationGeneration);
+            // A publication drain is temporary only for the exact Worker already
+            // selected into its successor. The published generation and Worker
+            // birth are separate authorities after earlier continuation(s).
+            if (entry.Draining && !entry.Retired
+                && entry.Generation == caller.SessionGeneration
+                && entry.Session.OwnsRuntimeGeneration(caller.PackageId, birth)
+                && entry.Session.TryGetLoadedPackage(caller.PackageId, out var previous)
+                && ReferenceEquals(previous?.Worker, caller.Package.Worker)
+                && entry.DrainSuccessor is { } successor
+                && successor.OwnsRuntimeGeneration(caller.PackageId, birth)
+                && successor.TryGetLoadedPackage(caller.PackageId, out var next)
+                && ReferenceEquals(next?.Worker, caller.Package.Worker)
+                && !caller.RetirementToken.IsCancellationRequested
+                && !caller.Package.Worker.GenerationCompletion.IsCompleted)
             {
-                throw new RuntimeUnavailableException("The active package session is draining and is not accepting new requests.");
+                return null;
             }
-            if (_packageRecoveryCommit is { SessionEntry: var committingEntry }
-                && ReferenceEquals(entry, committingEntry))
-            {
-                throw new RuntimeUnavailableException(
-                    "The active package session is publishing a recovered generation and is not accepting new requests.");
-            }
-            if (!entry.AcceptingLeases)
-            {
-                throw new RuntimeUnavailableException("The active package session is still activating and is not accepting requests.");
-            }
-            return CreateLeaseUnderLock(entry);
+            return AcquireLeaseUnderLock();
         }
     }
 
@@ -69,22 +101,19 @@ internal sealed class PackageSessionState(
             SessionEntry? entry = null;
             if (!_activeEntry.Draining
                 && _activeEntry.AcceptingLeases
-                && _activeEntry.ActivationGeneration == generation.SessionGeneration
                 && _activeEntry.Session.OwnsRuntimeGeneration(packageId, generation))
             {
                 entry = _activeEntry;
             }
             else if (_pendingPublication is { Completed: false, CandidateEntry: { } candidate }
                      && !candidate.Draining
-                     && candidate.ActivationGeneration == generation.SessionGeneration
                      && candidate.Session.OwnsRuntimeGeneration(packageId, generation))
             {
                 entry = candidate;
             }
             else if (_recoveryPublication is { Recovering: true } recovery
                      && ReferenceEquals(_activeEntry, recovery.PreviousEntry)
-                     && _activeEntry.ActivationGeneration == generation.SessionGeneration
-                     && _activeEntry.Session.OwnsRuntimeGeneration(packageId, generation))
+                      && _activeEntry.Session.OwnsRuntimeGeneration(packageId, generation))
             {
                 entry = _activeEntry;
             }
@@ -341,6 +370,7 @@ internal sealed class PackageSessionState(
             {
                 throw new RuntimeUnavailableException("The active package session is already draining.");
             }
+            previousEntry.DrainSuccessor = session;
             previousEntry.Draining = true;
             retirement = previousEntry.Retirement;
             generationEpoch = AdvanceGenerationUnderLock(
@@ -434,6 +464,8 @@ internal sealed class PackageSessionState(
                 throw new RuntimeStaleGenerationException(
                     "The candidate Runtime generation changed before publication.");
             }
+            publication.CandidateEntry.Session.CommitWorkerRetention();
+            publication.PreviousEntry.DrainSuccessor = null;
             publication.PreviousEntry.Retired = true;
             publication.Completed = true;
             publication.Committed = true;
@@ -485,6 +517,7 @@ internal sealed class PackageSessionState(
                 return false;
             }
             publication.Completed = true;
+            publication.PreviousEntry.DrainSuccessor = null;
             candidate = publication.CandidateEntry;
             candidate.Draining = true;
             SignalRetirementIfDrained(candidate);
@@ -1721,6 +1754,7 @@ internal sealed class PackageSessionState(
             }
 
             entry.Draining = false;
+            entry.DrainSuccessor = null;
             retirementCallbacks = entry.RetirementCallbacks;
             entry.Retirement = new CancellationTokenSource();
             entry.Drained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1926,6 +1960,7 @@ internal sealed class PackageSessionState(
         public long LastLeaseId { get; set; }
         public bool Retired { get; set; }
         public bool Draining { get; set; }
+        public ActivePackageSession? DrainSuccessor { get; set; }
         public bool AcceptingLeases { get; set; } = acceptingLeases;
     }
 

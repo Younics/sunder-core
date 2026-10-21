@@ -197,7 +197,8 @@ public sealed class PackageSessionOverlayTests
         var loadService = new PackageSessionLoadService(
             NullLogger.Instance,
             executionRuntimeLaunchResolver: TestExecutionRuntimeLaunchResolver.Instance,
-            ephemeralExecutionRuntimeBindingResolver: bindingResolver);
+            ephemeralExecutionRuntimeBindingResolver: bindingResolver,
+            concurrency: new PackageSessionConcurrencyOptions { MaximumPreparationConcurrency = 1 });
         try
         {
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>

@@ -13,6 +13,20 @@ internal readonly record struct AppPackageViewUnregistrationResult(
 
 internal sealed class AppPackageViewRegistry
 {
+    private readonly Dictionary<string, AppPackageViewRegistry> _retained = new(StringComparer.OrdinalIgnoreCase);
+    internal void RetainPackage(string packageId, AppPackageViewRegistry owner)
+    {
+        lock (_syncRoot) _retained.Add(packageId, owner);
+    }
+    internal void DetachRetainedPackages() { lock (_syncRoot) _retained.Clear(); }
+    private AppPackageViewRegistry? RetainedPackage(string packageId)
+    {
+        lock (_syncRoot) return _retained.GetValueOrDefault(packageId);
+    }
+    private AppPackageViewRegistry? RetainedView(string viewId)
+    {
+        lock (_syncRoot) return _retained.FirstOrDefault(pair => pair.Value.GetPackageId(viewId) == pair.Key).Value;
+    }
     private readonly object _syncRoot = new();
     private readonly Dictionary<string, AppRegisteredPackageView> _registeredViews = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, AppRegisteredSettingsView> _registeredSettingsViews = new(StringComparer.OrdinalIgnoreCase);
@@ -75,7 +89,7 @@ internal sealed class AppPackageViewRegistry
         {
             return _registeredViews.TryGetValue(viewId, out var registration)
                 ? registration.PackageId
-                : null;
+                : _retained.FirstOrDefault(pair => pair.Value.GetPackageId(viewId) == pair.Key).Key;
         }
     }
 
@@ -95,6 +109,8 @@ internal sealed class AppPackageViewRegistry
         Func<Control> factory)
     {
         var viewId = registration.Id;
+        if (RetainedView(viewId) is { } retained)
+            throw new InvalidOperationException($"Package view id '{viewId}' is already registered by package '{retained.GetPackageId(viewId)}'.");
         lock (_syncRoot)
         {
             if (_registeredViews.TryGetValue(viewId, out var existingRegistration)
@@ -111,6 +127,7 @@ internal sealed class AppPackageViewRegistry
 
     public IReadOnlyList<PackageViewDescriptor> GetPackageViewDescriptors(string packageId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.GetPackageViewDescriptors(packageId);
         lock (_syncRoot)
         {
             return _registeredViews.Values
@@ -156,6 +173,7 @@ internal sealed class AppPackageViewRegistry
         Func<string, bool> isPackageDisabled,
         Func<string, string, Exception, bool> reportFailure)
     {
+        if (RetainedView(viewId) is { } retained) return retained.GetOrCreateView(viewId, isPackageDisabled, reportFailure);
         AppRegisteredPackageView registration;
         lock (_syncRoot)
         {
@@ -233,6 +251,7 @@ internal sealed class AppPackageViewRegistry
 
     public bool HasSettingsView(string packageId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.HasSettingsView(packageId);
         lock (_syncRoot)
         {
             return _registeredSettingsViews.ContainsKey(packageId);
@@ -249,6 +268,7 @@ internal sealed class AppPackageViewRegistry
 
     public IReadOnlyList<string> ListPackageViewIds(string packageId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.ListPackageViewIds(packageId);
         lock (_syncRoot)
         {
             return _viewIdsByPackageId.TryGetValue(packageId, out var viewIds) ? viewIds.ToArray() : [];
@@ -265,6 +285,7 @@ internal sealed class AppPackageViewRegistry
                     ? descriptor
                     : new PackageSettingsViewDescriptor(packageId, packageId, $"Configure {packageId}."))
                 .OrderBy(package => package.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .Concat(_retained.SelectMany(pair => pair.Value.ListSettingsViewPackages(isPackageDisabled).Where(item => item.PackageId == pair.Key)))
                 .ToArray();
         }
 
@@ -294,6 +315,7 @@ internal sealed class AppPackageViewRegistry
         Func<string, bool> isPackageDisabled,
         Func<string, string, Exception, bool> reportFailure)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.GetOrCreateSettingsView(packageId, isPackageDisabled, reportFailure);
         var viewId = GetSettingsViewId(packageId);
         AppRegisteredSettingsView registration;
         lock (_syncRoot)
@@ -394,6 +416,7 @@ internal sealed class AppPackageViewRegistry
         Func<string, bool> isPackageDisabled,
         Func<string, string, Exception, bool> reportFailure)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.GetSettingsViewForNavigation(packageId, requireReplacement, isPackageDisabled, reportFailure);
         var viewId = GetSettingsViewId(packageId);
         AppRegisteredSettingsView registration;
         lock (_syncRoot)
@@ -513,6 +536,7 @@ internal sealed class AppPackageViewRegistry
         string viewId,
         out bool newlyQuarantined)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.TryQuarantineView(packageId, viewId, out newlyQuarantined);
         lock (_syncRoot)
         {
             var isRegisteredView = _registeredViews.TryGetValue(viewId, out var registeredView)
@@ -538,6 +562,7 @@ internal sealed class AppPackageViewRegistry
 
     internal bool IsViewQuarantined(string packageId, string viewId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.IsViewQuarantined(packageId, viewId);
         lock (_syncRoot)
         {
             if (!_quarantinedViewIds.Contains(viewId))
@@ -563,6 +588,7 @@ internal sealed class AppPackageViewRegistry
 
     private bool RemoveCachedViewsWithOutcome(string packageId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.RemoveCachedViewsWithOutcome(packageId);
         var controlsToDispose = new List<Control>();
         lock (_syncRoot)
         {
@@ -601,6 +627,7 @@ internal sealed class AppPackageViewRegistry
 
     public bool RemoveCachedView(string viewId)
     {
+        if (RetainedView(viewId) is { } retained) return retained.RemoveCachedView(viewId);
         Control? controlToDispose;
         lock (_syncRoot)
         {
@@ -618,6 +645,7 @@ internal sealed class AppPackageViewRegistry
 
     internal bool RemoveCachedView(string packageId, string viewId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.RemoveCachedView(packageId, viewId);
         Control? controlToDispose = null;
         lock (_syncRoot)
         {
@@ -667,6 +695,7 @@ internal sealed class AppPackageViewRegistry
     private AppPackageViewUnregistrationResult UnregisterPackageWithOutcome(
         string packageId)
     {
+        if (RetainedPackage(packageId) is { } retained) return retained.UnregisterPackageWithOutcome(packageId);
         var controlsToDispose = new List<Control>();
         string[] removedViewIds;
         lock (_syncRoot)

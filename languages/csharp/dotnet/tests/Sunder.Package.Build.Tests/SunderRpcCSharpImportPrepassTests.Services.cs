@@ -34,7 +34,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         else
         {
             owner = Activator.CreateInstance(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Internal.PackageServices")!, rpc)!;
-            var service = owner.GetType().GetProperty("Example")!.GetValue(owner)!;
+            var service = ImportedExample(owner);
             invoke = () => ((ValueTask)service.GetType().GetMethod("PingAsync")!.Invoke(service, [caller.Token])!).AsTask();
         }
         await using var lifetime = (IAsyncDisposable)owner;
@@ -59,7 +59,8 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             renamed.Sources.Where(file => file.Path.StartsWith("injected-apis/", StringComparison.Ordinal)));
         using var probe = CompileProbe(original);
         Assert.NotNull(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.IPackageApi"));
-        Assert.NotNull(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.IExampleService"));
+        Assert.NotNull(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IExampleService"));
+        Assert.NotNull(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal.IContractServices"));
         Assert.Null(probe.Assembly.GetType("Sunder.Generated.Services.IDependencyPackageApi"));
     }
 
@@ -72,7 +73,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal;
             [SunderServiceProvider(typeof(IExampleService))]
             public sealed partial class Provider(IServiceProviders<IExampleService> providers) : IExampleService
             {
@@ -87,6 +88,54 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         Assert.Contains(analysis.RolePlan.Diagnostics, value => value.Id == "package-authoring.di-use-required");
     }
 
+    [Theory]
+    [InlineData("example.first", "example.second", "Example_First")]
+    [InlineData("a.bc", "ab.c", "A_Bc")]
+    [InlineData("1.2.a", "1a.2", "_1_2_A")]
+    public void SameConsumerSourceSurvivesOneToTwoContractsWithEqualServiceIds(string firstId, string secondId, string scope)
+    {
+        var first = $$"""
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Services;
+            [SunderService(SunderServiceExposure.Public, ContractId = "{{firstId}}", ServiceId = "shared")]
+            public interface FirstService { ValueTask<bool> ReadyAsync(); }
+            """;
+        var second = $$"""
+
+            [SunderService(SunderServiceExposure.Public, ContractId = "{{secondId}}", ServiceId = "shared")]
+            public interface SecondService { ValueTask<bool> ReadyAsync(); }
+            """;
+        var before = PrepareMigrationImports(first);
+        var after = PrepareMigrationImports(first + second);
+        var original = Assert.Single(before.Contracts);
+        var retained = after.Contracts.Single(contract => contract.ContractKey == firstId);
+        Assert.Equal(original.NaturalServices, retained.NaturalServices);
+        Assert.Equal(original.Descriptor.GetCanonicalUtf8(), retained.Descriptor.GetCanonicalUtf8());
+        Assert.Equal(original.ModelProjection.ToCanonicalUtf8(), retained.ModelProjection.ToCanonicalUtf8());
+        var consumer = new SunderRpcCSharpSourceFile("consumer.cs", $$"""
+            using System.Threading.Tasks;
+            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.{{SunderRpcCSharpImportPrepass.ContractName(firstId)}};
+            public static class Consumer
+            {
+                public static ISharedService Select(IPackageApi api) => api.{{scope}}.Shared;
+                public static ValueTask<bool> Call(IPackageApi api) => Select(api).ReadyAsync();
+            }
+            """);
+        foreach (var imports in new[] { before, after })
+        {
+            var compiled = new SunderRpcCSharpSourceCompiler().Compile(new("example.consumer", "1.0.0", [consumer], References(),
+                SupplementalSources: imports.Sources, ImportedPackageApis: imports.PackageApis));
+            Assert.True(compiled.Success, string.Join(Environment.NewLine, compiled.Diagnostics));
+            using var bytes = new MemoryStream();
+            var emitted = compiled.SourceCompilation!.Emit(bytes);
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
+            var api = compiled.SourceCompilation.GetTypeByMetadataName("Sunder.Generated.Packages.Example_Dependency_Services.IPackageApi")!;
+            Assert.Equal(imports.Contracts.Count, api.GetMembers().OfType<Microsoft.CodeAnalysis.IPropertySymbol>().Count());
+            Assert.Empty(api.GetMembers("Shared"));
+        }
+    }
+
     [Fact]
     public async Task InjectedPackageApiIsLazyOwnsUnaryScopesRejectsDriftAndDoesNotRetry()
     {
@@ -96,7 +145,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         var rpc = new RpcStub { LiveCatalog = true, Providers = [provider], Current = provider,
             ScopeFactory = _ => { var scope = new RpcStub { Providers = [provider], Current = provider }; scopes.Add(scope); return ValueTask.FromResult<ISunderRpcCallScope>(scope); } };
         var api = Activator.CreateInstance(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Internal.PackageServices")!, rpc)!;
-        var service = api.GetType().GetProperty("Example")!.GetValue(api)!;
+        var service = ImportedExample(api);
         var method = service.GetType().GetMethod("PingAsync")!;
         Task Call(CancellationToken token = default) => ((ValueTask)method.Invoke(service, [token])!).AsTask();
         Assert.Equal(0, rpc.ScopeCount); Assert.Equal(0, rpc.DiscoverCount);
@@ -151,7 +200,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         var scope = new RpcStub { Providers = [provider], Current = provider, Subscribe = Values };
         var rpc = new RpcStub { LiveCatalog = true, Providers = [provider], Current = provider, ScopeFactory = _ => ValueTask.FromResult<ISunderRpcCallScope>(scope) };
         var api = Activator.CreateInstance(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Internal.PackageServices")!, rpc)!;
-        var service = api.GetType().GetProperty("Example")!.GetValue(api)!;
+        var service = ImportedExample(api);
         var stream = (IAsyncEnumerable<long>)service.GetType().GetMethod("WatchAsync")!.Invoke(service, [CancellationToken.None])!;
         Assert.Equal(0, rpc.ScopeCount);
         await using var iterator = stream.GetAsyncEnumerator(); Assert.True(await iterator.MoveNextAsync()); Assert.Equal(1, iterator.Current);
@@ -168,5 +217,11 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             yield return JsonSerializer.SerializeToElement(1);
             entered.SetResult(); await Task.Delay(Timeout.InfiniteTimeSpan, token);
         }
+    }
+
+    private static object ImportedExample(object api)
+    {
+        var contract = api.GetType().GetProperty("Example_Rpc_V1_Minimal")!.GetValue(api)!;
+        return contract.GetType().GetProperty("Example")!.GetValue(contract)!;
     }
 }

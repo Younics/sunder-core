@@ -28,7 +28,9 @@ for (const [file, definition] of Object.entries(corpus.fixtures)) {
     for (const key of Object.keys(data)) {
       const incomplete = structuredClone(data);
       delete incomplete[key];
-      assert.equal(validate(incomplete), false, `${file}: missing ${key}`);
+      const optional = (definition === "appSessionStatus" && key === "retirements")
+        || (definition === "appActivationRetirementRequirement" && key === "stageId");
+      assert.equal(validate(incomplete), optional, `${file}: missing ${key}`);
     }
     assert.equal(validate({ ...data, unrecognizedAuthority: true }), false);
   });
@@ -45,6 +47,26 @@ test("policy schema rejects nested inventory laundering and impossible execution
   const denied = await readJson(fixtureRoot + "runtime-platform-revoked.json");
   denied.disposition = "Allowed";
   assert.equal(ajv.getSchema(`${schema.$id}#/$defs/runtimePlatformPolicy`)(denied), false);
+});
+
+test("current policy contracts reject removed external authority members even when null", async () => {
+  for (const [file, properties] of [
+    ["sync-request.json", ["minimumCheckpoint"]],
+    ["sync-response.json", ["checkpoint"]],
+    ["cohort-result.json", ["checkpoint"]],
+    ["policy-mutation.json", ["checkpoint"]],
+    ["resolution-policy.json", ["checkpoint"]],
+    ["stack-policy.json", ["checkpoint"]],
+  ]) {
+    const data = await readJson(fixtureRoot + file);
+    const validate = ajv.getSchema(`${schema.$id}#/$defs/${corpus.fixtures[file]}`);
+    for (const property of properties) assert.equal(validate({ ...data, [property]: null }), false, `${file}: ${property}`);
+  }
+  const lease = await readJson(fixtureRoot + "lease-expired.json");
+  const validateLease = ajv.getSchema(`${schema.$id}#/$defs/lease`);
+  for (const property of ["checkpointSequence", "checkpointDigest", "topologyGeneration", "topologyFingerprint"]) {
+    assert.equal(validateLease({ ...lease, watermark: { ...lease.watermark, [property]: null } }), false, property);
+  }
 });
 
 async function readJson(relativePath) {

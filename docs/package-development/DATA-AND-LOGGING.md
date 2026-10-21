@@ -66,9 +66,100 @@ await using var input = await context.Storage.Files.OpenReadAsync("cache/index.j
 
 State and file APIs are thread-safe. Mutations are atomic: cancellation before commit preserves the previous value/file; once replacement commits, the operation succeeds even if cancellation races afterward. File writes create parent directories. Stream writes advance but never dispose the caller-owned input stream. The caller must dispose streams returned by `OpenReadAsync`.
 
+### Accepted App State Updates
+
+An App which debounces or asynchronously validates a save must register the work
+when the change is accepted, not later from `IAsyncDisposable`. Inject
+`IPackageAppStateUpdates` into the App service and return its `RunAsync` task to
+the caller (or observe it through an owned error-reporting task):
+
+```csharp
+return updates.RunAsync("bookmarks", async update =>
+{
+    using var delay = CancellationTokenSource.CreateLinkedTokenSource(
+        update.SettlementRequested, update.CancellationToken);
+    try
+    {
+        await Task.Delay(TimeSpan.FromMilliseconds(300), delay.Token);
+    }
+    catch (OperationCanceledException error) when (
+        error.CancellationToken == delay.Token &&
+        update.SettlementRequested.IsCancellationRequested &&
+        !update.CancellationToken.IsCancellationRequested)
+    {
+        // Normal replacement/shutdown requests a flush, not abandonment.
+    }
+    update.CancellationToken.ThrowIfCancellationRequested();
+    await context.Storage.State.SetValueAsync("bookmarks", json, update.CancellationToken);
+});
+```
+
+The generated App composition supplies this service and infers the required
+`app-state-updates.v1` capability. Admission rejects synchronously before invoking
+the callback when unpublished, retiring, revoked, or at capacity. Do not mark a
+local snapshot accepted until this call admits it. Callbacks run asynchronously,
+are not serialized, and must await all storage work; packages own coalescing and
+ordering. Use stable portable document keys: an activation admits at most 128
+distinct keys and 128 pending callbacks. Do not use one key per edit.
+
+Keep callbacks bounded to state validation and persistence. Do not re-enter App
+activation/navigation or wait for the owning activation's retirement from a
+callback: settlement can already own the App lifecycle gate. Marshal any optional
+UI notifications separately; persistence must not depend on the dispatcher.
+
+Normal handoff closes new admission, requests settlement, and waits within the
+existing retirement budget before replacement reads or final revocation. Only
+the original accepted callback has settlement authority; a captured context or
+forked task loses that authority when the callback ends. Independent security
+revocation stays immediate and never grants post-revocation writes. Join accepted
+work during disposal; do not start an unregistered final write there.
+
+A newer successful callback can supersede a logical validation failure for the
+same key. It cannot erase an uncertain transport/storage mutation. Observe and
+report failures; cancellation or a closed HTTP request is not proof that a remote
+write was abandoned. This contract does not promise a final save after process
+termination, emergency security revocation, or expired settlement budgets.
+
 ### Migrating Legacy Keys
 
-Worker V1 runs declared state and secret migrations automatically before activation. Declare every legacy physical-key shape in the immutable worker options:
+Worker V1 runs declared state and secret migrations automatically before activation.
+In a canonical single-project package, declare one migration-plan provider:
+
+```csharp
+public sealed class StorageMigrations : ISunderWorkerStorageMigrationProvider
+{
+    public IReadOnlyList<PackageStorageKeyMigration> StateMigrations { get; } =
+    [
+        PackageStorageKeyMigration.Exact("docker.images:v1", "docker.images.v1"),
+    ];
+}
+```
+
+`SecretMigrations` can be supplied on the same provider; either list defaults to
+empty. Generated composition snapshots these plans before advertising the Worker
+catalog. Implement `ISunderWorkerStorageMigrationPreparation` when dynamic rules
+need package-local routing initialized from read-only state:
+
+```csharp
+public sealed class MigrationPreparation : ISunderWorkerStorageMigrationPreparation
+{
+    public IReadOnlyList<string> LiveKeys { get; private set; } = [];
+
+    public async ValueTask PrepareStorageMigrationsAsync(
+        SunderWorkerMigrationPreparationContext context,
+        CancellationToken cancellationToken = default)
+    {
+        LiveKeys = await context.ListStateKeysAsync("workspace-bindings.", cancellationToken);
+    }
+}
+```
+
+Preparation participants are DI-managed Worker roots and run in dependency-first
+order. They may also implement the plan-provider interface; constructors and plan
+getters must not access Host data. Preparation updates in-memory state used by the
+already declared rules, not the immutable advertised plan.
+
+The equivalent low-level Worker options are:
 
 ```csharp
 return new SunderWorkerOptions(providers)

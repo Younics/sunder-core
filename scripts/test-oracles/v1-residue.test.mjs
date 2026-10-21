@@ -91,37 +91,17 @@ test("residue scan covers additional authored text formats and special filenames
   });
 });
 
-test("residue scan accepts the exact reopened Phase 0 cutover inventory", async () => {
+test("current residue checks are independent of historical pending-cutover records", async () => {
   await withRepository(async (root) => {
     const directory = join(root, "eng", "compatibility");
     await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "core-compatibility-candidate.json"), JSON.stringify({
-      decisions: {
-        pendingCutovers: [
-          "implementation-first-csharp-and-node-rpc-authoring",
-          "protocol-project-package-and-authored-descriptor-retirement",
-          "source-derived-signed-platform-contract-catalog",
-        ],
-      },
-    }));
-
-    assert.deepEqual(await findV1Residue(root), []);
-  });
-});
-
-test("residue scan rejects a changed reopened Phase 0 cutover inventory", async () => {
-  await withRepository(async (root) => {
-    const directory = join(root, "eng", "compatibility");
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "core-compatibility-candidate.json"), JSON.stringify({
-      decisions: {
-        pendingCutovers: ["implementation-first-csharp-and-node-rpc-authoring"],
-      },
-    }));
-
-    assert.deepEqual(await findV1Residue(root), [
-      "eng/compatibility/core-compatibility-candidate.json: pending cutovers differ from the Phase 0 implementation-first inventory",
-    ]);
+    for (const decisions of [{ pendingCutovers: [] }, { pendingCutovers: ["historical-only"] }, {}]) {
+      const path = join(directory, "core-compatibility-candidate.json");
+      const bytes = JSON.stringify({ decisions });
+      await writeFile(path, bytes);
+      assert.deepEqual(await findV1Residue(root), []);
+      assert.equal(await readFile(path, "utf8"), bytes);
+    }
   });
 });
 

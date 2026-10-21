@@ -111,9 +111,9 @@ public sealed class StacksWindowViewModelTests
         Assert.True(viewModel.IsMarketplaceMode);
         Assert.True(viewModel.ShowRegistrySelectedDetails);
         Assert.Equal("Team Stack", viewModel.SelectedRegistryStackTitle);
-        Assert.Equal("sunder.package.agent", Assert.Single(viewModel.RegistrySelectedPackages).PackageId);
+        Assert.Equal("younics.ai.agent", Assert.Single(viewModel.RegistrySelectedPackages).PackageId);
         var detailPackage = Assert.Single(viewModel.RegistrySelectedDetails);
-        Assert.Equal("sunder.package.agent", detailPackage.PackageId);
+        Assert.Equal("younics.ai.agent", detailPackage.PackageId);
         var group = Assert.Single(detailPackage.ItemGroups);
         Assert.Equal("Agent Profiles", group.DisplayName);
         var item = Assert.Single(group.Items);
@@ -371,9 +371,9 @@ public sealed class StacksWindowViewModelTests
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
                 [
-                    CreateExportItem("sunder.package.agent", "profile", "Agent profile", kind: "agent-profile"),
-                    CreateExportItem("sunder.package.agent", "workspace", "Agent workspace", kind: "agent-workspace"),
-                    CreateExportItem("sunder.package.agent.tools", "tool", "Tool config"),
+                    CreateExportItem("younics.ai.agent", "profile", "Agent profile", kind: "agent-profile"),
+                    CreateExportItem("younics.ai.agent", "workspace", "Agent workspace", kind: "agent-workspace"),
+                    CreateExportItem("younics.ai.agent.tools.files", "tool", "Tool config"),
                 ],
                 [],
                 []),
@@ -385,8 +385,8 @@ public sealed class StacksWindowViewModelTests
         await viewModel.InitializeAsync();
 
         Assert.Equal(2, viewModel.PackageGroups.Count);
-        Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "sunder.package.agent" && group.Items.Count == 2);
-        Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "sunder.package.agent.tools" && group.Items.Count == 1);
+        Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "younics.ai.agent" && group.Items.Count == 2);
+        Assert.Contains(viewModel.PackageGroups, group => group.PackageId == "younics.ai.agent.tools.files" && group.Items.Count == 1);
         Assert.All(viewModel.PackageGroups, group => Assert.False(group.IsSelected));
         Assert.All(viewModel.PackageGroups.SelectMany(group => group.Items), item => Assert.True(item.IsSelected));
         Assert.Equal(0, viewModel.SelectedPackageCount);
@@ -399,7 +399,7 @@ public sealed class StacksWindowViewModelTests
         viewModel.NextCommand.Execute(null);
 
         Assert.True(viewModel.CanGoNext);
-        var agentGroup = viewModel.PackageGroups.First(group => group.PackageId == "sunder.package.agent");
+        var agentGroup = viewModel.PackageGroups.First(group => group.PackageId == "younics.ai.agent");
         Assert.Equal(["Agent Profiles", "Agent Workspaces"], agentGroup.ItemGroups.Select(group => group.DisplayName));
         agentGroup.SelectAllItemsCommand.Execute(null);
         Assert.Equal("2/2 items", agentGroup.CountText);
@@ -418,8 +418,8 @@ public sealed class StacksWindowViewModelTests
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
                 [
-                    CreateExportItem("sunder.package.agent", "profile", "Agent profile"),
-                    CreateExportItem("sunder.package.agent", "workspace", "Agent workspace", defaultSelected: false),
+                    CreateExportItem("younics.ai.agent", "profile", "Agent profile"),
+                    CreateExportItem("younics.ai.agent", "workspace", "Agent workspace", defaultSelected: false),
                 ],
                 [],
                 []),
@@ -443,8 +443,8 @@ public sealed class StacksWindowViewModelTests
         {
             ActivePackages =
             [
-                CreateActivePackage("sunder.package.agent.tools.shell", "Sunder Agent Tools Shell"),
-                CreateActivePackage("sunder.package.agent.tools.web", "Sunder Agent Tools Web"),
+                CreateActivePackage("younics.ai.agent.tools.shell", "AI Agent - Shell"),
+                CreateActivePackage("younics.ai.agent.tools.web", "AI Agent - Web"),
             ],
         };
         var viewModel = new CreateStackWizardViewModel(
@@ -478,7 +478,7 @@ public sealed class StacksWindowViewModelTests
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
                 [CreateExportItem(
-                    "sunder.package.agent",
+                    "younics.ai.agent",
                     "profile",
                     "Agent profile",
                     [
@@ -540,7 +540,7 @@ public sealed class StacksWindowViewModelTests
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
                 [CreateExportItem(
-                    "sunder.package.agent",
+                    "younics.ai.agent",
                     "profile",
                     "Agent profile",
                     [new RuntimeStackExportItemDetail("Unclassified value", "Value")])],
@@ -567,8 +567,8 @@ public sealed class StacksWindowViewModelTests
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
                 [
-                    CreateExportItem("sunder.package.agent", "profile", "Agent profile", kind: "agent-profile"),
-                    CreateExportItem("sunder.package.agent", "workspace", "Agent workspace", kind: "agent-workspace"),
+                    CreateExportItem("younics.ai.agent", "profile", "Agent profile", kind: "agent-profile"),
+                    CreateExportItem("younics.ai.agent", "workspace", "Agent workspace", kind: "agent-workspace"),
                 ],
                 [],
                 []),
@@ -600,7 +600,7 @@ public sealed class StacksWindowViewModelTests
         var runtimeApiClient = new FakeRuntimeApiClient
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
-                [CreateExportItem("sunder.package.agent", "profile", "Agent profile")],
+                [CreateExportItem("younics.ai.agent", "profile", "Agent profile")],
                 [],
                 []),
             WriteArchiveOnExport = true,
@@ -627,7 +627,7 @@ public sealed class StacksWindowViewModelTests
         Assert.Null(runtimeApiClient.LastExportRequest.ReadmeMarkdown);
         Assert.Equal("Team setup\nfor coding agents", runtimeApiClient.LastExportRequest.Summary);
         Assert.Null(runtimeApiClient.LastExportRequest.Media);
-        Assert.Equal(["sunder.package.agent"], runtimeApiClient.LastExportRequest.SelectedPackages);
+        Assert.Equal(["younics.ai.agent"], runtimeApiClient.LastExportRequest.SelectedPackages);
         var selectedItem = Assert.Single(runtimeApiClient.LastExportRequest.SelectedItems);
         var selectedDetail = Assert.Single(selectedItem.Details ?? []);
         Assert.True(selectedDetail.IsSelected);
@@ -636,7 +636,7 @@ public sealed class StacksWindowViewModelTests
         var stack = Assert.Single(stacks);
         Assert.Equal("team-stack", stack.StackId);
         var detailPackage = Assert.Single(stack.Details ?? []);
-        Assert.Equal("sunder.package.agent", detailPackage.PackageId);
+        Assert.Equal("younics.ai.agent", detailPackage.PackageId);
         var detailItem = Assert.Single(detailPackage.Items);
         Assert.Equal("Agent profile", detailItem.DisplayName);
         var detailValue = Assert.Single(detailItem.Values);
@@ -651,7 +651,7 @@ public sealed class StacksWindowViewModelTests
         var root = CreateTempDirectory();
         var runtimeApiClient = new FakeRuntimeApiClient
         {
-            ActivePackages = [CreateActivePackage("sunder.package.agent.tools.shell", "Sunder Agent Tools Shell")],
+            ActivePackages = [CreateActivePackage("younics.ai.agent.tools.shell", "AI Agent - Shell")],
             WriteArchiveOnExport = true,
         };
         var library = new LocalStackLibraryService(Path.Combine(root, "library"));
@@ -671,7 +671,7 @@ public sealed class StacksWindowViewModelTests
 
         Assert.NotNull(runtimeApiClient.LastExportRequest);
         Assert.Empty(runtimeApiClient.LastExportRequest.SelectedItems);
-        Assert.Equal(["sunder.package.agent.tools.shell"], runtimeApiClient.LastExportRequest.SelectedPackages);
+        Assert.Equal(["younics.ai.agent.tools.shell"], runtimeApiClient.LastExportRequest.SelectedPackages);
         var stack = Assert.Single(await library.ListAsync());
         Assert.Equal("tools-stack", stack.StackId);
     }
@@ -687,7 +687,7 @@ public sealed class StacksWindowViewModelTests
         {
             ExportDiscoveryResponse = new RuntimeStackExportDiscoveryResponse(
                 [CreateExportItem(
-                    "sunder.package.agent",
+                    "younics.ai.agent",
                     "profile",
                     "Agent profile",
                     [
@@ -752,7 +752,7 @@ public sealed class StacksWindowViewModelTests
         await viewModel.CreateCommand.ExecuteAsync(null);
 
         Assert.NotNull(runtimeApiClient.LastExportRequest);
-        Assert.Equal(["sunder.package.agent"], runtimeApiClient.LastExportRequest.SelectedPackages);
+        Assert.Equal(["younics.ai.agent"], runtimeApiClient.LastExportRequest.SelectedPackages);
         Assert.Empty(runtimeApiClient.LastExportRequest.SelectedItems);
         var listed = Assert.Single(await library.ListAsync());
         Assert.Equal("Updated Team Stack", listed.Name);
@@ -824,7 +824,7 @@ public sealed class StacksWindowViewModelTests
         await library.UpdateDetailsAsync(imported.StackId,
         [
             new LocalStackDetailPackage(
-                "sunder.package.agent",
+                "younics.ai.agent",
                 "Agent",
                 "A",
                 [new LocalStackDetailItem(
@@ -838,7 +838,7 @@ public sealed class StacksWindowViewModelTests
             ActivePackages =
             [
                 new ActivePackageDescriptor(
-                    "sunder.package.agent",
+                    "younics.ai.agent",
                     "Agent",
                     "1.0.0",
                     PackageHostRoles.App | PackageHostRoles.Runtime,
@@ -860,7 +860,7 @@ public sealed class StacksWindowViewModelTests
         Assert.DoesNotContain("Loaded", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
         var package = Assert.Single(viewModel.SelectedLocalDetails);
         Assert.Equal("Agent", package.DisplayName);
-        Assert.Equal("file:///packages/sunder.package.agent/icons/agent.png", package.IconUri?.ToString());
+        Assert.Equal("file:///packages/younics.ai.agent/icons/agent.png", package.IconUri?.ToString());
         Assert.True(package.IsExpanded);
         Assert.False(package.IsCollapsed);
         Assert.Equal("Agent Profiles", Assert.Single(package.ItemGroups).DisplayName);
@@ -923,8 +923,8 @@ public sealed class StacksWindowViewModelTests
             Details =
             [
                 new LocalStackDetailPackage(
-                    "sunder.package.agent",
-                    "Sunder Agent",
+                    "younics.ai.agent",
+                    "AI Agent",
                     "A",
                     [new LocalStackDetailItem(
                         "profile",
@@ -940,15 +940,15 @@ public sealed class StacksWindowViewModelTests
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
                 [
-                    new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
+                    new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: false, "Import profile."),
                 ],
-                [new RuntimeStackRequiredInputDescriptor("input-key", "sunder.package.agent", "agent", "api-key", "API key", RuntimeStackInputSensitivity.Secret, true, "Provider key.")],
+                [new RuntimeStackRequiredInputDescriptor("input-key", "younics.ai.agent", "agent", "api-key", "API key", RuntimeStackInputSensitivity.Secret, true, "Provider key.")],
                 [],
                 [],
                 []),
             ImportResponse = new RuntimeStackImportResponse(
                 RuntimeStackImportOutcome.Completed,
-                [new RuntimeStackImportedItemDescriptor("profile", "sunder.package.agent", "agent", "Agent profile", "Profile")],
+                [new RuntimeStackImportedItemDescriptor("profile", "younics.ai.agent", "agent", "Agent profile", "Profile")],
                 new Dictionary<string, string>(),
                 [],
                 [],
@@ -1017,7 +1017,7 @@ public sealed class StacksWindowViewModelTests
                 true,
                 "unused",
                 DateTimeOffset.UtcNow.AddMinutes(15),
-                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
                 [],
                 [],
                 [],
@@ -1084,7 +1084,7 @@ public sealed class StacksWindowViewModelTests
                 true,
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
-                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
                 [],
                 [],
                 [],
@@ -1151,7 +1151,7 @@ public sealed class StacksWindowViewModelTests
                 true,
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
-                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
                 [],
                 [],
                 [],
@@ -1203,7 +1203,7 @@ public sealed class StacksWindowViewModelTests
             true,
             "late-plan",
             DateTimeOffset.UtcNow.AddMinutes(15),
-            [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+            [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
             [],
             [],
             [],
@@ -1272,7 +1272,7 @@ public sealed class StacksWindowViewModelTests
                 true,
                 "unused",
                 DateTimeOffset.UtcNow.AddMinutes(15),
-                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
+                [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true)],
                 [],
                 [],
                 [],
@@ -1405,7 +1405,7 @@ public sealed class StacksWindowViewModelTests
         var installPlan = new RegistryResolveInstallPlanResponse(
             true,
             [new RegistryPackageInstallPlanItem(
-                "sunder.package.agent",
+                "younics.ai.agent",
                 CurrentVersion: null,
                 Version: "1.2.0",
                 PackageContentIdentity: "package-content-identity",
@@ -1420,7 +1420,7 @@ public sealed class StacksWindowViewModelTests
                         null,
                         "sha256",
                         1024,
-                        "https://registry.example/packages/sunder.package.agent/1.2.0/download",
+                        "https://registry.example/packages/younics.ai.agent/1.2.0/download",
                         "source-sha256",
                         "manifest-sha256",
                         "content-identity",
@@ -1434,7 +1434,7 @@ public sealed class StacksWindowViewModelTests
         var runtimeInstallPlan = new RuntimeRegistryResolveInstallPlanResponse(
             true,
             [new RuntimeRegistryPackageInstallPlanItem(
-                "sunder.package.agent",
+                "younics.ai.agent",
                 CurrentVersion: null,
                 Version: "1.2.0",
                 PackageContentIdentity: "package-content-identity",
@@ -1449,7 +1449,7 @@ public sealed class StacksWindowViewModelTests
                         null,
                         "sha256",
                         1024,
-                        "https://registry.example/packages/sunder.package.agent/1.2.0/download",
+                        "https://registry.example/packages/younics.ai.agent/1.2.0/download",
                         "source-sha256",
                         "manifest-sha256",
                         "content-identity",
@@ -1470,14 +1470,14 @@ public sealed class StacksWindowViewModelTests
                 true,
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
-                [new RuntimeStackImportActionDescriptor("action-key", "sunder.package.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true, "Import profile.")],
+                [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true, "Import profile.")],
                 [],
                 [],
                 [],
                 []),
             ImportResponse = new RuntimeStackImportResponse(
                 RuntimeStackImportOutcome.Completed,
-                [new RuntimeStackImportedItemDescriptor("profile", "sunder.package.agent", "agent", "Agent profile", "Profile")],
+                [new RuntimeStackImportedItemDescriptor("profile", "younics.ai.agent", "agent", "Agent profile", "Profile")],
                 new Dictionary<string, string>(),
                 [],
                 [],
@@ -1485,7 +1485,7 @@ public sealed class StacksWindowViewModelTests
             RegistryPlan = runtimeInstallPlan,
             PackageStoreStageOperationResult = SuccessPackageOperation() with
             {
-                ImpactedPackageIds = ["sunder.package.agent"],
+                ImpactedPackageIds = ["younics.ai.agent"],
             },
         };
         var viewModel = new UseStackWizardViewModel(
@@ -1555,12 +1555,12 @@ public sealed class StacksWindowViewModelTests
             stackId,
             name,
             "A shared Stack.",
-            [new RegistryStackPackageRequirement("sunder.package.agent", "latest", null, "1.0.0", true)],
+            [new RegistryStackPackageRequirement("younics.ai.agent", "latest", null, "1.0.0", true)],
             [new RegistryStackFragmentSummary(
                 "agent-profile",
-                "sunder.package.agent",
-                "sunder.package.agent.profile",
-                "sunder.package.agent/profile",
+                "younics.ai.agent",
+                "younics.ai.agent.profile",
+                "younics.ai.agent/profile",
                 1,
                 "Agent profile",
                 "Profile settings.",
@@ -1568,7 +1568,7 @@ public sealed class StacksWindowViewModelTests
                 "profile",
                 "agent-profile",
                 [new RegistryStackFragmentDetail("Custom instructions", "Use a concise tone.", "Include value")])],
-            [new RegistryStackRequiredInput("api-key", "sunder.package.agent", "agent", "API key", "Provider key.", true)],
+            [new RegistryStackRequiredInput("api-key", "younics.ai.agent", "agent", "API key", "Provider key.", true)],
             new RegistryStackArtifact("", 0, $"https://registry.example/api/v1/stacks/{stackId}/download"),
             DateTimeOffset.UtcNow.AddDays(-1),
             DateTimeOffset.UtcNow,
@@ -1622,7 +1622,7 @@ public sealed class StacksWindowViewModelTests
                 new SunderStackFragmentManifest
                 {
                     FragmentId = "agent-profile",
-                    OwnerPackageId = "sunder.package.agent",
+                    OwnerPackageId = "younics.ai.agent",
                     ContributorId = "agent",
                     SchemaId = "agent.profile",
                     SchemaVersion = 1,
@@ -1674,7 +1674,7 @@ public sealed class StacksWindowViewModelTests
                 [
                     new SunderStackPackageRequirement
                     {
-                        PackageId = "sunder.package.agent",
+                        PackageId = "younics.ai.agent",
                         InstallTag = installTag,
                         MinimumVersion = minimumVersion,
                         Required = packageRequired,

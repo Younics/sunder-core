@@ -371,14 +371,11 @@ public sealed partial class PackageTemplateTests
                 Assert.Equal("1.0.0", descriptor.Version);
                 Assert.Matches("^[0-9a-f]{64}$", descriptor.Sha256);
                 Assert.Matches("^[0-9a-f]{64}$", Assert.IsType<string>(descriptor.AbiSha256));
+                var packageStem = "Buildable_" + shape.Name[..1] + shape.Name[1..].ToLowerInvariant();
                 Assert.Equal(
-                    SunderRpcCSharpGenerator.Generate(descriptor, "Sunder.Generated.Rpc.Sample", SunderRpcCSharpAccessibility.Internal),
+                    SunderRpcCSharpGenerator.Generate(descriptor,
+                        $"Sunder.Generated.Packages.{packageStem}_Internal.C{packageStem}_Sample", SunderRpcCSharpAccessibility.Internal),
                     await File.ReadAllTextAsync(generatedBindingPath));
-                var predecessor = SunderRpcContractDescriptor.Parse(System.Text.Encoding.UTF8.GetBytes((await File.ReadAllTextAsync(Path.Combine(repositoryRoot,
-                    "languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/Fixtures/Sample.before-source.json"))).Replace("SUNDER_PACKAGE_ID_TEXT", packageId, StringComparison.Ordinal)));
-                Assert.Equal("2.0.0", predecessor.Version); // Authentic historical private oracle, not current source authority.
-                Assert.NotEqual(predecessor.Sha256, descriptor.Sha256);
-                Assert.NotEqual(predecessor.AbiSha256, descriptor.AbiSha256);
                 Assert.Equal(new[] { "greet", "greet-many" }, Assert.Single(descriptor.Services).Methods.Select(method => method.MethodId).Order(StringComparer.Ordinal));
                 Assert.False(File.Exists(Path.Combine(output, "sunder-contracts.owned.json")));
                 await AssertTemplateInputsAsync(output, authored);

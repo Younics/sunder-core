@@ -79,6 +79,7 @@ internal static partial class SunderRpcAuthoringDocuments
         var bytes = Utf8NoBom.GetBytes(output.ToString());
         var reparsed = ParseOwnedPlatformBaseline(bytes);
         ValidateOwnedSnapshotModels(baseline.Contracts, reparsed.Contracts);
+        if (baseline.ExactBytes.Length != 0) ValidateImmutableProjectionReviews(ParseOwnedPlatformBaseline(baseline.ExactBytes).Contracts, reparsed.Contracts);
         return bytes;
     }
 
@@ -108,7 +109,7 @@ internal static partial class SunderRpcAuthoringDocuments
         var existing = baseline?.Contracts ?? new Dictionary<string, SunderRpcOwnedContractBaseline>(StringComparer.Ordinal);
         var source = OwnedPlatformCandidatesByKey(existing, candidates, contractKey);
         var contracts = AcceptOwnedContracts(existing, source, contractKey, expectedCurrentVersion, nextVersion, acknowledgeBreakingChange);
-        return WriteOwnedPlatformBaseline(new(contracts, [], string.Empty));
+        return WriteOwnedPlatformBaseline(new(contracts, baseline?.ExactBytes ?? [], baseline?.Sha256 ?? string.Empty));
     }
 
     internal static byte[] PlanOwnedPlatformBaselineFreeze(
@@ -129,7 +130,7 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             if (contract.Current is not { State: "draft" } current) continue;
             RequireStableOwnedTransition(key, previousVersion: null, current.Descriptor.Version);
-            ValidateOwnedCandidateHistory(key, current.Descriptor, current.Exposure, contract.History, preserveUnchangedPrerelease: false);
+            ValidateOwnedCandidateHistory(key, current.Descriptor, current.Exposure, contract.History, preserveUnchangedPrerelease: false, current.ProjectionReview);
         }
         var contracts = FreezeOwnedContracts(baseline.Contracts, source, contractKey, "catalogRelease",
             JsonSerializer.SerializeToElement(new { authorityId = CorePlatformAuthorityId, releaseVersion = catalogReleaseVersion }),

@@ -884,10 +884,25 @@ public sealed class RuntimeClientTransportTests
         Assert.True(body.IsDisposed);
     }
 
-    [Fact]
-    public async Task BoundedJsonResponse_CallerCancellationDisposesStream()
+    [Theory]
+    [InlineData("json", "caller")]
+    [InlineData("memory", "caller")]
+    [InlineData("array", "caller")]
+    [InlineData("json", "foreign")]
+    [InlineData("memory", "foreign")]
+    [InlineData("array", "foreign")]
+    [InlineData("json", "tokenless")]
+    public async Task ResponseBody_CancellationPreservesProvenanceAndDisposesStream(string readMode, string provenance)
     {
-        var body = new CancellationBlockingStream();
+        using var foreign = new CancellationTokenSource();
+        foreign.Cancel();
+        var failure = provenance switch
+        {
+            "foreign" => new OperationCanceledException(foreign.Token),
+            "tokenless" => new OperationCanceledException(),
+            _ => null,
+        };
+        var body = new CancellationBlockingStream { ReadFailure = failure };
         var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
         {
             "/api/handshake" => Json(CreateHandshake()),
@@ -897,17 +912,30 @@ public sealed class RuntimeClientTransportTests
             },
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         });
-        using var client = new RuntimeManagementClient(
+        using var transport = new RuntimeClientTransport(
             () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"),
             handler);
+        using var client = new RuntimeManagementClient(transport);
         using var cancellation = new CancellationTokenSource();
 
-        var pending = client.GetSystemStatusAsync(cancellation.Token);
+        using var response = readMode == "json" ? null : await transport.GetAsync(
+            transport.CreateRequestUri("system"), cancellationToken: cancellation.Token);
+        await using var stream = response is null ? null : await response.Content.ReadAsStreamAsync(cancellation.Token);
+        Task pending = readMode switch
+        {
+            "json" => client.GetSystemStatusAsync(cancellation.Token),
+            "memory" => stream!.ReadAsync(new byte[1], cancellation.Token).AsTask(),
+            _ => stream!.ReadAsync(new byte[1], 0, 1, cancellation.Token),
+        };
         await body.ReadStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         cancellation.Cancel();
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        var observed = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        if (failure is not null) Assert.Same(failure, observed);
+        else Assert.Equal(cancellation.Token, observed.CancellationToken);
+        if (stream is not null) await stream.DisposeAsync();
         Assert.True(body.IsDisposed);
+        Assert.Equal(["/api/handshake", "/api/v1/system"], handler.Paths);
     }
 
     [Fact]
@@ -1485,6 +1513,7 @@ public sealed class RuntimeClientTransportTests
         private int _disposed;
         public TaskCompletionSource ReadStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        public OperationCanceledException? ReadFailure { get; init; }
 
         public override bool CanRead => true;
         public override bool CanSeek => false;
@@ -1496,7 +1525,8 @@ public sealed class RuntimeClientTransportTests
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
             ReadStarted.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken); }
+            catch (OperationCanceledException) when (ReadFailure is not null) { throw ReadFailure; }
             return 0;
         }
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

@@ -2,8 +2,8 @@
 
 Status: the template and compiled Quickstart now use one authored project. Ordinary
 Build, development composition and direct multi-RID Pack include restored NuGet/project
-ownership, compiled XAML/resources and generated App preview routing. Remaining work
-is driven by supported first-party package requirements. The workflow is IDE-independent.
+ownership, compiled XAML/resources and generated App preview routing. The workflow is
+IDE-independent; native and production-release qualification remains separate.
 
 ## One authored package
 
@@ -32,8 +32,9 @@ lists. Source folders are organizational and do not determine role ownership.
   compiles independently; it does not share mutable state across processes.
 
 RPC interfaces that declare extension points retain their source-authority purpose.
-For an implementation class `N.GreetingService`, the generated typed API is
-`N.IGreetingService`, with the same accessibility and the declared RPC method
+For an implementation class `N.GreetingService` in package `example.greeting`, the
+generated typed API is `Sunder.Generated.Packages.Example_Greeting_Services.IGreetingService`,
+with the same accessibility and the declared RPC method
 signatures. Reserved-name collisions fail; generated symbols do not rename themselves
 with unstable suffixes. Concrete implementation references from UI code are rejected;
 UI code depends on the generated API. Declared interfaces are not duplicated.
@@ -128,6 +129,18 @@ during composition. The getter and its construction must be deterministic withou
 Host I/O or package-data mutation. Multiple schema providers are rejected. The Worker
 SDK supplies the DI implementation used by generated composition.
 
+For storage-key migrations, declare at most one
+`ISunderWorkerStorageMigrationProvider`. Its state and secret plans default to empty
+and are snapshotted during composition, before `worker.ready`; constructors and plan
+getters must be deterministic and free of Host I/O or persistent mutation.
+Implement `ISunderWorkerStorageMigrationPreparation` for optional read-only
+preparation after generation commit and before any migration or activation callback.
+Preparation implementations run in constructor dependency order, with ordinal names
+ordering independent roots. A class implementing both contracts is one DI singleton.
+Both are Worker roots; migration-only packages use ordinary generated DI disposal
+without acquiring background-service or generation-composition requirements.
+See [storage migration examples](DATA-AND-LOGGING.md#migrating-legacy-keys).
+
 Concrete source implementations of `IPackageAuthHandler` and `IPackageCallbackHandler`
 are also Worker constructor roots. At most one authentication handler is allowed; it
 is registered through `SunderWorkerOptions.AuthHandler` and excluded from the generic
@@ -176,7 +189,14 @@ replacing prior output.
 
 ### Restored dependency ownership
 
-For the evaluated TFM/RID, Sunder projects the existing NuGet assets-format-3 graph.
+For the evaluated TFM/RID, Sunder projects the existing NuGet assets-format-3 or
+assets-format-4 graph. Format 4 (used by SDK analysis levels 10.0.300 and later)
+pivots targets and framework metadata by the exact evaluated target alias and
+records the effective TFM separately. Sunder preserves that format and alias in
+each generated role graph, including restore/dependency groups; it never selects
+another alias merely because both resolve to the same TFM. Original restore files
+are evidence inputs and are not rewritten or downgraded. Unsupported future
+formats, inconsistent framework metadata and failed/corrupt restore graphs fail closed.
 Bound role-source symbols and complete emitted role assembly references seed library
 ownership. Transitive library dependencies follow their owner. An owned library
 retains its complete selected compile/runtime/native/resource/build assets; individual

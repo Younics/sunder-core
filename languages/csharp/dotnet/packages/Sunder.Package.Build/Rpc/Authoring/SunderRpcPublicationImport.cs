@@ -46,6 +46,11 @@ internal sealed class SunderRpcPublicationImport(HttpClient http, bool allowDeve
                 if (HashArchive(packagePath, token) != observed) throw Invalid("The retained private archive changed during publication verification.");
                 return false; // Exact private bytes were verified; private publication has no independent baseline transition.
             }
+            var projections = SunderRpcModelProjectionDocument.Parse(SunderRpcDescriptorFileReader.ReadStableBytes(
+                Path.Combine(inspectionPath, SunderPackageFormat.RpcModelProjectionFileName), 4_194_304, "publication model projection"));
+            if (projections.ModelProjectionSha256 != local.GetProperty("modelProjectionSha256").GetString())
+                throw Invalid("The inspected public model projection changed during publication verification.");
+            SunderRpcAuthoringDocuments.ValidateReviewedArtifactProjections(baseline, owned, projections.Contracts);
             var proposal = SunderRpcAuthoringDocuments.PlanPackagePublication(baseline, verified);
             return GenerateSunderRpcBindingsTask.CommitOwnedPublication(projectDirectory, path, baseline.ExactBytes, proposal, () =>
             {

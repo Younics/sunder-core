@@ -47,17 +47,18 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using Sunder.Sdk.Packaging;
             using Sunder.Sdk.Services;
             using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Rpc_V1_Minimal;
             namespace RangeConsumer;
             [SunderService]
             public sealed partial class ConsumerService(IPackageApi api, IServiceProviders<IExampleService> providers)
             {
                 public object Catalog => providers;
-                public async Task<bool> RunAsync() { await api.Example.PingAsync(); return true; }
+                public async Task<bool> RunAsync() { await api.Example_Rpc_V1_Minimal.Example.PingAsync(); return true; }
             }
             [SunderPackageView("range.consumer", "Range", ViewModel = typeof(PageModel))]
             public sealed class Page : Avalonia.Controls.UserControl;
             public sealed class PageModel(IPackageApi api, IServiceProviders<IExampleService> providers)
-            { public object Catalog => providers; public ValueTask RunAsync() => api.Example.PingAsync(); }
+            { public object Catalog => providers; public ValueTask RunAsync() => api.Example_Rpc_V1_Minimal.Example.PingAsync(); }
             """;
         var references = References().Concat(new[] { typeof(SunderWorker).Assembly.Location,
             typeof(Sunder.Sdk.Avalonia.IAvaloniaPackageContributionRegistry).Assembly.Location,

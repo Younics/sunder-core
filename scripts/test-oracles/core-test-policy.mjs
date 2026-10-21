@@ -286,7 +286,7 @@ function dotnetLaneFor(declaration, policy) {
 
 function dotnetPrerequisites(name, source, externalArguments) {
   const prerequisites = [{ kind: "executable", name: "dotnet", requiredWhenSelected: true }];
-  if (/CrossLanguage|Interop/iu.test(`${name} ${source}`)) {
+  if (/CrossLanguage|Interop|RetainedTypeScriptBuildsWithSelectedCandidateTools|RetainedCheckedJavaScriptBuildsWithSelectedCandidateTools/iu.test(`${name} ${source}`)) {
     prerequisites.push({ kind: "executable", name: "node", minimumMajorVersion: 24, requiredWhenSelected: true });
   }
   if (externalArguments[0] !== undefined) {
@@ -313,6 +313,7 @@ function operatingSystemsFor(attributes, name, source) {
 
 function externalInputPrerequisite(name) {
   const kinds = {
+    SUNDER_AGENT_CURRENT_BASELINE_ROOT: "directory",
     SUNDER_AGENT_UI_SNAPSHOT_DIR: "directory",
     SUNDER_AGENT_PACKAGE_ARCHIVE_DIR: "directory",
     SUNDER_NODE_MODULE_PACKAGE_PATH: "file",
@@ -323,6 +324,7 @@ function externalInputPrerequisite(name) {
     SUNDER_LIVE_PLATFORM_INPUT: "file",
     SUNDER_LIVE_REGISTRY_IMPORTS_INPUT: "file",
     SUNDER_LIVE_INSTALLATION_INPUT: "file",
+    SUNDER_COMPATIBILITY_CONTEXT: "file",
     SUNDER_LIVE_PLATFORM_PHASE: "environment",
     SUNDER_LIVE_REGISTRY_IMPORTS_PHASE: "environment",
     SUNDER_LIVE_INSTALLATION_PHASE: "environment",

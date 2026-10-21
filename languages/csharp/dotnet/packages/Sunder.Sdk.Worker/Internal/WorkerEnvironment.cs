@@ -11,7 +11,8 @@ internal sealed record WorkerEnvironment(
     string SessionId,
     string PackageContentPath,
     string PackageDataPath,
-    bool RpcExtendedDeadlineV1)
+    bool RpcExtendedDeadlineV1,
+    bool OperationalOutcomesV1)
 {
     private const string RpcExtendedDeadlineEnvironmentVariable = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
 
@@ -68,7 +69,8 @@ internal sealed record WorkerEnvironment(
             sessionId,
             contentPath,
             temporaryPath,
-            rpcExtendedDeadlineV1);
+            rpcExtendedDeadlineV1,
+            OptionalFlag(getEnvironmentVariable, "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"));
     }
 
     private static bool OptionalFlag(

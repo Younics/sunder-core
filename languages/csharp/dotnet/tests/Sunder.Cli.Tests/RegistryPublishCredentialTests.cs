@@ -147,6 +147,8 @@ public sealed class RegistryPublishCredentialTests
             string? expectedResourceId = null;
             bool hasSetLatestHeader = true;
             var policyRead = false;
+            var committedPolicy = new RegistryStackPolicySnapshot("demo-stack", "owner", new("demo-stack", 1, new('b', 64)),
+                "Listed", null, new(8, new('c', 64)));
             using var client = new RegistryClient(
                 new Uri("https://registry.test/"),
                 new AsyncDelegateHandler(request =>
@@ -171,7 +173,7 @@ public sealed class RegistryPublishCredentialTests
                             "demo-stack",
                             "Published.",
                             [],
-                            [])),
+                            []) { Policy = committedPolicy }),
                     });
                 }));
             using var credential = new RegistryPublishCredential(PublishToken);
@@ -179,6 +181,7 @@ public sealed class RegistryPublishCredentialTests
             var result = await client.PublishStackAsync(archivePath, credential, CancellationToken.None);
 
             Assert.True(result.Success);
+            Assert.Equal(committedPolicy, result.Policy);
             Assert.Equal("demo-stack", expectedResourceId);
             Assert.False(hasSetLatestHeader);
         }

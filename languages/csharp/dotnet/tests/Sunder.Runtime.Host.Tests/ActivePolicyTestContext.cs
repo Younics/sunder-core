@@ -50,8 +50,7 @@ internal sealed class ActivePolicyTestContext : IDisposable
         => Cache.RequireActivation(Origin, package ?? Package);
 
     internal static RegistryPolicySynchronizationResponse Allowed(RegistryPolicySynchronizationRequest request, long revision = 1)
-        => new(request.Nonce, Origin, new(revision, Hash("package-policy-" + revision)),
-            new(revision, Hash("checkpoint-" + revision), 1, Hash("topology")), ObservedAt, ObservedAt.AddHours(24),
+        => new(request.Nonce, Origin, new(revision, Hash("package-policy-" + revision)), ObservedAt, ObservedAt.AddHours(24),
             request.Packages.Select(subject => new RegistryPackagePolicyDecision(subject, "Active", "Listed", "Allowed", null, null, request.PlatformCatalogs)).ToArray(),
             request.PlatformCatalogs.Select(subject => new RegistryPlatformPolicyDecision(subject, "Supported", "Allowed", null, null)).ToArray());
 

@@ -20,7 +20,17 @@
           "releaseVersion": "1.1.0"
         }
       },
-      "history": []
+      "history": [],
+      "projectionReviews": [
+        {
+          "contractVersion": "2.0.0",
+          "descriptorSha256": "38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898",
+          "abiSha256": "6ca6d6385c720290548592de890f3e3ceb86f3d999167f4e80c6afb15f8a02d8",
+          "reviewKind": "initial-source",
+          "canonicalProjection": "{\n  \"modelProjection\": {\n    \"models\": {\n      \"Id\": \"Id\",\n      \"IdList\": \"IdList\",\n      \"JsonText\": \"JsonText\",\n      \"SchemaVersion\": \"SchemaVersion\",\n      \"ShortText\": \"ShortText\",\n      \"StackContributorMetadata\": \"StackContributorMetadata\",\n      \"StackExportDetailSelection\": \"StackExportDetailSelection\",\n      \"StackExportDetailSelectionList\": \"StackExportDetailSelectionList\",\n      \"StackExportDiscoveryContext\": \"StackExportDiscoveryContext\",\n      \"StackExportItemDescriptor\": \"StackExportItemDescriptor\",\n      \"StackExportItemDescriptorList\": \"StackExportItemDescriptorList\",\n      \"StackExportItemDetail\": \"StackExportItemDetail\",\n      \"StackExportItemDetailList\": \"StackExportItemDetailList\",\n      \"StackExportItemList\": \"StackExportItemList\",\n      \"StackExportItemSelection\": \"StackExportItemSelection\",\n      \"StackExportItemSelectionList\": \"StackExportItemSelectionList\",\n      \"StackExportRequest\": \"StackExportRequest\",\n      \"StackImportAction\": \"StackImportAction\",\n      \"StackImportActionKind\": \"StackImportActionKind\",\n      \"StackImportActionList\": \"StackImportActionList\",\n      \"StackImportAppliedContext\": \"StackImportAppliedContext\",\n      \"StackImportConflict\": \"StackImportConflict\",\n      \"StackImportConflictList\": \"StackImportConflictList\",\n      \"StackImportConflictSeverity\": \"StackImportConflictSeverity\",\n      \"StackImportOutcome\": \"StackImportOutcome\",\n      \"StackImportPreview\": \"StackImportPreview\",\n      \"StackImportResult\": \"StackImportResult\",\n      \"StackImportedItem\": \"StackImportedItem\",\n      \"StackImportedItemList\": \"StackImportedItemList\",\n      \"StackPackageRequirement\": \"StackPackageRequirement\",\n      \"StackPackageRequirementList\": \"StackPackageRequirementList\",\n      \"StackRequiredInputDescriptor\": \"StackRequiredInputDescriptor\",\n      \"StackRequiredInputDescriptorList\": \"StackRequiredInputDescriptorList\",\n      \"StackRpcEmpty\": \"StackRpcEmpty\",\n      \"StackRpcExportContribution\": \"StackRpcExportContribution\",\n      \"StackRpcFragmentExport\": \"StackRpcFragmentExport\",\n      \"StackRpcFragmentExportList\": \"StackRpcFragmentExportList\",\n      \"StackRpcFragmentImport\": \"StackRpcFragmentImport\",\n      \"StackRpcFragmentImportList\": \"StackRpcFragmentImportList\",\n      \"StackRpcImportPreviewRequest\": \"StackRpcImportPreviewRequest\",\n      \"StackRpcImportRequest\": \"StackRpcImportRequest\",\n      \"StackRpcPayloadFile\": \"StackRpcPayloadFile\",\n      \"StackRpcPayloadFileList\": \"StackRpcPayloadFileList\",\n      \"StackValueSensitivity\": \"StackValueSensitivity\",\n      \"StringList\": \"StringList\",\n      \"StringMap\": \"StringMap\",\n      \"SunderRpcContentReference\": \"ContentReference\",\n      \"Text\": \"Text\"\n    },\n    \"serviceReferences\": {}\n  }\n}\n",
+          "projectionSha256": "c3a558ea14fc1cc1b8cc7f730b6c9d0583a472c94955676dc0c3396b13ef0526"
+        }
+      ]
     }
   }
 }

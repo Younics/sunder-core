@@ -6,10 +6,10 @@
   <PropertyGroup>
     <_SunderPackageSingleProject Condition="'$(SunderPackageProject)' == 'true' and '$(OutputType)' == 'Library' and '$(SunderPackageRole)' == '' and '$(SunderPackageAppProject)' == '' and '$(SunderPackageRootProject)' == '' and '$(SunderPackagePrimaryProject)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true'">true</_SunderPackageSingleProject>
     <_SunderPackageSingleProject Condition="'$(SunderPackageCompilationRole)' != ''">true</_SunderPackageSingleProject>
-    <_SunderPackageRoleGlobals>SunderPackageCompilationRole;SunderPackageReferenceRole;SunderPackageRolePlanPath;SunderPackageRolePlanSha256;SunderPackageRidBuild;SunderPackageAuthoringOutputRoot;SunderPackageAuthoringIntermediateRoot;SunderPackageAuthoringPackInput;SunderPackageAuthoringPackOutput;AssemblyName;OutputType;StartupObject;IntermediateOutputPath;OutputPath;OutDir;AppendRuntimeIdentifierToOutputPath;GenerateRuntimeConfigurationFiles;SunderPackageProject;ProjectAssetsFile;MSBuildProjectExtensionsPath</_SunderPackageRoleGlobals>
+    <_SunderPackageRoleGlobals>SunderPackageCompilationRole;SunderPackageReferenceRole;SunderPackageRolePlanPath;SunderPackageRolePlanSha256;SunderPackageRoleCompilationRoot;SunderPackageAnalysisGlobalUsingsFile;SunderPackageRidBuild;SunderPackageAuthoringOutputRoot;SunderPackageAuthoringIntermediateRoot;SunderPackageAuthoringPackInput;SunderPackageAuthoringPackOutput;AssemblyName;OutputType;StartupObject;IntermediateOutputPath;OutputPath;OutDir;AppendRuntimeIdentifierToOutputPath;GenerateRuntimeConfigurationFiles;SunderPackageProject;ProjectAssetsFile;MSBuildProjectExtensionsPath</_SunderPackageRoleGlobals>
     <_GlobalPropertiesToRemoveFromProjectReferences Condition="'$(_SunderPackageSingleProject)' == 'true'">$(_GlobalPropertiesToRemoveFromProjectReferences);$(_SunderPackageRoleGlobals);RuntimeIdentifier;SelfContained;UseAppHost;PublishSingleFile;PublishTrimmed</_GlobalPropertiesToRemoveFromProjectReferences>
     <GenerateRuntimeConfigurationFiles Condition="'$(SunderPackageCompilationRole)' == 'app'">true</GenerateRuntimeConfigurationFiles>
-    <MSBuildAllProjects Condition="'$(SunderPackageCompilationRole)' != ''">$(MSBuildAllProjects);$(SunderPackageRolePlanPath)</MSBuildAllProjects>
+    <MSBuildAllProjects Condition="'$(SunderPackageCompilationRole)' != '' and '$(SunderPackageRoleCompilationRoot)' != ''">$(MSBuildAllProjects);$(SunderPackageRoleCompilationRoot)/compilation-inputs.v1.json</MSBuildAllProjects>
     <_SunderPackageResourcePreparationTarget Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == ''">_PrepareSunderPackageResources</_SunderPackageResourcePreparationTarget>
     <SkipCompilerExecution Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(DesignTimeBuild)' == 'true'">true</SkipCompilerExecution>
     <ProvideCommandLineArgs Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(DesignTimeBuild)' == 'true'">true</ProvideCommandLineArgs>
@@ -147,7 +147,7 @@
       <_SunderExpectedRoleAssetsFile>$([System.IO.Path]::GetFullPath('$(_SunderExpectedRoleAssetsFile)'))</_SunderExpectedRoleAssetsFile>
     </PropertyGroup>
     <Error Condition="'$(_SunderExpectedRoleAssetsFile)' != '' and '$(_SunderActualRoleAssetsFile)' != '$(_SunderExpectedRoleAssetsFile)'"
-           Text="package-authoring.role-plan-invalid: The inner build did not select its verified role assets file." />
+           Text="package-authoring.role-plan-invalid: The inner build selected '$(_SunderActualRoleAssetsFile)' instead of its verified role assets '$(_SunderExpectedRoleAssetsFile)'." />
     <ItemGroup>
       <ProjectReference Remove="@(_SunderRoleExcludedProjects)" MatchOnMetadata="FullPath" MatchOnMetadataOptions="PathLike" />
       <AvaloniaXaml Remove="@(AvaloniaXaml)" />
@@ -168,19 +168,15 @@
     <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
   </Target>
 
-  <Target Name="_ReadSunderPackageCompilationRole" BeforeTargets="CoreCompile"
+  <!-- Hash only the validated role-local compiler inputs in the SDK dependency
+       cache. Keep the complete authored set for fresh validation at CoreCompile. -->
+  <Target Name="_ProjectSunderPackageCompilationRole" BeforeTargets="_GenerateCompileDependencyCache"
           DependsOnTargets="_ReadSunderPackageRoleDependencies;ResolveReferences"
           Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true'">
     <ItemGroup>
       <_SunderRoleSdkAssemblyAttributes Include="$(GeneratedAssemblyInfoFile);$(TargetFrameworkMonikerAssemblyAttributesPath);$(AssemblyAttributesPath)" />
       <_SunderRoleAuthoredCompile Include="@(Compile)" Exclude="@(_SunderRoleSdkAssemblyAttributes)" Condition="'%(Compile.AutoGen)' != 'true'" />
     </ItemGroup>
-    <ReadSunderPackageRoleInputsTask PlanPath="$(SunderPackageRolePlanPath)" ExpectedSha256="$(SunderPackageRolePlanSha256)"
-                                    ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
-                                    RuntimeIdentifier="$(RuntimeIdentifier)" PackageVersion="$(Version)"
-                                    SourceFiles="@(_SunderRoleAuthoredCompile)" ValidateSourceEvaluation="true" ProjectDirectory="$(MSBuildProjectDirectory)" DefineConstants="$(DefineConstants)"
-                                    GeneratedGlobalUsingsFile="$(GeneratedGlobalUsingsFile)" AnalysisGlobalUsingsFile="$(SunderPackageAnalysisGlobalUsingsFile)"
-                                    Role="$(SunderPackageCompilationRole)" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
     <ItemGroup>
       <!-- SDK assembly attributes are role-local. All other inputs come from the
            validated source plan, including its projected global using directives. -->
@@ -198,7 +194,33 @@
       <_SunderRoleCompileOnlyReference Include="@(ReferencePath)" Exclude="@(_SunderRoleRuntimeReferences);@(_SunderRoleRuntimeAssets)" />
       <ReferencePath Remove="@(_SunderRoleCompileOnlyReference)" />
       <ReferencePath Include="@(_SunderRoleCompileOnlyReference)" CopyLocal="false" IncludeRuntimeDependency="false" />
+      <_SunderProjectedRoleReferences Include="@(ReferencePath)" />
+      <_SunderProjectedRoleRefAssemblies Include="@(ReferencePathWithRefAssemblies)" />
     </ItemGroup>
+    <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
+  </Target>
+
+  <Target Name="_ReadSunderPackageCompilationRole" BeforeTargets="CoreCompile"
+          DependsOnTargets="_ProjectSunderPackageCompilationRole"
+          Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true'">
+    <ItemGroup>
+      <_SunderUnexpectedRoleCompile Include="@(Compile)" Exclude="@(_SunderRoleCompile);@(_SunderRoleSdkAssemblyAttributes)" Condition="'%(Compile.AutoGen)' != 'true'" />
+      <_SunderMissingRoleCompile Include="@(_SunderRoleCompile)" Exclude="@(Compile)" />
+      <_SunderUnexpectedRoleReferences Include="@(ReferencePath)" Exclude="@(_SunderProjectedRoleReferences)" />
+      <_SunderUnexpectedRoleReferences Include="@(ReferencePathWithRefAssemblies)" Exclude="@(_SunderProjectedRoleRefAssemblies)" />
+      <_SunderMissingRoleReferences Include="@(_SunderProjectedRoleReferences)" Exclude="@(ReferencePath)" />
+      <_SunderMissingRoleReferences Include="@(_SunderProjectedRoleRefAssemblies)" Exclude="@(ReferencePathWithRefAssemblies)" />
+    </ItemGroup>
+    <Error Condition="'@(_SunderUnexpectedRoleCompile)' != '' or '@(_SunderMissingRoleCompile)' != ''"
+           Text="package-authoring.role-plan-invalid: The evaluated source set changed after role projection. Added: @(_SunderUnexpectedRoleCompile); missing: @(_SunderMissingRoleCompile)." />
+    <Error Condition="'@(_SunderUnexpectedRoleReferences)' != '' or '@(_SunderMissingRoleReferences)' != ''"
+           Text="package-authoring.role-plan-invalid: The evaluated reference set changed after role projection. Added: @(_SunderUnexpectedRoleReferences); missing: @(_SunderMissingRoleReferences)." />
+    <ReadSunderPackageRoleInputsTask PlanPath="$(SunderPackageRolePlanPath)" ExpectedSha256="$(SunderPackageRolePlanSha256)"
+                                    ProjectIdentity="$(MSBuildProjectName)" Configuration="$(Configuration)" TargetFramework="$(TargetFramework)"
+                                    RuntimeIdentifier="$(RuntimeIdentifier)" PackageVersion="$(Version)"
+                                    SourceFiles="@(_SunderRoleAuthoredCompile)" ValidateSourceEvaluation="true" ProjectDirectory="$(MSBuildProjectDirectory)" DefineConstants="$(DefineConstants)"
+                                    GeneratedGlobalUsingsFile="$(GeneratedGlobalUsingsFile)" AnalysisGlobalUsingsFile="$(SunderPackageAnalysisGlobalUsingsFile)"
+                                    Role="$(SunderPackageCompilationRole)" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)" />
     <OnError ExecuteTargets="_ReleaseSunderRpcGeneratedOutputLock" />
   </Target>
 

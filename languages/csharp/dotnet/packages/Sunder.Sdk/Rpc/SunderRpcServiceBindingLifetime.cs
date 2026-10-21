@@ -11,6 +11,8 @@ namespace Sunder.Sdk.Rpc;
 /// For generated bindings. Construction performs no discovery. Discovery or use of a bound reference
 /// starts observation. Retirement is permanent for an issued binding, including after catalog recovery.
 /// Factories create exact-bound proxies borrowing this DI scope; they must observe the supplied retirement token.
+/// Independent discovery can recover after the receiver's transport reopens and observation is reestablished;
+/// it does not revive previously issued references or replay service invocations.
 /// </remarks>
 [EditorBrowsable(EditorBrowsableState.Never)]
 [SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
@@ -62,10 +64,14 @@ public sealed partial class SunderRpcServiceBindingLifetime : IDisposable, IAsyn
             // In particular, an older availability failure cannot mask a new authorization denial.
             var snapshot = await ReadAsync().ConfigureAwait(false);
             // A successful probe is not permission to publish bindings from a broken observation.
-            await ReadyAsync(cancellationToken).ConfigureAwait(false);
+            var readyEpoch = await ReadyAfterDiscoveryAsync(cancellationToken).ConfigureAwait(false);
             // Initial subscription/resnapshot may have observed a withdrawal after the probe.
             // Preserve the startup race barrier without delaying a failed explicit probe behind it.
-            if (!observationReady) snapshot = await ReadAsync().ConfigureAwait(false);
+            if (!observationReady || epoch != readyEpoch)
+            {
+                epoch = readyEpoch;
+                snapshot = await ReadAsync().ConfigureAwait(false);
+            }
             ApplySnapshot(contractId, snapshot, epoch);
             return snapshot;
         }
@@ -204,7 +210,11 @@ public sealed partial class SunderRpcServiceBindingLifetime : IDisposable, IAsyn
                 if (throwIfStopped) ThrowIfStopped();
                 return;
             }
-            _watchTask ??= Task.Run(ObserveAsync);
+            if (_watchTask is not null) return;
+            // The lazy observer outlives the discovery/invocation which first used
+            // this DI scope. Never capture that caller's invocation/deadline context.
+            if (ExecutionContext.IsFlowSuppressed()) _watchTask = Task.Run(ObserveAsync);
+            else { using (ExecutionContext.SuppressFlow()) _watchTask = Task.Run(ObserveAsync); }
         }
     }
 
@@ -298,6 +308,28 @@ public sealed partial class SunderRpcServiceBindingLifetime : IDisposable, IAsyn
             ready = _ready.Task;
         }
         await ready.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<long> ReadyAfterDiscoveryAsync(CancellationToken cancellationToken)
+    {
+        Task ready;
+        lock (_gate)
+        {
+            ThrowIfStopped();
+            if (_connected) return _epoch;
+            // The explicit discovery just succeeded on the receiver's current transport.
+            // Do not substitute a cached failure from its previous transport. The single
+            // observer must still subscribe/resnapshot before any new binding is issued.
+            if (_ready.Task.IsCompleted) _ready = NewCompletion();
+            ready = _ready.Task;
+        }
+        await ready.WaitAsync(cancellationToken).ConfigureAwait(false);
+        lock (_gate)
+        {
+            ThrowIfStopped();
+            if (!_connected) throw _availabilityError ?? Unavailable();
+            return _epoch;
+        }
     }
 
     private long EnterQuery(bool requireConnected = true)

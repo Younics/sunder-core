@@ -19,6 +19,7 @@ import { preparePackageImports, importProjection, importedDependenciesForRoles }
 import { canonicalCandidateFixture, installFixtureInspector, publishFixtureModelProjections, rebindFixtureProjection } from "./model-projection-fixtures";
 import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
 import { projectionDocumentBytes } from "../src/rpc-model-projection";
+import { restoreContracts } from "../src/rpc-contract-restore";
 
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
@@ -145,24 +146,31 @@ test("consumer roles project per-role grants, readiness and dependencies without
     await assert.rejects(preparePackageImports(lock, c.cache, "example.owner", [], new Set(["runtime"])), /consumer-roles-unavailable/);
   } finally { await c.dispose(); }
 });
-test("explicit consumer role migration preserves old Runtime intent, rejects invalid roles, and keeps no-op mtimes", async () => {
+test("missing or invalid consumer intent and projection pins fail closed without lock, cache or output changes", async () => {
   const c = await fixture();
   try {
-    const legacy = JSON.parse(c.original.toString()); delete legacy.packageImports["example.dependency"].consumerRoles;
-    const original = Buffer.from(JSON.stringify(legacy, null, 2) + "\n");
-    assert.throws(() => parseContractLock(original), /consumer-roles-migration-required/);
-    await writeFile(c.lockPath, original);
-    const result = await packageApiCommand(c.root, { operation: "migrate-consumer-roles", cacheRoot: c.cache });
-    assert.equal(result.changed, true); assert.deepEqual(result.lock.packageImports.get("example.dependency")!.consumerRoles, ["runtime"]);
-    assert.deepEqual(await readFile(c.lockPath), c.original);
-    const mtime = (await stat(c.lockPath)).mtimeMs;
-    assert.equal((await packageApiCommand(c.root, { operation: "migrate-consumer-roles", cacheRoot: c.cache })).changed, false);
-    assert.equal((await stat(c.lockPath)).mtimeMs, mtime);
-    const widened = await packageApiCommand(c.root, { operation: "migrate-consumer-roles", packageId: "example.dependency", consumerRoles: ["app", "runtime"], cacheRoot: c.cache });
-    assert.deepEqual(widened.lock.packageImports.get("example.dependency")!.consumerRoles, ["app", "runtime"]);
-    legacy.packageImports["example.dependency"].consumerRoles = ["runtime", "app"];
-    await writeFile(c.lockPath, JSON.stringify(legacy, null, 2) + "\n");
-    await assert.rejects(packageApiCommand(c.root, { operation: "migrate-consumer-roles", packageId: "example.dependency", consumerRoles: ["runtime"], cacheRoot: c.cache }), /consumer-roles-invalid/);
+    const cache = await snapshot(c.cache); let requests = 0;
+    const fetchImplementation: typeof fetch = async () => { requests++; throw new Error("Unexpected HTTP."); };
+    for (const mutation of ["missing-roles", "invalid-roles", "missing-projection-pins"]) {
+      const raw = JSON.parse(c.original.toString());
+      if (mutation === "missing-roles") delete raw.packageImports["example.dependency"].consumerRoles;
+      if (mutation === "invalid-roles") raw.packageImports["example.dependency"].consumerRoles = ["runtime", "app"];
+      if (mutation === "missing-projection-pins") {
+        delete raw.packageArtifacts["example.dependency"].modelProjectionBytes;
+        delete raw.packageArtifacts["example.dependency"].modelProjectionSha256;
+      }
+      const original = Buffer.from(JSON.stringify(raw, null, 2) + "\n");
+      const diagnostic = mutation === "missing-projection-pins" ? /missing/ : /consumer-roles-invalid/;
+      assert.throws(() => parseContractLock(original), diagnostic);
+      await writeFile(c.lockPath, original); const mtime = (await stat(c.lockPath)).mtimeMs;
+      await assert.rejects(loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }), diagnostic);
+      await assert.rejects(restoreContracts(c.root, { cacheRoot: c.cache, fetchImplementation }), diagnostic);
+      await assert.rejects(packageApiCommand(c.root, { operation: "update", packageId: "example.dependency", consumerRoles: ["app", "runtime"], cacheRoot: c.cache, fetchImplementation }));
+      assert.deepEqual(await readFile(c.lockPath), original); assert.equal((await stat(c.lockPath)).mtimeMs, mtime);
+      assert.equal(requests, 0); assert.deepEqual(await snapshot(c.cache), cache);
+    }
+    await assert.rejects(packageApiCommand(c.root, { operation: "migrate-consumer-roles", cacheRoot: c.cache } as unknown as PackageApiRequest), /import-not-found/);
+    await assert.rejects(stat(join(c.root, ".sunder/generated/rpc")), { code: "ENOENT" });
   } finally { await c.dispose(); }
 });
 test("TS and JS imported service implementations derive only provider grants from exact selected types", async () => {
@@ -172,7 +180,7 @@ test("TS and JS imported service implementations derive only provider grants fro
       const lock = JSON.parse(c.original.toString()); lock.packageImports = {};
       lock.providerImports.extension = { packageId: "example.dependency", contractId: c.requirement.contractId };
       await writeFile(c.lockPath, JSON.stringify(lock, null, 2) + "\n");
-      await writeFile(join(c.root, `src/services.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation = defineService({ ping(request,context){context.signal.throwIfAborted();return request;} },{implements:Implementations.extension});');
+      await writeFile(join(c.root, `src/services.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation = defineService({ examplePing(request,context){context.signal.throwIfAborted();return request;} },{implements:Implementations.extension});');
       const loaded = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache });
       assert.equal(loaded.contracts[0]!.descriptorSha256, c.requirement.descriptorSha256);
       assert.equal(loaded.ownedRpc!.importedProviders.length, 1); assert.equal(loaded.config.usesContracts!.length, 0);
@@ -224,15 +232,25 @@ test("package API add/update uses stable selection, explicit presence and prerel
     const added = await command(add); assert.ok(added.changed);
     assert.equal(added.lock.packageArtifacts.get("example.dependency")!.selectedPackageVersion, "1.9.0");
     assert.equal(added.lock.packageImports.get("example.dependency")!.presence, "optional"); assert.deepEqual(added.lock.packageImports.get("example.dependency")!.requiredContracts, []);
+    assert.deepEqual(added.lock.packageImports.get("example.dependency")!.consumerRoles, ["app", "runtime"]);
     await assert.rejects(stat(join(c.root, "sunder-contracts.owned.json")), { code: "ENOENT" });
     await c.run("contracts", "accept");
     const before = await readFile(c.lockPath); const time = (await stat(c.lockPath)).mtimeMs; const calls = requests;
     assert.equal((await command(add)).changed, false); assert.equal(requests, calls); assert.equal((await stat(c.lockPath)).mtimeMs, time);
     const prerelease = await command({ operation: "update", packageId: "example.dependency", includePrerelease: true });
     assert.equal(prerelease.lock.packageArtifacts.get("example.dependency")!.selectedPackageVersion, "1.10.0-rc.1");
+    assert.deepEqual(prerelease.lock.packageImports.get("example.dependency")!.consumerRoles, ["app", "runtime"]);
     assert.equal((await command({ operation: "update", packageId: "example.dependency" })).changed, false);
     const stable = await command({ operation: "update", packageId: "example.dependency", includePrerelease: false, presence: "required" });
     assert.equal(stable.lock.packageArtifacts.get("example.dependency")!.selectedPackageVersion, "1.9.0");
+    const runtime = await command({ operation: "update", packageId: "example.dependency", consumerRoles: ["runtime"] });
+    assert.deepEqual(runtime.lock.packageImports.get("example.dependency")!.consumerRoles, ["runtime"]);
+    assert.deepEqual([...runtime.lock.packageArtifacts], [...stable.lock.packageArtifacts]);
+    const runtimeTime = (await stat(c.lockPath)).mtimeMs;
+    assert.equal((await command({ operation: "update", packageId: "example.dependency" })).changed, false);
+    assert.equal((await stat(c.lockPath)).mtimeMs, runtimeTime);
+    const widened = await command({ operation: "update", packageId: "example.dependency", consumerRoles: ["app", "runtime"] });
+    assert.deepEqual(widened.lock.packageImports.get("example.dependency")!.consumerRoles, ["app", "runtime"]);
     const saved = await readFile(c.lockPath);
     await writeFile(join(c.root, "src/worker.ts"), 'import {Catalogs} from "#sunder/api"; export const broken=Catalogs.missing;');
     await assert.rejects(command({ operation: "update", packageId: "example.dependency", presence: "optional" }), /rpc-authoring\./u);
@@ -304,6 +322,7 @@ for (const invalid of [
   { operation: "update", packageId: "example.dependency", registryOrigin: "https://registry.example/" },
   { operation: "add", packageId: "example.new", versionRange: ">=1.0.0" }, { operation: "require", packageId: "example.dependency", contractId: "example.absent" },
   { operation: "remove", packageId: "example.absent" },
+  { operation: "update", consumerRoles: ["app", "runtime"] },
 ] as const) test(`invalid package API intent stays offline: ${JSON.stringify(invalid)}`, async () => {
   const c = await fixture();
   try {

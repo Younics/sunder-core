@@ -122,7 +122,12 @@ public sealed class LiveRegistryDevelopmentImportTests
                 var handler = Assert.Single(loaded.RpcProviders.Values).Handler;
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
                 var context = new SunderRpcInvocationContext(provider.PackageId, provider.PackageVersion, provider, DateTimeOffset.UtcNow.AddSeconds(20), 1, deadline.Token);
-                var reply = await handler.InvokeUnaryAsync(context, "messages", "send", JsonSerializer.SerializeToElement(new { }), deadline.Token);
+                JsonElement reply = default;
+                var invocationFailure = await Record.ExceptionAsync(async () =>
+                    reply = await handler.InvokeUnaryAsync(context, "messages", "send", JsonSerializer.SerializeToElement(new { }), deadline.Token));
+                Assert.True(invocationFailure is null, $"Provider invocation failed for '{folder}': {invocationFailure}\n"
+                    + $"Provider exception type: {(invocationFailure as ProcessRpcProviderFaultException)?.ProviderExceptionType}\n"
+                    + string.Join("\n", logs.Entries.Select(entry => entry.Message + "\n" + entry.Exception)));
                 Assert.Equal("live-provider", reply.GetProperty("message").GetString());
                 if (folder == input.Packages[0])
                 {

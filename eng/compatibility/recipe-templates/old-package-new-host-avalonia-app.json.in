@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "referenceId": "<reviewed-reference-id>",
+  "corpusId": "<reviewed-corpus-id>",
+  "kind": "old-package-new-host",
+  "owner": "Sunder.App.Tests",
+  "command": { "runner": "dotnet-test", "entryPoint": "languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj", "arguments": [] },
+  "reportFormat": "trx",
+  "requiredTests": ["Sunder.App.Tests.ReleasedSdkAppCorpusTests.RetainedAppPackageActivatesWithProvidedCandidateAppIdentity"],
+  "timeoutSeconds": 1800
+}

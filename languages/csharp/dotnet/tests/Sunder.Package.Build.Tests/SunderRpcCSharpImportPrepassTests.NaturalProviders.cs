@@ -13,17 +13,50 @@ namespace Sunder.Package.Build.Tests;
 public sealed partial class SunderRpcCSharpImportPrepassTests
 {
     [Fact]
+    public void WireMinorMethodAdditionBreaksAnUnchangedGeneratedInterfaceProvider()
+    {
+        const string declaration = """
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Services;
+            [SunderService(SunderServiceExposure.Public)]
+            public interface CounterService { ValueTask<string> ReadAsync(); }
+            """;
+        const string provider = """
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Sunder.Sdk.Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Counter;
+            [SunderServiceProvider(typeof(ICounterService))]
+            public sealed partial class ExistingProvider : ICounterService
+            {
+                public ValueTask<string> ReadAsync(CancellationToken token = default) => ValueTask.FromResult("value");
+            }
+            """;
+        var before = PrepareNaturalImport(declaration, "counter");
+        _ = CompileNaturalProvider(before, provider);
+        var after = PrepareNaturalImport(declaration.Replace("ReadAsync();", "ReadAsync(); ValueTask<string> AddedAsync();", StringComparison.Ordinal), "counter");
+        var oldContract = Assert.Single(before.Contracts); var newContract = Assert.Single(after.Contracts);
+        Assert.Equal(oldContract.ModelProjection.ToCanonicalUtf8(), newContract.ModelProjection.ToCanonicalUtf8());
+        Assert.Equal(SunderRpcContractChangeKind.Minor, SunderRpcContractCompatibility.Classify(oldContract.Descriptor, newContract.Descriptor).Kind);
+        var failed = new SunderRpcCSharpSourceCompiler().Compile(NaturalProviderInput(after, provider));
+        Assert.False(failed.Success);
+        Assert.Contains(failed.Diagnostics, diagnostic => diagnostic.Message.Contains("AddedAsync", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ImportedNaturalProviderNeedsNoContextUnitOrAuthoredTransportAdapter()
     {
         const string declaration = """
             using System.Collections.Generic;
             using System.Threading;
             using System.Threading.Tasks;
+            using Sunder.Sdk.Rpc;
             using Sunder.Sdk.Services;
             [SunderService(SunderServiceExposure.Public)]
             public interface EmbeddingProviderService
             {
                 ValueTask<Entry> DescribeAsync(CancellationToken token = default);
+                ValueTask<Entry> EchoAsync(Entry request, CancellationToken token = default);
                 ValueTask<IReadOnlyList<Entry>> ListModelsAsync(CancellationToken token = default);
                 ValueTask<Entry> GetReadinessAsync(CancellationToken token = default);
                 ValueTask<Entry> SpaceIdentityAsync(string modelId, CancellationToken token = default);
@@ -31,7 +64,13 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
                 ValueTask<IReadOnlyList<Entry>> GenerateBatchAsync(string modelId, IReadOnlyList<string> texts, CancellationToken token = default);
                 ValueTask ResetAsync(CancellationToken token = default);
             }
-            public sealed record Entry(string Value);
+            public sealed record Entry(string Value)
+            {
+                public SunderRpcOptional<IReadOnlyList<string>> Items { get; init; }
+                public SunderRpcOptional<int> Count { get; init; }
+                public SunderRpcOptional<string?> Note { get; init; }
+                public string? RequiredNote { get; init; }
+            }
             """;
         var imports = PrepareNaturalImport(declaration, "localEmbedding");
         // The provider chooses the canonical interface even though its reviewed
@@ -42,13 +81,14 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using System.Threading;
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Embedding_Provider;
             using Sunder.Generated.Packages.Example_Dependency_Models;
             [SunderServiceProvider(typeof(IEmbeddingProviderService))]
             public sealed partial class LocalEmbedding : IEmbeddingProviderService
             {
                 public int Resets { get; private set; }
                 public ValueTask<Entry> DescribeAsync(CancellationToken token = default) => Reply("description");
+                public ValueTask<Entry> EchoAsync(Entry request, CancellationToken token = default) => ValueTask.FromResult(request);
                 public ValueTask<IReadOnlyList<Entry>> ListModelsAsync(CancellationToken token = default) => ValueTask.FromResult<IReadOnlyList<Entry>>([new() { Value = "model" }]);
                 public ValueTask<Entry> GetReadinessAsync(CancellationToken token = default) => Reply("ready");
                 public ValueTask<Entry> SpaceIdentityAsync(string modelId, CancellationToken token = default) => Reply(modelId);
@@ -66,7 +106,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         try
         {
             var assembly = load.LoadFromStream(bytes);
-            var api = assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.IEmbeddingProviderService", true)!;
+            var api = assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Embedding_Provider.IEmbeddingProviderService", true)!;
             Assert.DoesNotContain(api.GetMethods().SelectMany(method => method.GetParameters()), parameter => parameter.ParameterType == typeof(SunderRpcInvocationContext));
             Assert.Equal(typeof(CancellationToken), Assert.Single(api.GetMethod("DescribeAsync")!.GetParameters()).ParameterType);
             Assert.Equal(typeof(ValueTask), api.GetMethod("ResetAsync")!.ReturnType);
@@ -74,6 +114,25 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             var registration = (SunderWorkerProviderRegistration)instance.GetType().GetMethod("CreateSunderRpcProviderRegistration")!.Invoke(instance, null)!;
             var result = await registration.Handler.InvokeUnaryAsync(null!, "embedding-provider", "generate", JsonSerializer.SerializeToElement(new { modelId = "model", text = "text" }));
             Assert.Equal("model:text", result.GetProperty("value").GetString());
+            Assert.Equal(JsonValueKind.Null, result.GetProperty("requiredNote").ValueKind);
+            Assert.False(result.TryGetProperty("items", out _));
+            Assert.False(result.TryGetProperty("count", out _));
+            Assert.False(result.TryGetProperty("note", out _));
+            var echoed = await registration.Handler.InvokeUnaryAsync(null!, "embedding-provider", "echo",
+                JsonSerializer.SerializeToElement(new { value = "echoed", requiredNote = (string?)null }));
+            Assert.Equal("echoed", echoed.GetProperty("value").GetString());
+            Assert.False(echoed.TryGetProperty("items", out _));
+            Assert.False(echoed.TryGetProperty("count", out _));
+            Assert.False(echoed.TryGetProperty("note", out _));
+            var present = await registration.Handler.InvokeUnaryAsync(null!, "embedding-provider", "echo",
+                JsonSerializer.SerializeToElement(new { value = "present", requiredNote = (string?)null, items = Array.Empty<string>(), count = 0, note = (string?)null }));
+            Assert.Empty(present.GetProperty("items").EnumerateArray());
+            Assert.Equal(0, present.GetProperty("count").GetInt32());
+            Assert.Equal(JsonValueKind.Null, present.GetProperty("note").ValueKind);
+            await Assert.ThrowsAsync<JsonException>(() => registration.Handler.InvokeUnaryAsync(null!, "embedding-provider", "echo",
+                JsonSerializer.SerializeToElement(new { value = "missing-required" })).AsTask());
+            await Assert.ThrowsAsync<JsonException>(() => registration.Handler.InvokeUnaryAsync(null!, "embedding-provider", "echo",
+                JsonSerializer.SerializeToElement(new { value = "null-optional", requiredNote = (string?)null, count = (int?)null })).AsTask());
             var unit = await registration.Handler.InvokeUnaryAsync(null!, "embedding-provider", "reset", JsonSerializer.SerializeToElement(new { }));
             Assert.Empty(unit.EnumerateObject()); Assert.Equal(1, instance.GetType().GetProperty("Resets")!.GetValue(instance));
             using var canceled = new CancellationTokenSource(); canceled.Cancel();

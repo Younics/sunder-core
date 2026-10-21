@@ -150,6 +150,7 @@ internal sealed class RuntimePackageActivator(
                 RpcManifestSha256 = package.ManifestSha256 ?? string.Empty,
                 MigrationJournal = packageData.MigrationJournal,
                 ExecutionRuntimeBinding = package.ExecutionRuntimeBinding,
+                ApprovedSensitiveCapabilities = package.ApprovedSensitiveCapabilities.ToArray(),
                 RecoveryFactory = () => CreateRecoveryLoadedPackage(
                     recoveryPackage,
                     rpcBroker,

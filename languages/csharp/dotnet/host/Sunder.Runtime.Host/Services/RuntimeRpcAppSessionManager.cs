@@ -18,7 +18,7 @@ internal interface IRuntimeRpcCallerActivation
     IReadOnlyList<SunderPackageContractUseManifest> RpcContractUses { get; }
     CancellationToken RetirementToken { get; }
     bool IsCurrent(PackageSessionLease sessionLease);
-    bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease);
+    bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false);
 }
 
 internal sealed record RuntimeRpcPermissionSubject(
@@ -61,6 +61,8 @@ internal sealed class RuntimeRpcAppSessionManager(
     private readonly object _gate = new();
     private readonly Dictionary<string, RuntimeRpcAppCallerSession> _active = new(StringComparer.Ordinal);
     private bool _disposed;
+    internal Func<RuntimePackageSource, CancellationToken, Task<IReadOnlyDictionary<string, SunderRpcContractDescriptor>>> LoadContracts { get; init; }
+        = RuntimeRpcPackageMetadata.LoadContractsAsync;
 
     public async Task<RuntimeRpcAppSessionDescriptor> OpenAsync(
         RuntimeRpcAppSessionOpenRequest request,
@@ -94,12 +96,14 @@ internal sealed class RuntimeRpcAppSessionManager(
         }
         var manifest = source.Manifest;
         var policySubject = PackageUiSnapshotStore.PolicySubject(source);
+        AppPolicyActivationAuthority? authority = null;
         if (processPolicies is not null)
         {
             if (peer is null || policySubject is null) throw new RuntimeAppPolicyException(Sunder.Registry.Contracts.PackagePolicyErrorCodes.AppProcessSupervisionRequired);
-            try { processPolicies.RequireLoaded(peer, source); }
+            try { authority = processPolicies.RequireCallerPermit(peer, source, request.AppGenerationId, request.LoadPermitId, targetDescriptor); }
             catch (PackagePolicyDeniedException error) { throw new RuntimeAppPolicyException(error.Code); }
         }
+        using var opening = authority?.Acquire();
         var manifestSha256 = RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
         if (!string.Equals(manifest.Id, request.PackageId, StringComparison.Ordinal)
             || !string.Equals(manifest.Version, request.PackageVersion, StringComparison.Ordinal)
@@ -122,7 +126,7 @@ internal sealed class RuntimeRpcAppSessionManager(
                 "The App RPC caller stamp does not match an exact managed or web App target in the active package manifest.");
         }
 
-        var contracts = await RuntimeRpcPackageMetadata.LoadContractsAsync(
+        var contracts = await LoadContracts(
             source,
             cancellationToken).ConfigureAwait(false);
         var caller = new RuntimeRpcAppCallerSession(
@@ -137,10 +141,12 @@ internal sealed class RuntimeRpcAppSessionManager(
         {
             EnsureProcessPolicy = processPolicies is null ? null : () =>
             {
-                try { processPolicies.RequireLoaded(peer!, source); }
-                catch (PackagePolicyDeniedException error) { throw SunderRpcException.Infrastructure(SunderRpcErrorKind.Unavailable, error.Code, "App process policy does not permit RPC acquisition."); }
+                try { processPolicies.RequireCallerPermit(peer!, source, request.AppGenerationId, request.LoadPermitId, targetDescriptor); }
+                catch (PackagePolicyDeniedException error) { throw RuntimeRpcPolicyDenials.ToException(error); }
+                catch (RuntimeUnavailableException error) { throw SunderRpcException.Infrastructure(SunderRpcErrorKind.Unavailable, "rpc.app-session.unavailable", error.Message); }
             },
         };
+        caller.BindAuthority(authority);
         var sessionId = CreateSessionId();
         RuntimeRpcAppCallerSession[] retired = [];
         var capacityExceeded = false;
@@ -152,6 +158,7 @@ internal sealed class RuntimeRpcAppSessionManager(
                 lock (_gate)
                 {
                     ObjectDisposedException.ThrowIf(_disposed, this);
+                    if (authority is not null && !authority.IsActive) throw new RuntimeStaleGenerationException("The App activation retired while its caller was opening.");
                     retired = _active
                         .Where(pair => !pair.Value.IsGenerationCurrent(request.SessionGeneration))
                         .Select(static pair => pair.Value)
@@ -216,13 +223,22 @@ internal sealed class RuntimeRpcAppSessionManager(
         {
             throw RetiredSession();
         }
+        RuntimeRpcAppCallerSession caller;
         lock (_gate)
         {
-            if (!_disposed && _active.TryGetValue(sessionId, out var caller))
-            {
-                caller.EnsureProcessPolicy?.Invoke();
-                return caller;
-            }
+            if (_disposed || !_active.TryGetValue(sessionId, out caller!)) throw RetiredSession();
+        }
+        // Policy/readiness validation can acquire PackageSessionState's monitor.
+        // Opening commits in the opposite direction (package state -> dictionary),
+        // so never execute that validation under the dictionary monitor.
+        caller.EnsureProcessPolicy?.Invoke();
+        lock (_gate)
+        {
+            // Close, disposal, generation replacement or authority retirement may
+            // have won while validation ran. Broker acquisition also retains its
+            // exact generation/activation fences after this lookup returns.
+            if (!_disposed && _active.TryGetValue(sessionId, out var current)
+                && ReferenceEquals(current, caller) && !caller.IsRetired) return caller;
         }
         throw RetiredSession();
     }
@@ -259,7 +275,10 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
     private readonly RuntimePackageSource _source;
     private readonly CancellationTokenSource _retirement = new();
     private int _callerCalls;
+    private int _callerObservations;
     private bool _retired;
+    private IDisposable? _authorityLease;
+    private CancellationTokenRegistration _authorityRetirement;
 
     public RuntimeRpcAppCallerSession(
         RuntimePackageSource source,
@@ -284,6 +303,16 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
     public string SessionId { get; set; } = string.Empty;
     internal RuntimePackageSource Source => _source;
     internal Action? EnsureProcessPolicy { get; init; }
+    internal AppPolicyActivationAuthority? Authority { get; private set; }
+    internal bool IsRetired { get { lock (_gate) return _retired; } }
+
+    internal void BindAuthority(AppPolicyActivationAuthority? authority)
+    {
+        if (authority is null) return;
+        Authority = authority;
+        _authorityLease = authority.Acquire();
+        _authorityRetirement = authority.RetirementToken.UnsafeRegister(static state => ((RuntimeRpcAppCallerSession)state!).Retire(), this);
+    }
     public string PackageId { get; }
     public string PackageVersion { get; }
     public Guid? ActivationId => AppGenerationId;
@@ -314,17 +343,18 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
         }
     }
 
-    public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease)
+    public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false)
     {
         lock (_gate)
         {
-            if (_retired || _callerCalls >= maximumCalls)
+            ref var active = ref (observation ? ref _callerObservations : ref _callerCalls);
+            if (_retired || active >= maximumCalls)
             {
                 lease = null;
                 return false;
             }
-            _callerCalls++;
-            lease = new RuntimeRpcActivationLease(_retirement.Token, ReleaseCaller);
+            active++;
+            lease = new RuntimeRpcActivationLease(_retirement.Token, () => ReleaseCaller(observation));
             return true;
         }
     }
@@ -336,14 +366,22 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
             if (_retired) return;
             _retired = true;
         }
-        _ = RuntimeCancellation.Signal(_retirement);
+        _ = CompleteRetirementAsync();
     }
 
-    private void ReleaseCaller()
+    private async Task CompleteRetirementAsync()
+    {
+        await RuntimeCancellation.Signal(_retirement).ConfigureAwait(false);
+        _authorityRetirement.Unregister();
+        Interlocked.Exchange(ref _authorityLease, null)?.Dispose();
+    }
+
+    private void ReleaseCaller(bool observation)
     {
         lock (_gate)
         {
-            if (_callerCalls > 0) _callerCalls--;
+            ref var active = ref (observation ? ref _callerObservations : ref _callerCalls);
+            if (active > 0) active--;
         }
     }
 }

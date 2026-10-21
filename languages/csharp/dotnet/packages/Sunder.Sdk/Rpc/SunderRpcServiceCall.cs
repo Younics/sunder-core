@@ -15,6 +15,11 @@ public static class SunderRpcServiceCall
     {
         ArgumentNullException.ThrowIfNull(scope);
         ArgumentNullException.ThrowIfNull(provider);
+        if (scope is ISunderRpcGeneratedOperationScope operation)
+        {
+            await operation.EnsureCurrentAsync(provider, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         cancellationToken.ThrowIfCancellationRequested();
         if (provider.State != SunderRpcProviderState.Active) throw SunderRpcServiceLocator.Stale();
         SunderRpcServiceLocator.Validate(provider);
@@ -45,13 +50,17 @@ public static class SunderRpcServiceCall
         if (original.IsCancellationRequested)
         {
             if (exception is OperationCanceledException cancelled && cancelled.CancellationToken == original) return exception;
-            return new OperationCanceledException(exception.Message, exception, original);
+            var translated = new OperationCanceledException(exception.Message, exception, original);
+            SunderRpcDispatchEvidence.Copy(exception, translated);
+            return translated;
         }
         if (!retirementToken.IsCancellationRequested) return exception;
-        var rpc = exception as SunderRpcException;
-        return new SunderRpcException(new(SunderRpcErrorKind.Unavailable, "rpc.binding.retired",
+        var rpc = exception as SunderRpcException ?? SunderRpcDispatchEvidence.Cause(exception);
+        var retired = new SunderRpcException(new(SunderRpcErrorKind.Unavailable, "rpc.binding.retired",
             "The selected service lifetime ended.",
             rpc?.Error.DispatchState ?? SunderRpcDispatchState.PossiblyDispatched,
-            rpc?.Error.RetrySafety ?? SunderRpcRetrySafety.Unsafe));
+            rpc?.Error.RetrySafety ?? SunderRpcRetrySafety.Unsafe), rpc?.IsHostAuthenticated == true);
+        SunderRpcDispatchEvidence.Copy(exception, retired);
+        return retired;
     }
 }

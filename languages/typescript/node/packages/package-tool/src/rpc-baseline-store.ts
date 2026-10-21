@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { link, lstat, open, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, parse, resolve, sep } from "node:path";
 import { readProjectDescriptorFile } from "./descriptor-files";
-import { parseBaseline, writeBaseline, type OwnedBaseline } from "./rpc-baseline";
+import { parseBaseline, writeBaseline, validateImmutableProjectionReviews, type OwnedBaseline } from "./rpc-baseline";
 import { MAX_BASELINE_BYTES, object, parseOuter } from "./rpc-baseline-json";
 import { isPackageId, isSemanticVersion } from "@sunder/sdk";
 import { markerPath, withOutputLeases } from "./output";
@@ -100,17 +100,17 @@ export async function withBaselineLease<T>(input: BaselineInput, operation: () =
 }
 export async function commitBaseline(input: BaselineInput, proposal: Buffer, verifyInputs: () => Promise<void>): Promise<boolean> {
   const parsed = parseBaseline(proposal);
+  if (input.baseline) validateImmutableProjectionReviews(input.baseline, parsed);
   if (input.baseline && parsed.packageId !== input.baseline.packageId) throw new Error("rpc-authoring.private-retirement-mutated: Baseline root authority cannot change.");
+  if (input.baseline?.retiredPrivateContracts !== undefined && parsed.retiredPrivateContracts === undefined)
+    throw new Error("rpc-authoring.private-retirement-mutated: Preserve the existing private archive, including an explicit empty map.");
   for (const [key, entry] of input.baseline?.retiredPrivateContracts ?? []) {
     const after = parsed.retiredPrivateContracts?.get(key);
     if (!after || !writeBaseline(parsed.packageId, new Map([[key, entry]])).equals(writeBaseline(parsed.packageId, new Map([[key, after]]))))
       throw new Error(`rpc-authoring.private-retirement-mutated: ${key}: preserve complete original archived evidence.`);
   }
-  for (const [key, entry] of parsed.retiredPrivateContracts ?? []) if (!input.baseline?.retiredPrivateContracts?.has(key)) {
-    const original = input.baseline?.contracts.get(key);
-    if (!original || parsed.contracts.has(key) || !writeBaseline(parsed.packageId, new Map([[key, original]])).equals(writeBaseline(parsed.packageId, new Map([[key, entry]]))))
-      throw new Error(`rpc-authoring.private-retirement-mutated: ${key}: archive additions must equal removed active before-images.`);
-  }
+  for (const key of parsed.retiredPrivateContracts?.keys() ?? []) if (!input.baseline?.retiredPrivateContracts?.has(key))
+    throw new Error(`rpc-authoring.private-retirement-mutated: ${key}: the retained private archive cannot gain entries.`);
   return withBaselineLease(input, async () => {
     await verifyInputs(); await input.revalidate();
     if (input.baseline?.bytes.equals(proposal)) return false;

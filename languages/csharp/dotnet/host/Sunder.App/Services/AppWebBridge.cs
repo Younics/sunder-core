@@ -622,6 +622,13 @@ internal sealed class AppWebBridge : IAsyncDisposable
             abiSha256 = provider.AbiSha256
                 ?? throw new InvalidDataException("The Runtime provider is missing its ABI identity."),
             providerHandle = handle,
+            // Exact binding metadata is public, but the broker endpoint remains
+            // native-owned. The browser's endpoint identity is this document's
+            // stable alias; it never grants access outside ResolveProvider.
+            endpointReference = handle,
+            activationId = provider.ActivationId,
+            activationEpoch = provider.ActivationEpoch,
+            sessionGeneration = provider.SessionGeneration,
             catalogRevision = provider.CatalogRevision,
             state = provider.State switch
             {
@@ -752,8 +759,25 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
         var json = Encoding.UTF8.GetString(utf8);
         var script = $"window.__sunderReceive?.({JsonSerializer.Serialize(json)});";
-        await _webView.InvokeScriptAsync(script).ConfigureAwait(false);
+        try
+        {
+            await _webView.InvokeScriptAsync(script).ConfigureAwait(false);
+        }
+        catch (Exception exception) when ((exception is InvalidOperationException or OperationCanceledException)
+            && HasRetiredDocument(pending, nonce))
+        {
+            // Native dispatch may run after navigation/disposal removed its page.
+            // Only the exact retired document can abandon delivery. Never retry
+            // the send against its replacement or hide a live-document failure.
+        }
         return true;
+    }
+
+    private bool HasRetiredDocument(AppWebPendingRequest pending, string nonce)
+    {
+        lock (_gate)
+            return !_trustedNavigation || _currentUri is null || pending.DocumentGeneration != _documentGeneration
+                || !string.Equals(nonce, _nonce, StringComparison.Ordinal) || Volatile.Read(ref _disposed) != 0;
     }
 
     private bool TryReadRequest(JsonElement root, out BridgeRequest request, out string error)

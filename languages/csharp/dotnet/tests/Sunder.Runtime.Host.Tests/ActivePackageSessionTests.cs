@@ -14,6 +14,20 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class ActivePackageSessionTests
 {
     [Fact]
+    public void SessionSnapshotUsesActualSourceIdentityInsteadOfAuthoredDescriptorObservation()
+    {
+        var loaded = CreateLoadedPackage("test.package");
+        loaded = loaded with { Source = loaded.Source with { ContentIdentity = new string('a', 64) } };
+        var session = new ActivePackageSession(null,
+            new Dictionary<string, ActiveLoadedPackage> { ["test.package"] = loaded },
+            new Dictionary<string, SessionPackageDescriptor>
+            {
+                ["test.package"] = CreateSessionPackage("test.package", isEnabled: true) with { SourceContentIdentity = new string('b', 64) },
+            });
+        Assert.Equal(loaded.Source.ContentIdentity, Assert.Single(session.GetSessionPackages()).SourceContentIdentity);
+    }
+
+    [Fact]
     public void CreateEmpty_ReturnsFreshExplicitlyEmptySessions()
     {
         var first = ActivePackageSession.CreateEmpty();

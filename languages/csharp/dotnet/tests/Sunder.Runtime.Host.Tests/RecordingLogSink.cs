@@ -123,12 +123,12 @@ internal static class RecordedRuntimePhaseAssertions
 
     public static void Identity(RecordedLogEntry entry, ExecutionRuntimeIdentity identity)
     {
-        Assert.Equal(identity.SourceId, entry.Properties["RuntimeSourceId"]);
+        Assert.Equal(identity.SourceId.ToString().ToLowerInvariant(), entry.Properties["RuntimeSourceId"]);
         Assert.Equal(identity.RuntimeId, entry.Properties["RuntimeId"]);
         Assert.Equal(identity.VendorVersion, entry.Properties["RuntimeVendorVersion"]);
         Assert.Equal(identity.Rid, entry.Properties["RuntimeRid"]);
         Assert.Equal(identity.ModuleAbi, entry.Properties["RuntimeModuleAbi"]);
-        Assert.Equal(identity.VendorChecksumAlgorithm, entry.Properties["RuntimeVendorChecksumAlgorithm"]);
+        Assert.Equal(identity.VendorChecksumAlgorithm.ToString().ToLowerInvariant(), entry.Properties["RuntimeVendorChecksumAlgorithm"]);
         Assert.Equal(identity.VendorChecksumDigest, entry.Properties["RuntimeVendorChecksumDigest"]);
     }
 

@@ -1,5 +1,7 @@
 using Avalonia.Controls;
+using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
+using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Xunit;
@@ -186,6 +188,51 @@ public sealed class AppPackageDisableCoordinatorTests
             new AppPackageFaultNotifier(notificationService: null),
             markPackageDisabled,
             isPackageDisabled);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Unload_WhenViewDisposalFails_StillDrainsOwnedServicesWithoutRetirementAcknowledgement(bool useDeadline)
+    {
+        using var temporary = TemporaryDirectoryScope.Create("app-failed-view-drain");
+        await using var background = new BackgroundProcessQueueService();
+        using var assemblies = new AppSharedAssemblyRegistry([]);
+        var registry = new AppPackageViewRegistry(ImmediateUiDispatcher.Instance);
+        registry.RegisterPackageView("agent", new PackageViewRegistration("agent.chat", "Chat"), static () => new ThrowingDisposeView());
+        Assert.NotNull(new AppPackageHostedViewFacade(registry, _ => false, static (_, _, _) => false).GetOrCreateView("agent.chat"));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completed = false;
+        var acknowledgements = 0;
+        var provider = new ServiceCollection().AddSingleton(_ => new DelayedOwner(async () =>
+        {
+            entered.SetResult();
+            await release.Task;
+            completed = true;
+        })).BuildServiceProvider();
+        _ = provider.GetRequiredService<DelayedOwner>();
+        var coordinator = new AppPackageUnloadCoordinator(registry, new AppPackageRuntimeWorkStopper(background),
+            new AppPackageAssemblyTracker(), assemblies, _ => { }, _ => { });
+        var package = new ActivePackageDescriptor("agent", "Agent", "1.0.0", PackageHostRoles.App, null, true, PackageReadinessState.Ready, []);
+        var handle = new AppLoadedPackageHandle(package, RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, "failed-view-drain"),
+            temporary.RootPath, provider, null)
+        {
+            LoadAdmission = new(Guid.NewGuid(), "permit", _ => { acknowledgements++; return Task.CompletedTask; }),
+        };
+
+        var cleanup = coordinator.UnloadPackageAsync("agent", handle, useDeadline);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        try { Assert.False(cleanup.IsCompleted); }
+        finally { release.TrySetResult(); }
+        Assert.Equal(AppPackageUiCleanupOutcome.Unproven, await cleanup.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.True(completed);
+        Assert.Equal(0, acknowledgements);
+    }
+
+    private sealed class DelayedOwner(Func<Task> cleanup) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => new(cleanup());
     }
 
     private static Task<AppPackageUiCleanupOutcome> ProvenBoundaryCleanupAsync()

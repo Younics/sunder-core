@@ -1,44 +1,53 @@
 # Sunder Core Compatibility Candidate
 
-This document records the pre-implementation-first Core surface used as a
-migration oracle. Phase 0 was reopened on 2026-09-04, so this candidate is not a
-final Phase 7 compatibility freeze and does not authorize tagging or publication.
+## Current observation and protected history
 
-The generated source of truth is [`eng/compatibility/core-compatibility-candidate.json`](../eng/compatibility/core-compatibility-candidate.json). It inventories public .NET and npm artifacts, API snapshots, MSBuild inputs and outputs, CLI behavior, Runtime and Host HTTP routes, Registry client calls, errors, configuration, telemetry, schemas, templates, release tags, and artifact identities. Source hashes freeze implementation-defined metadata where Minimal APIs do not declare complete OpenAPI response metadata.
+The current generator writes only
+`eng/compatibility/core-current-compatibility-candidate.json`, with schema 2,
+candidate ID `sunder-core-current`, status **UNFROZEN** and release state
+**UNRELEASED**. This is a current-source observation, not a release qualification
+or SDK freeze. No current candidate is claimed until its exact clean source and
+fresh build inputs are available.
 
-[`eng/compatibility/stack-contributor-rpc-migration-baseline.json`](../eng/compatibility/stack-contributor-rpc-migration-baseline.json)
-separately freezes the canonical descriptor and ABI bytes, hashes, services,
-methods, and errors for the platform-owned `sunder.stack.contributor` contract.
-It also inventories the current descriptor source, embedded and packed assets,
-packed `buildTransitive` file, and every direct Stack-package RPC MSBuild
-declaration, including empty binding/provider/use sets. Its scope names template,
-sample, test, and generated-output exclusions and rejects unclassified Core .NET
-RPC declarations. The recorded migration policy moves identity distribution to
-the Registry-published Core platform catalog while retaining only reviewed Stack domain and
-semantic-adapter behavior in `Sunder.Sdk.Stacks`. It is migration evidence only
-and is never a package build input.
+The following archives are inert, byte-preserved history:
 
-## Regeneration
+- [`core-compatibility-candidate.json`](../eng/compatibility/core-compatibility-candidate.json),
+  the pre-implementation-first migration ledger;
+- [`stack-contributor-rpc-migration-baseline.json`](../eng/compatibility/stack-contributor-rpc-migration-baseline.json),
+  its Stack descriptor/ABI, packaging and declaration capture.
 
-The checked-in candidate is the historical migration oracle. Do not regenerate it
-to hide implementation-first or Registry-authority changes during migration. The
-2026-10-03 catalog decision supersedes its signed-catalog pending-cutover wording;
-current public API snapshots, schemas and owning tests validate the new surface.
-Phase 7 must review/freeze the final surface after canonical project retirement.
+Neither archive supplies current runtime/build expectations, a historical-hash
+join or a pending Phase 0 prerequisite. The archived Stack reconstruction test
+is excluded from compilation. Current Stack domain behavior, source parity,
+platform lifecycle, contract semantics and real artifact tests retain ownership.
+Frozen wire conformance corpora and supported released SDK baselines keep their
+separate genuine compatibility purposes.
 
-For an approved candidate refresh, restore .NET and npm dependencies, then use the
-owning generators from the repository root:
+## Collecting a new current candidate
+
+After the source owner completes clean commits, select the exact reviewed Core
+source commit. The generator rejects dirty/untracked source and a checkout that
+differs from that commit, allowing only its new current candidate output to differ.
+It never infers a pin from a dirty checkout and has no historical-output override.
+Once dependencies are prepared, use:
 
 ```shell
-dotnet restore Sunder.Core.slnx --locked-mode
-npm ci --prefix languages/typescript/node
-node scripts/compatibility/generate-core-compatibility-candidate.mjs --write
-node scripts/compatibility/generate-core-compatibility-candidate.mjs --check
-SUNDER_UPDATE_CORE_RPC_MIGRATION_BASELINE=1 dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj --no-restore --filter FullyQualifiedName~StackContributorRpcMigrationBaselineTests
-dotnet test languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/Sunder.Sdk.PublicApi.Tests.csproj --no-restore --filter FullyQualifiedName~StackContributorRpcMigrationBaselineTests
+node scripts/compatibility/generate-core-compatibility-candidate.mjs --write --source-commit <exact-clean-commit>
+node scripts/compatibility/generate-core-compatibility-candidate.mjs --check --source-commit <exact-clean-commit>
 ```
 
-The generator builds the current Release CLI and all TypeScript packages before collecting CLI help and emitted declaration files. `--check` regenerates the complete candidate in memory and fails when the checked-in bytes differ. Core CI runs this check with complete Git tag history so release evidence is deterministic.
+Both modes build the selected Release CLI and TypeScript packages before collecting
+CLI help and emitted declarations. They must not run while another owner holds the
+build outputs. `--check` compares the new current file byte-for-byte; it does not
+validate or rewrite a migration ledger. Offline source-selection fixtures run with
+`node --test scripts/compatibility/current-candidate.test.mjs` and do not build.
+
+The observation inventories public .NET/npm artifacts, API snapshots, MSBuild,
+CLI/HTTP behavior, errors, configuration, persistence, telemetry, schemas, templates
+and release/artifact identities. Source fingerprints describe the selected input;
+they do not make an output its own independent expected baseline. SDK freeze,
+native/cold/source-artifact qualification and independently retained supported
+release evidence remain separate required gates.
 
 ## Retained Surfaces
 
@@ -47,10 +56,9 @@ The generator builds the current Release CLI and all TypeScript packages before 
 - `SunderStackContributorRpc.CreateWorkerProviderRegistration` is removed; Worker packages now construct registrations at their own Worker boundary and `Sunder.Sdk.Stacks` no longer depends on `Sunder.Sdk.Worker`.
 - App Runtime and Registry composite interfaces remain active composition boundaries.
 - Archive V1, content-index V1, projection V1, Stack V1, `sunder.rpc.values.v1`, and `.v1` capability names identify current contracts; their suffix does not mark obsolete compatibility.
-- Runtime package authoring remains Worker-only: one canonical unsuffixed Worker
-  V1 project with a managed module entry point plus an optional role-isolated App
-  project. Current package-local Protocol projects are migration inputs scheduled
-  for deletion, not final authoring boundaries.
+- Runtime package authoring uses one canonical unsuffixed Library project. Core
+  generates isolated exact-RID Worker V1 and optional App roles. Current topology,
+  dependency and artifact checks reject authored split roles and Protocol helpers.
 - Current unmanaged packages may use the explicit Registry source-adoption operation. Core does not infer provenance or scan historical layouts.
 - C# RPC generation preserves public declarations by default. `SunderRpcCSharpGenerator` accepts explicit `Public` or `Internal` accessibility, and packaged `Sunder.Package.Build` exposes the same exact values through `SunderRpcBinding` `Accessibility` metadata. Internal mode uniformly covers every top-level generated declaration; invalid values fail closed before output replacement.
 
@@ -59,19 +67,17 @@ The generator builds the current Release CLI and all TypeScript packages before 
 - TypeScript package tooling and SDK consumers emit Manifest V1, Worker Protocol V1, RPC descriptor V1, and runtime-backed CommonJS modules without Node executable or SEA tooling bytes.
 - .NET package builds emit framework-dependent managed modules without AppHost, runtime-pack, symbol, or generated XML documentation bytes.
 
-The generated candidate's `pendingCutovers` and `allowedFutureDeltas` ledgers
-deliberately carry the same three-item implementation-first inventory while
-Phase 0 is open. They are migration controls, not approved final compatibility
-deltas. Phase 7 replaces them with the first supported V1 baseline after
-source-derived authoring, project cleanup, and cross-language parity are
-complete.
+The new observation carries no pending migration cutovers or historical allowed
+deltas. This does not waive qualification for the first supported release.
 
 ## Ownership Boundaries
 
 - Core defines neither `Registry:PublicOrigin` nor `Registry:Artifacts:PublicOrigin`; public and artifact origin policy belongs to the Registry repository.
 - Explicit Registry endpoint operation metadata belongs to the Registry server. Core Registry clients freeze their called routes, verbs, trust boundary, and source implementations.
 - Core has no CloudFront configuration or public surface.
-- Agent descriptor/provider/consumer counts, Agent persistence, and Registry database migrations are frozen in their owning repositories rather than duplicated into this ledger.
+- Agent expectations come from its independent current inventory and separately
+  reviewed current descriptor records. Agent persistence and Registry database
+  migrations remain owned by their repositories.
 
 ## Package Policy
 

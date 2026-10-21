@@ -12,6 +12,7 @@ internal sealed record SunderRpcCSharpResourceMember(string WireName, string Mem
     bool OptionalServiceReference = false)
 {
     internal string? ConstantValue { get; init; }
+    internal bool IgnoreWhenNull { get; init; }
 }
 internal sealed record SunderRpcCSharpResourceLayout(string TypeName, bool ValueType,
     IReadOnlyList<SunderRpcCSharpResourceMember> Members, string? TransparentMember = null,

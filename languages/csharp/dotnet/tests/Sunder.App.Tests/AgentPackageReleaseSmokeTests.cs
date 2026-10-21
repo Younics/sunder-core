@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using Sunder.App.Services;
+using Sunder.Core.Tests;
 using Sunder.Runtime.Contracts;
 using Xunit;
 
@@ -19,7 +20,14 @@ public sealed class AgentPackageReleaseSmokeTests
             await File.ReadAllTextAsync(Path.Combine(snapshotDirectory!, "metadata.json")),
             new JsonSerializerOptions(JsonSerializerDefaults.Web));
         Assert.NotNull(metadata);
-        var snapshotPath = Path.Combine(snapshotDirectory!, "sunder.package.agent.snapshot");
+        var baseline = AgentCurrentBaseline.Load();
+        Assert.Equal(baseline.InventorySha256, metadata.InventorySha256);
+        Assert.Equal(baseline.ContractsSha256, metadata.ContractsSha256);
+        Assert.Equal(AgentCurrentBaseline.AgentId, metadata.Package.PackageId);
+        Assert.Equal(metadata.Package.PackageId, metadata.Snapshot.PackageId);
+        Assert.Equal(baseline.PackageVersion, metadata.Package.Version);
+        Assert.Contains(metadata.Package.PackageId, baseline.AppPackageIds);
+        var snapshotPath = Path.Combine(snapshotDirectory!, "younics.ai.agent.snapshot");
         await using var snapshotStream = File.OpenRead(snapshotPath);
         var actualHash = Convert.ToHexString(await SHA256.HashDataAsync(snapshotStream)).ToLowerInvariant();
         Assert.Equal(metadata.Snapshot.ContentHash, actualHash);
@@ -51,7 +59,7 @@ public sealed class AgentPackageReleaseSmokeTests
 
             var activePackage = Assert.Single(host.FilterEnabledPackages([metadata.Package]));
             Assert.Equal(1, host.LoadedPackageCount);
-            Assert.Contains(activePackage.Views, view => view.ViewId == "sunder.package.agent.chat");
+            Assert.Contains(activePackage.Views, view => view.ViewId == "younics.ai.agent.chat");
         }
         finally
         {
@@ -73,7 +81,9 @@ public sealed class AgentPackageReleaseSmokeTests
 
     private sealed record AgentAppSnapshotMetadata(
         ActivePackageDescriptor Package,
-        PackageUiSnapshotDescriptor Snapshot);
+        PackageUiSnapshotDescriptor Snapshot,
+        string InventorySha256,
+        string ContractsSha256);
 
     private sealed class ImmediateUiDispatcher : IUiDispatcher
     {

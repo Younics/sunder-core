@@ -8,6 +8,9 @@ internal sealed class AppPackageHostedViewFacade(
     Func<string, bool> isPackageDisabled,
     Func<string, string, Exception, bool> reportHostedViewFailure)
 {
+    internal Func<string, AppPackageHostedViewFacade?>? RetainedView { get; set; }
+    internal Func<string, AppPackageHostedViewFacade?>? RetainedPackage { get; set; }
+    internal Func<IEnumerable<AppPackageHostedViewFacade>>? RetainedFacades { get; set; }
     public AppPackageHostedViewFacade(
         AppPackageViewRegistry viewRegistry,
         Func<string, bool> isPackageDisabled,
@@ -44,6 +47,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     public bool IsViewPrepared(string viewId)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) return retained.IsViewPrepared(viewId);
         lock (_operationSyncRoot)
         {
             return _warmedViewIds.Contains(viewId) || _presentedViewIds.Contains(viewId);
@@ -59,6 +63,7 @@ internal sealed class AppPackageHostedViewFacade(
         CancellationToken cancellationToken,
         Func<Control, bool>? retainView = null)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) return await retained.WarmupViewAsync(viewId, cancellationToken, retainView);
         return await RunViewOperationAsync(
             viewId,
             ViewOperationKind.Warmup,
@@ -126,6 +131,7 @@ internal sealed class AppPackageHostedViewFacade(
         Func<Control?, bool> presentView,
         CancellationToken cancellationToken)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) return await retained.PrepareViewAsync(viewId, presentView, cancellationToken);
         ArgumentNullException.ThrowIfNull(presentView);
         return await RunViewOperationAsync(
             viewId,
@@ -187,7 +193,7 @@ internal sealed class AppPackageHostedViewFacade(
     public async ValueTask<Control?> ReloadViewAsync(
         string viewId,
         CancellationToken cancellationToken)
-        => await ResetViewAsync(
+        => RetainedView?.Invoke(viewId) is { } retained ? await retained.ReloadViewAsync(viewId, cancellationToken) : await ResetViewAsync(
             viewId,
             cancellationToken,
             operationCancellation =>
@@ -205,7 +211,7 @@ internal sealed class AppPackageHostedViewFacade(
     public async ValueTask<bool> InvalidateViewAsync(
         string viewId,
         CancellationToken cancellationToken)
-        => await ResetViewAsync(
+        => RetainedView?.Invoke(viewId) is { } retained ? await retained.InvalidateViewAsync(viewId, cancellationToken) : await ResetViewAsync(
             viewId,
             cancellationToken,
             operationCancellation =>
@@ -226,6 +232,7 @@ internal sealed class AppPackageHostedViewFacade(
         CancellationToken cancellationToken,
         Func<bool>? canStart = null)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) return await retained.NotifyViewNavigatedAsync(viewId, parameters, cancellationToken, canStart);
         var currentCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         CancellationTokenSource? previousCancellation;
         lock (_operationSyncRoot)
@@ -305,6 +312,7 @@ internal sealed class AppPackageHostedViewFacade(
         CancellationToken cancellationToken,
         Func<bool>? canStart = null)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) return await retained.PrepareNavigationForPresentationAsync(viewId, parameters, stageView, presentView, unstageView, cancellationToken, canStart);
         ArgumentNullException.ThrowIfNull(stageView);
         ArgumentNullException.ThrowIfNull(presentView);
         ArgumentNullException.ThrowIfNull(unstageView);
@@ -440,6 +448,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     public void CancelViewNavigation(string viewId)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) { retained.CancelViewNavigation(viewId); return; }
         CancellationTokenSource? cancellation;
         lock (_operationSyncRoot)
         {
@@ -451,6 +460,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     public async Task CancelViewNavigationAsync(string viewId)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) { await retained.CancelViewNavigationAsync(viewId); return; }
         CancellationTokenSource? cancellation;
         lock (_operationSyncRoot)
         {
@@ -480,6 +490,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     public void CancelAllViewNavigations()
     {
+        foreach (var retained in RetainedFacades?.Invoke() ?? []) retained.CancelAllViewNavigations();
         CancellationTokenSource[] cancellations;
         lock (_operationSyncRoot)
         {
@@ -495,6 +506,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     public async Task CancelAllViewNavigationsAsync()
     {
+        await Task.WhenAll((RetainedFacades?.Invoke() ?? []).Select(retained => retained.CancelAllViewNavigationsAsync()));
         CancellationTokenSource[] cancellations;
         lock (_operationSyncRoot)
         {
@@ -517,6 +529,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     internal Task BeginCancelViewOperations(string viewId)
     {
+        if (RetainedView?.Invoke(viewId) is { } retained) return retained.BeginCancelViewOperations(viewId);
         ActiveViewOperation[] operations;
         CancellationTokenSource? navigationCancellation;
         lock (_operationSyncRoot)
@@ -543,6 +556,7 @@ internal sealed class AppPackageHostedViewFacade(
 
     internal Task BeginCancelAllViewOperations()
     {
+        var retainedDrains = (RetainedFacades?.Invoke() ?? []).Select(retained => retained.BeginCancelAllViewOperations()).ToArray();
         CancellationTokenSource[] navigationCancellations;
         ActiveViewOperation[] operations;
         lock (_operationSyncRoot)
@@ -560,11 +574,12 @@ internal sealed class AppPackageHostedViewFacade(
             .Concat(operations.Select(static operation => operation.Cancellation))
             .Select(static cancellation => TryCancelAsync(cancellation))
             .ToArray();
-        return DrainAllViewOperationsAsync(cancellationSignals, operations);
+        return Task.WhenAll(retainedDrains.Append(DrainAllViewOperationsAsync(cancellationSignals, operations)));
     }
 
     public async Task CancelPackageViewOperationsAsync(string packageId)
     {
+        if (RetainedPackage?.Invoke(packageId) is { } retained) { await retained.CancelPackageViewOperationsAsync(packageId); return; }
         ActiveViewOperation[] operations;
         CancellationTokenSource[] navigationCancellations;
         lock (_operationSyncRoot)

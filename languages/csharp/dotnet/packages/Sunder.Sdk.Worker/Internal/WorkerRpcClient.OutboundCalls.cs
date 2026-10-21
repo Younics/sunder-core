@@ -260,15 +260,19 @@ internal sealed partial class WorkerRpcClient
                     "rpc.worker.not-active",
                     "The process worker activation is not active.");
             }
+            var observation = kind == OutboundCallKind.Stream && _environment.OperationalOutcomesV1;
             var laneCount = _calls.Values.Count(item =>
                 item.Control == control
                 && item.Logging == logging
+                && (!_environment.OperationalOutcomesV1 || item.Kind == kind)
                 && !item.Terminal);
             var laneLimit = control
                 ? _limits.MaximumControlCalls
                 : logging
                     ? _limits.MaximumLoggingCalls
-                    : _limits.MaximumOutboundCalls;
+                    : observation
+                        ? _limits.MaximumOutboundStreams
+                        : _limits.MaximumOutboundCalls;
             if (laneCount >= laneLimit)
             {
                 throw SunderRpcException.Infrastructure(
@@ -277,12 +281,16 @@ internal sealed partial class WorkerRpcClient
                         ? "rpc.worker.control-call-limit"
                         : logging
                             ? "rpc.worker.logging-call-limit"
-                            : "rpc.worker.call-limit",
+                            : observation
+                                ? "rpc.worker.stream-limit"
+                                : "rpc.worker.call-limit",
                     control
                         ? "The worker RPC control-call limit was reached."
                         : logging
                             ? "The worker logging-call limit was reached."
-                        : "The worker RPC call limit was reached.");
+                            : observation
+                                ? "The worker RPC observation limit was reached."
+                                : "The worker RPC call limit was reached.");
             }
 
             _calls.Add(id, call);
@@ -326,9 +334,6 @@ internal sealed partial class WorkerRpcClient
         {
             await call.RequestWrite.ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (_runtime.StoppingToken.IsCancellationRequested)
-        {
-        }
         catch (Exception exception)
         {
             lock (_runtime.Gate)
@@ -340,9 +345,10 @@ internal sealed partial class WorkerRpcClient
             call.TerminalCompletion.TrySetResult();
             call.UnaryCompletion.TrySetException(exception);
             call.Events.Fail(exception);
-            _runtime.Fail(exception is WorkerProtocolException
-                ? exception
-                : new WorkerProtocolException("Worker RPC request write failed.", exception));
+            if (exception is not OperationCanceledException || !_runtime.StoppingToken.IsCancellationRequested)
+                _runtime.Fail(exception is WorkerProtocolException
+                    ? exception
+                    : new WorkerProtocolException("Worker RPC request write failed.", exception));
         }
     }
 
@@ -566,12 +572,8 @@ internal sealed partial class WorkerRpcClient
     }
 
     private static SunderRpcException RequestResourceExhausted(string code, string message)
-        => new(new SunderRpcError(
-            SunderRpcErrorKind.ResourceExhausted,
-            code,
-            message,
-            SunderRpcDispatchState.NotDispatched,
-            SunderRpcRetrySafety.Safe));
+        => SunderRpcException.Infrastructure(SunderRpcErrorKind.ResourceExhausted, code, message)
+            .WithDispatchMetadata(SunderRpcDispatchState.NotDispatched, SunderRpcRetrySafety.Safe);
 
     private static SunderRpcException StreamQueueResourceExhausted(
         OutboundCall call,
@@ -584,12 +586,10 @@ internal sealed partial class WorkerRpcClient
         if (identity.MethodId is not null) message += $"; method={identity.MethodId}";
         message += ".";
         if (message.Length > 512) message = message[..512];
-        return new SunderRpcException(new SunderRpcError(
+        return SunderRpcException.Infrastructure(
             SunderRpcErrorKind.ResourceExhausted,
             "rpc.worker.stream-queue-limit",
-            message,
-            SunderRpcDispatchState.PossiblyDispatched,
-            SunderRpcRetrySafety.Unsafe));
+            message).WithDispatchMetadata(SunderRpcDispatchState.PossiblyDispatched, SunderRpcRetrySafety.Unsafe);
     }
 
     private static string FormatQueueLimit(WorkerJsonEventQueueLimit limit)

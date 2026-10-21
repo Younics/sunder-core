@@ -12,7 +12,7 @@ import { loadProject, currentRid } from "../src/model";
 import { generateRpcBindings } from "../src/rpc-bindings";
 import { assertServiceOptions } from "@sunder/sdk";
 import { contractsCommand } from "../src/rpc-contracts";
-import { writeSourceFile as writeFile } from "./service-fixtures";
+import { liveCatalogWatch, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../../dist/cli.js");
@@ -48,6 +48,7 @@ async function project(extension: "ts" | "js", text = source): Promise<string> {
 for (const extension of ["ts", "js"] as const) for (const exposure of ["package", "public"] as const)
 test(`owned ${extension} ${exposure} App defaults and managed calls keep exact identity, ambiguity and role boundaries`, async () => {
   const root = await project(extension, source.replace('exposure:"package"', `exposure:"${exposure}"`));
+  const owners: Array<{ disposeAsync(): Promise<void> }> = [];
   try {
     await generateRpcBindings(root);
     const loaded = await loadProject(root);
@@ -66,31 +67,33 @@ test(`owned ${extension} ${exposure} App defaults and managed calls keep exact i
     assert.equal(validate(app), true, JSON.stringify(validate.errors));
     assert.equal(validate(runtime), true, JSON.stringify(validate.errors));
     const bundle = resolve(root, "browser-test.cjs");
-    await esbuild({ stdin: { contents: `export {Self} from ${JSON.stringify(resolve(root, ".sunder/generated/rpc/api.ts"))}; export {createApiContext} from "@sunder/sdk/browser";`, resolveDir: root, loader: "ts" }, outfile: bundle, bundle: true, platform: "browser", format: "cjs",
+    await esbuild({ stdin: { contents: `export {Self} from ${JSON.stringify(resolve(root, ".sunder/generated/rpc/api.ts"))}; export {createApiContext,RpcError} from "@sunder/sdk/browser";`, resolveDir: root, loader: "ts" }, outfile: bundle, bundle: true, platform: "browser", format: "cjs",
       alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
     const browser = await readFile(bundle, "utf8");
     assert.doesNotMatch(browser, /node:fs|runWorker|owned-provider-bind/);
     const good: BrowserRpcProvider = { packageId: "example.app", packageVersion: "99.0.0", providerId: "example.app.messages.provider",
       contractId: contract.descriptor.contractId, contractVersion: contract.descriptor.version, descriptorSha256: contract.descriptorSha256,
-      abiSha256: contract.abiSha256, providerHandle: "opaque-browser-handle", catalogRevision: 1, state: "active", faultCode: null };
+      abiSha256: contract.abiSha256, providerHandle: "opaque-browser-handle", endpointReference: "exact-endpoint",
+      activationId: "11223344556677889900aabbccddeeff", activationEpoch: 1, sessionGeneration: 1, catalogRevision: 1, state: "active", faultCode: null };
     let providers = [good]; let resetRequired = false;
     const calls: unknown[] = [];
     const rpc = {
       async discover(id: string) { assert.equal(id, contract.descriptor.contractId); return { revision: 1, sequence: 1, providers, resetRequired }; },
       async invoke(...args: unknown[]) { calls.push(args); return { message: "response" }; },
       async *subscribe(...args: unknown[]) { calls.push(args); yield { message: "event" }; },
-      async *watch() {},
+      watch: liveCatalogWatch,
     } as SunderBrowserRpc;
-    const { Self, createApiContext } = require(bundle);
-    const owner = createApiContext("example.app", rpc); const client = owner.api(Self);
+    const { Self, createApiContext, RpcError } = require(bundle);
+    const owner = createApiContext("example.app", rpc); owners.push(owner); const client = owner.api(Self);
     assert.deepEqual(await client.messages.send({ message: "request" }), { message: "response" });
     for await (const event of client.messages.watch({ message: "request" })) assert.deepEqual(event, { message: "event" });
     assert.equal((calls[0] as unknown[])[0], good.providerHandle);
     assert.equal((calls[1] as unknown[])[0], good.providerHandle);
     // Broker denial remains authoritative: owning a public provider/App facade
     // does not supply the Worker role with a consumer grant or bypass its error.
-    const denial = new Error("rpc.permission-denied");
+    const denial = new RpcError({kind:"permission-denied",code:"rpc.permission-denied",message:"Runtime use was not granted."});
     const workerOwner = createApiContext("example.app", { ...rpc, discover: async () => { throw denial; } });
+    owners.push(workerOwner);
     await assert.rejects(workerOwner.api(Self).messages.send({ message: "request" }), error => error === denial);
     workerOwner.dispose(); assert.equal(calls.length, 2);
     for (const changed of [{ packageId: "other.app" }, { contractVersion: "9.9.9" }, { descriptorSha256: "f".repeat(64) }, { abiSha256: "f".repeat(64) }, { state: "inactive" as const }]) {
@@ -99,13 +102,18 @@ test(`owned ${extension} ${exposure} App defaults and managed calls keep exact i
     }
     providers = [];
     await assert.rejects(client.messages.send({ message: "request" }), /No active provider/);
-    providers = [good, { ...good, providerId: "example.app.other", providerHandle: "second-handle" }];
+    providers = [good, { ...good, providerId: "example.app.other", providerHandle: "second-handle", endpointReference: "second-endpoint" }];
     await assert.rejects(client.messages.send({ message: "request" }), /ambiguous/);
     resetRequired = true; providers = [good];
-    await assert.rejects(client.messages.send({ message: "request" }), /fresh snapshot/);
+    await assert.rejects(client.messages.send({ message: "request" }), error => {
+      assert.ok(error instanceof RpcError);
+      const response = (error as import("@sunder/sdk").RpcError).error;
+      assert.equal(response.kind,"unavailable"); assert.equal(response.code,"rpc.catalog.disconnected");
+      assert.equal(response.dispatchState,"not-dispatched"); assert.equal(response.retrySafety,"safe"); return true;
+    });
     assert.equal(calls.length, 2); // Rejected discovery never invokes or retries a provider.
     owner.dispose();
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await Promise.all(owners.map(owner=>owner.disposeAsync())); await rm(root, { recursive: true, force: true }); }
 });
 
 test("owned App source projection packs role-isolated leaves and rejects stale prebuilt grants", { timeout: 180_000 }, async () => {

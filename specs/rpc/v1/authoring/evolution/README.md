@@ -130,6 +130,12 @@ must not be rewritten to satisfy this temporary gate.
 
 ## Lifecycle Integration
 
+The [local public source projection review amendment](../REVIEWED-PROJECTIONS.md)
+adds a separate exported-source classification and version-bound companion reviews.
+Descriptor/ABI compatibility alone does not establish source API compatibility.
+Missing historical projection data remains unknown; initial adoption is explicit
+and current-source-only, and normal Build/Freeze/Pack fail on missing/drifted reviews.
+
 C# baseline models retain complete `SnapshotJson` and read-only `History`,
 including every release/publication evidence field. The deterministic writer
 reparses its output and rejects model/JSON disagreement instead of discarding or
@@ -178,10 +184,9 @@ post-archive input revalidation under the baseline lease. Own-property membershi
 all ABI maps/reference traversal correctly reports declared `constructor` error removal
 as `/errors/constructor` / `error-removed`; source maps use null prototypes. Every shared
 handler is checked in all generated contexts independent of provider order without type
-widening. The [Node execution boundary](../../../../../languages/typescript/node/packages/package-tool/README.md#owned-v3-source-and-releases)
-records actual packed omit-dev TS/JS lifecycle/Pack, accepted contract `2.0.0` independent
-of package `7.6.5`, mutation guards, and zero SDK runtime dependencies. Retaining existing
-published evidence is not publication-evidence import; mode fallback cannot prove freeze.
+widening. The [Node lifecycle reference](../../../../../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions)
+documents private package-version contracts and reviewed public evolution. Explicit
+publication import verifies external evidence; mode fallback cannot prove freeze.
 
 Core platform baseline read/write/Check/Accept/Freeze shares these immutable-history,
 evidence-preserving snapshot, and classifier paths, with public snapshots and a
@@ -214,10 +219,7 @@ The explicit migration target `CheckSunderPlatformCatalogMigrationInput` checks 
 Stack `2.0.0` descriptor oracle and six methods. Separately, the implemented adapter
 and typed wire models reproduce all 48 definitions and the complete shipped canonical
 descriptor/ABI tuple from source. `CheckSunderPlatformContracts` checks source against
-the Core baseline. The earlier local source/lifecycle checkpoint recorded successful
-actual Core `platform-contracts check` and `CheckSunderPlatformContracts` runs; those
-results are historical, not current-batch reruns. Neither check establishes production
-catalog release authorization or phase completion.
+the Core baseline. These checks establish source consistency, not Registry publication.
 
 ## Canonical Recipes
 

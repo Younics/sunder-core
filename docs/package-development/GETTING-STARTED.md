@@ -1,137 +1,100 @@
 # Getting Started
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 1. Use the matching `sdk/v*` tag for released template behavior.
-
-> **RPC authoring transition:** The generated Protocol project and authored
-> descriptor steps below describe current pre-cutover source. The accepted final
-> design is [Implementation-First RPC Authoring](IMPLEMENTATION-FIRST-RPC.md),
-> which is not implemented yet.
-
-This guide creates a package, runs it as a development package, and produces a validated distributable artifact. The repository also contains a [compiled quickstart package](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/) used by the Sunder Core build.
+This guide tracks current source on the Sunder SDK 1.1 line and .NET 10. For released
+behavior, use the matching `sdk/v*` tag and README in the released template package.
 
 ## Prerequisites
 
-- .NET 10 SDK.
-- Sunder App and the `sunder` CLI, or source builds of both.
-- Access to NuGet.org or another feed containing the coordinated Sunder `1.1.x` packages.
+- .NET 10 SDK for building.
+- Sunder App and the `sunder` CLI for package development and installation.
+- A feed containing the coordinated SDK packages, or locally packed source candidates.
 
-Check the SDK and CLI:
-
-```powershell
-dotnet --version
-sunder --help
-```
-
-## Install The Template
-
-Install the template from the `1.1` line:
-
-```powershell
-dotnet new install Sunder.Package.Templates::1.1.0
-```
-
-Use `dotnet new uninstall Sunder.Package.Templates` before changing to a different template line. When testing an unreleased source build, install the locally packed `.nupkg` instead.
+Sunder-managed execution runtimes are separate from your development SDK. Install
+required package runtimes through the App or CLI when prompted.
 
 ## Create A Package
 
-Create a headless Worker V1 Runtime package:
-
-```powershell
-dotnet new sunder-package `
-  --name MyPackage `
-  --packageId my.company.package `
-  --packageName "My Package"
+```sh
+dotnet new install Sunder.Package.Templates::1.1.0
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --output MyPackage
+dotnet restore MyPackage/MyPackage.csproj
+dotnet build MyPackage/MyPackage.csproj --no-restore
 ```
 
-Create an App and Worker V1 Runtime package with a default Avalonia view:
-
-```powershell
-dotnet new sunder-package `
-  --name MyPackage `
-  --packageId my.company.package `
-  --packageName "My Package" `
-  --withAvalonia
-```
-
-Use `--output .\MyPackage` when you need an explicit destination. The generated family contains `Sunder.Package.props` as its single package-version source, a root unsuffixed canonical Worker/package project, an always-present non-packable `*.Protocol` project, and optional App/Stack code. Worker source remains under `*.Worker/`, but there is no separate Worker csproj or Aggregate wrapper. The Protocol project starts with an RPC descriptor plus generated DTO, client, and provider adapters. The canonical project sets `SunderPackagePrimaryProject=true`; build composes its current-RID framework-dependent Worker module with the optional App, while `PackSunderPackage` builds all six exact-RID module leaves into one universal package. It does **not** contain a source `sunder-package.json`; `Sunder.Package.Build` generates the canonical Manifest V1 document from compiled metadata and MSBuild items.
-
-### Template Options
+For unreleased tooling, install the locally packed template `.nupkg` instead. The
+template creates **one authored Library project** with `SunderPackageProject=true`,
+package metadata, an ordinary private service and a contract lock. Sunder generates
+interfaces, clients, DI, Worker entry points and optional App composition.
 
 | Option | Result |
 | --- | --- |
-| `--packageId <id>` | Required lowercase dot-separated runtime identity. |
-| `--packageName <name>` | Required user-facing name. |
-| `--withAvalonia` | Adds `Sunder.Sdk.Avalonia`, Avalonia, and a default App view. |
-| `--noDefaultView` | Keeps Avalonia support but omits the starter shell view. |
-| `--withStacks` | Adds `Sunder.Sdk.Stacks` and a compiled exporter/importer stub. |
-| `--withHostDependency` | Adds an installed-package dependency. |
-| `--hostPackageId <id>` | Package id required by `--withHostDependency`. |
-| `--hostPackageVersionRange <range>` | Runtime dependency range; default `>=1.1.0 <1.2.0`. |
+| `--withAvalonia` | Adds Avalonia support and a starter view/view model |
+| `--noDefaultView` | Keeps Avalonia support without the starter shell view |
+| `--withStacks` | Adds Stack contributor source; select its platform API before Build |
+| `--withHostDependency` | Adds an ordinary package dependency |
+| `--hostPackageId <id>` | Required dependency identity with `--withHostDependency` |
+| `--hostPackageVersionRange <range>` | Reviewed dependency range |
 
-## Build
+See the [template README](../../languages/csharp/dotnet/packages/Sunder.Package.Templates/README.md)
+for all options and the Stack selection command.
 
-```powershell
-dotnet restore .\MyPackage\MyPackage.csproj
-dotnet build .\MyPackage\MyPackage.csproj --no-restore
+## Add Services And UI
+
+Implement ordinary public async methods on a `[SunderService]` class. The generated
+interface is available for constructor injection. Optional views use
+`[SunderPackageView]`; their view models call the generated API rather than a Worker
+implementation. Author business values once; Sunder handles their wire projection.
+
+Private services need no Accept/Freeze step. Public export and external API selection
+are explicit reviewed operations. See [ordinary services](ORDINARY-SERVICES.md) and
+the compiled [Quickstart](../../languages/csharp/dotnet/samples/Sunder.Package.Quickstart/README.md).
+
+## Run And Watch
+
+Build emits `MyPackage/bin/Debug/net10.0/sunder-dev`. Load that generated package:
+
+```sh
+sunder dev package run MyPackage/bin/Debug/net10.0/sunder-dev --watch
 ```
 
-The build emits the exact Worker leaf at `MyPackage/bin/Debug/net10.0/<current-rid>/sunder-dev/` and a composed development tree at `MyPackage/bin/Debug/net10.0/sunder-dev/`. The optional App csproj is a build-only `SunderPackageAppProject` input and never enters Worker compile or runtime output. Both folders are generated output and may be deleted and recreated; do not edit them.
+Alternatively, use `Sunder.App --dev-package <folder> --watch` (`Sunder.App.exe` on
+Windows). In another terminal **inside the package project directory**, run:
 
-## Run In Sunder
-
-Close any older invocation using the same development package, then launch:
-
-```powershell
-Sunder.App.exe `
-  --dev-package .\MyPackage\bin\Debug\net10.0\sunder-dev `
-  --watch
+```sh
+dotnet watch build
 ```
 
-On macOS or Linux, invoke the corresponding Sunder executable and use `/` path separators.
+The source watcher rebuilds C#, AXAML, resources and contract inputs. The output
+watcher validates and stages complete package generations. Failed builds/reloads
+preserve the previous active generation. The pinned SDK requires `dotnet watch build`
+from the project directory; forwarding `--project` to its build command is unsupported.
 
-The App sends its complete development-package set to the already-running Runtime service through an invocation-owned lease. Runtime validates the current-RID projection, starts the package worker, watches the generated folder when `--watch` is present, and publishes an App-safe package snapshot. App does not load files directly from the development output. Rebuilding triggers a generation-fenced reload; closing App releases its lease and restores an installed package with the same id, if one exists.
-
-Load a dependency and its extension in one invocation so Runtime can validate the complete graph:
-
-```powershell
-Sunder.App.exe `
-  --dev-package .\HostPackage\bin\Debug\net10.0\sunder-dev `
-  --dev-package .\ExtensionPackage\bin\Debug\net10.0\sunder-dev `
-  --watch
-```
+Current C# local builds emit a manifest-bound import handoff beside `sunder-dev`.
+Published imports and other producers may require explicit preparation; see
+[development imports](DEVELOPMENT-IMPORTS.md). Load dependent development packages
+together using repeated `--dev-package` options. Closing the owning invocation
+releases its development lease.
 
 ## Pack And Validate
 
-Set the strict SemVer package version once in the generated `Sunder.Package.props`. The canonical, App, and Protocol projects all import this file:
+Set the strict SemVer `Version` in the authored project, then pack all declared RIDs:
 
-```xml
-<Project>
-  <PropertyGroup>
-    <Version>1.0.0</Version>
-  </PropertyGroup>
-</Project>
+```sh
+dotnet msbuild MyPackage/MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+sunder dev package validate <archive.sunderpkg>
+sunder package install --file <archive.sunderpkg>
 ```
 
-Create and validate the artifact:
-
-```powershell
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:FreezeSunderContracts
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
-sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
-```
-
-Install the exact validated file locally:
-
-```powershell
-sunder package install --file .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
-```
-
-See [Build, Validate, Publish, And Version](BUILD-PUBLISH-VERSIONING.md) before publishing to a Registry. The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative source for generated manifest and archive rules.
+Use the archive path reported by Pack. Generated manifests, role outputs and archives
+are not source files to edit. Public API changes require their reviewed lifecycle
+before publication; private-only starter packages do not.
 
 ## Next Steps
 
-- [Package Anatomy](PACKAGE-ANATOMY.md) explains App and Runtime roles.
-- [Activation, DI, And Disposal](ACTIVATION-AND-DI.md) defines safe lifecycle behavior.
-- [Avalonia Views](AVALONIA.md) adds shell UI.
-- [Owner RPC](RUNTIME-OPERATIONS.md) connects App UI to Runtime providers.
-- [Troubleshooting](TROUBLESHOOTING.md) covers common first-run failures.
+- [Package anatomy](PACKAGE-ANATOMY.md)
+- [Single-project composition and role ownership](SINGLE-PROJECT-AUTHORING.md)
+- [Contract selection and restore](CONTRACT-RESTORE-CACHE.md)
+- [Activation and disposal](ACTIVATION-AND-DI.md)
+- [Avalonia views](AVALONIA.md)
+- [Build, publish and version](BUILD-PUBLISH-VERSIONING.md)
+- [Troubleshooting](TROUBLESHOOTING.md)

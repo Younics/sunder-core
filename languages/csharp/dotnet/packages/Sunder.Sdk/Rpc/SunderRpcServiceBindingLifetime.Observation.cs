@@ -203,6 +203,11 @@ public sealed partial class SunderRpcServiceBindingLifetime
     private void QueryFailed(Exception exception, string contractId, long epoch)
     {
         var failure = Failure(exception);
+        // A finite read rejected for resource pressure says nothing about catalog
+        // continuity. Keep the independent observer and exact issued bindings;
+        // retiring them here turns one busy request into a reconnection cascade.
+        // Failure of the observation stream itself still invalidates its epoch.
+        if (failure.Error.Kind == SunderRpcErrorKind.ResourceExhausted) return;
         if (failure.Error.Kind == SunderRpcErrorKind.PermissionDenied) ContractFailed(contractId, failure, epoch);
         else InvalidateAll(failure, epoch, cancelObservation: true);
     }

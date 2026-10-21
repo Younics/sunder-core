@@ -8,12 +8,11 @@ internal static partial class SunderRpcCSharpImportPrepass
     private static SunderRpcCSharpImportedContract PrepareNaturalContract(SunderRpcCSharpImportedContract contract,
         string authorityId, IDictionary<string, string> names)
     {
-        var apiNamespace = Editor.GeneratedPackageNames.Services(authorityId);
         var internalNamespace = Editor.GeneratedPackageNames.Internal(authorityId);
         var services = contract.Descriptor.Services.OrderBy(service => service.ServiceId, StringComparer.Ordinal).Select(service =>
         {
             var stem = SunderRpcCSharpSyntax.Identifier(service.ServiceId).TrimStart('@');
-            var api = apiNamespace + "." + NaturalInterfaceName(service.ServiceId);
+            var api = Editor.GeneratedPackageNames.ImportedServiceInterface(authorityId, contract.Descriptor.ContractId, service.ServiceId);
             var origin = contract.ContractKey + "/" + service.ServiceId;
             if (names.TryGetValue(api, out var previous))
                 throw new InvalidDataException($"rpc-authoring.generated-name-collision: '{previous}' and '{origin}' both generate '{api}'. Select distinct stable service identities.");
@@ -22,34 +21,27 @@ internal static partial class SunderRpcCSharpImportPrepass
             return new SunderRpcCSharpNaturalService(service.ServiceId, api, client, client + "Providers", "__SunderNatural" + stem + "ProviderAdapter") { ContractId = contract.Descriptor.ContractId };
         }).ToArray();
         var prepared = contract with { AuthorityPackageId = authorityId, NaturalServices = services };
-        if (services.Length > 1)
-        {
-            var aggregate = NaturalProviderInterface(prepared);
-            if (names.TryGetValue(aggregate, out var previous))
-                throw new InvalidDataException($"rpc-authoring.generated-name-collision: '{previous}' conflicts with aggregate '{aggregate}'.");
-            names.Add(aggregate, contract.ContractKey);
-        }
+        var aggregate = NaturalProviderInterface(prepared);
+        if (names.TryGetValue(aggregate, out var previous))
+            throw new InvalidDataException($"rpc-authoring.generated-name-collision: '{previous}' conflicts with aggregate '{aggregate}'.");
+        names.Add(aggregate, contract.ContractKey);
         return prepared;
     }
 
     internal static string NaturalProviderInterface(SunderRpcCSharpImportedContract contract)
-        => contract.NaturalServices.Count == 1 ? contract.NaturalServices[0].InterfaceMetadataName
-            : Editor.GeneratedPackageNames.Services(contract.AuthorityPackageId!) + ".I" + ContractName(contract.ContractKey)[1..] + "Services";
+        => Editor.GeneratedPackageNames.Services(contract.AuthorityPackageId!) + "." + ContractName(contract.ContractKey) + ".IContractServices";
 
     internal static string NaturalProviderImportInterface(string packageId, string key)
         => Editor.GeneratedPackageNames.Services(packageId) + ".I" + UpperInitial(key) + "Service";
 
-    private static string NaturalInterfaceName(string serviceId)
-        => Editor.GeneratedPackageNames.NaturalInterfaceName(serviceId);
-
-    // Ordinary APIs occupy one flat authority namespace. Two distinct contracts
-    // cannot silently change a service's public name by adding contract scopes.
+    // Canonical imported APIs are always contract-local, so selecting another
+    // contract cannot rename existing services or collide with their identities.
     private static void ValidateNaturalServiceNames(IEnumerable<SunderRpcContractDescriptor> descriptors,
         IReadOnlyDictionary<string, SunderRpcLockedArtifactContract> authorities)
     {
         var collision = descriptors.Where(descriptor => authorities.TryGetValue(descriptor.ContractId, out var authority) && authority.AuthorityKind == "package")
             .SelectMany(descriptor => descriptor.Services.Select(service => (Key: descriptor.ContractId + "/" + service.ServiceId,
-                Name: Editor.GeneratedPackageNames.Services(authorities[descriptor.ContractId].AuthorityId) + "." + NaturalInterfaceName(service.ServiceId))))
+                Name: Editor.GeneratedPackageNames.ImportedServiceInterface(authorities[descriptor.ContractId].AuthorityId, descriptor.ContractId, service.ServiceId))))
             .OrderBy(value => value.Key, StringComparer.Ordinal)
             .GroupBy(value => value.Name, StringComparer.OrdinalIgnoreCase).FirstOrDefault(group => group.Select(value => value.Key).Distinct(StringComparer.Ordinal).Count() > 1);
         if (collision is not null)
@@ -107,7 +99,7 @@ internal static partial class SunderRpcCSharpImportPrepass
                 clientName + "Providers", clientName, imported: true);
             output.AppendLine("}");
         }
-        if (declarations && contract.NaturalServices.Count > 1)
+        if (declarations)
         {
             var metadataName = NaturalProviderInterface(contract);
             var dot = metadataName.LastIndexOf('.');

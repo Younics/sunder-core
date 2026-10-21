@@ -63,7 +63,7 @@ public sealed class AgentStackSourceTestTask : Microsoft.Build.Utilities.Task
             var generation = new GenerateSunderRpcBindingsTask
             {
                 BuildEngine = BuildEngine, HostObject = HostObject, ProjectDirectory = ProjectDirectory,
-                IntermediateOutputPath = IntermediateOutputPath, PackageId = "sunder.package.agent", PackageVersion = "2.0.0",
+                IntermediateOutputPath = IntermediateOutputPath, PackageId = "younics.ai.agent", PackageVersion = "2.0.0",
                 ProjectIdentity = "AgentOwnerSource.csproj", TargetFramework = "net10.0", Configuration = "Debug",
                 AssemblyName = "Sunder.Package.Agent", NullableEnabled = true, SourceFiles = SourceFiles, ReferencePaths = ReferencePaths,
                 ContractCacheRoot = cache, ContractOperation = Operation,

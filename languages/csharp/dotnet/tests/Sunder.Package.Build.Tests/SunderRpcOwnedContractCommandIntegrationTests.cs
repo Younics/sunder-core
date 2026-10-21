@@ -169,11 +169,15 @@ public sealed class SunderRpcOwnedContractCommandIntegrationTests
         AssertBaselineUnchanged(firstFrozen.ExactBytes);
         Assert.Equal(rpcBeforeChange, RpcSnapshot());
 
-        // No old/new version properties: the shared planner must allocate the compatible bump.
-        AssertSuccess(await Target("AcceptSunderContracts"));
+        // A wire-additive method adds a required generated provider member. Source
+        // compatibility therefore requires an explicitly reviewed Major tuple.
+        AssertFailure(await Target("AcceptSunderContracts"), "breaking-change acknowledgement");
+        AssertBaselineUnchanged(firstFrozen.ExactBytes);
+        AssertSuccess(await Target("AcceptSunderContracts", "-p:SunderContractKey=greeting",
+            "-p:SunderContractCurrentVersion=1.0.0", "-p:SunderContractNextVersion=2.0.0", "-p:SunderAcknowledgeBreakingChange=true"));
         var evolved = Baseline();
         var contract = evolved.Contracts["greeting"];
-        Assert.Equal("1.1.0", contract.Current!.Descriptor.Version);
+        Assert.Equal("2.0.0", contract.Current!.Descriptor.Version);
         Assert.Equal("draft", contract.Current.State);
         Assert.True(JsonElement.DeepEquals(originalEvidence, Assert.Single(contract.History).SnapshotJson));
         AssertSuccess(await Target("CheckSunderContracts"));
@@ -188,7 +192,7 @@ public sealed class SunderRpcOwnedContractCommandIntegrationTests
         AssertSuccess(await Target("Build", "-p:Version=7.6.6"));
         AssertSuccess(await Target("PackSunderPackage", "-p:Version=7.6.6"));
         AssertBaselineUnchanged(nextFrozen.ExactBytes);
-        await AssertArchive("7.6.6", "1.1.0");
+        await AssertArchive("7.6.6", "2.0.0");
         var rpcBeforeReuse = RpcSnapshot();
         AssertSuccess(await Target("FreezeSunderContracts", "-p:Version=7.6.7"));
         AssertBaselineUnchanged(nextFrozen.ExactBytes);

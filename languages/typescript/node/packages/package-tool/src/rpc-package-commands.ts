@@ -3,8 +3,7 @@ import { open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { isPackageId } from "@sunder/sdk";
 import { cachePath, contractCacheFiles, DEFAULT_CONTRACT_CACHE } from "./rpc-contract-cache";
-import { contractError, consumerRoles, parseContractLock, parseContractLockForReselection, type ConsumerRole, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";
-import { migrateConsumerRoles, type ConsumerRoleChange } from "./rpc-consumer-migration";
+import { contractError, consumerRoles, parseContractLock, type ConsumerRole, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";
 import { ordered, outerBytes, outerKeys, parseOuter, type Outer, type OuterObject } from "./rpc-baseline-json";
 import { hydrateContractLock } from "./rpc-contract-restore";
 import { sameReviewedSelection, selectPackageArtifact } from "./rpc-package-selection";
@@ -16,7 +15,7 @@ import { defaultPlatformKey, selectPlatformContract } from "./rpc-platform-catal
 import type { InspectedContractCandidate } from "./rpc-contract-candidate";
 
 export interface PackageApiRequest extends RegistryOriginOptions {
-  readonly operation: "add" | "update" | "remove" | "list" | "require" | "unrequire" | "implement" | "unimplement" | "migrate-consumer-roles"
+  readonly operation: "add" | "update" | "remove" | "list" | "require" | "unrequire" | "implement" | "unimplement"
     | "platform-implement" | "platform-update" | "platform-unimplement" | "platform-list";
   readonly packageId?: string; readonly contractId?: string; readonly versionRange?: string; readonly includePrerelease?: boolean;
   readonly registryOrigin?: string; readonly presence?: "required" | "optional"; readonly localName?: string; readonly candidate?: string; readonly platformCatalog?: string;
@@ -25,7 +24,7 @@ export interface PackageApiRequest extends RegistryOriginOptions {
 }
 type Draft = { lockVersion: number; packageArtifacts: Record<string, OuterObject>; packageImports: Record<string, { localName: string; presence: string; requiredContracts: string[]; consumerRoles: readonly ConsumerRole[] }>;
   providerImports: Record<string, { packageId: string; contractId: string }>; platformImports: Record<string, OuterObject> };
-export interface PackageApiResult { readonly changed: boolean; readonly lock: ContractLock; readonly roleChanges?: readonly ConsumerRoleChange[] }
+export interface PackageApiResult { readonly changed: boolean; readonly lock: ContractLock }
 export async function packageApiCommand(project: string, request: PackageApiRequest): Promise<PackageApiResult> {
   try { return await execute(project, request); }
   catch (error) {
@@ -35,10 +34,9 @@ export async function packageApiCommand(project: string, request: PackageApiRequ
 }
 async function execute(project: string, request: PackageApiRequest): Promise<PackageApiResult> {
   validateRequest(request); project = await cachePath(project);
-  if (request.operation === "migrate-consumer-roles") return migrateConsumerRoles(project, request);
   const path = join(project, "sunder-contracts.lock.json"); const cache = request.cacheRoot ?? DEFAULT_CONTRACT_CACHE;
   const original = await contractCacheFiles.read(path, 33_554_432);
-  const before = (request.operation === "update" ? parseContractLockForReselection : parseContractLock)(original, request.allowDevelopmentRegistryOrigin);
+  const before = parseContractLock(original, request.allowDevelopmentRegistryOrigin);
   if (request.operation === "list" || request.operation === "platform-list") return { changed: false, lock: before };
   const candidates = new Map<string, InspectedContractCandidate>();
   try {
@@ -210,11 +208,7 @@ function validateRequest(value: PackageApiRequest): void {
   if (Object.keys(value).some(key => !["operation", "packageId", "contractId", "versionRange", "includePrerelease", "registryOrigin", "presence", "localName", "candidate", "platformCatalog", "cacheRoot", "fetchImplementation", "signal", "allowDevelopmentRegistryOrigin", "consumerRoles"].includes(key))) missing();
   if (value.consumerRoles !== undefined) {
     consumerRoles(value.consumerRoles, value.packageId);
-    if (!["add", "update", "migrate-consumer-roles"].includes(value.operation) || value.packageId === undefined) missing();
-  }
-  if (value.operation === "migrate-consumer-roles") {
-    if (value.packageId !== undefined && !isPackageId(value.packageId) || [value.contractId, value.versionRange, value.includePrerelease, value.registryOrigin, value.presence, value.localName, value.candidate, value.platformCatalog, value.fetchImplementation].some(item => item !== undefined)) missing();
-    return;
+    if (!["add", "update"].includes(value.operation) || value.packageId === undefined) missing();
   }
   if (value.allowDevelopmentRegistryOrigin !== undefined && typeof value.allowDevelopmentRegistryOrigin !== "boolean")
     contractError("package-api.registry-origin-invalid", "Development Registry mode must be an explicit Boolean.");

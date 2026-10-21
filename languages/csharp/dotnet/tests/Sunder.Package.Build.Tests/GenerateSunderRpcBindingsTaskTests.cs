@@ -1,6 +1,5 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Encodings.Web;
 using System.Text.Json;
 using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
@@ -16,11 +15,6 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed partial class GenerateSunderRpcBindingsTaskTests
 {
-    private static readonly JsonSerializerOptions DeterministicJson = new()
-    {
-        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
-    };
-
     [Fact]
     public void Execute_GeneratesAndAtomicallyPublishesImplementationFirstOutputs()
     {
@@ -36,7 +30,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 [new(sourcePath, ImplementationFirstSource)],
                 references));
             Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
-            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts).Descriptor);
+            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts));
             var intermediateOutputPath = Path.Combine(root, "obj", "Debug", "net10.0");
             var first = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
 
@@ -182,7 +176,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 [new(sourcePath, ImplementationFirstSource)],
                 references));
             Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
-            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts).Descriptor);
+            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts));
 
             var exportTask = CreateSourceTask(
                 root,
@@ -414,7 +408,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 [new(sourcePath, ImplementationFirstSource)],
                 references));
             Assert.True(candidate.Success, string.Join(Environment.NewLine, candidate.Diagnostics));
-            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts).Descriptor);
+            WriteSourceAuthoringState(root, Assert.Single(candidate.Contracts));
             var exportTask = CreateSourceTask(
                 root, Path.Combine(root, "obj", "Debug", "net10.0"), sourcePath, references);
             exportTask.GenerationMode = "ProjectExport";
@@ -1294,34 +1288,14 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             .ToArray();
     }
 
-    private static void WriteSourceAuthoringState(string root, SunderRpcContractDescriptor descriptor)
+    private static void WriteSourceAuthoringState(string root, SunderRpcCSharpCompiledContract contract)
     {
-        var canonicalDescriptor = Encoding.UTF8.GetString(descriptor.GetCanonicalUtf8());
-        var canonicalAbi = Encoding.UTF8.GetString(descriptor.GetCanonicalAbiProjectionUtf8());
-        var baseline = "{\n"
-                       + "  \"schemaVersion\": 1,\n"
-                       + "  \"authorityKind\": \"package\",\n"
-                       + "  \"authorityId\": \"example.generated\",\n"
-                       + "  \"packageId\": \"example.generated\",\n"
-                       + "  \"contracts\": {\n"
-                       + "    \"greeting\": {\n"
-                       + "      \"contractId\": \"example.generated.greeting\",\n"
-                       + "      \"current\": {\n"
-                       + "        \"state\": \"draft\",\n"
-                       + "        \"exposure\": \"public\",\n"
-                       + $"        \"contractVersion\": \"{descriptor.Version}\",\n"
-                       + $"        \"descriptorBytes\": {descriptor.GetCanonicalUtf8().Length},\n"
-                        + $"        \"canonicalDescriptor\": {JsonSerializer.Serialize(canonicalDescriptor, DeterministicJson)},\n"
-                       + $"        \"descriptorSha256\": \"{descriptor.Sha256}\",\n"
-                       + $"        \"abiProjectionBytes\": {descriptor.GetCanonicalAbiProjectionUtf8().Length},\n"
-                        + $"        \"canonicalAbiProjection\": {JsonSerializer.Serialize(canonicalAbi, DeterministicJson)},\n"
-                       + $"        \"abiSha256\": \"{descriptor.AbiSha256}\"\n"
-                       + "      },\n"
-                       + "      \"history\": []\n"
-                       + "    }\n"
-                       + "  }\n"
-                       + "}\n";
-        File.WriteAllText(Path.Combine(root, "sunder-contracts.owned.json"), baseline);
+        // This synthetic draft starts from the actual compiled source, including its
+        // exported model names and method policies. Descriptor-only JSON is not a review.
+        var baseline = new SunderRpcOwnedPackageBaseline("example.generated",
+            new Dictionary<string, SunderRpcOwnedContractBaseline>(StringComparer.Ordinal), [], string.Empty);
+        File.WriteAllBytes(Path.Combine(root, "sunder-contracts.owned.json"),
+            SunderRpcAuthoringDocuments.PlanOwnedBaselineAcceptance(baseline, [contract], null, null, null, false));
         File.WriteAllText(
             Path.Combine(root, "sunder-contracts.lock.json"),
             "{\n"

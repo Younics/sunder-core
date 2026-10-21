@@ -36,7 +36,8 @@ internal sealed class WorkerHarness : IAsyncDisposable
         WorkerLimits? limits = null,
         bool ignoreInputReadCancellation = false,
         bool rpcExtendedDeadlineV1 = false,
-        string packageVersion = PackageVersion)
+        string packageVersion = PackageVersion,
+        bool operationalOutcomesV1 = true)
     {
         Limits = (limits ?? WorkerLimits.Default) with { };
         Input = new AsyncByteStream(ignoreInputReadCancellation);
@@ -63,6 +64,10 @@ internal sealed class WorkerHarness : IAsyncDisposable
         if (rpcExtendedDeadlineV1)
         {
             environment["SUNDER_RPC_EXTENDED_DEADLINE_V1"] = "1";
+        }
+        if (operationalOutcomesV1)
+        {
+            environment["SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"] = "1";
         }
         try
         {

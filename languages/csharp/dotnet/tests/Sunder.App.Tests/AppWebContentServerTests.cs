@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using Avalonia;
 using Sunder.App.Services;
 using Sunder.Package.Format;
 using Xunit;
@@ -8,6 +9,45 @@ namespace Sunder.App.Tests;
 
 public sealed class AppWebContentServerTests
 {
+    [Theory]
+    [InlineData(300, 200, 18, 1)]
+    [InlineData(300, 200, 18, 1.25)]
+    [InlineData(300, 200, 18, 2)]
+    [InlineData(80, 40, 18, 2)]
+    [InlineData(500, 120, 30, 1.5)]
+    public void NativeBrowserViewportRectangleFitsEveryRoundedCornerAndTranslatedBoundary(double width, double height, double radius, double scaling)
+    {
+        var boundary = new Rect(7.25, -3.5, width, height);
+        var viewport = AppNativeWebViewViewport.ContainedRectangle(boundary, radius, scaling);
+        Assert.True(viewport.Width > 0 && viewport.Height > 0);
+        var inset = viewport.X - boundary.X;
+        Assert.True(Math.Abs(inset * scaling - Math.Round(inset * scaling)) < 0.00001);
+        foreach (var corner in new[] { viewport.TopLeft, viewport.TopRight, viewport.BottomLeft, viewport.BottomRight })
+        {
+            var center = new Point(corner.X < boundary.Center.X ? boundary.X + radius : boundary.Right - radius,
+                corner.Y < boundary.Center.Y ? boundary.Y + radius : boundary.Bottom - radius);
+            var delta = corner - center;
+            Assert.True(delta.X * delta.X + delta.Y * delta.Y <= radius * radius,
+                $"Native viewport corner {corner} escaped rounded boundary {boundary} at {scaling}x.");
+        }
+        var clipped = viewport.Intersect(new Rect(10, 0, 30, 20));
+        Assert.True(viewport.Contains(clipped));
+    }
+
+    [Theory]
+    [InlineData(0, 200)]
+    [InlineData(200, 0)]
+    [InlineData(8, 8)]
+    public void NativeBrowserViewportCannotLeaveAOnePixelNativeSurfaceWhenTooSmall(double width, double height)
+        => Assert.Equal(default, AppNativeWebViewViewport.ContainedRectangle(new Rect(0, 0, width, height), 18, 2));
+
+    [Fact]
+    public void SquareBrowserBoundaryDoesNotNeedAnInset()
+    {
+        var boundary = new Rect(4, 7, 100, 90);
+        Assert.Equal(boundary, AppNativeWebViewViewport.ContainedRectangle(boundary, 0, 2));
+    }
+
     [Fact]
     public async Task ServesOnlyHashedPackageOriginWithStrictHeadersRoutesAndMethods()
     {

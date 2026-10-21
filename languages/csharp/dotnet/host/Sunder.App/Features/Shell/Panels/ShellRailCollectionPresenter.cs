@@ -17,11 +17,19 @@ internal sealed class ShellRailCollectionPresenter(
     public void Rebuild(
         IReadOnlyList<ShellPlacementSlot> slots,
         bool createHostedViews,
-        IReadOnlySet<string>? stabilizedViewIds = null)
+        IReadOnlySet<string>? stabilizedViewIds = null,
+        IReadOnlySet<string>? retainedViewIds = null)
     {
         var viewIdsToCancel = new List<string>();
+        var retainedPlacements = new HashSet<RailPlacement>();
         foreach (var slot in slots)
         {
+            if (slot.Panel.ActiveViewId is { } active && retainedViewIds?.Contains(active) == true
+                && active == ShellSelectionState.GetSelectedViewId(shellState, slot.Placement))
+            {
+                retainedPlacements.Add(slot.Placement);
+                continue;
+            }
             if (!string.IsNullOrWhiteSpace(slot.Panel.ActiveViewId))
             {
                 viewIdsToCancel.Add(slot.Panel.ActiveViewId);
@@ -43,6 +51,7 @@ internal sealed class ShellRailCollectionPresenter(
         {
             RestoreSelection(slot, ShellSelectionState.GetSelectedViewId(shellState, slot.Placement));
             var selectedViewId = ShellSelectionState.GetSelectedViewId(shellState, slot.Placement);
+            if (retainedPlacements.Contains(slot.Placement)) continue;
             panelContentPresenter.Apply(slot.Panel, slot.Placement, selectedViewId, viewsById, middleBarItemCount, createHostedViews);
             if (createHostedViews
                 && !string.IsNullOrWhiteSpace(selectedViewId)

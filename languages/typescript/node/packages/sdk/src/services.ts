@@ -24,6 +24,8 @@ export interface ServiceOptions {
   readonly runtimeUses?: readonly ServiceRuntimeUse[];
   /** Facets on named source types, or method.parameter / method.result paths. */
   readonly constraints?: Readonly<Record<string, ServiceConstraints>>;
+  /** Stable wire definition name and exact portable public model name, keyed by an unambiguous reachable source type name. */
+  readonly values?: Readonly<Record<string, { readonly name?: string; readonly publicName?: string }>>;
   readonly errors?: Readonly<Record<string, ServiceError<unknown>>>;
   readonly methods?: Readonly<Record<string, { readonly name?: string; readonly idempotency?: "none" | "idempotent"; readonly errors?: readonly string[]; readonly timeoutSeconds?: number; readonly completeOnResponseContentRetirement?: boolean }>>;
 }

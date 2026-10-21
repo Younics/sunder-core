@@ -68,8 +68,7 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
             var cacheRoot = string.IsNullOrEmpty(ContractCacheRoot) ? SunderRpcContractCache.DefaultRoot : Path.GetFullPath(ContractCacheRoot, ProjectDirectory);
             using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
             var result = new SunderRpcPackageApiCommands(new(http, AllowDevelopmentRegistryOrigin)).ExecuteAsync(lockPath, cacheRoot, request,
-                (before, _, stage) => ValidateSource(before, stage, cacheRoot, request), _cancellation.Token,
-                message => Log.LogMessage(MessageImportance.High, message)).GetAwaiter().GetResult();
+                (before, _, stage) => ValidateSource(before, stage, cacheRoot, request), _cancellation.Token).GetAwaiter().GetResult();
             Log.LogMessage(MessageImportance.High, result.Changed ? "Committed package API lock changes. Run Build to regenerate bindings." : "Package API lock is unchanged.");
             foreach (var artifact in result.ContractLock.PackageArtifacts.Values)
             {
@@ -107,7 +106,7 @@ public sealed class ManageSunderPackageApiTask : Microsoft.Build.Utilities.Task,
             providerKey = request.Operation == "PlatformImplement" ? selected.PlatformImports.Values.Single(value => value.ContractId == request.ContractId).Key
                 : selected.ProviderImports.Values.Single(value => value.PackageId == request.PackageId && value.ContractId == request.ContractId).Key;
         }
-        if (request.Operation is not ("Add" or "Update" or "Implement" or "Unimplement" or "PlatformImplement" or "PlatformUpdate" or "PlatformUnimplement" or "MigrateConsumerRoles")) return;
+        if (request.Operation is not ("Add" or "Update" or "Implement" or "Unimplement" or "PlatformImplement" or "PlatformUpdate" or "PlatformUnimplement")) return;
         var check = new GenerateSunderRpcBindingsTask
         {
             BuildEngine = BuildEngine, SourceFiles = SourceFiles, ReferencePaths = ReferencePaths,

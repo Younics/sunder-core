@@ -6,7 +6,7 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppPackageHostComposition : IDisposable
+internal sealed partial class AppPackageHostComposition : IDisposable
 {
     private readonly AppPackageActivator _packageActivator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
@@ -19,7 +19,26 @@ internal sealed class AppPackageHostComposition : IDisposable
     private readonly Action<Guid, string, string?, Assembly> _registerFaultAttribution;
     private readonly BackgroundProcessQueueService? _ownedBackgroundProcessQueue;
     private readonly Guid _generationId;
+    private readonly Guid _activationOwnerId;
     private int _cleanupUnproven;
+    private readonly AppPackageViewRegistry _viewRegistry;
+    private readonly AppPackageRuntimeWorkStopper _runtimeWorkStopper;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, AppPackageHostComposition> _retained = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _retainedActivationIds = new(StringComparer.OrdinalIgnoreCase);
+
+    internal void RetainPackage(string packageId, AppPackageHostComposition owner, bool existingActivation)
+    {
+        if (!_retained.TryAdd(packageId, owner)) throw new InvalidOperationException("An activation was retained twice.");
+        if (existingActivation) _retainedActivationIds.Add(packageId);
+        foreach (var registration in owner.AssemblyTracker.SnapshotPackageAssemblies().Where(item => item.PackageId == packageId))
+            _registerFaultAttribution(_generationId, packageId, _state.GetPackageContentHash(packageId), registration.Assembly);
+    }
+    internal void DetachRetainedPackages() { _retained.Clear(); }
+    internal bool IsRetainedPackage(string packageId) => _retainedActivationIds.Contains(packageId);
+    internal bool ServicesPublished => _publication.IsPublished;
+    internal Guid ActivationOwnerId => _activationOwnerId;
+    internal bool CanRetainActivations => _publication.IsPublished && CleanupOutcome == AppPackageUiCleanupOutcome.Proven;
+    internal IReadOnlySet<string> RetainedPackageIds => _retainedActivationIds;
 
     public AppPackageHostComposition(
         object eventSender,
@@ -41,11 +60,15 @@ internal sealed class AppPackageHostComposition : IDisposable
         IAppWebViewFactory? webViewFactory = null,
         IAppWebRpcClientFactory? webRpcClientFactory = null,
         ExternalBrowserService? externalBrowser = null,
-        IAppPackagePolicy? packagePolicy = null)
+        IAppPackagePolicy? packagePolicy = null,
+        IAppPackageDevelopmentBackend? developerServices = null,
+        Guid? activationOwnerId = null)
     {
         _eventSender = eventSender;
         _generationId = generationId;
+        _activationOwnerId = activationOwnerId ?? generationId;
         _state = state;
+        _viewRegistry = viewRegistry;
         _registerFaultAttribution = registerFaultAttribution;
         AssemblyTracker = new AppPackageAssemblyTracker();
         var packagesById = activePackages
@@ -75,11 +98,16 @@ internal sealed class AppPackageHostComposition : IDisposable
                 viewId,
                 _state.GetPackageContentHash(packageId),
                 exception));
+        ViewFacade.RetainedView = viewId => _viewRegistry.GetPackageId(viewId) is { } packageId
+            ? _retained.GetValueOrDefault(packageId)?.ViewFacade : null;
+        ViewFacade.RetainedPackage = packageId => _retained.GetValueOrDefault(packageId)?.ViewFacade;
+        ViewFacade.RetainedFacades = () => _retained.Values.Distinct().Select(owner => owner.ViewFacade).ToArray();
 
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
         var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
         _ownedBackgroundProcessQueue = backgroundProcessQueue is null ? resolvedBackgroundProcessQueue : null;
-        var runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue, generationId);
+        var runtimeWorkStopper = _runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue, activationOwnerId ?? generationId,
+            (packageId, token) => _retained.TryGetValue(packageId, out var owner) ? owner._runtimeWorkStopper.StopPackageWorkAsync(packageId, token) : null);
         _publicationServices = new AppPackagePublicationServices(shellViewService, settingsNavigationService, _publication);
         var serviceProviderFactory = new AppPackageServiceProviderFactory(
             _publicationServices,
@@ -87,7 +115,8 @@ internal sealed class AppPackageHostComposition : IDisposable
             notificationCenter,
             resolvedBackgroundProcessQueue,
             _publication,
-            generationId);
+            activationOwnerId ?? generationId,
+            developerServices);
         _packageActivator = new AppPackageActivator(
             _sharedAssemblyRegistry,
             serviceProviderFactory,
@@ -133,7 +162,25 @@ internal sealed class AppPackageHostComposition : IDisposable
 
     public void UnpublishServices() => _publication.Revoke();
 
-    public IDisposable BeginRuntimePreparation() => _publication.BeginRuntimePreparation();
+    internal AppPackageGenerationPublication.DataHandoff BeginDataHandoff() => _publication.BeginDataHandoff();
+
+    public IDisposable BeginRuntimePreparation()
+    {
+        var scopes = new List<IDisposable>();
+        try
+        {
+            if (!_publication.IsPublished) scopes.Add(_publication.BeginRuntimePreparation());
+            foreach (var owner in _retained.Values.Distinct())
+                if (!owner.ServicesPublished) scopes.Add(owner.BeginRuntimePreparation());
+            return new PreparationScopes(scopes);
+        }
+        catch { new PreparationScopes(scopes).Dispose(); throw; }
+    }
+
+    private sealed class PreparationScopes(List<IDisposable> scopes) : IDisposable
+    {
+        public void Dispose() { for (var index = scopes.Count - 1; index >= 0; index--) scopes[index].Dispose(); }
+    }
 
     public IReadOnlyList<Task> BeginGenerationRetirement()
     {
@@ -165,7 +212,7 @@ internal sealed class AppPackageHostComposition : IDisposable
                 source,
                 preparedSource,
                 activation,
-                _generationId,
+                _activationOwnerId,
                 RegisterPackageAssembly,
                 _state.TrackLoadContext,
                 _state.TrackOwnedDisposable,
@@ -190,7 +237,7 @@ internal sealed class AppPackageHostComposition : IDisposable
                     activation.ServiceProvider,
                     activation.LoadContext,
                     activation.TargetLifetime,
-                    projectionLease));
+                    projectionLease) { LoadAdmission = activation.LoadAdmission });
             projectionLease = null;
             activated = true;
         }
@@ -204,7 +251,8 @@ internal sealed class AppPackageHostComposition : IDisposable
                     activation.ServiceProvider,
                     activation.LoadContext,
                     activation.TargetLifetime,
-                    projectionLease).ConfigureAwait(false);
+                    projectionLease,
+                    loadAdmission: activation.LoadAdmission).ConfigureAwait(false);
                 RecordCleanupOutcome(cleanupOutcome);
             }
         }
@@ -264,16 +312,12 @@ internal sealed class AppPackageHostComposition : IDisposable
         CancellationToken cancellationToken = default,
         bool preserveDisabled = false)
     {
+        if (_retained.TryGetValue(packageId, out var retained))
+            return await retained.UnloadPackageAsync(packageId, cancellationToken, preserveDisabled).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_state.TryRemoveLoadedPackage(packageId, preserveDisabled, out var handle) || handle is null)
-        {
-            return false;
-        }
-
-        RecordCleanupOutcome(await _unloadCoordinator.UnloadPackageAsync(packageId, handle)
-            .ConfigureAwait(false));
+        var result = await RetireOwnedPackageAsync(packageId, preserveDisabled, useRetirementDeadline: true).ConfigureAwait(false);
         PublishPackageStateChanged();
-        return true;
+        return result.WasLoaded;
     }
 
     private async Task<AppPackageUnloadResult> UnloadPackageForDisableAsync(
@@ -281,38 +325,16 @@ internal sealed class AppPackageHostComposition : IDisposable
         CancellationToken cancellationToken,
         bool preserveDisabled)
     {
+        if (_retained.TryGetValue(packageId, out var retained))
+            return await retained.UnloadPackageForDisableAsync(packageId, cancellationToken, preserveDisabled).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!_state.TryRemoveLoadedPackage(packageId, preserveDisabled, out var handle) || handle is null)
-        {
-            return AppPackageUnloadResult.NotLoaded;
-        }
-
-        var cleanupOutcome = await _unloadCoordinator.UnloadPackageAsync(packageId, handle)
-            .ConfigureAwait(false);
-        RecordCleanupOutcome(cleanupOutcome);
+        var result = await RetireOwnedPackageAsync(packageId, preserveDisabled, useRetirementDeadline: true).ConfigureAwait(false);
         PublishPackageStateChanged();
-        return new AppPackageUnloadResult(
-            WasLoaded: true,
-            cleanupOutcome);
+        return result;
     }
 
-    public async Task<AppPackageUnloadResult> UnloadPackageForGenerationRetirementAsync(
-        string packageId)
-    {
-        if (!_state.TryRemoveLoadedPackage(packageId, preserveDisabled: true, out var handle) || handle is null)
-        {
-            return AppPackageUnloadResult.NotLoaded;
-        }
-
-        var cleanupOutcome = await _unloadCoordinator.UnloadPackageAsync(
-            packageId,
-            handle,
-            useRetirementDeadline: false).ConfigureAwait(false);
-        RecordCleanupOutcome(cleanupOutcome);
-        return new AppPackageUnloadResult(
-            WasLoaded: true,
-            cleanupOutcome);
-    }
+    public Task<AppPackageUnloadResult> UnloadPackageForGenerationRetirementAsync(string packageId)
+        => RetireOwnedPackageAsync(packageId, preserveDisabled: true, useRetirementDeadline: false);
 
     public async Task<AppPackageUiCleanupOutcome> DisposeRemainingOwnedResourcesAsync()
     {

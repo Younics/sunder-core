@@ -12,7 +12,7 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
 import release_coordinates as c
-import retained_release_assets as assets
+import github_release as assets
 import core_catalog_release as catalog
 
 SOURCE, EVIDENCE, MAIN = "a" * 40, "b" * 40, "c" * 40
@@ -42,16 +42,10 @@ class GitHub:
             return next(data for identity, data in self.files.values() if str(identity) == endpoint.split("/")[-1])
         raise AssertionError("Unexpected GitHub API: " + endpoint)
 
-    def helper(self, command, **kwargs):
-        self.calls.append(Path(command[1]).name)
-        if Path(command[1]).name == "upload-github-release-assets.sh":
-            for path in command[4:]:
-                self.put(Path(path).name, Path(path).read_bytes())
-        elif Path(command[1]).name == "download-github-release-assets.sh":
-            for name in command[5:]:
-                (Path(command[4]) / name).write_bytes(self.files[name][1])
-        else:
-            raise AssertionError("Unexpected helper: " + str(command))
+    def upload(self, release_id, paths):
+        self.calls.append((release_id, paths))
+        for path in paths:
+            self.put(Path(path).name, Path(path).read_bytes())
 
 
 class ReleaseHandoffTests(unittest.TestCase):
@@ -132,7 +126,7 @@ class ReleaseHandoffTests(unittest.TestCase):
                     inventorySha256=catalog.catalog(data, c.decode(baseline), "1.1.0"), catalogSha256=c.digest(data), catalogBytes=len(data),
                     invocation=c.current_invocation(c.SDK_WORKFLOW)))
         github = GitHub("sdk/v1.1.0")
-        with patch.object(c, "gh", github.gh), patch.object(c, "remote_tag"), patch.object(c, "source_file", return_value=baseline), patch.object(catalog.subprocess, "run", github.helper):
+        with patch.object(c, "gh", github.gh), patch.object(c, "remote_tag"), patch.object(c, "source_file", return_value=baseline), patch.object(assets.GitHubRelease, "upload", github.upload):
             catalog.retain(directory, "42")
             original = (directory / catalog.RECEIPT).read_bytes()
             catalog.retain(directory, "42")

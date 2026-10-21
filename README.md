@@ -49,7 +49,6 @@ Create the current managed .NET Runtime preset with the public template:
 dotnet new install Sunder.Package.Templates
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
 dotnet restore .\MyPackage\MyPackage.csproj
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:AcceptSunderContracts -p:SunderContractKey=sample -p:SunderContractNextVersion=2.0.0
 dotnet build .\MyPackage\MyPackage.csproj --no-restore
 ```
 
@@ -65,11 +64,10 @@ Load it into Sunder App during development:
 Sunder.App.exe --dev-package .\MyPackage\bin\Debug\net10.0\sunder-dev
 ```
 
-Set the package version once in `MyPackage/MyPackage.csproj`, then freeze the reviewed
-contracts and create the distributable archive:
+Set the package version in `MyPackage/MyPackage.csproj` and create the archive.
+The starter service is private and needs no Accept/Freeze step:
 
 ```powershell
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:FreezeSunderContracts
 dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
 sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sunderpkg
 ```

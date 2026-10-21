@@ -39,14 +39,6 @@ public sealed record RegistryPolicyIdentity(
     [property: JsonRequired] long Revision,
     [property: JsonRequired] string Fingerprint);
 
-/// <summary>Non-secret external checkpoint identity; storage topology locations are not exposed.</summary>
-[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record RegistryPolicyCheckpointIdentity(
-    [property: JsonRequired] long Sequence,
-    [property: JsonRequired] string Digest,
-    [property: JsonRequired] long TopologyGeneration,
-    [property: JsonRequired] string TopologyFingerprint);
-
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPackageVersionIdentity(
     [property: JsonRequired] string PackageId,
@@ -59,14 +51,14 @@ public sealed record RegistryPlatformCatalogIdentity(
     [property: JsonRequired] string ReleaseVersion,
     [property: JsonRequired] string CatalogSha256);
 
-/// <summary>Exact requested subjects and client rollback floors. Nonce is fresh 128-bit lowercase hexadecimal.</summary>
+/// <summary>Exact requested subjects and the client's cached package-policy consistency floor. Nonce is fresh 128-bit lowercase hexadecimal.</summary>
+/// <remarks>The Registry database is authoritative; a cached revision is not independent proof against database rollback.</remarks>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistryPolicySynchronizationRequest(
     [property: JsonRequired] string Nonce,
     IReadOnlyList<RegistryPackageVersionIdentity> Packages,
     IReadOnlyList<RegistryPlatformCatalogIdentity> PlatformCatalogs,
-    [property: JsonRequired] RegistryPolicyIdentity? MinimumPackagePolicy,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity? MinimumCheckpoint)
+    [property: JsonRequired] RegistryPolicyIdentity? MinimumPackagePolicy)
 {
     private IReadOnlyList<RegistryPackageVersionIdentity> _packages = PolicyCollections.FreezeBounded(Packages, RegistryPolicyLimits.MaximumPackageSubjects);
     private IReadOnlyList<RegistryPlatformCatalogIdentity> _platformCatalogs = PolicyCollections.FreezeBounded(PlatformCatalogs, RegistryPolicyLimits.MaximumPlatformSubjects);
@@ -102,7 +94,6 @@ public sealed record RegistryPolicySynchronizationResponse(
     [property: JsonRequired] string Nonce,
     [property: JsonRequired] string RegistryOrigin,
     [property: JsonRequired] RegistryPolicyIdentity PackagePolicy,
-    [property: JsonRequired] RegistryPolicyCheckpointIdentity Checkpoint,
     [property: JsonRequired] DateTimeOffset ObservedAtUtc,
     [property: JsonRequired] DateTimeOffset ValidUntilUtc,
     IReadOnlyList<RegistryPackagePolicyDecision> Packages,

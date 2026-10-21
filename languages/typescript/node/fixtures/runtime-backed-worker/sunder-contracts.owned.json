@@ -21,7 +21,17 @@
           "packageVersion": "1.0.0"
         }
       },
-      "history": []
+      "history": [],
+      "projectionReviews": [
+        {
+          "contractVersion": "2.0.0",
+          "descriptorSha256": "dfa821a6e62cc7b7b7a7a2a2fbfb4f93ae7c8400d8d2dbf8f045ba4fdc0836c4",
+          "abiSha256": "ea78829fc86bf2ef756edc851ea1cb6935f370468c626524c5e3b539365a1560",
+          "reviewKind": "initial-source",
+          "canonicalProjection": "{\n  \"modelProjection\": {\n    \"models\": {\n      \"ErrorDetails\": \"ErrorDetails\",\n      \"Request\": \"Request\",\n      \"Response\": \"Response\"\n    },\n    \"serviceReferences\": {}\n  }\n}\n",
+          "projectionSha256": "29daaa483ac5aff035338fff584a5f8978db4ae019384f89866e547ec69aa7d3"
+        }
+      ]
     }
   }
 }

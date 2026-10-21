@@ -37,7 +37,7 @@ Mutations return `RegistryContractAuthorityOperationResponse`. HTTP statuses are
 on success, 400 for invalid input, 403 for ownership/credential/protected-ID denial,
 404 for a missing contract or required package lease, and 409 for occupied, stale,
 expired, cancelled, published or quota-conflicting state. Availability failures use
-the shared [503 Problem Details contract](REGISTRY-AVAILABILITY.md).
+the shared [Registry operation-error contract](REGISTRY-AVAILABILITY.md).
 
 ## Ownership and lease lifecycle
 
@@ -59,7 +59,7 @@ cannot predate the owning package's recorded lease state or move backwards throu
 the contract's history.
 
 Package cancellation cancels every still-active bound contract lease in the same
-transaction/checkpoint; already elapsed contracts expire. Package expiry makes all
+database transaction; already elapsed contracts expire. Package expiry makes all
 bound leases ineffective at the same deadline. Package reclaim records their complete
 expiry cascade before replacing the package lease. Another package owner must explicitly
 reserve an available contract family; inheriting a package ID never transfers authority.
@@ -100,11 +100,11 @@ allowlist; they cannot retain an inactive hidden list.
 Initial reservation and reclaim allocate the next `providerPolicyRevision`; a real
 policy change increments it once, including after permanent claim. Claimed policy updates
 preserve package/owner/lease/claim identity and have no expiry. Renewal, cancellation and expiry preserve policy
-and its revision. Every changed policy is checkpointed with the exact previous state.
+and its revision. Every changed policy checks the exact previous state in the database transaction.
 Policy is an input to provider **publication admission**. These routes grant no
 contract-version publication delegation, runtime calls or use actions, and alter no
 descriptor bytes or already accepted immutable package versions. Runtime routing
 retains its independent exact-use, provider-audience, identity/ABI and activation checks.
 
-The Production public-ready gate requires verified catalog and complete first-party
-bootstrap state. This handoff establishes the reservation/policy boundary only.
+An empty Registry is ready. These operations enforce the owning package's reservation,
+current authorization and policy preconditions without a global first-party/catalog gate.

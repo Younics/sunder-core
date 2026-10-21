@@ -80,15 +80,10 @@ internal sealed partial class RegistryActivePolicyClient(RegistryHttpClient http
         ValidateRequest(request);
         Require(response.RegistryOrigin == origin && response.Nonce == request.Nonce && response.ObservedAtUtc.Offset == TimeSpan.Zero
             && response.ValidUntilUtc.Offset == TimeSpan.Zero && response.ValidUntilUtc - response.ObservedAtUtc == TimeSpan.FromSeconds(RuntimePolicyTiming.LeaseSeconds), "Policy origin, nonce or fixed lease interval differs.");
-        Require(response.PackagePolicy.Revision > 0 && Hash(response.PackagePolicy.Fingerprint)
-            && response.Checkpoint.Sequence > 0 && Hash(response.Checkpoint.Digest) && response.Checkpoint.TopologyGeneration > 0 && Hash(response.Checkpoint.TopologyFingerprint), "Policy watermarks are incomplete.");
+        Require(response.PackagePolicy.Revision > 0 && Hash(response.PackagePolicy.Fingerprint), "Package policy identity is incomplete.");
         Require(request.Packages.SequenceEqual(response.Packages.Select(value => value.Package)) && request.PlatformCatalogs.SequenceEqual(response.PlatformCatalogs.Select(value => value.Catalog)), "Policy response does not cover exactly the requested subjects.");
         Require(request.MinimumPackagePolicy is null || response.PackagePolicy.Revision >= request.MinimumPackagePolicy.Revision
-            && (response.PackagePolicy.Revision != request.MinimumPackagePolicy.Revision || response.PackagePolicy.Fingerprint == request.MinimumPackagePolicy.Fingerprint), "Package policy rolled back or conflicted.");
-        if (request.MinimumCheckpoint is { } minimum)
-            Require(response.Checkpoint.Sequence >= minimum.Sequence && response.Checkpoint.TopologyGeneration >= minimum.TopologyGeneration
-                && (response.Checkpoint.Sequence != minimum.Sequence || response.Checkpoint == minimum)
-                && (response.Checkpoint.TopologyGeneration != minimum.TopologyGeneration || response.Checkpoint.TopologyFingerprint == minimum.TopologyFingerprint), "Checkpoint policy rolled back or conflicted.");
+            && (response.PackagePolicy.Revision != request.MinimumPackagePolicy.Revision || response.PackagePolicy.Fingerprint == request.MinimumPackagePolicy.Fingerprint), "Package policy is older than or conflicts with the cached identity.");
         foreach (var platform in response.PlatformCatalogs) ValidatePlatform(platform, response.ObservedAtUtc);
         foreach (var package in response.Packages)
         {

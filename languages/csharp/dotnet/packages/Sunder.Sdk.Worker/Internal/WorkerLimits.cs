@@ -14,7 +14,9 @@ internal sealed record WorkerLimits
     public int MaximumHeaderBytes { get; init; } = 8 * 1024;
     public int MaximumMessageDepth { get; set; } = 72;
     public int MaximumInboundCalls { get; init; } = 64;
+    public int MaximumInboundStreams { get; init; } = 64;
     public int MaximumOutboundCalls { get; init; } = 32;
+    public int MaximumOutboundStreams { get; init; } = 32;
     public int MaximumLoggingCalls { get; init; } = 32;
     public int MaximumCallScopes { get; init; } = 64;
     public int MaximumContentHandles { get; init; } = 128;
@@ -30,6 +32,7 @@ internal sealed record WorkerLimits
     public int MaximumPayloadBytes { get; init; } = 1024 * 1024;
     public int MaximumFilePayloadBytes { get; init; } = 16 * 1024 * 1024;
     public int MaximumContentUses { get; init; } = 32;
+    public TimeSpan ShutdownDrainTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     public WorkerLimits Validate()
     {
@@ -41,7 +44,9 @@ internal sealed record WorkerLimits
             || MaximumHeaderBytes <= 0
             || MaximumMessageDepth <= 0
             || MaximumInboundCalls <= 0
+            || MaximumInboundStreams <= 0
             || MaximumOutboundCalls <= 0
+            || MaximumOutboundStreams <= 0
             || MaximumLoggingCalls <= 0
             || MaximumCallScopes <= 0
             || MaximumContentHandles <= 0
@@ -56,7 +61,9 @@ internal sealed record WorkerLimits
             || MaximumContentBytes <= 0
             || MaximumPayloadBytes <= 0
             || MaximumFilePayloadBytes < MaximumPayloadBytes
-            || MaximumContentUses <= 0)
+            || MaximumContentUses <= 0
+            || ShutdownDrainTimeout <= TimeSpan.Zero
+            || ShutdownDrainTimeout.TotalMilliseconds > uint.MaxValue - 1)
         {
             throw new ArgumentOutOfRangeException(nameof(WorkerLimits), "Worker protocol limits must be positive.");
         }

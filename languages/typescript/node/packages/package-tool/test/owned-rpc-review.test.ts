@@ -14,7 +14,7 @@ import { constructorSource, sharedSource } from "./owned-rpc-review-fixtures";
 import { fixtureSource, generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
-const cli = resolve(__dirname, "../../dist/cli.js");
+const cli = resolve(__dirname, "../src/cli.js");
 const emptyLock = `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`;
 async function project(extension: string, source: string): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-review-")); await mkdir(resolve(root, "src"));
@@ -24,6 +24,32 @@ async function project(extension: string, source: string): Promise<string> {
   return root;
 }
 const run = (root: string, ...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root]);
+
+test("CLI rejects unreviewed source and retired conversion commands without changing baseline or lock", { timeout: 120_000 }, async () => {
+  const root = await project("ts", constructorSource(true));
+  try {
+    await run(root, "contracts", "accept"); await run(root, "contracts", "freeze");
+    const path = resolve(root, "sunder-contracts.owned.json"), before = await readFile(path);
+    const legacy = JSON.parse(before.toString());
+    for (const entry of Object.values(legacy.contracts) as Record<string, unknown>[]) delete entry.projectionReviews;
+    await writeFile(path, JSON.stringify(legacy, null, 2) + "\n");
+    const legacyBytes = await readFile(path);
+    const mtime = (await stat(path)).mtimeMs, lock = await readFile(resolve(root, "sunder-contracts.lock.json"));
+    await assert.rejects(loadProject(root), /source-projection-unreviewed/);
+    await assert.rejects(run(root, "contracts", "freeze"), /source-projection-unreviewed/);
+    await assert.rejects(run(root, "contracts", "accept"), /source-projection-unreviewed/);
+    await assert.rejects(aggregateAndPack(root), /source-projection-unreviewed/);
+    await assert.rejects(run(root, "contracts", "check"), /source-projection-unreviewed/);
+    await assert.rejects(run(root, "contracts", "accept", "--adopt-initial-source-projection"), /Unknown contracts accept option/);
+    await assert.rejects(run(root, "contracts", "migrate-private"), /contracts requires check, accept, or freeze/);
+    await assert.rejects(run(root, "api", "migrate-consumer-roles"), /api requires add/);
+    const help = await run(root, "--help");
+    assert.doesNotMatch(help.stdout, /adopt-initial-source-projection|migrate-private|migrate-consumer-roles/);
+    assert.deepEqual(await readFile(path), legacyBytes); assert.equal((await stat(path)).mtimeMs, mtime);
+    assert.deepEqual(await readFile(resolve(root, "sunder-contracts.lock.json")), lock);
+    await assert.rejects(stat(resolve(root, ".sunder/generated/rpc")), { code: "ENOENT" });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 for (const extension of ["ts", "js"]) test(`frozen ${extension} constructor error removal requires explicit Major acceptance`, { timeout: 120_000 }, async () => {
   const root = await project(extension, constructorSource(true));

@@ -9,6 +9,74 @@ public sealed partial class SunderServiceBindingTests
     [InlineData("discover")]
     [InlineData("ensure")]
     [InlineData("resolve")]
+    public async Task FiniteResourcePressurePreservesExactBindingsAndIndependentCatalogObservation(string operation)
+    {
+        var snapshot = ServiceResourceTestClient.Provider;
+        var other = snapshot with { ContractId = "test.other", Endpoint = new("other-endpoint") };
+        var client = new ServiceBindingTestClient(snapshot, other);
+        await using var bindings = new SunderRpcServiceBindingLifetime(client);
+        await bindings.DiscoverAsync(snapshot.ContractId);
+        await bindings.DiscoverAsync(other.ContractId);
+        var selected = bindings.CreateProvider(snapshot, CreateService);
+        var unrelated = bindings.CreateProvider(other, CreateService);
+        var observer = await client.NextObservationAsync();
+        var pressure = new SunderRpcException(new(SunderRpcErrorKind.ResourceExhausted,
+            "rpc.worker.call-limit", "The worker is busy."));
+        client.QueryFailure = pressure;
+        client.DiscoveryFailure = _ => pressure;
+
+        Assert.Same(pressure, await Assert.ThrowsAsync<SunderRpcException>(async () =>
+        {
+            if (operation == "discover") await bindings.DiscoverAsync(snapshot.ContractId);
+            else if (operation == "ensure") await selected.EnsureCurrentAsync();
+            else await bindings.ResolveAsync(snapshot, CreateService);
+        }));
+        Assert.False(selected.RetirementToken.IsCancellationRequested);
+        Assert.False(unrelated.RetirementToken.IsCancellationRequested);
+        Assert.False(observer.DisposalStarted.Task.IsCompleted);
+        Assert.Equal(1, client.Watches);
+
+        client.QueryFailure = null;
+        client.DiscoveryFailure = null;
+        await selected.EnsureCurrentAsync();
+        await unrelated.EnsureCurrentAsync();
+        Assert.Same(selected, bindings.CreateProvider(snapshot, CreateService));
+        Assert.Equal(1, client.MaximumConcurrentWatches);
+    }
+
+    [Fact]
+    public async Task SuccessfulIndependentDiscoveryAfterTransportReopenWaitsForObservationAndNeverRevivesIssuedReference()
+    {
+        var provider = ServiceResourceTestClient.Provider;
+        var client = new ServiceBindingTestClient(provider);
+        await using var lifetime = new SunderRpcServiceBindingLifetime(client);
+        await lifetime.DiscoverAsync(provider.ContractId);
+        var original = lifetime.CreateProvider(provider, CreateService);
+        var observer = await client.NextObservationAsync();
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        observer.DisposalWait = release.Task;
+        try
+        {
+            client.Publish(SunderRpcCatalogEventKind.ResetRequired);
+            await observer.DisposalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var next = lifetime.DiscoverAsync(provider.ContractId).AsTask();
+            Assert.False(next.IsCompleted); // Fresh probe succeeded; old observer is still draining.
+            Assert.True(original.RetirementToken.IsCancellationRequested);
+            release.TrySetResult();
+            var discovered = await next.WaitAsync(TimeSpan.FromSeconds(5));
+            var fresh = lifetime.CreateProvider(Assert.Single(discovered.Providers), CreateService);
+            await fresh.EnsureCurrentAsync();
+            Assert.NotSame(original, fresh);
+            await Assert.ThrowsAsync<SunderRpcException>(async () => await original.EnsureCurrentAsync());
+            Assert.Equal(1, client.MaximumConcurrentWatches);
+        }
+        finally { release.TrySetResult(); }
+    }
+
+    [Theory]
+    [InlineData("discover")]
+    [InlineData("ensure")]
+    [InlineData("resolve")]
     public async Task ExplicitFreshLookupSurfacesPermissionDenialWhileObserverRecoveryIsBlocked(string operation)
     {
         var snapshot = ServiceResourceTestClient.Provider;

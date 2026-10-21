@@ -17,6 +17,8 @@ This folder contains current Sunder documentation for the implementation in this
 - [CLI reference](SUNDER-CLI.md)
 - [Desktop app and development arguments](SUNDER-APP.md)
 - [Canonical current-user Host behavior](SUNDER-HOST-SERVICE.md)
+- [Package Runtimes settings](PACKAGE-RUNTIMES.md)
+- [Official runtime management and API](OFFICIAL-RUNTIME-HANDOFF.md)
 - [Core release workflow and signing status](SUNDER-CORE-RELEASES.md)
 
 ## Package Development Guides
@@ -27,6 +29,11 @@ This folder contains current Sunder documentation for the implementation in this
 - [Node Service Authoring](SUNDER-NODE-PROCESS-PACKAGES.md#author-ordinary-services)
 - [Browser And React Lifetimes](SUNDER-NODE-PROCESS-PACKAGES.md#browser-and-react-lifetimes)
 - [Package Anatomy](package-development/PACKAGE-ANATOMY.md)
+- [Single-project authoring and generated roles](package-development/SINGLE-PROJECT-AUTHORING.md)
+- [Development imports and watch](package-development/DEVELOPMENT-IMPORTS.md)
+- [API selection, restore and cache](package-development/CONTRACT-RESTORE-CACHE.md)
+- [Platform imports](package-development/PLATFORM-CONTRACT-IMPORTS.md)
+- [Qualified prebuilt role inputs](package-development/PREBUILT-ROLE-INPUTS.md)
 - [Activation, DI, And Disposal](package-development/ACTIVATION-AND-DI.md)
 - [Data And Logging](package-development/DATA-AND-LOGGING.md)
 - [Avalonia Views](package-development/AVALONIA.md)

@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   if (provider === "provider") {
     await command("api", "implement", "example.dependency", "example.rpc.v1.minimal", "--version", ">=1.0.0 <2.0.0", "--registry", "https://registry.example/", "--candidate", candidate, "--local-name", "extension", "--cache-root", cache);
     await assert.rejects(command("generate"), /no defineService implementation/);
-    await writeFile(join(root, "src/rpc.ts"), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation=defineService({ping(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.extension});');
+    await writeFile(join(root, "src/rpc.ts"), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.extension});');
   } else {
     await command("api", "add", "example.dependency", "--version", ">=1.0.0 <2.0.0", "--registry", "https://registry.example/", "--candidate", candidate, "--presence", "optional", "--cache-root", cache);
   }

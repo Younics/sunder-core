@@ -1,4 +1,6 @@
 using Sunder.Package.Build.Tasks;
+using System.Security.Cryptography;
+using System.Text.Json;
 using Xunit;
 
 namespace Sunder.Package.Build.Tests;
@@ -94,6 +96,132 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             Assert.True(observed);
         }
         finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void EvidenceDiscovery_BoundsEvidenceRatherThanAccumulatedVerifiedCompilerCopies()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var snapshots = CreateRetainedCompileEvidence(root, files: 512, snapshots: 65);
+            Assert.True(Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories).Count() > 32_768);
+            GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"));
+
+            // A different configuration/RID/handoff must still reveal a lost public
+            // baseline, even after the ordinary entry limit has been exceeded.
+            var evidence = Path.Combine(root, "obj/Release/net10.0/sunder-analysis/linux-x64/sunder-package-role-plans/retained/sunder-rpc/authoring-receipt.v1.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(evidence)!);
+            File.WriteAllText(evidence, PublicEvidenceReceipt);
+            Assert.Contains("existing owned-contract baseline is required", Assert.Throws<InvalidDataException>(() =>
+                GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"))).Message, StringComparison.Ordinal);
+            File.Delete(evidence);
+
+            // A directory name/marker alone never earns a larger discovery budget.
+            // Every snapshot must match its exact descriptor content identity.
+            foreach (var snapshot in snapshots) File.AppendAllText(Path.Combine(snapshot, "compilation-inputs.v1.json"), " ");
+            Assert.Contains("source-limit-exceeded", Assert.Throws<InvalidDataException>(() =>
+                GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"))).Message, StringComparison.Ordinal);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("unlisted-evidence")]
+    [InlineData("source-directory")]
+    [InlineData("malformed-evidence")]
+    [InlineData("proof-replacement")]
+    [InlineData("ancestor-replacement")]
+    [InlineData("vanished-snapshot")]
+    public void EvidenceDiscovery_RetainedCompilerProofCannotHideEvidenceOrPathChanges(string mutation)
+    {
+        var root = CreateTempDirectory();
+        var moved = root + "-moved";
+        try
+        {
+            var snapshot = Assert.Single(CreateRetainedCompileEvidence(root, files: 2, snapshots: 1));
+            var source = Path.Combine(snapshot, "roles/worker/source/0.cs");
+            if (mutation is "unlisted-evidence" or "malformed-evidence" or "source-directory")
+            {
+                var directory = Path.Combine(snapshot, "unlisted");
+                if (mutation == "source-directory") { File.Delete(source); directory = source; }
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(Path.Combine(directory, "authoring-receipt.v1.json"), mutation == "malformed-evidence" ? "{" : PublicEvidenceReceipt);
+                if (mutation == "malformed-evidence") Assert.Contains("invalid UTF-8", Assert.Throws<InvalidDataException>(() =>
+                    GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"))).Message, StringComparison.Ordinal);
+                else Assert.Contains("existing owned-contract baseline is required", Assert.Throws<InvalidDataException>(() =>
+                    GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"))).Message, StringComparison.Ordinal);
+                return;
+            }
+            var visits = 0;
+            void BeforeRead(string path)
+            {
+                if (path != snapshot || ++visits != 2) return;
+                if (mutation == "proof-replacement")
+                {
+                    var proof = Path.Combine(snapshot, "compilation-inputs.v1.json");
+                    var timestamp = File.GetLastWriteTimeUtc(proof);
+                    File.WriteAllText(proof, File.ReadAllText(proof).Replace("PrivatePackage", "PrivauePackage", StringComparison.Ordinal));
+                    File.SetLastWriteTimeUtc(proof, timestamp);
+                }
+                if (mutation == "vanished-snapshot") Directory.Delete(snapshot, recursive: true);
+                if (mutation == "ancestor-replacement")
+                {
+                    var ancestor = Path.GetDirectoryName(snapshot)!;
+                    Directory.Move(ancestor, moved);
+                    File.WriteAllText(ancestor, "replacement is not a directory");
+                }
+            }
+            if (mutation == "vanished-snapshot") GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"), BeforeRead);
+            else Assert.Throws<IOException>(() => GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(root, Path.Combine(root, "obj/sunder-rpc"), BeforeRead));
+            Assert.Equal(2, visits);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            if (Directory.Exists(moved)) Directory.Delete(moved, recursive: true);
+        }
+    }
+
+    private const string PublicEvidenceReceipt = """{"contracts":[{"contractKey":"owned","exposure":"public"}],"bundles":[{"contractKey":"owned","source":"owned"}]}""";
+
+    private static string[] CreateRetainedCompileEvidence(string root, int files, int snapshots)
+    {
+        var inputs = CreateTempDirectory();
+        try
+        {
+            var bytes = "// retained generated source\n"u8.ToArray();
+            var hash = Convert.ToHexStringLower(SHA256.HashData(bytes));
+            var compile = Enumerable.Range(0, files).Select(index => new { path = $"roles/worker/source/{index}.cs", sha256 = hash }).ToArray();
+            Directory.CreateDirectory(Path.Combine(inputs, "roles/worker/source"));
+            foreach (var file in compile.Take(2)) File.WriteAllBytes(Path.Combine(inputs, file.path), bytes);
+            return Enumerable.Range(0, snapshots).Select(index =>
+            {
+                using var plan = JsonDocument.Parse(JsonSerializer.SerializeToUtf8Bytes(new
+                {
+                    compilationCacheRoot = Path.Combine(root, "obj/Debug/net10.0/sunder-analysis/osx-arm64/sunder-package-compilations"),
+                    projectIdentity = "PrivatePackage", assemblyName = "PrivatePackage", configuration = "Debug", targetFramework = "net10.0",
+                    runtimeIdentifier = "osx-arm64", packageVersion = "1.0." + index, defineConstants = Array.Empty<string>(),
+                    workerCompile = compile.Take(2).ToArray(), workerReferences = Array.Empty<string>(), workerRuntimeReferences = Array.Empty<string>(),
+                    resources = Array.Empty<string>(), workerDependencies = (object?)null, frameworkInputs = Array.Empty<string>(),
+                    frameworkProperties = new { }, frameworkGenerators = Array.Empty<string>(),
+                }));
+                var snapshot = SunderRoleCompilationSnapshot.Publish(plan.RootElement, inputs, "worker");
+                if (files <= 2) return snapshot;
+                // Expand the real producer's small output into historical copies.
+                // This regression owns discovery, not 33,280 redundant Publish reads.
+                var path = Path.Combine(snapshot, "compilation-inputs.v1.json");
+                var descriptor = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllBytes(path))!.AsObject();
+                descriptor["compile"] = JsonSerializer.SerializeToNode(compile);
+                var contents = JsonSerializer.SerializeToUtf8Bytes(descriptor);
+                foreach (var file in compile.Skip(2)) File.WriteAllBytes(Path.Combine(snapshot, file.path), bytes);
+                File.WriteAllBytes(path, contents);
+                var sealedPath = Path.Combine(Path.GetDirectoryName(snapshot)!, "worker-" + Convert.ToHexStringLower(SHA256.HashData(contents)));
+                Directory.Move(snapshot, sealedPath);
+                return sealedPath;
+            }).ToArray();
+        }
+        finally { Directory.Delete(inputs, recursive: true); }
     }
 
     [Theory]

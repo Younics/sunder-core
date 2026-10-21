@@ -1,0 +1,101 @@
+{
+  "formatVersion": 1,
+  "status": "current-source",
+  "languageVersion": "14.0",
+  "validFixtures": [
+    {
+      "id": "complete", "path": "valid/complete.cs", "packageId": "example.authoring", "packageVersion": "1.0.0",
+      "contracts": [
+        {
+          "contractKey": "parity", "contractId": "example.authoring.parity", "contractVersion": "1.0.0", "exposure": "package",
+          "canonicalDescriptorBytes": 7443, "descriptorSha256": "ed55315e62632955f98d7990d63b7688f31bafb7365f0395111d74b939a11c0e",
+          "canonicalAbiProjectionBytes": 6807, "abiSha256": "234bc843a82abc44b8a99ad8e64460a9bad0af4354ad245cb1bda1bc13c26c8e",
+          "logicalName": "Sunder.Generated.Packages.Example_Authoring_Internal.CExample_Authoring_Parity",
+          "providers": [{ "providerId": "example.authoring.parity.provider", "audience": "owner", "role": "runtime" }]
+        }
+      ]
+    },
+    {
+      "id": "provider-forms", "path": "valid/provider-forms.cs", "packageId": "example.authoring.extensions", "packageVersion": "1.0.0",
+      "contracts": [
+        {
+          "contractKey": "audit", "contractId": "example.authoring.extensions.audit", "contractVersion": "1.0.0", "exposure": "public",
+          "canonicalDescriptorBytes": 594, "descriptorSha256": "6b0e6d628fb5459cb27e9d5aa3496d5a760fc023bfeb4c40f0797a29e84b62c6",
+          "canonicalAbiProjectionBytes": 576, "abiSha256": "38119190582a0539ca8b6d2c2467336d7163ca420f4c6cc7f4e9fbda045d7cfd",
+          "logicalName": "Sunder.Generated.Packages.Example_Authoring_Extensions_Internal.CExample_Authoring_Extensions_Audit",
+          "providers": []
+        },
+        {
+          "contractKey": "clock", "contractId": "example.authoring.extensions.clock", "contractVersion": "1.0.0", "exposure": "public",
+          "canonicalDescriptorBytes": 573, "descriptorSha256": "e590768863cbbba70902f87eddbbcc78761afeb1479685535ec7a0feaea64277",
+          "canonicalAbiProjectionBytes": 555, "abiSha256": "d04d9b080e6e8c7db60628d2f57c17689dee2dd98fe17141092efe66087ea361",
+          "logicalName": "Sunder.Generated.Packages.Example_Authoring_Extensions_Internal.CExample_Authoring_Extensions_Clock",
+          "providers": [
+            { "providerId": "example.authoring.extensions.clock.owner", "audience": "owner", "role": "runtime" },
+            { "providerId": "example.authoring.extensions.clock.primary", "audience": "public", "role": "runtime" }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "naming-defaults", "path": "valid/naming-defaults.cs", "packageId": "example.naming", "packageVersion": "1.0.0",
+      "contracts": [
+        {
+          "contractKey": "o-auth2", "contractId": "example.naming.o.auth2", "contractVersion": "1.0.0", "exposure": "package",
+          "canonicalDescriptorBytes": 525, "descriptorSha256": "85f986d77fb0e054c2075ffcd0a458986263bf3627d3450542fea1c4bf246d31",
+          "canonicalAbiProjectionBytes": 507, "abiSha256": "80aa14fbba22337b99fa925deb4f609af3ce053ebe73a48343eed1bde7d14799",
+          "logicalName": "Sunder.Generated.Packages.Example_Naming_Internal.CExample_Naming_O_Auth2",
+          "providers": [{ "providerId": "example.naming.o.auth2.provider", "audience": "owner", "role": "runtime" }]
+        },
+        {
+          "contractKey": "url-lookup", "contractId": "example.naming.url.lookup", "contractVersion": "1.0.0", "exposure": "package",
+          "canonicalDescriptorBytes": 646, "descriptorSha256": "80f0574ef0588c7b4aa636c4ad50046d23ae44eff36a0152b70d3ae4ac3e36f4",
+          "canonicalAbiProjectionBytes": 628, "abiSha256": "10b10c67575e5fdc68ebef738941135e4687b9635914e4efa4ea4f7a836f9ea8",
+          "logicalName": "Sunder.Generated.Packages.Example_Naming_Internal.CExample_Naming_Url_Lookup",
+          "providers": [{ "providerId": "example.naming.url.lookup.provider", "audience": "owner", "role": "runtime" }]
+        }
+      ]
+    },
+    {
+      "id": "identity-limits", "path": "valid/identity-limits.cs", "packageId": "example.boundary", "packageVersion": "1.0.0",
+      "contracts": [
+        {
+          "contractKey": "contract-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractId": "example.boundary.contract.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractVersion": "1.0.0", "exposure": "package",
+          "canonicalDescriptorBytes": 662, "descriptorSha256": "826f2e97ee41c658c502d713ae1bc3251a0b73a4adcf049335a0f60298e3ddb4",
+          "canonicalAbiProjectionBytes": 644, "abiSha256": "135c41877ad80cccaf006b1fe907153aa3aa4fab37968f584292a9af82cf4bb1",
+          "logicalName": "Sunder.Generated.Packages.Example_Boundary_Internal.CExample_Boundary_Contract_Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "providers": [], "contractIdCharacters": 128
+        },
+        {
+          "contractKey": "provider-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractId": "example.boundary.provider.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "contractVersion": "1.0.0", "exposure": "package",
+          "canonicalDescriptorBytes": 644, "descriptorSha256": "06f941b061d368860ef760333bd799fae61d8dce9cad515f680eab9a06ec9c7b",
+          "canonicalAbiProjectionBytes": 626, "abiSha256": "9f303ee73a74f4069d1cb0b8985adea09c8753cddd7c42e3d14fcec3e284947d",
+          "logicalName": "Sunder.Generated.Packages.Example_Boundary_Internal.CExample_Boundary_Provider_Aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "providers": [{ "providerId": "example.boundary.provider.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.provider", "audience": "owner", "role": "runtime", "characters": 128 }]
+        }
+      ]
+    }
+  ],
+  "invalidFixtures": [
+    { "id": "service-invalid", "path": "invalid/service-invalid.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.service-invalid", "spans": [{ "line": 6, "text": "EmptyService" }] },
+    { "id": "method-invalid", "path": "invalid/method-invalid.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.method-invalid", "spans": [{ "line": 9, "text": "Run" }] },
+    { "id": "value-invalid", "path": "invalid/value-invalid.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.value-invalid", "spans": [{ "line": 15, "text": "Name" }] },
+    { "id": "provider-invalid", "path": "invalid/provider-invalid.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.provider-invalid", "spans": [{ "line": 8, "text": "Public" }] },
+    { "id": "handler-incomplete", "path": "invalid/handler-incomplete.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.handler-incomplete", "spans": [{ "line": 18, "text": "IncompleteProvider" }] },
+    { "id": "collision-namespace-duplicate", "path": "invalid/collision-namespace-duplicate.cs", "packageId": "example.collision", "diagnosticId": "rpc-authoring.identity-collision", "spans": [{ "line": 16, "text": "StatusService" }, { "line": 26, "text": "StatusService" }] },
+    { "id": "collision-ascii-case", "path": "invalid/collision-ascii-case.cs", "packageId": "example.collision", "diagnosticId": "rpc-authoring.identity-collision", "spans": [{ "line": 13, "text": "Status" }, { "line": 19, "text": "STATUS" }] },
+    { "id": "collision-suffix-service", "path": "invalid/collision-suffix-service.cs", "packageId": "example.collision", "diagnosticId": "rpc-authoring.identity-collision", "spans": [{ "line": 7, "text": "Status" }, { "line": 14, "text": "StatusService" }] },
+    { "id": "collision-suffix-async", "path": "invalid/collision-suffix-async.cs", "packageId": "example.collision", "diagnosticId": "rpc-authoring.identity-collision", "spans": [{ "line": 10, "text": "Run" }, { "line": 13, "text": "RunAsync" }] },
+    { "id": "collision-synthetic-request", "path": "invalid/collision-synthetic-request.cs", "packageId": "example.collision", "diagnosticId": "rpc-authoring.generated-name-collision", "spans": [{ "line": 10, "text": "CreateAsync" }, { "line": 13, "text": "OrderCreateRequest" }] },
+    { "id": "collision-post-escape-reserved", "path": "invalid/collision-post-escape-reserved.cs", "packageId": "example.collision", "diagnosticId": "rpc-authoring.value-invalid", "spans": [{ "line": 10, "text": "_await" }] },
+    { "id": "unsupported-source", "path": "invalid/unsupported-source.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.unsupported-source", "spans": [{ "line": 10, "text": "EchoAsync" }] },
+    { "id": "source-limit-contract-identity", "path": "invalid/source-limit-contract-identity.cs", "packageId": "example.boundary", "diagnosticId": "rpc-authoring.model-projection-invalid", "message": "Model projection identity must use the canonical package-ID grammar.", "spans": [], "derivedIdentityCharacters": 129 },
+    { "id": "source-limit-package-id-derived-contract", "path": "invalid/source-limit-package-id-derived-contract.cs", "packageId": "example.aaaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa.aaaaaaa", "diagnosticId": "rpc-authoring.model-projection-invalid", "message": "Model projection identity must use the canonical package-ID grammar.", "spans": [], "derivedIdentityCharacters": 130 },
+    { "id": "source-limit-provider-identity", "path": "invalid/source-limit-provider-identity.cs", "packageId": "example.boundary", "diagnosticId": "rpc-authoring.source-limit-exceeded", "spans": [{ "line": 8, "text": "ProviderAaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaService" }], "derivedIdentityCharacters": 129 },
+    { "id": "baseline-drift", "path": "invalid/baseline-drift.cs", "packageId": "example.invalid", "diagnosticId": "rpc-authoring.baseline-drift", "spans": [{ "line": 7, "text": "RenamedService" }], "acceptedIdentities": { "Example.Invalid.RenamedService": "example.invalid.original" } }
+  ]
+}

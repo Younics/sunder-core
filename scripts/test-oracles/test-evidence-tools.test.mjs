@@ -229,7 +229,10 @@ test("runtime model retains theories, dynamic Node declarations, platform owners
   assert.ok(declarations.some((item) => item.id
     === "Sunder.Package.Format.Tests.SemanticVersionTests.TryParse_RejectsMalformedVersions"));
   assert.ok(declarations.some((item) => item.framework === "node" && item.dynamicTemplate));
-  assert.ok(declarations.filter((item) => item.framework === "shell").length >= 5);
+  for (const name of ["preflight-npm-trusted-publishing.fixture.sh", "verify-nuget-package.fixture.sh",
+    "verify-nuget-source.fixture.sh", "verify-release-tag.fixture.sh"]) {
+    assert.ok(declarations.some((item) => item.framework === "shell" && item.name === name));
+  }
 
   const publicPackageContract = declarations.find((item) => item.id
     === "Sunder.Package.Build.Tests.CorePublicPackageContractTests.EveryPublicNuget_HasEvaluatedIdentityRoleClosureAndDeterministicArtifact");
@@ -336,48 +339,42 @@ test("selected lane prerequisite gate requires exact selection and every typed i
 });
 
 test("candidate-safe workflows retain lane gates, runtime reports, and compact evidence", async () => {
-  const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-test-oracles.yml");
+  const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-ci.yml");
   const workflow = await readFile(workflowPath, "utf8");
-  assert.doesNotMatch(workflowPath, /(?:ci|release|validation)\.yml$/u);
   assert.match(workflow, /workflow_dispatch:/u);
   assert.match(workflow, /schedule:/u);
-  assert.doesNotMatch(workflow, /pull_request:|push:/u);
-  assert.match(workflow, /Sunder\.Core\.TestSupport\.Tests\/Sunder\.Core\.TestSupport\.Tests\.csproj/u);
+  assert.match(workflow, /pull_request:|push:/u);
+  assert.match(workflow, /complete-audit:/u);
   assert.match(workflow, /check-core-test-policy\.mjs/u);
   assert.match(workflow, /run-core-test-lane\.mjs/u);
   assert.match(workflow, /run-node-test-matrix-with-results\.mjs/u);
   assert.match(workflow, /--allow-partial[\s\S]*--require-test/u);
   assert.match(workflow, /if: always\(\)/u);
 
-  const sdk = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-sdk-ci.yml"), "utf8");
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
-  const node = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-node-ci.yml"), "utf8");
-  const app = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-app-packaging-ci.yml"), "utf8");
-  assert.match(sdk, /--primary-lane dotnet-linux/u);
+  assert.match(workflow, /--primary-lane dotnet-linux/u);
   assert.match(host, /--primary-lane host-platform/u);
-  assert.match(host, /ubuntu-24\.04[\s\S]*windows-2022[\s\S]*macos-14/u);
-  assert.match(node, /--primary-lane node/u);
-  assert.doesNotMatch(node, /run: npm test/u);
-  assert.match(node, /template-lifecycle:[\s\S]*npm --prefix "\$sample" run package/u);
-  assert.match(node, /run contracts:accept[\s\S]*run contracts:check[\s\S]*run typecheck[\s\S]*run contracts:freeze[\s\S]*run package/u);
-  assert.match(node, /SUNDER_REQUIRE_NODE_MODULE_INTEROP: "1"/u);
-  assert.match(node, /SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE: "1"/u);
-  assert.match(node, /GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost/u);
-  assert.match(node, /sunder-node-package-ownership-evidence/u);
-  assert.match(sdk, /SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"/u);
-  assert.match(sdk, /GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost/u);
-  assert.match(app, /--test Sunder\.App\.Tests\.BundledBuildOutputTests\.AppBuildContainsSupervisorRuntimeAndCliExecutables/u);
-  for (const ciWorkflow of [sdk, host, node, app, workflow]) {
+  assert.match(host, /ubuntu-24\.04[\s\S]*windows-2022[\s\S]*macos-15/u);
+  assert.match(workflow, /--primary-lane node/u);
+  assert.match(workflow, /run contracts:check[\s\S]*run typecheck[\s\S]*run package/u);
+  assert.doesNotMatch(workflow, /run contracts:accept|run contracts:freeze/u);
+  assert.match(workflow, /SUNDER_REQUIRE_NODE_MODULE_INTEROP: "1"/u);
+  assert.match(workflow, /SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE: "1"/u);
+  assert.match(workflow, /GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost/u);
+  assert.match(workflow, /SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"/u);
+  assert.match(workflow, /GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost/u);
+  assert.match(host, /--primary-lane app-packaging/u);
+  for (const ciWorkflow of [host, workflow]) {
     assert.match(ciWorkflow, /--results-directory/u);
     assert.match(ciWorkflow, /if: always\(\)[\s\S]*upload-artifact/u);
   }
-  for (const dotnetWorkflow of [sdk, node, app, workflow]) assert.match(dotnetWorkflow, /-m:1/u);
+  for (const dotnetWorkflow of [host, workflow]) assert.doesNotMatch(dotnetWorkflow, /-m:1/u);
 
   const dotnetRunner = await readFile(
     resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs"),
     "utf8",
   );
-  assert.match(dotnetRunner, /"-m:1"/u);
+  assert.doesNotMatch(dotnetRunner, /"-m:1"/u);
   const nodeRunner = await readFile(
     resolve(repositoryRoot, "scripts/test-oracles/run-node-tests-with-results.mjs"),
     "utf8",

@@ -14,11 +14,23 @@ may also declare one `ISunderWorkerSettingsSchemaProvider` to supply its setting
 schema to generated composition. The provider is Worker-owned and DI-managed; schema
 construction runs before activation and must be deterministic without Host I/O.
 
+For generated storage migration support, implement
+`ISunderWorkerStorageMigrationProvider` for immutable state/secret plans and
+`ISunderWorkerStorageMigrationPreparation` for optional read-only preparation.
+There is at most one plan provider. Preparation participants run in dependency
+order, and all implementations share ordinary generated Worker DI ownership.
+Neither interface requires implementing the full background-service lifecycle.
+
 ```powershell
 dotnet add package Sunder.Sdk.Worker
 ```
 
-Worker projects use exact-RID, framework-dependent publish builds. Their package entry point is the managed `.dll` loaded by the exact bound execution runtime. Reference the exact coordinated Worker version and private build tooling, then declare one explicit target for the current build RID:
+## Low-level Worker integration
+
+The following explicit-role example describes low-level integration and test leaves.
+Canonical package projects use the generated entry point and targets described above.
+Worker outputs use exact-RID, framework-dependent publish builds. Their package entry
+point is the managed `.dll` loaded by the exact bound execution runtime:
 
 ```xml
 <PropertyGroup>
@@ -141,6 +153,14 @@ Composition = new SunderWorkerComposition(
 ```
 
 For each `ISunderWorkerLifecycleService`, composition awaits `PrepareCandidateAsync` in registration order before generation commit, then awaits `CommitGenerationAsync` for the exact Host-assigned generation. After storage-migration preparation and declared migrations, it awaits every `ActivateAsync` before the worker acknowledges activation and the Host can publish the candidate. Only then does the worker monitor each stable `Completion` task. Shutdown calls `ShutdownAsync` in reverse registration order and disposes the package provider; a prepared candidate that is discarded is shut down without commit or activation. The option-level callbacks run after the corresponding composition phase, except `OnShutdown`, which runs before composition shutdown.
+
+Lifecycle failure closes work admission and reports the exact active generation to
+the Host. Cancellation callbacks, admitted handlers, and outstanding Host work drain
+before the once-only shutdown owner disposes dependencies. Cleanup control and logging
+remain available while transport is usable. Startup failures use the same ownership
+path, including activation-only generated packages. A bounded cleanup timeout leaves
+unfinished package resources to process containment; it never authorizes disposing
+dependencies under live handlers or acknowledging successful shutdown.
 
 Configuration completes before the immutable contribution catalog is advertised. Candidate preparation is non-destructive. Generation commit is idempotent for one exact Host-assigned generation. `OnBeforeStorageMigrations` exposes only generation-fenced read-only state; the Host prepares every worker before running declared migrations. The stable `RoleLocalWorkspace` capability is present during configuration, but its root and path resolution fail closed until the Host binds it immediately before activation. Activation completes before the worker acknowledges publication readiness, so provider dispatch cannot race package initialization.
 

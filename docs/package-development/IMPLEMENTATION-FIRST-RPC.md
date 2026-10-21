@@ -75,74 +75,10 @@ tuple with unchanged hashes. SDK source builds now generate an SDK-only handler 
 required partial factory through a short-lived build-only tool process; missing
 generation fails compilation. The thin Stack wrapper retains only routing-error
 semantics, not handwritten public-DTO JSON conversion. The embedded descriptor/props
-distribution and public DTO/client bridge remain migration paths pending retirement.
+distribution and retained provider/DTO helpers remain lower-level SDK surfaces.
 Exported local content alone does not establish publication or admission.
 The [platform-catalog implementation boundary](../../specs/rpc/v1/authoring/platform-catalog/README.md)
 records exact bytes, pins, dependencies, and remaining integration.
-
-<details>
-<summary>Historical Node DSL checkpoint — superseded authoring and private-lifecycle observations</summary>
-
-The following checkpoint records the pre-ordinary-service implementation and its
-original test scope. Its DSL, private baseline prerequisites and generated-module
-names are not current package-author instructions. See the current
-[Node lifecycle](#node-private-and-public-lifecycle) and
-[configuration](#package-configuration-and-generated-output) instead.
-
-Node now implements the bounded owned TS/JS DSL vertical, lossless package-owned
-baseline reader/writer, conservative production classifier, closed
-`contracts check|accept|freeze`, and source-verified V3 release Pack, including
-prebuilt aggregation. The real generate/dev/build pipeline reproduces seven frozen
-owned tuples independently from TS and JS; its classifier executes all 199 shared
-proof/direction/minimum/history recipes without changing C# oracles or frozen
-expectations. The SDK remains zero-dependency.
-
-The Node baseline retains deterministic canonical bytes, complete immutable
-history/state and release/publication evidence within the frozen 268,435,456-byte,
-depth-16 ceiling and bounded structural/collection budgets. It accepts package
-authority only and never invents published state or Registry evidence. Contracts
-default to `1.0.0` independently of package version. A genuinely new selected key
-with no current/history may use a next-only stable initial override; existing
-current/history overrides require the exact key/current/next pair, plus explicit
-acknowledgement for breaking, unclassified, exposure, or removal changes. Check
-checks the complete set; Freeze takes the package version from config.
-
-First Accept requires fresh source, a valid exact read-only lock, an absent
-baseline and no prior receipt/export, before first generation. Package and platform
-selection may populate the lock first in an initial dependency-configuration phase.
-It validates inventory/hash/generated-name and source/lock stability while permitting
-not-yet-selected provider interfaces in complete source. First Accept must compile
-and validate the complete graph; accepted projects retain full source checks during
-selection. Prior receipt/export/marker evidence forbids missing-baseline bootstrap.
-Local candidates and Core catalogs need no Registry; selected provider surfaces must
-be bound before Accept. The earlier
-baseline-free development route cannot adopt an existing receipt into a release;
-baseline deletion or V3-to-V2/non-RPC fallback cannot prove freeze. Accepted versions
-are injected before descriptor, contextual type, binding, registration, and manifest
-generation. Accept recompiles at proposed versions while retaining the original
-physical baseline/absence fingerprint and revalidating source/config/producer/
-compiler/runtime-reference and resolution inputs. Baseline-only lease transactions
-perform no generated-output recovery/orphan cleanup; no-ops preserve mtimes.
-
-Pack requires every current contract frozen/published and exact complete owned
-projection. Prebuilt Pack also repeats ordinary-source analysis and verifies fresh
-production Worker bytes. Post-archive/evidence revalidation holds the baseline lease.
-Own-property membership across maps and null-prototype source maps prevent inherited
-names from hiding removals, including `constructor` errors. Shared handlers are
-checked against every generated context, independent of provider order, without
-type widening. Actual packed omit-dev TS/JS execution includes next-only first
-contract `2.0.0`, independent package `7.6.5`, lifecycle/Pack and mutation guards.
-
-Imports/restores, platform providers/admission, optional dependencies, explicit
-publication-evidence import and V3 templates have owning implementations. New
-prerelease allocation remains unsupported. Owned source/release verification grants
-no publication or Runtime authority. See
-the [Node execution boundary](../../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions).
-Descriptor files, Protocol projects, direct MSBuild RPC items, and Node schema-
-version-2 RPC config in remaining projects are pre-cutover migration inputs, not
-the final V1 authoring contract described here.
-
-</details>
 
 The wire contract does not change: canonical RPC descriptor V1 and
 `sunder.rpc.values.v1` remain the language-neutral runtime authority. This
@@ -503,6 +439,43 @@ second schema tree. Unsupported types, facets, paths or incompatible constraints
 fail source/descriptor validation. Native classes, tuples, ambiguous `any` or
 `unknown`, generic/overloaded methods and arbitrary unions are not portable service
 boundaries. Named scalar/collection aliases are not an authored `definitions` map.
+
+### Stable Node Value Names
+
+Optional `values` metadata on `defineService` separates a named source value's wire
+definition key from its exported model name. It uses the same bounded literal
+options as other service metadata in TypeScript and checked JavaScript:
+
+```ts
+import { defineService } from "@sunder/sdk";
+
+type InternalGreeting = { message: string };
+export const greeting = defineService({
+  echo(value: InternalGreeting): InternalGreeting { return value; },
+}, {
+  exposure: "public",
+  values: { InternalGreeting: { name: "WireGreeting", publicName: "GreetingResult" } },
+});
+```
+
+For checked JavaScript, declare the value with
+`/** @typedef {{message: string}} InternalGreeting */` and annotate the method's
+parameter/return with JSDoc; the `values` options are identical. Keys identify an
+unambiguous reachable source declaration name, not an import alias or a schema.
+Each entry supplies `name`, `publicName`, or both. An omitted field independently
+defaults to the existing source-derived spelling. Pin both to retain descriptor/ABI
+bytes and exported `modelProjection` through a source rename, updating the metadata
+key to the new declaration name. Constraint paths still use source names.
+
+`name` is a 1–128-character wire key using ASCII letters, digits, `.`, `-` and `_`.
+`publicName` is exact `[A-Za-z_][A-Za-z0-9_]{0,127}`, excluding reserved C#/TypeScript
+keywords; tooling does not normalize it. A service admits at most 256 value-name
+entries. Unused or ambiguous keys, invalid names, and distinct models colliding
+under ASCII case folding fail source analysis. Every owning service that shares a
+source model must resolve the same public name; put metadata on the declaration,
+not an `implements` provider. Selected imported model names come from their reviewed
+projection and cannot be overridden. Owning `SelfModels` aliases continue to use
+the actual source values.
 
 ### Node Semantic Options And Extensions
 
@@ -1046,7 +1019,6 @@ The matching .NET targets are:
 | Platform implement/update/unimplement/list | `ImplementSunderPlatformApi`, `UpdateSunderPlatformApi`, `UnimplementSunderPlatformApi`, `ListSunderPlatformApis` |
 | Contract restore/check | `RestoreSunderContracts`, `CheckSunderContracts` |
 | Owned accept/freeze/publication import | `AcceptSunderContracts`, `FreezeSunderContracts`, `ImportSunderContractPublication` |
-| Explicit private/consumer-role migration | `MigratePrivateSunderContracts`, `MigrateSunderPackageApiConsumerRoles` |
 
 Their exact public properties are `SunderPackageId`, `SunderContractId`,
 `SunderContractKey`, `SunderPackageVersionRange`,
@@ -1092,8 +1064,8 @@ pins. Different restore-selected artifact bytes across consumers are not by
 themselves installed release conflicts. Restore still verifies the exact selected
 artifact, full public inventory, ultimate provenance, descriptor bytes, and all
 hashes; it never repairs drift by choosing a compatible artifact. The actual
-installed artifact is still validated and recorded exactly. Execution-runtime
-`.sunderruntime` exact pins and Registry catalog lifecycle checks remain separate.
+installed artifact is still validated and recorded exactly. Host-managed official
+runtime bindings and Registry catalog lifecycle checks remain separate.
 
 A distinct transitive ultimate package authority needs an explicit selection with
 a reviewed range and prerelease policy before it can contribute an installable
@@ -1354,18 +1326,6 @@ RPC packing is denied.
 source checks; prebuilt packing still requires ordinary source and resolved
 references, without rebuilding Worker or App inputs.
 
-**Historical migration-only checkpoint:** the following describes the former
-descriptor-first migration boundary, not a normal service-authoring recipe.
-
-The temporary descriptor-first migration path requires explicit authored
-`SunderContractBundle`, `SunderUsesContract`, and `SunderRpcProvider` inputs as
-applicable, with no source-authoring baseline/lock/receipt/export evidence. Extracted
-or generated snapshots are not authored descriptors. The same `PackageContractBuilder`
-validates these inputs and their complete projection without publishing descriptor
-files; there is no new allow flag or inferred freeze evidence. This path is slated
-for retirement with Phase 4 templates/tooling and Phase 5 first-party migration,
-not a second final authoring mode.
-
 ### Import Verified Publication Evidence
 
 After Registry accepts the retained archive, explicitly import its publication
@@ -1416,13 +1376,13 @@ snapshots and a current `sunder.stack.contributor`; ordinary package-baseline
 readers still reject platform authority.
 
 The existing engineering tool exposes `platform-contracts` actions `check`, `accept`,
-`freeze`, `payload`, and `import-publication`, each requiring `--core-root <root>`, with
+`freeze`, `export`, and `import-publication`, each requiring `--core-root <root>`, with
 [closed per-action options](../../eng/platform-contracts/README.md).
 Initial bootstrap requires the exact key `stack-contributor-rpc-service-adapter`,
 `--next-version 2.0.0`, and source matching the fixed shipped migration hashes.
-Freeze records a required catalog release, not publication. Payload generation
+Freeze records a required catalog release, not publication. Catalog export
 requires the complete exact source set to match frozen/published current snapshots
-and writes unsigned canonical payload bytes only, without overwrite, into an
+and writes canonical catalog bytes, without overwrite, into an
 existing parent outside Core `languages/`.
 
 Source and SDK-only generated transport must reach a two-pass fixed point before
@@ -1445,9 +1405,8 @@ target on the private tool with `DependsOnTargets="Build"`, not a normal-Build h
 Contract-family authority, contract-version publication, provider-publication
 admission, descriptor exposure, and Runtime use/action authorization are
 independent, default-deny checks. Passing one check never satisfies another.
-The following authority/lifecycle policy is the target architecture, not a claim
-that Registry authority records are finished. The implemented shared version gate
-is narrower, as noted under Version Publication And Classification.
+Registry owns authority/lifecycle records and their transactional database admission. The
+shared compatibility classifier supplies schema/version proofs, not publication grants.
 
 ### Contract-Family Authority And Identity
 
@@ -1460,8 +1419,8 @@ kinds:
 
 - `package`: `authorityId` and the owning package are the canonical package ID;
   only publication of that authority-owning package may introduce a version;
-- `platform`: authority is administrator-managed and comes only from a reviewed,
-  signed Sunder Core platform-contract release. V1 fixes this authority to
+- `platform`: authority is administrator-managed by the explicitly selected Registry
+  for an exact reviewed Core catalog. V1 fixes this authority to
   `sunder.core` and its only family to `sunder.stack.contributor`.
 
 Bundling, consuming, or implementing an existing exact descriptor never
@@ -1643,55 +1602,41 @@ contract version, descriptor and ABI hashes, service/method,
 provider and endpoint generation, both current activations, and current package/
 platform policy.
 
-### Bootstrap, Readiness, And Catalog Revocation
+### First-Party Provisioning, Readiness, And Catalog Revocation
 
 The fresh V1 Registry baseline seeds only the exact reserved
 `sunder.stack.contributor` platform authority under `sunder.core`, with provider
 publication `open`. Before any Agent publication, an administrator bootstrap must
-atomically reserve all 15 frozen Agent package IDs to the configured issuer-
+atomically reserve all 15 current Agent release-cohort package IDs to the configured issuer-
 qualified first-party release owner and all 19 reviewed Agent public contract
-IDs and provider policies to owning package `sunder.package.agent`. The four
-families `sunder.agent.runtime.catalog`, `sunder.agent.run.control`,
-`sunder.agent.workspace.execution.resolver`, and
-`sunder.agent.child.run.executor` are `authority-package-only`;
-`sunder.agent.tool.execution.observed` is allowlisted only to
-`sunder.package.agent.mcp`; the other fourteen are `open`.
+IDs and provider policies to owning package `younics.ai.agent`. The cohort includes
+`younics.sunder.package.maker` explicitly alongside `younics.ai.agent` and its 13
+satellite packages; prefix matching alone does not identify the cohort. The canonical
+first-party inventory owns the exact policies: the observed-execution bridge is
+allowlisted to the 15 first-party identities and the other 18 initial policies are Open.
+Validate its configured inventory hash rather than maintaining a second bootstrap list.
 
-Production deployment carries the non-secret hash of that exact inventory. After
-schema migration and before the public process rollout, the one-shot
-`RegistryAuthorityBootstrapCommand` builds the normal Registry service provider
-without Kestrel, synchronizes authorization and execution-runtime trust configuration,
-validates/imports the canonical Registry catalog, and
-applies the complete package/authority owner/policy inventory. It is idempotent
-only for an exact catalog/inventory/owner replay and commits nothing on missing,
-extra, or conflicting state. Production has no HTTP or readiness bypass.
-
-Registry startup and public readiness remain separate:
-
-- `startup` health covers configuration, telemetry, database, and storage;
-  failure is process-fatal. Authorization and trust rollback/conflict detected by
-  the startup synchronizers is also fatal before endpoint service.
-- `public-ready` additionally proves the configured catalog/authority inventory
-  and ownership hash, current authorization configuration, and external policy-
-  checkpoint alignment. `/health/ready` evaluates both tags, and a
-  fail-closed route gate denies public browse, resolve, download, and publish
-  traffic until both pass.
-- liveness and authenticated internal diagnosis/status/recovery remain reachable
-  while a process is not public-ready, including before bootstrap, so recovery
-  never depends on routing public traffic to an unready pod.
+This first-party inventory is a publication/provisioning concern, not a service-readiness
+prerequisite. A configured Registry with an initialized empty database is ready. Health
+checks cover service dependencies; missing first-party reservations or Core catalogs do
+not block ordinary browse or unrelated publication. Each operation enforces the exact
+authority, reservation, catalog and database-policy preconditions it consumes. Core has
+no Registry-wide journal startup/status/recovery endpoint or corresponding status DTO.
 
 Registry persists each package version's exact platform-release dependency and
 inverse lookup. Catalog revocation never rewrites package, descriptor, or catalog
 bytes: it excludes the release and every dependent version from new lock
 resolution and affected restore/publish/install/update/repair operations,
 advances the global package-policy revision/fingerprint once, and remains visible
-through public status and Host policy synchronization. Revocation after initial
-bootstrap therefore does not make the process unready.
+through catalog metadata and Host policy synchronization. Revocation therefore does not
+make the process unready.
 
-`Sunder.Runtime.Host` durably synchronizes complete active package/platform/
-runtime policy every five minutes with at most 30 seconds jitter and a 15-second
-request deadline. It accepts only authenticated, nonce-bound, anti-rollback
-snapshots; a successful response grants the fixed 24-hour local lease from the
+`Sunder.Runtime.Host` durably synchronizes complete active package/platform
+policy every five minutes with at most 30 seconds jitter and a 15-second
+request deadline. It accepts only authenticated, nonce-bound snapshots consistent
+with retained package-policy revisions/fingerprints; PostgreSQL remains authoritative,
+and those client consistency floors do not independently prove absence of database
+rollback. A successful response grants the fixed 24-hour local lease from the
 earlier Host request-start tick on a suspend-aware continuous clock, and failure
 cannot renew it. Once revocation is known, or that lease expires, Runtime
 withdraws affected endpoints/capabilities before further dispatch and stops
@@ -1703,31 +1648,29 @@ descriptors.
 
 ### Implementation Ownership
 
-This section freezes policy; it does not move implementation into author-facing
-SDKs or generated descriptors. Future phases keep these owners:
+Implementation stays with these owners rather than author-facing SDKs or descriptors:
 
-- Phase 1 in `repos/sunder-core`: `Sunder.Package.Format` owns canonical
+- In Core, `Sunder.Package.Format` owns canonical
   compatibility classification and catalog content validation;
   the normative RPC authoring schemas remain under `specs/rpc/v1/authoring`.
   Existing `tools/Sunder.ExecutionRuntime.Build` owns the migration-input check,
   source-based `eng/platform-contracts` baseline lifecycle/catalog export, and
   Registry publication-evidence import.
-  Production release composition remains pending. `Sunder.Registry.Contracts`
+  `Sunder.Registry.Contracts`
   owns dependency-free DTOs and routes.
-- Phase 2 in `repos/sunder-registry`: `Sunder.Registry.Infrastructure` owns
+- In Registry, `Sunder.Registry.Infrastructure` owns
   reservation, claim, publication, inventory, admission, lifecycle, policy, and
-  revocation persistence; `Sunder.Registry.Server` owns composition, non-HTTP
-  bootstrap, health/readiness gates, and routes; Registry Web exposes only the
+  revocation persistence; `Sunder.Registry.Server` owns composition, administrator
+  provisioning, service health, and routes; Registry Web exposes only the
   corresponding audited management operations.
-- Phase 3 in `repos/sunder-core`: `Sunder.Runtime.Host` owns durable policy
-  synchronization, anti-rollback/lease enforcement, endpoint withdrawal,
+- `Sunder.Runtime.Host` owns durable policy
+  synchronization, cached-policy consistency/lease enforcement, endpoint withdrawal,
   process supervision, readiness evaluation, and exact use/action authorization.
-- Phase 4 in `repos/sunder-core`: `Sunder.Package.Build` and
+- `Sunder.Package.Build` and
   `@sunder/package-tool` own baseline commands, exact lock/restore behavior,
   independent catalog verification, and generated provider/use records. They
   consume Registry decisions but never become contract authority.
-- Phase 5 in `repos/sunder-agent-package` consumes the pre-established bootstrap
-  inventory and migrates first-party packages; it cannot define a second
+- Agent consumes the reviewed bootstrap inventory; it cannot define a second
   authority, admission, exposure, or Runtime policy.
 
 ## Rejected Alternatives
@@ -1744,25 +1687,10 @@ SDKs or generated descriptors. Future phases keep these owners:
 
 ## Delivery Gate
 
-**Historical delivery checkpoint:** the Workstream A observations in the next
-paragraph record their original scope, not current Node authoring prerequisites.
-
-This ADR freezes the design but does not claim implementation completion. The
-current Workstream A change set includes the keyword fixture, closed schemas,
-equivalent C#/TypeScript/JavaScript source fixtures, exact canonical
-descriptor/ABI outputs, generated provider/use inventories, Core and Agent
-migration baselines, and the Agent feed audit. Workstream A closes only after
-that evidence is reviewed, checked in, and passes its gates. Descriptor-first source remains only until the
-coordinated compiler, lock, manifest, templates, and Agent migration cutover is
-green.
-
 The integrated C#/Node generation, source-derived baseline/Pack, Registry-backed
 selection and exact offline restore, catalog publication/revocation, and Host
 import/lifecycle paths have owning implementation and test coverage. The catalog
 authority model requires no signing setup. These local checks do not establish a
-deployed Registry publication, final canonical first-party migration or a release.
-
-Remaining program work includes actual package-root conversion and obsolete
-App/Protocol/helper retirement, final developer/product flows, measured startup/size
-acceptance, clean-source/native qualification and durable release evidence. Historical
-checkpoints document their original scopes rather than qualifying those final gates.
+deployed Registry publication or a release. Canonical first-party migration and
+physical project retirement are complete. Measured startup/size acceptance,
+clean-source/native qualification and durable deployed release evidence remain separate.

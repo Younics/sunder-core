@@ -19,6 +19,7 @@ internal sealed class RuntimeProtocolDescriptor
         RuntimeProtocolFeatures.SchemaFirstRpcV1,
         RuntimeProtocolFeatures.RpcPermissionsV1,
         RuntimeProtocolFeatures.AppWebRpcV1,
+        RuntimeProtocolFeatures.WorkerExecutionObservationsV1,
         RuntimeProtocolFeatures.RuntimeResourcePolicyV1,
         RuntimeProtocolFeatures.PackageRuntimeRecoveryV1,
         RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1,

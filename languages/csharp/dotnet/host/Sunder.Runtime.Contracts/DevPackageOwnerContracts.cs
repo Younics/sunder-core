@@ -46,9 +46,22 @@ public sealed record DevPackageOwnerReleaseRequest(
     Guid RuntimeInstanceId,
     string OwnerToken);
 
+public sealed record DevPackageOwnerReleaseStageRequest(
+    Guid RuntimeInstanceId, string OwnerToken, long Revision, string MutationId);
+
+public sealed record DevPackageOwnerReleaseCommitRequest(
+    Guid RuntimeInstanceId, string OwnerToken, string StageId);
+
+public sealed record DevPackageOwnerReleaseResult(
+    Guid RuntimeInstanceId, string OwnerId, string StageId, RuntimePackageSnapshot Snapshot);
+
 public sealed record DevPackageOwnerPackage(
     string PackageId,
-    bool Watch);
+    bool Watch)
+{
+    /// <summary>Effective Host watch state, including other owners. Null on older Hosts.</summary>
+    public bool? EffectiveWatch { get; init; }
+}
 
 public sealed record DevPackageOwnerLeaseResponse(
     Guid RuntimeInstanceId,

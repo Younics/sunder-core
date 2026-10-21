@@ -11,7 +11,6 @@ internal sealed partial class PackageLifecyclePolicyCache
         Require(state.SchemaVersion == 1 && state.Generation > 0 && state.AuthorityGeneration > 0 && state.AuthorityGeneration <= state.Generation
             && state.ClockGeneration >= 0 && state.ClockGeneration <= state.AuthorityGeneration
             && state.Origin == origin && state.PackagePolicy.Revision > 0 && Hash(state.PackagePolicy.Fingerprint)
-            && state.Checkpoint.Sequence > 0 && Hash(state.Checkpoint.Digest) && state.Checkpoint.TopologyGeneration > 0 && Hash(state.Checkpoint.TopologyFingerprint)
             && state.Packages.Count + state.Platforms.Count is > 0 and <= MaximumSubjects, "Policy cache metadata is invalid.");
         ValidateClock(state.HighWater);
         Require(state.LastRequestStarted >= 0 && state.LastRequestStarted <= state.HighWater.Ticks
@@ -43,11 +42,7 @@ internal sealed partial class PackageLifecyclePolicyCache
         var watermark = lease.Watermark!;
         var clock = lease.Clock!;
         Require(watermark.RegistryOrigin == state.Origin && watermark.PackagePolicyRevision > 0 && watermark.PackagePolicyRevision <= state.PackagePolicy.Revision
-            && Hash(watermark.PackagePolicyFingerprint) && (watermark.PackagePolicyRevision != state.PackagePolicy.Revision || watermark.PackagePolicyFingerprint == state.PackagePolicy.Fingerprint)
-            && watermark.CheckpointSequence > 0 && watermark.CheckpointSequence <= state.Checkpoint.Sequence && Hash(watermark.CheckpointDigest)
-            && (watermark.CheckpointSequence != state.Checkpoint.Sequence || watermark.CheckpointDigest == state.Checkpoint.Digest)
-            && watermark.TopologyGeneration > 0 && watermark.TopologyGeneration <= state.Checkpoint.TopologyGeneration && Hash(watermark.TopologyFingerprint)
-            && (watermark.TopologyGeneration != state.Checkpoint.TopologyGeneration || watermark.TopologyFingerprint == state.Checkpoint.TopologyFingerprint), "Invalid cached lease watermarks.");
+            && Hash(watermark.PackagePolicyFingerprint) && (watermark.PackagePolicyRevision != state.PackagePolicy.Revision || watermark.PackagePolicyFingerprint == state.PackagePolicy.Fingerprint), "Invalid cached lease watermarks.");
         ValidateClock(new(clock.BootSessionId, clock.ClockSource, clock.TicksPerSecond, clock.RequestStartedTicks, clock.VirtualMachineGeneration));
         Require((Int128)clock.DeadlineTicks - clock.RequestStartedTicks == (Int128)clock.TicksPerSecond * RuntimePolicyTiming.LeaseSeconds
             && clock.HighWaterTicks >= clock.RequestStartedTicks && clock.HighWaterTicks < clock.DeadlineTicks

@@ -54,12 +54,12 @@ public sealed class PublicApiBaselineTests
 
     [Theory]
     [MemberData(nameof(SdkAssemblies))]
-    public void ExportedApiMatchesShipped11Baseline(Type assemblyMarker)
+    public void ExportedApiMatchesCurrentCandidateSnapshot(Type assemblyMarker)
     {
         var assembly = assemblyMarker.Assembly;
         var fileName = assembly.GetName().Name + ".txt";
         var actual = PublicApiFormatter.Format(assembly);
-        var updateRoot = Environment.GetEnvironmentVariable("SUNDER_UPDATE_PUBLIC_API_ROOT");
+        var updateRoot = PublicApiSnapshotPolicy.GetUpdateRoot("SUNDER_UPDATE_PUBLIC_API_ROOT");
         if (!string.IsNullOrWhiteSpace(updateRoot))
         {
             var selectedAssemblies = (Environment.GetEnvironmentVariable("SUNDER_UPDATE_PUBLIC_API_ASSEMBLIES") ?? string.Empty)
@@ -70,8 +70,8 @@ public sealed class PublicApiBaselineTests
                 var outputPath = Path.Combine(updateRoot, fileName);
                 Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
                 File.WriteAllText(outputPath, actual);
+                return;
             }
-            return;
         }
 
         var baselinePath = Path.Combine(AppContext.BaseDirectory, "PublicApi", fileName);
@@ -79,23 +79,31 @@ public sealed class PublicApiBaselineTests
         Assert.Equal(File.ReadAllText(baselinePath).Replace("\r\n", "\n"), actual);
     }
 
-    private static class PublicApiFormatter
+    // The v2 text format is consumed by scripts/compatibility/public-api-comparison.mjs.
+    // Keep released v2 snapshots immutable; a future formatter needs an explicit migration.
+    internal static class PublicApiFormatter
     {
-        private static readonly NullabilityInfoContext Nullability = new();
+        [ThreadStatic]
+        private static NullabilityInfoContext? nullability;
+        private static NullabilityInfoContext Nullability => nullability ??= new();
 
         public static string Format(Assembly assembly)
         {
-            var lines = assembly.GetExportedTypes()
+            var lines = assembly.GetTypes()
                 .Where(IsSupportedPublicApiType)
                 .OrderBy(static type => type.FullName, StringComparer.Ordinal)
                 .SelectMany(FormatType)
                 .ToArray();
-            return string.Join('\n', lines) + "\n";
+            return "# sunder-public-api-v2\nassembly " + assembly.GetName().FullName + "\n"
+                + string.Join('\n', lines) + "\n";
         }
 
         private static bool IsSupportedPublicApiType(Type type)
-            => type.Namespace != "CompiledAvaloniaXaml"
-               || type.GetCustomAttribute<EditorBrowsableAttribute>()?.State != EditorBrowsableState.Never;
+            => (type.IsPublic || (type.DeclaringType is not null
+                    && (type.IsNestedPublic || type.IsNestedFamily || type.IsNestedFamORAssem)
+                    && IsSupportedPublicApiType(type.DeclaringType)))
+               && (type.Namespace != "CompiledAvaloniaXaml"
+                   || type.GetCustomAttribute<EditorBrowsableAttribute>()?.State != EditorBrowsableState.Never);
 
         private static IEnumerable<string> FormatType(Type type)
         {
@@ -103,47 +111,62 @@ public sealed class PublicApiBaselineTests
             {
                 yield return attribute;
             }
-            yield return $"type {TypeKind(type)} {FormatTypeName(type)}{FormatInheritance(type)}{FormatGenericConstraints(type.GetGenericArguments())}";
+            var visibility = type.IsNestedFamily ? "protected" : type.IsNestedFamORAssem ? "protected internal" : "public";
+            yield return $"type {visibility} {TypeKind(type)} {FormatDeclaredTypeName(type)}{FormatInheritance(type)}{FormatGenericConstraints(type.GetGenericArguments())}";
 
-            const BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
-            foreach (var constructor in type.GetConstructors(flags).OrderBy(FormatMethod, StringComparer.Ordinal))
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (var constructor in type.GetConstructors(flags).Where(IsApiMethod).OrderBy(FormatMethod, StringComparer.Ordinal))
             {
                 foreach (var attribute in FormatApiAttributes(constructor, "  ")) yield return attribute;
                 yield return "  " + FormatMethod(constructor);
             }
 
-            foreach (var field in type.GetFields(flags).OrderBy(static field => field.Name, StringComparer.Ordinal))
+            foreach (var field in type.GetFields(flags)
+                         .Where(static field => field.IsPublic || field.IsFamily || field.IsFamilyOrAssembly)
+                         .OrderBy(static field => field.Name, StringComparer.Ordinal))
             {
                 foreach (var attribute in FormatApiAttributes(field, "  ")) yield return attribute;
+                var fieldNullability = Nullability.Create(field);
                 var value = field.IsLiteral ? $" = {FormatValue(field.GetRawConstantValue())}" : string.Empty;
-                var modifiers = field.IsStatic ? "static " : string.Empty;
+                var modifiers = field.IsPublic ? "public " : field.IsFamily ? "protected " : "protected internal ";
+                modifiers += field.IsLiteral ? "const " : field.IsStatic ? "static " : string.Empty;
                 modifiers += field.IsInitOnly ? "readonly " : string.Empty;
-                yield return $"  field {modifiers}{FormatTypeName(field.FieldType, Nullability.Create(field))} {field.Name}{value}";
+                modifiers += IsRequired(field) ? "required " : string.Empty;
+                var writeType = field.IsLiteral || field.IsInitOnly ? string.Empty : FormatWriteNullability(field.FieldType, fieldNullability);
+                yield return $"  field {modifiers}{FormatTypeName(field.FieldType, fieldNullability)} {field.Name}{value}{writeType}";
             }
 
-            foreach (var property in type.GetProperties(flags).OrderBy(static property => property.Name, StringComparer.Ordinal))
+            foreach (var property in type.GetProperties(flags)
+                         .Where(static property => IsApiMethod(property.GetMethod) || IsApiMethod(property.SetMethod))
+                         .OrderBy(static property => property.ToString(), StringComparer.Ordinal))
             {
                 foreach (var attribute in FormatApiAttributes(property, "  ")) yield return attribute;
-                var setter = property.SetMethod is null
-                    ? string.Empty
-                    : property.SetMethod.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsExternalInit))
-                        ? "init; "
-                        : "set; ";
-                var accessors = $"{{ {(property.GetMethod is null ? string.Empty : "get; ")}{setter}}}";
+                var setter = property.SetMethod?.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(System.Runtime.CompilerServices.IsExternalInit)) == true
+                    ? "init" : "set";
+                foreach (var attribute in FormatApiAttributes(property.GetMethod, "  ", "get")) yield return attribute;
+                foreach (var attribute in FormatApiAttributes(property.SetMethod, "  ", setter)) yield return attribute;
+                var accessors = $"{{ {FormatAccessor(property.GetMethod, "get")}{FormatAccessor(property.SetMethod, setter)}}}";
                 var index = property.GetIndexParameters();
                 var name = index.Length == 0 ? property.Name : $"this[{string.Join(", ", index.Select(FormatParameter))}]";
-                var modifiers = property.GetMethod?.IsStatic == true || property.SetMethod?.IsStatic == true ? "static " : string.Empty;
-                yield return $"  property {modifiers}{FormatTypeName(property.PropertyType, Nullability.Create(property))} {name} {accessors}";
+                var modifiers = IsRequired(property) ? "required " : string.Empty;
+                var propertyNullability = Nullability.Create(property);
+                var writeType = property.SetMethod is null ? string.Empty : FormatWriteNullability(property.PropertyType, propertyNullability);
+                yield return $"  property {modifiers}{FormatTypeName(property.PropertyType, propertyNullability)} {name} {accessors}{writeType}";
             }
 
-            foreach (var eventInfo in type.GetEvents(flags).OrderBy(static eventInfo => eventInfo.Name, StringComparer.Ordinal))
+            foreach (var eventInfo in type.GetEvents(flags)
+                         .Where(static eventInfo => IsApiMethod(eventInfo.AddMethod) || IsApiMethod(eventInfo.RemoveMethod))
+                         .OrderBy(static eventInfo => eventInfo.Name, StringComparer.Ordinal))
             {
                 foreach (var attribute in FormatApiAttributes(eventInfo, "  ")) yield return attribute;
-                var modifiers = eventInfo.AddMethod?.IsStatic == true ? "static " : string.Empty;
-                yield return $"  event {modifiers}{FormatTypeName(eventInfo.EventHandlerType!)} {eventInfo.Name}";
+                foreach (var attribute in FormatApiAttributes(eventInfo.AddMethod, "  ", "add")) yield return attribute;
+                foreach (var attribute in FormatApiAttributes(eventInfo.RemoveMethod, "  ", "remove")) yield return attribute;
+                yield return $"  event {FormatTypeName(eventInfo.EventHandlerType!, Nullability.Create(eventInfo))} {eventInfo.Name} {{ {FormatAccessor(eventInfo.AddMethod, "add")}{FormatAccessor(eventInfo.RemoveMethod, "remove")}}}";
             }
 
-            foreach (var method in type.GetMethods(flags).Where(static method => !method.IsSpecialName).OrderBy(FormatMethod, StringComparer.Ordinal))
+            foreach (var method in type.GetMethods(flags)
+                         .Where(static method => IsApiMethod(method) && (!method.IsSpecialName || method.Name.StartsWith("op_", StringComparison.Ordinal)))
+                         .OrderBy(FormatMethod, StringComparer.Ordinal))
             {
                 foreach (var attribute in FormatApiAttributes(method, "  ")) yield return attribute;
                 yield return "  " + FormatMethod(method);
@@ -164,8 +187,33 @@ public sealed class PublicApiBaselineTests
             var constraints = method.IsGenericMethodDefinition
                 ? FormatGenericConstraints(method.GetGenericArguments())
                 : string.Empty;
-            var modifiers = method.IsStatic ? "static " : method.IsAbstract ? "abstract " : method.IsVirtual ? "virtual " : string.Empty;
+            var modifiers = FormatMethodModifiers(method);
             return $"method {modifiers}{returnType}{name}({string.Join(", ", method.GetParameters().Select(FormatParameter))}){constraints}";
+        }
+
+        private static bool IsApiMethod(MethodBase? method)
+            => method is not null && (method.IsPublic || method.IsFamily || method.IsFamilyOrAssembly);
+
+        private static bool IsRequired(MemberInfo member)
+            => member.IsDefined(typeof(System.Runtime.CompilerServices.RequiredMemberAttribute), inherit: false);
+
+        private static string FormatAccessor(MethodInfo? method, string kind)
+            => method is null ? string.Empty : FormatMethodModifiers(method) + kind + "; ";
+
+        private static string FormatMethodModifiers(MethodBase method)
+        {
+            var result = method.IsPublic ? "public " : method.IsFamily ? "protected "
+                : method.IsFamilyOrAssembly ? "protected internal " : method.IsFamilyAndAssembly ? "private protected "
+                : method.IsAssembly ? "internal " : "private ";
+            if (method.IsStatic) result += "static ";
+            if (method.IsAbstract) result += "abstract ";
+            if (method.IsVirtual)
+            {
+                if (method.IsFinal) result += "final ";
+                // Static interface members omit NewSlot but do not override an inherited instance slot.
+                result += method.IsStatic || (method.Attributes & MethodAttributes.NewSlot) != 0 ? "virtual " : "override ";
+            }
+            return result;
         }
 
         private static string FormatGenericConstraints(IReadOnlyList<Type> genericArguments)
@@ -193,18 +241,33 @@ public sealed class PublicApiBaselineTests
             return string.Concat(constraints);
         }
 
-        private static IEnumerable<string> FormatApiAttributes(MemberInfo member, string indent)
+        private static IEnumerable<string> FormatApiAttributes(MemberInfo? member, string indent, string? accessor = null)
         {
+            if (member is null) yield break;
+            // Keep accessor attributes attached to the property/event record, with their exact scope.
+            var prefix = $"{indent}attribute " + (accessor is null ? string.Empty : accessor + " ");
             var obsolete = member.GetCustomAttribute<ObsoleteAttribute>();
             if (obsolete is not null)
             {
-                yield return $"{indent}attribute System.ObsoleteAttribute({FormatValue(obsolete.Message)}, IsError = {FormatValue(obsolete.IsError)})";
+                yield return $"{prefix}System.ObsoleteAttribute({FormatValue(obsolete.Message)}, IsError = {FormatValue(obsolete.IsError)})";
             }
 
             var editorBrowsable = member.GetCustomAttribute<System.ComponentModel.EditorBrowsableAttribute>();
             if (editorBrowsable is not null)
             {
-                yield return $"{indent}attribute System.ComponentModel.EditorBrowsableAttribute({editorBrowsable.State})";
+                yield return $"{prefix}System.ComponentModel.EditorBrowsableAttribute({editorBrowsable.State})";
+            }
+
+            foreach (var attribute in member.GetCustomAttributesData()
+                         .Select(static attribute => attribute.AttributeType.FullName)
+                         .Where(static name => name is "Microsoft.Build.Framework.RequiredAttribute"
+                             or "Microsoft.Build.Framework.OutputAttribute"
+                             or "System.Diagnostics.CodeAnalysis.SetsRequiredMembersAttribute"
+                             or "System.Runtime.CompilerServices.IsReadOnlyAttribute"
+                             or "System.Runtime.CompilerServices.IsByRefLikeAttribute")
+                         .Order(StringComparer.Ordinal))
+            {
+                yield return $"{prefix}{attribute}";
             }
 
             foreach (var capability in member.GetCustomAttributesData()
@@ -213,7 +276,7 @@ public sealed class PublicApiBaselineTests
                          .Where(static capability => capability is not null)
                          .Order(StringComparer.Ordinal))
             {
-                yield return $"{indent}attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute({FormatValue(capability)})";
+                yield return $"{prefix}Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute({FormatValue(capability)})";
             }
         }
 
@@ -234,6 +297,7 @@ public sealed class PublicApiBaselineTests
         private static string FormatInheritance(Type type)
         {
             var inherited = new List<string>();
+            if (type.IsEnum) inherited.Add(FormatTypeName(Enum.GetUnderlyingType(type)));
             if (type.BaseType is not null && type.BaseType != typeof(object) && type.BaseType != typeof(ValueType) && type.BaseType != typeof(Enum))
             {
                 inherited.Add(FormatTypeName(type.BaseType));
@@ -245,9 +309,11 @@ public sealed class PublicApiBaselineTests
 
         private static string FormatTypeName(Type type, NullabilityState nullability = NullabilityState.Unknown)
         {
+            if (type.IsByRef) return "ref " + FormatTypeName(type.GetElementType()!);
+            if (type.IsPointer) return FormatTypeName(type.GetElementType()!) + "*";
             if (type.IsArray)
             {
-                return FormatTypeName(type.GetElementType()!) + "[]" + NullableSuffix(type, nullability);
+                return FormatTypeName(type.GetElementType()!) + ArraySuffix(type) + NullableSuffix(type, nullability);
             }
 
             if (type.IsGenericParameter)
@@ -264,44 +330,82 @@ public sealed class PublicApiBaselineTests
             var name = type.FullName ?? type.Name;
             if (type.IsGenericType)
             {
-                name = name[..name.IndexOf('`')]
-                    + "<" + string.Join(", ", type.GetGenericArguments().Select(static argument => FormatTypeName(argument))) + ">";
+                name = FormatGenericTypeName(type, type.GetGenericArguments().Select(static argument => FormatTypeName(argument)).ToArray());
             }
 
             return name.Replace('+', '.') + NullableSuffix(type, nullability);
         }
 
-        private static string FormatTypeName(Type type, NullabilityInfo nullability)
+        private static string FormatWriteNullability(Type type, NullabilityInfo nullability)
         {
+            // The declaration's type is the read contract. Record an independent accepted-input
+            // type when attributes such as AllowNull/DisallowNull make the write contract differ.
+            var readType = FormatTypeName(type, nullability);
+            var writeType = FormatTypeName(type, nullability, forWrite: true);
+            return readType == writeType ? string.Empty : $" [write: {writeType}]";
+        }
+
+        private static string FormatTypeName(Type type, NullabilityInfo nullability, bool forWrite = false)
+        {
+            var state = forWrite ? nullability.WriteState : nullability.ReadState;
+            // NullabilityInfo describes the element's generic arguments for by-ref types too.
+            if (type.IsByRef) return "ref " + FormatTypeName(type.GetElementType()!, nullability, forWrite);
+            if (type.IsPointer) return FormatTypeName(type.GetElementType()!, nullability, forWrite) + "*";
             if (type.IsArray)
             {
                 var element = nullability.ElementType is null
                     ? FormatTypeName(type.GetElementType()!)
-                    : FormatTypeName(type.GetElementType()!, nullability.ElementType);
-                return element + "[]" + NullableSuffix(type, nullability.ReadState);
+                    : FormatTypeName(type.GetElementType()!, nullability.ElementType, forWrite);
+                return element + ArraySuffix(type) + NullableSuffix(type, state);
             }
 
             var nullable = Nullable.GetUnderlyingType(type);
             if (nullable is not null)
             {
-                return FormatTypeName(nullable) + "?";
+                // For Nullable<Container<T...>>, NullabilityInfo.GenericTypeArguments describes
+                // Container's arguments directly, not a separate Nullable<T> wrapper node.
+                return FormatTypeName(nullable, nullability, forWrite) + "?";
             }
 
             if (!type.IsGenericType)
             {
-                return FormatTypeName(type, nullability.ReadState);
+                return FormatTypeName(type, state);
             }
 
-            var name = (type.FullName ?? type.Name);
-            name = name[..name.IndexOf('`')];
             var arguments = type.GetGenericArguments();
             var formattedArguments = arguments.Select((argument, index) =>
                 index < nullability.GenericTypeArguments.Length
-                    ? FormatTypeName(argument, nullability.GenericTypeArguments[index])
+                    ? FormatTypeName(argument, nullability.GenericTypeArguments[index], forWrite)
                     : FormatTypeName(argument));
-            return name.Replace('+', '.')
-                   + "<" + string.Join(", ", formattedArguments) + ">"
-                   + NullableSuffix(type, nullability.ReadState);
+            return FormatGenericTypeName(type, formattedArguments.ToArray())
+                   + NullableSuffix(type, state);
+        }
+
+        private static string ArraySuffix(Type type) => "[" + new string(',', type.GetArrayRank() - 1) + "]";
+
+        private static string FormatDeclaredTypeName(Type type)
+            => !type.IsGenericType ? FormatTypeName(type) : FormatGenericTypeName(type,
+                type.GetGenericArguments().Select(static argument =>
+                    ((argument.GenericParameterAttributes & GenericParameterAttributes.VarianceMask) switch
+                    {
+                        GenericParameterAttributes.Covariant => "out ",
+                        GenericParameterAttributes.Contravariant => "in ",
+                        _ => string.Empty,
+                    }) + argument.Name).ToArray());
+
+        private static string FormatGenericTypeName(Type type, string[] arguments)
+        {
+            var index = 0;
+            var definition = type.GetGenericTypeDefinition();
+            return string.Join('.', (definition.FullName ?? definition.Name).Split('+').Select(part =>
+            {
+                var tick = part.IndexOf('`');
+                if (tick < 0) return part;
+                var count = int.Parse(part[(tick + 1)..], System.Globalization.CultureInfo.InvariantCulture);
+                var result = part[..tick] + "<" + string.Join(", ", arguments.Skip(index).Take(count)) + ">";
+                index += count;
+                return result;
+            }));
         }
 
         private static string NullableSuffix(Type type, NullabilityState state)
@@ -311,12 +415,15 @@ public sealed class PublicApiBaselineTests
             => value switch
             {
                 null => "null",
-                string text => $"\"{text}\"",
+                string text => System.Text.Json.JsonSerializer.Serialize(text),
+                char character => "char(" + ((int)character).ToString(System.Globalization.CultureInfo.InvariantCulture) + ")",
                 bool flag => flag ? "true" : "false",
                 _ => Convert.ToString(value, System.Globalization.CultureInfo.InvariantCulture) ?? "null",
             };
 
         private static string TypeKind(Type type)
-            => type.IsInterface ? "interface" : type.IsEnum ? "enum" : type.IsValueType ? "struct" : type.IsSealed ? "sealed class" : "class";
+            => type.IsInterface ? "interface" : type.IsEnum ? "enum" : type.IsValueType ? "struct"
+                : type.IsAbstract && type.IsSealed ? "static class" : type.IsAbstract ? "abstract class"
+                : type.IsSealed ? "sealed class" : "class";
     }
 }

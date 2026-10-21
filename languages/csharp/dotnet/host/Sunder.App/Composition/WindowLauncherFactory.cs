@@ -15,7 +15,8 @@ public sealed class WindowLauncherFactory(
     SettingsWindowFactory settingsWindowFactory,
     PackagesWindowFactory packagesWindowFactory,
     StacksWindowFactory stacksWindowFactory,
-    IUiDispatcher uiDispatcher)
+    IUiDispatcher uiDispatcher,
+    AppPackageDeveloperServices? developerServices = null)
 {
     public WindowLauncher Create(
         PackageViewHostService packageViewHostService,
@@ -34,5 +35,6 @@ public sealed class WindowLauncherFactory(
             developerLog,
             updateService,
             backgroundProcessQueue,
-            runtimeEventSubscription);
+            runtimeEventSubscription,
+            developerServices);
 }

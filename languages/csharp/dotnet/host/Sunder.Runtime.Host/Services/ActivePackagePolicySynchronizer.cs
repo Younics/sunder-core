@@ -16,6 +16,11 @@ internal sealed class ActivePackagePolicySynchronizer(
     private readonly Dictionary<string, (string Identity, SunderPackageManifest Manifest)> _manifests = new(StringComparer.Ordinal);
     private readonly List<Task> _cleanup = [];
     private readonly object _enforcementGate = new();
+    private readonly object _persistenceGate = new();
+    private readonly CancellationTokenSource _persistenceStopping = new();
+    private Task _persistenceTask = Task.CompletedTask;
+    private bool _persistenceQuiesced;
+    private int _disposed;
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
@@ -25,7 +30,10 @@ internal sealed class ActivePackagePolicySynchronizer(
 
     public override void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         cache.PolicyChanged -= EnforceActive;
+        lock (_persistenceGate) _persistenceQuiesced = true;
+        RuntimeCancellation.DisposeAfterCallbacks(_persistenceStopping, _persistenceStopping.CancelAsync());
         base.Dispose();
     }
 
@@ -38,7 +46,40 @@ internal sealed class ActivePackagePolicySynchronizer(
             await started.Task.WaitAsync(stoppingToken);
         }
         // Network waits/backoff must never delay expiry enforcement.
-        await Task.WhenAll(RefreshLoopAsync(stoppingToken), EnforcementLoopAsync(stoppingToken), PersistenceLoopAsync(stoppingToken));
+        Task persistence;
+        lock (_persistenceGate)
+        {
+            // Shutdown can win before ApplicationStarted. No persistence work may
+            // be admitted after the explicit drain has completed in that case.
+            if (!_persistenceQuiesced)
+            {
+                var token = _persistenceStopping.Token;
+                _persistenceTask = Task.Run(() => RunPersistenceAsync(stoppingToken, token), CancellationToken.None);
+            }
+            persistence = _persistenceTask;
+        }
+        await Task.WhenAll(RefreshLoopAsync(stoppingToken), EnforcementLoopAsync(stoppingToken), persistence);
+    }
+
+    // The Runtime retires its operation gate before stopping the web host. Drain
+    // only this background writer first; keep policy refresh/expiry enforcement
+    // alive until sessions retire and ordinary hosted-service shutdown runs.
+    internal Task StopPersistenceAsync(CancellationToken cancellationToken)
+    {
+        Task pending;
+        lock (_persistenceGate)
+        {
+            _persistenceQuiesced = true;
+            pending = _persistenceTask;
+        }
+        return Task.WhenAll(_persistenceStopping.CancelAsync(), pending).WaitAsync(cancellationToken);
+    }
+
+    private async Task RunPersistenceAsync(CancellationToken serviceToken, CancellationToken persistenceToken)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(serviceToken, persistenceToken);
+        try { await PersistenceLoopAsync(lifetime.Token); }
+        catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
     }
 
     private async Task RefreshLoopAsync(CancellationToken token)

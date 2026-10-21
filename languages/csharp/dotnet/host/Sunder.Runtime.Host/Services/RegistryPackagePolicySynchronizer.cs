@@ -29,7 +29,7 @@ internal sealed class RegistryPackagePolicySynchronizer(RegistryActivePolicyClie
     internal async Task RefreshPlanAsync(string origin, RegistryResolveInstallPlanResponse plan, CancellationToken token)
     {
         var policy = plan.ResolutionPolicy ?? throw new PackagePolicyDeniedException(PackagePolicyErrorCodes.PolicyRequired);
-        if (plan.PackagePolicy != policy.PackagePolicy || plan.PolicyCheckpoint != policy.Checkpoint)
+        if (plan.PackagePolicy != policy.PackagePolicy)
             throw new PackagePolicyDeniedException(PackagePolicyErrorCodes.PolicyConflict);
         var packages = plan.Items.Where(value => value.ActionKind != RegistryPackageActionKinds.PackageRemove)
             .Select(value => new RegistryPackageVersionIdentity(value.PackageId, value.Version!, value.PackageContentIdentity)).ToArray();
@@ -38,7 +38,7 @@ internal sealed class RegistryPackagePolicySynchronizer(RegistryActivePolicyClie
         // The plan is not lease authority. A nonce-bound refresh must still agree with
         // the exact package revision used by resolution before it can be used.
         await RefreshAsync([new(origin, packages, platforms)], token);
-        cache.RequirePlan(origin, policy.PackagePolicy, policy.Checkpoint);
+        cache.RequirePlan(origin, policy.PackagePolicy);
         foreach (var package in packages) cache.RequireActivation(origin, package);
     }
 

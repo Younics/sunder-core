@@ -224,7 +224,11 @@ Registry browsing uses remote Registry APIs. Local installed state always comes 
 
 Current unmanaged packages retain their explicit provenance, including `Unknown`; Sunder never guesses that local bytes came from the configured Registry. Select **Adopt source & update** to explicitly bind an unmanaged package to that Registry's `latest` tag. Dependency planning may replace related packages together, but source adoption remains explicit.
 
-Installed-package details show each exact Runtime target binding and whether its execution runtime is compatible, missing, policy-limited, deprecated, retired, revoked, or unhealthy. Repair is shown only when Runtime recommends it. The action may stop dependent Workers; Runtime owns launch fencing, Worker and lease drain, immutable cached-byte repair, and package reload. App does not inspect runtime-store files or implement a separate low-level execution-runtime console.
+Installed-package details show exact target bindings and runtime compatibility/health.
+[Package Runtimes](PACKAGE-RUNTIMES.md) provides .NET/Node installation, updates,
+verification, repair and uninstall. Vendor support is distinct from package/platform
+policy. Host owns launch fencing, Worker/lease drain, verified-byte repair and reload;
+the App does not inspect runtime-store files.
 
 ## Build Output Locks
 

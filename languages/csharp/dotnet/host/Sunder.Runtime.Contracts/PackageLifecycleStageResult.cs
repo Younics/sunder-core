@@ -20,6 +20,15 @@ public sealed record PackageLifecycleStageResult(
 
     public bool Success => StageId is not null && Errors.Count == 0;
 
+    private IReadOnlyList<RuntimeAppActivationRetirementRequirement> _retirements = [];
+    public IReadOnlyList<RuntimeAppActivationRetirementRequirement> Retirements
+    {
+        get => _retirements;
+        init => _retirements = RuntimeContractCollections.Freeze(value);
+    }
+
+    public RuntimePackageStamp? BaseStamp { get; init; }
+
     public static PackageLifecycleStageResult Failed(
         string message,
         IReadOnlyList<ActivePackageDescriptor>? activePackages = null,

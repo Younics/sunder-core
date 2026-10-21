@@ -45,7 +45,8 @@ internal sealed record SunderRpcCSharpMarshallingPlan(SunderRpcContractDescripto
             var members = definition is SunderRpcCSharpRecordDefinitionModel record ? record.Record.Properties.Select(property => new SunderRpcCSharpResourceMember(property.WireName,
                 property.Name, property.Serialization == SunderRpcCSharpPropertySerialization.WhenWritingDefault,
                 property.TypeName.EndsWith('?') && structs.Contains(property.TypeName[..^1]), property.TypeName,
-                OptionalMember(contract, key, property.WireName)) { ConstantValue = property.ConstantValue }).ToArray() : [];
+                OptionalMember(contract, key, property.WireName))
+                { ConstantValue = property.ConstantValue, IgnoreWhenNull = property.Serialization == SunderRpcCSharpPropertySerialization.WhenWritingNull }).ToArray() : [];
             Dictionary<string, string>? variants = null;
             if (definition is SunderRpcCSharpTaggedUnionDefinitionModel union)
             {
@@ -63,7 +64,8 @@ internal sealed record SunderRpcCSharpMarshallingPlan(SunderRpcContractDescripto
                         layouts["\0" + synthetic.TypeName] = new(variantType, false, synthetic.Properties.Select(property => new SunderRpcCSharpResourceMember(property.WireName,
                             property.Name, property.Serialization == SunderRpcCSharpPropertySerialization.WhenWritingDefault,
                             property.TypeName.EndsWith('?') && structs.Contains(property.TypeName[..^1]), property.TypeName,
-                            OptionalMember(contract, variantDefinition, property.WireName)) { ConstantValue = property.ConstantValue }).ToArray());
+                            OptionalMember(contract, variantDefinition, property.WireName))
+                            { ConstantValue = property.ConstantValue, IgnoreWhenNull = property.Serialization == SunderRpcCSharpPropertySerialization.WhenWritingNull }).ToArray());
                     }
                     else variants.Add(definitions.Single(pair => pair.Value.TypeName == variant.TypeName || "global::" + Editor.GeneratedPackageNames.Models(contract.AuthorityPackageId!) + "." + pair.Value.TypeName == variant.TypeName).Key, variantType);
                 }

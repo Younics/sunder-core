@@ -22,17 +22,10 @@
     "optionalText": { "anyOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] },
     "principalId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[\\u0021-\\u007e]+$" },
     "nonnegativeInteger": { "type": "integer", "minimum": 0, "maximum": 9223372036854775807 },
-    "optionalPolicyIdentity": { "anyOf": [{ "$ref": "#/$defs/policyIdentity" }, { "type": "null" }] },
-    "optionalCheckpoint": { "anyOf": [{ "$ref": "#/$defs/checkpoint" }, { "type": "null" }] },
-    "optionalRevision": { "anyOf": [{ "$ref": "#/$defs/revision" }, { "type": "null" }] },
     "disposition": { "enum": ["Allowed", "Denied", "PolicyRequired"] },
     "policyIdentity": {
       "type": "object", "additionalProperties": false, "required": ["revision", "fingerprint"],
       "properties": { "revision": { "$ref": "#/$defs/revision" }, "fingerprint": { "$ref": "#/$defs/sha256" } }
-    },
-    "checkpoint": {
-      "type": "object", "additionalProperties": false, "required": ["sequence", "digest", "topologyGeneration", "topologyFingerprint"],
-      "properties": { "sequence": { "$ref": "#/$defs/revision" }, "digest": { "$ref": "#/$defs/sha256" }, "topologyGeneration": { "$ref": "#/$defs/revision" }, "topologyFingerprint": { "$ref": "#/$defs/sha256" } }
     },
     "package": {
       "type": "object", "additionalProperties": false, "required": ["packageId", "version", "packageContentIdentity"],
@@ -52,13 +45,12 @@
     },
     "synchronizationRequest": {
       "type": "object", "additionalProperties": false,
-      "required": ["nonce", "packages", "platformCatalogs", "minimumPackagePolicy", "minimumCheckpoint"],
+      "required": ["nonce", "packages", "platformCatalogs", "minimumPackagePolicy"],
       "properties": {
         "nonce": { "$ref": "#/$defs/nonce" },
         "packages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/package" } },
         "platformCatalogs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/platform" } },
-        "minimumPackagePolicy": { "anyOf": [{ "$ref": "#/$defs/policyIdentity" }, { "type": "null" }] },
-        "minimumCheckpoint": { "anyOf": [{ "$ref": "#/$defs/checkpoint" }, { "type": "null" }] }
+        "minimumPackagePolicy": { "anyOf": [{ "$ref": "#/$defs/policyIdentity" }, { "type": "null" }] }
       },
       "anyOf": [
         { "properties": { "packages": { "minItems": 1 } } },
@@ -91,10 +83,10 @@
     },
     "synchronizationResponse": {
       "type": "object", "additionalProperties": false,
-      "required": ["nonce", "registryOrigin", "packagePolicy", "checkpoint", "observedAtUtc", "validUntilUtc", "packages", "platformCatalogs"],
+      "required": ["nonce", "registryOrigin", "packagePolicy", "observedAtUtc", "validUntilUtc", "packages", "platformCatalogs"],
       "properties": {
         "nonce": { "$ref": "#/$defs/nonce" }, "registryOrigin": { "$ref": "#/$defs/origin" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" },
-        "checkpoint": { "$ref": "#/$defs/checkpoint" }, "observedAtUtc": { "$ref": "#/$defs/utc" }, "validUntilUtc": { "$ref": "#/$defs/utc" },
+        "observedAtUtc": { "$ref": "#/$defs/utc" }, "validUntilUtc": { "$ref": "#/$defs/utc" },
         "packages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/packageDecision" } },
         "platformCatalogs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/platformDecision" } }
       }
@@ -130,7 +122,41 @@
       "type": "object", "additionalProperties": false, "required": ["sessionId", "appGenerationId", "runtimeInstanceId"],
       "properties": { "sessionId": { "$ref": "#/$defs/nonce" }, "appGenerationId": { "$ref": "#/$defs/guid" }, "runtimeInstanceId": { "$ref": "#/$defs/guid" } }
     },
-    "appPermitRequest": { "type": "object", "additionalProperties": false, "required": ["session", "package"], "properties": { "session": { "$ref": "#/$defs/appSessionRequest" }, "package": { "$ref": "#/$defs/package" }, "snapshotId": { "$ref": "#/$defs/nonce" } } },
+    "appPermitRequest": {
+      "type": "object", "additionalProperties": false, "required": ["session", "package"],
+      "properties": { "session": { "$ref": "#/$defs/appSessionRequest" }, "package": { "$ref": "#/$defs/package" }, "snapshotId": { "$ref": "#/$defs/nonce" }, "appActivationId": { "$ref": "#/$defs/guid" }, "appTarget": { "$ref": "#/$defs/appTarget" } },
+      "allOf": [
+        { "if": { "required": ["appActivationId"] }, "then": { "required": ["appTarget", "snapshotId"] } },
+        { "if": { "required": ["appTarget"] }, "then": { "required": ["appActivationId", "snapshotId"] } }
+      ]
+    },
+    "appTarget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "rid", "kind", "entryPoint", "targetFramework", "sdkVersion", "requiredHostCapabilities", "views", "executionRuntime", "executionRuntimeBinding"],
+      "properties": {
+        "role": { "const": "app" }, "rid": { "$ref": "#/$defs/text" }, "kind": { "enum": ["avalonia", "web"] },
+        "entryPoint": { "$ref": "#/$defs/text" }, "targetFramework": { "$ref": "#/$defs/optionalText" }, "sdkVersion": { "anyOf": [{ "$ref": "#/$defs/version" }, { "type": "null" }] },
+        "requiredHostCapabilities": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/text" } },
+        "views": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/appView" } },
+        "executionRuntime": { "type": "null" }, "executionRuntimeBinding": { "type": "null" }
+      }
+    },
+    "appView": {
+      "type": "object", "additionalProperties": false, "required": ["viewId", "displayName", "route", "icon", "defaultPlacement", "showInHotbar"],
+      "properties": { "viewId": { "$ref": "#/$defs/id" }, "displayName": { "$ref": "#/$defs/text" }, "route": { "$ref": "#/$defs/text" }, "icon": { "$ref": "#/$defs/optionalText" }, "defaultPlacement": { "$ref": "#/$defs/text" }, "showInHotbar": { "type": "boolean" } }
+    },
+    "appActivationRetirementRequest": {
+      "type": "object", "additionalProperties": false, "required": ["session", "appActivationId", "loadPermitId"],
+      "properties": { "session": { "$ref": "#/$defs/appSessionRequest" }, "appActivationId": { "$ref": "#/$defs/guid" }, "loadPermitId": { "$ref": "#/$defs/nonce" } }
+    },
+    "appActivationRetirementResult": {
+      "type": "object", "additionalProperties": false, "required": ["session", "appActivationId", "loadPermitId", "state"],
+      "properties": { "session": { "$ref": "#/$defs/appSessionRequest" }, "appActivationId": { "$ref": "#/$defs/guid" }, "loadPermitId": { "$ref": "#/$defs/nonce" }, "state": { "const": "retired" } }
+    },
+    "appActivationRetirementRequirement": {
+      "type": "object", "additionalProperties": false, "required": ["policySessionId", "appActivationId", "loadPermitId", "package"],
+      "properties": { "policySessionId": { "$ref": "#/$defs/nonce" }, "appActivationId": { "$ref": "#/$defs/guid" }, "loadPermitId": { "$ref": "#/$defs/nonce" }, "package": { "$ref": "#/$defs/package" }, "stageId": { "anyOf": [{ "$ref": "#/$defs/nonce" }, { "type": "null" }] } }
+    },
     "providerPredicate": {
       "type": "object", "additionalProperties": false, "required": ["consumerPackageId", "consumerRole", "contract", "actions"],
       "properties": { "consumerPackageId": { "$ref": "#/$defs/id" }, "consumerRole": { "enum": ["app", "runtime"] }, "contract": { "$ref": "#/$defs/rpcContract" }, "actions": { "type": "array", "minItems": 1, "maxItems": 3, "uniqueItems": true, "items": { "enum": ["discover", "invoke", "subscribe"] } } }
@@ -143,9 +169,9 @@
     },
     "cohortResult": {
       "type": "object", "additionalProperties": false,
-      "required": ["idempotencyKey", "requestSha256", "packagePolicy", "checkpoint", "committedAtUtc", "versions", "previousTags", "resultingTags"],
+      "required": ["idempotencyKey", "requestSha256", "packagePolicy", "committedAtUtc", "versions", "previousTags", "resultingTags"],
       "properties": {
-        "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "requestSha256": { "$ref": "#/$defs/sha256" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" }, "checkpoint": { "$ref": "#/$defs/checkpoint" }, "committedAtUtc": { "$ref": "#/$defs/utc" },
+        "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "requestSha256": { "$ref": "#/$defs/sha256" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" }, "committedAtUtc": { "$ref": "#/$defs/utc" },
         "versions": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/availabilityChange" } },
         "previousTags": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/tagSnapshot" } },
         "resultingTags": { "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": { "$ref": "#/$defs/tagSnapshot" } }
@@ -160,8 +186,8 @@
       "properties": { "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "expectedPackagePolicyRevision": { "$ref": "#/$defs/revision" }, "expectedPackageContentIdentity": { "$ref": "#/$defs/sha256" }, "publicReason": { "$ref": "#/$defs/publicReason" } }
     },
     "policyMutation": {
-      "type": "object", "additionalProperties": false, "required": ["idempotencyKey", "requestSha256", "policy", "checkpoint", "committedAtUtc"],
-      "properties": { "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "requestSha256": { "$ref": "#/$defs/sha256" }, "policy": { "$ref": "#/$defs/policyIdentity" }, "checkpoint": { "$ref": "#/$defs/checkpoint" }, "committedAtUtc": { "$ref": "#/$defs/utc" } }
+      "type": "object", "additionalProperties": false, "required": ["idempotencyKey", "requestSha256", "policy", "committedAtUtc"],
+      "properties": { "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "requestSha256": { "$ref": "#/$defs/sha256" }, "policy": { "$ref": "#/$defs/policyIdentity" }, "committedAtUtc": { "$ref": "#/$defs/utc" } }
     },
     "authorityRequirement": {
       "type": "object", "additionalProperties": false, "required": ["packageId", "versionRange", "includePrerelease"],
@@ -188,25 +214,14 @@
       "properties": { "packageId": { "$ref": "#/$defs/id" }, "errorCode": { "$ref": "#/$defs/errorCode" }, "requirements": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/packageRequirement" } } }
     },
     "resolutionPolicy": {
-      "type": "object", "additionalProperties": false, "required": ["packagePolicy", "checkpoint", "requirements", "restoreProvenance", "optionalPackages", "platformCatalogs"],
+      "type": "object", "additionalProperties": false, "required": ["packagePolicy", "requirements", "restoreProvenance", "optionalPackages", "platformCatalogs"],
       "properties": {
-        "packagePolicy": { "$ref": "#/$defs/policyIdentity" }, "checkpoint": { "$ref": "#/$defs/checkpoint" },
+        "packagePolicy": { "$ref": "#/$defs/policyIdentity" },
         "requirements": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/packageRequirement" } },
         "restoreProvenance": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/restoreProvenance" } },
         "optionalPackages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/optionalPackage" } },
         "platformCatalogs": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/platformDecision" } }
       }
-    },
-    "registryStatus": {
-      "type": "object", "additionalProperties": false,
-      "required": ["code", "publicReady", "externalAligned", "appliedCheckpoint", "primaryCheckpoint", "mirrorCheckpoint", "packagePolicy", "publicationAuthorityPolicy", "authorizationPolicy", "authorizationGeneration"],
-      "properties": {
-        "code": { "$ref": "#/$defs/errorCode" }, "publicReady": { "type": "boolean" }, "externalAligned": { "type": "boolean" },
-        "appliedCheckpoint": { "$ref": "#/$defs/optionalCheckpoint" }, "primaryCheckpoint": { "$ref": "#/$defs/optionalCheckpoint" }, "mirrorCheckpoint": { "$ref": "#/$defs/optionalCheckpoint" },
-        "packagePolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "authorizationPolicy": { "$ref": "#/$defs/optionalPolicyIdentity" }, "authorizationGeneration": { "$ref": "#/$defs/optionalRevision" }
-      },
-      "if": { "properties": { "publicReady": { "const": true } } },
-      "then": { "properties": { "externalAligned": { "const": true }, "appliedCheckpoint": { "$ref": "#/$defs/checkpoint" }, "primaryCheckpoint": { "$ref": "#/$defs/checkpoint" }, "mirrorCheckpoint": { "$ref": "#/$defs/checkpoint" }, "packagePolicy": { "$ref": "#/$defs/policyIdentity" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/policyIdentity" }, "authorizationPolicy": { "$ref": "#/$defs/policyIdentity" }, "authorizationGeneration": { "$ref": "#/$defs/revision" } } }
     },
     "stackIdentity": {
       "type": "object", "additionalProperties": false, "required": ["stackId", "revision", "artifactSha256"],
@@ -245,8 +260,8 @@
       }
     },
     "stackPolicy": {
-      "type": "object", "additionalProperties": false, "required": ["stackId", "ownerPrincipalId", "currentRevision", "visibility", "publicReason", "publicationAuthorityPolicy", "checkpoint"],
-      "properties": { "stackId": { "$ref": "#/$defs/id" }, "ownerPrincipalId": { "$ref": "#/$defs/principalId" }, "currentRevision": { "$ref": "#/$defs/stackIdentity" }, "visibility": { "enum": ["Listed", "Unlisted", "SecurityBlocked"] }, "publicReason": { "$ref": "#/$defs/reason" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/policyIdentity" }, "checkpoint": { "$ref": "#/$defs/checkpoint" } },
+      "type": "object", "additionalProperties": false, "required": ["stackId", "ownerPrincipalId", "currentRevision", "visibility", "publicReason", "publicationAuthorityPolicy"],
+      "properties": { "stackId": { "$ref": "#/$defs/id" }, "ownerPrincipalId": { "$ref": "#/$defs/principalId" }, "currentRevision": { "$ref": "#/$defs/stackIdentity" }, "visibility": { "enum": ["Listed", "Unlisted", "SecurityBlocked"] }, "publicReason": { "$ref": "#/$defs/reason" }, "publicationAuthorityPolicy": { "$ref": "#/$defs/policyIdentity" } },
       "if": { "properties": { "visibility": { "const": "SecurityBlocked" } } }, "then": { "properties": { "publicReason": { "$ref": "#/$defs/publicReason" } } }
     },
     "stackVisibilityRequest": {
@@ -259,8 +274,8 @@
       "properties": { "idempotencyKey": { "$ref": "#/$defs/idempotencyKey" }, "expectedPublicationAuthorityRevision": { "$ref": "#/$defs/revision" }, "publicReason": { "$ref": "#/$defs/publicReason" } }
     },
     "watermark": {
-      "type": "object", "additionalProperties": false, "required": ["registryOrigin", "packagePolicyRevision", "packagePolicyFingerprint", "checkpointSequence", "checkpointDigest", "topologyGeneration", "topologyFingerprint"],
-      "properties": { "registryOrigin": { "$ref": "#/$defs/origin" }, "packagePolicyRevision": { "$ref": "#/$defs/revision" }, "packagePolicyFingerprint": { "$ref": "#/$defs/sha256" }, "checkpointSequence": { "$ref": "#/$defs/revision" }, "checkpointDigest": { "$ref": "#/$defs/sha256" }, "topologyGeneration": { "$ref": "#/$defs/revision" }, "topologyFingerprint": { "$ref": "#/$defs/sha256" } }
+      "type": "object", "additionalProperties": false, "required": ["registryOrigin", "packagePolicyRevision", "packagePolicyFingerprint"],
+      "properties": { "registryOrigin": { "$ref": "#/$defs/origin" }, "packagePolicyRevision": { "$ref": "#/$defs/revision" }, "packagePolicyFingerprint": { "$ref": "#/$defs/sha256" } }
     },
     "clock": {
       "type": "object", "additionalProperties": false, "required": ["bootSessionId", "clockSource", "ticksPerSecond", "requestStartedTicks", "deadlineTicks", "highWaterTicks", "virtualMachineGeneration"],
@@ -290,12 +305,12 @@
     },
     "appSessionStatus": {
       "type": "object", "additionalProperties": false, "required": ["sessionId", "state", "errorCode", "shutdownRequired", "loadedPackages"],
-      "properties": { "sessionId": { "$ref": "#/$defs/nonce" }, "state": { "$ref": "#/$defs/appState" }, "errorCode": { "$ref": "#/$defs/error" }, "shutdownRequired": { "type": "boolean" }, "loadedPackages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/package" } } },
+      "properties": { "sessionId": { "$ref": "#/$defs/nonce" }, "state": { "$ref": "#/$defs/appState" }, "errorCode": { "$ref": "#/$defs/error" }, "shutdownRequired": { "type": "boolean" }, "loadedPackages": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/package" } }, "retirements": { "type": "array", "maxItems": 131072, "uniqueItems": true, "items": { "$ref": "#/$defs/appActivationRetirementRequirement" } } },
       "if": { "properties": { "state": { "enum": ["shutdown-requested", "termination-required"] } } }, "then": { "properties": { "shutdownRequired": { "const": true } } }, "else": { "properties": { "shutdownRequired": { "const": false } } }
     },
     "appPermitResult": {
       "type": "object", "additionalProperties": false, "required": ["allowed", "errorCode", "permitId", "session", "package", "lease"],
-      "properties": { "allowed": { "type": "boolean" }, "errorCode": { "$ref": "#/$defs/error" }, "permitId": { "anyOf": [{ "$ref": "#/$defs/nonce" }, { "type": "null" }] }, "session": { "$ref": "#/$defs/appSessionRequest" }, "package": { "$ref": "#/$defs/package" }, "lease": { "anyOf": [{ "$ref": "#/$defs/lease" }, { "type": "null" }] }, "development": { "type": "boolean" } },
+      "properties": { "allowed": { "type": "boolean" }, "errorCode": { "$ref": "#/$defs/error" }, "permitId": { "anyOf": [{ "$ref": "#/$defs/nonce" }, { "type": "null" }] }, "session": { "$ref": "#/$defs/appSessionRequest" }, "package": { "$ref": "#/$defs/package" }, "lease": { "anyOf": [{ "$ref": "#/$defs/lease" }, { "type": "null" }] }, "development": { "type": "boolean" }, "appActivationId": { "$ref": "#/$defs/guid" } },
       "if": { "properties": { "allowed": { "const": true } } },
       "then": { "properties": { "errorCode": { "type": "null" }, "permitId": { "$ref": "#/$defs/nonce" } }, "if": { "required": ["development"], "properties": { "development": { "const": true } } }, "then": { "properties": { "lease": { "type": "null" } } }, "else": { "properties": { "lease": { "allOf": [{ "$ref": "#/$defs/lease" }, { "properties": { "state": { "const": "valid" } } }] } } } },
       "else": { "properties": { "errorCode": { "$ref": "#/$defs/errorCode" }, "permitId": { "type": "null" } } }

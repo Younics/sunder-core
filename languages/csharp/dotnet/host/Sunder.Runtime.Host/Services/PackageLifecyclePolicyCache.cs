@@ -12,7 +12,6 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed record PackagePolicyEntry(long Revision, RegistryPackagePolicyDecision Decision, RuntimePolicyLeaseStatus Lease);
 internal sealed record PlatformPolicyEntry(long Revision, RegistryPlatformPolicyDecision Decision, RuntimePolicyLeaseStatus Lease);
 internal sealed record PackagePolicyOriginFile(int SchemaVersion, long Generation, long AuthorityGeneration, long ClockGeneration, string Origin, RegistryPolicyIdentity PackagePolicy,
-    RegistryPolicyCheckpointIdentity Checkpoint,
     PolicyClockReading HighWater, long LastRequestStarted, string LastNonce, bool ClockInvalidated,
     IReadOnlyDictionary<string, PackagePolicyEntry> Packages, IReadOnlyDictionary<string, PlatformPolicyEntry> Platforms)
 {
@@ -84,11 +83,11 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         return new(origin, [package], entry.Decision.PlatformDependencies.ToArray());
     }
 
-    internal void RequirePlan(string origin, RegistryPolicyIdentity packagePolicy, RegistryPolicyCheckpointIdentity checkpoint)
+    internal void RequirePlan(string origin, RegistryPolicyIdentity packagePolicy)
     {
         origin = RegistryActivePolicyClient.Origin(origin);
         if (_persistenceFailures.ContainsKey(origin) || !_snapshots.TryGetValue(origin, out var state)
-            || state.PackagePolicy != packagePolicy || state.Checkpoint != checkpoint)
+            || state.PackagePolicy != packagePolicy)
             throw Denied(PackagePolicyErrorCodes.PlanStale);
     }
 
@@ -132,7 +131,7 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         IReadOnlyList<RegistryPlatformCatalogIdentity> platforms, CancellationToken token)
     {
         var state = await LoadAsync(origin, checkpointClock: false, token);
-        return new("", packages, platforms, state?.PackagePolicy, state?.Checkpoint);
+        return new("", packages, platforms, state?.PackagePolicy);
     }
 
     public async Task ObserveAsync(RegistryPolicyObservation observation, CancellationToken token = default)
@@ -162,21 +161,15 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         {
             RegistryActivePolicyClient.Require(response.Nonce != previous.LastNonce, "The policy nonce was already accepted.");
             RegistryActivePolicyClient.Require(invalidateOldLeases || observation.Started.Ticks >= previous.LastRequestStarted, "A reordered policy response cannot replace a newer observation.");
+            // Compare with this client's retained database observations, not an
+            // independent authority capable of proving absence of database rollback.
             RegistryActivePolicyClient.Require(response.PackagePolicy.Revision >= previous.PackagePolicy.Revision
                 && (response.PackagePolicy.Revision != previous.PackagePolicy.Revision || response.PackagePolicy == previous.PackagePolicy),
-                "Policy observation would roll back or conflict with durable watermarks.");
-            RegistryActivePolicyClient.Require(response.Checkpoint.Sequence >= previous.Checkpoint.Sequence
-                && response.Checkpoint.TopologyGeneration >= previous.Checkpoint.TopologyGeneration
-                && (response.Checkpoint.Sequence != previous.Checkpoint.Sequence || response.Checkpoint == previous.Checkpoint)
-                && (response.Checkpoint.TopologyGeneration != previous.Checkpoint.TopologyGeneration || response.Checkpoint.TopologyFingerprint == previous.Checkpoint.TopologyFingerprint), "Checkpoint observation conflicts with durable history.");
-            RegistryActivePolicyClient.Require(response.Checkpoint.Sequence != previous.Checkpoint.Sequence
-                || response.PackagePolicy == previous.PackagePolicy,
-                "The same checkpoint cannot carry different policy watermarks.");
+                "Policy observation is older than or conflicts with the cached identity.");
         }
         var deadline = checked(observation.Started.Ticks + checked(observation.Started.Frequency * RuntimePolicyTiming.LeaseSeconds));
         RegistryActivePolicyClient.Require(now.Ticks < deadline, "Policy response arrived after its local lease deadline.");
-        var watermark = new RuntimePolicyWatermark(origin, response.PackagePolicy.Revision, response.PackagePolicy.Fingerprint,
-            response.Checkpoint.Sequence, response.Checkpoint.Digest, response.Checkpoint.TopologyGeneration, response.Checkpoint.TopologyFingerprint);
+        var watermark = new RuntimePolicyWatermark(origin, response.PackagePolicy.Revision, response.PackagePolicy.Fingerprint);
         var status = new RuntimePolicyLeaseStatus(RuntimePolicyLeaseStates.Valid, null, watermark, response.Nonce, observation.ResponseSha256,
             response.ObservedAtUtc, response.ValidUntilUtc, new(now.BootSessionId, now.Source, now.Frequency, observation.Started.Ticks, deadline, now.Ticks, now.VirtualMachineGeneration));
         if (invalidateOldLeases && previous is not null) previous = InvalidateLeases(previous);
@@ -210,7 +203,7 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         }
         var next = new PackagePolicyOriginFile(1, checked((previous?.Generation ?? 0) + 1), checked((previous?.AuthorityGeneration ?? 0) + 1),
             checked((previous?.ClockGeneration ?? 0) + (invalidateOldLeases && previous?.ClockInvalidated != true ? 1 : 0)), origin, response.PackagePolicy,
-            response.Checkpoint, now, observation.Started.Ticks, response.Nonce, false, Sorted(packages), Sorted(platforms));
+            now, observation.Started.Ticks, response.Nonce, false, Sorted(packages), Sorted(platforms));
         await PersistAsync(filePath, next, token);
         var accepted = false;
         lock (_clockGate)

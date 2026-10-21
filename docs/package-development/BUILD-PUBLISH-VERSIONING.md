@@ -118,7 +118,10 @@ The output includes:
 bin/Release/net10.0/MyPackage.1.2.3.sunderpkg
 ```
 
-`PackSunderPackage` is the canonical explicit archive target. On a primary project it uses sequential guarded MSBuild task calls to build the same Worker csproj once for every `SunderPackageRuntimeIdentifiers` RID, builds `SunderPackageAppProject` exactly once, aggregates all leaves, and packs one universal archive. Inner Worker builds do not recursively build the App or compose. `dotnet publish` also creates an archive in the publish directory when a pipeline separately needs publish output:
+`PackSunderPackage` is the canonical explicit archive target. On the authored Library
+project it performs guarded generated-role builds for every declared RID, validates
+the isolated Worker/App leaves and composes one universal archive. `dotnet publish`
+also creates an archive when a pipeline needs publish output:
 
 ```powershell
 dotnet publish .\MyPackage.csproj -c Release --no-restore

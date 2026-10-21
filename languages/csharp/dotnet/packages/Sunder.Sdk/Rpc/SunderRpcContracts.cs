@@ -522,14 +522,24 @@ public sealed class SunderRpcException : Exception
     /// <summary>Gets the safe typed error.</summary>
     public SunderRpcError Error { get; }
 
+    /// <summary>Reports SDK-authenticated evidence that this generated unary operation did not dispatch its service handler.</summary>
+    /// <remarks>
+    /// Use only on the exception received from that operation. Public error flags and arbitrary inner exceptions are not authority.
+    /// This also recognizes cancellation wrappers created by the SDK itself, preserving their original caller token.
+    /// False means dispatch is unproven, not that it occurred. This proves no general business effects or callback behavior and never authorizes replay.
+    /// </remarks>
+    [SunderSdkCapability(SunderSdkCapabilities.WorkerExecutionObservationsV1)]
+    public static bool HasTrustedNoDispatchEvidence(Exception? exception)
+        => SunderRpcDispatchEvidence.HasProof(exception);
+
     internal bool IsHostAuthenticated => _hostAuthenticated;
 
     internal SunderRpcException WithDispatchMetadata(
         SunderRpcDispatchState dispatchState,
         SunderRpcRetrySafety retrySafety)
-        => Error.DispatchState == dispatchState && Error.RetrySafety == retrySafety
-            ? this
-            : new SunderRpcException(
+    {
+        if (Error.DispatchState == dispatchState && Error.RetrySafety == retrySafety) return this;
+        var result = new SunderRpcException(
                 new SunderRpcError(
                     Error.Kind,
                     Error.Code,
@@ -537,7 +547,10 @@ public sealed class SunderRpcException : Exception
                     dispatchState,
                     retrySafety,
                     Error.Details),
-                _hostAuthenticated);
+                 _hostAuthenticated);
+        SunderRpcDispatchEvidence.Copy(this, result);
+        return result;
+    }
 
     internal static SunderRpcException Infrastructure(
         SunderRpcErrorKind kind,

@@ -7,6 +7,29 @@ namespace Sunder.Sdk.PublicApi.Tests;
 public sealed partial class SunderServiceBindingTests
 {
     [Fact]
+    public async Task ActivationObserverDoesNotCaptureTheFirstCallersInvocationContextAcrossRecovery()
+    {
+        var ambient = new AsyncLocal<string?> { Value = "first-host-invocation" };
+        var observed = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var provider = ServiceResourceTestClient.Provider;
+        var client = new ServiceBindingTestClient(provider)
+        {
+            WatchStarting = _ => observed.Enqueue(ambient.Value ?? "<activation>"),
+        };
+        await using var bindings = new SunderRpcServiceBindingLifetime(client);
+        await bindings.DiscoverAsync(provider.ContractId);
+        await client.NextObservationAsync();
+        Assert.Equal("first-host-invocation", ambient.Value);
+        Assert.Equal("<activation>", Assert.Single(observed));
+        ambient.Value = "later-host-invocation";
+        client.Disconnect();
+        await client.NextObservationAsync();
+        await DiscoverAfterRecovery(bindings, provider.ContractId);
+        Assert.Equal(new[] { "<activation>", "<activation>" }, observed);
+        Assert.Equal("later-host-invocation", ambient.Value);
+    }
+
+    [Fact]
     public async Task InjectionIsDormantAndFirstUseSharesOneObserverAndTheCompleteSnapshotCursor()
     {
         var snapshot = ServiceResourceTestClient.Provider;

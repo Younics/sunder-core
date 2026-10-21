@@ -118,7 +118,10 @@ public sealed record RuntimeRpcAppSessionOpenRequest(
     string ManifestSha256,
     PackageTargetDescriptor Target,
     long SessionGeneration,
-    Guid AppGenerationId);
+    Guid AppGenerationId)
+{
+    public string? LoadPermitId { get; init; }
+}
 
 public sealed record RuntimeRpcAppSessionDescriptor(string SessionId);
 

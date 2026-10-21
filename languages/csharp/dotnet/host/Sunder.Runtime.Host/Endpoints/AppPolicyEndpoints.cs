@@ -20,6 +20,10 @@ internal static class AppPolicyEndpoints
             request => request.Session.SessionId == sessionId ? sessions.PermitAsync(request, AppPolicyPeerIdentity.Read(context), context.RequestAborted) : throw new PackagePolicyDeniedException(PackagePolicyErrorCodes.AppProcessSupervisionRequired)));
         group.MapPost("/{sessionId}/shutdown", (string sessionId, HttpContext context, AppProcessPolicySessions sessions) => ReadAsync<RuntimeAppPolicySessionRequest, RuntimeAppPolicySessionStatus>(context,
             request => request.SessionId == sessionId ? sessions.ShutdownAsync(request, AppPolicyPeerIdentity.Read(context), context.RequestAborted) : throw new PackagePolicyDeniedException(PackagePolicyErrorCodes.AppProcessSupervisionRequired)));
+        group.MapPost("/{sessionId}/activations/{activationId:guid}/retire", (string sessionId, Guid activationId, HttpContext context, AppProcessPolicySessions sessions) => ReadAsync<RuntimeAppActivationRetirementRequest, RuntimeAppActivationRetirementResult>(context,
+            request => request.Session.SessionId == sessionId && request.AppActivationId == activationId
+                ? sessions.RetireActivationAsync(request, AppPolicyPeerIdentity.Read(context), context.RequestAborted)
+                : throw new PackagePolicyDeniedException(PackagePolicyErrorCodes.AppProcessSupervisionRequired)));
         return endpoints;
     }
 

@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Client.Tests;
 
-public sealed class DevPackageOwnerSessionTests
+public sealed partial class DevPackageOwnerSessionTests
 {
     private static readonly DevPackageOwnerSessionOptions FastOptions = new()
     {
@@ -53,6 +53,22 @@ public sealed class DevPackageOwnerSessionTests
         Assert.Equal(2, client.Mutations.Count);
         Assert.Equal(client.Mutations[0].MutationId, client.Mutations[1].MutationId);
         Assert.Equal(client.Mutations[0].Revision, client.Mutations[1].Revision);
+    }
+
+    [Fact]
+    public async Task Acquire_SameFolderRevalidatesHostOwnershipAndReacquiresReapedLease()
+    {
+        var client = new OwnerClient(Guid.NewGuid()) { RejectFirstHeartbeat = true };
+        await using var session = CreateSession(client, options: new DevPackageOwnerSessionOptions
+        {
+            MinimumHeartbeatDelay = TimeSpan.FromHours(1), MaximumHeartbeatDelay = TimeSpan.FromHours(1),
+        });
+        var first = await session.AcquireAsync([Path.Combine(".", "dev-a")], true);
+        var observed = await session.AcquireAsync([Path.Combine(".", "dev-a")], true);
+        Assert.True(client.HeartbeatObserved.Task.IsCompletedSuccessfully);
+        Assert.Equal(2, client.Mutations.Count);
+        Assert.NotEqual(first.MutationId, observed.MutationId);
+        Assert.Equal(1, observed.Revision);
     }
 
     [Fact]
@@ -234,7 +250,7 @@ public sealed class DevPackageOwnerSessionTests
             options ?? FastOptions);
     }
 
-    private sealed class OwnerClient(Guid runtimeId) : IDevPackageOwnerClient
+    private sealed partial class OwnerClient(Guid runtimeId) : IDevPackageOwnerClient
     {
         private Guid _runtimeId = runtimeId;
         private int _heartbeatCount;
@@ -297,6 +313,11 @@ public sealed class DevPackageOwnerSessionTests
         {
             HeartbeatObserved.TrySetResult();
             var heartbeatCount = Interlocked.Increment(ref _heartbeatCount);
+            if (RejectHeartbeatAfterCommit && Commits.Count > 0)
+            {
+                ReleasedHeartbeat.TrySetResult();
+                throw new RuntimeClientException(HttpStatusCode.Unauthorized, "Owner released", "No owned lease remains.");
+            }
             if (RejectFirstHeartbeat && heartbeatCount == 1)
             {
                 throw new RuntimeClientException(

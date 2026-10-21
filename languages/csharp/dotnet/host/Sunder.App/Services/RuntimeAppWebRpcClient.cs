@@ -28,7 +28,7 @@ internal sealed class RuntimeAppWebRpcClientFactory(
                     package.ManifestSha256,
                     package.Target,
                     package.SessionGeneration,
-                    package.AppGenerationId),
+                    package.AppGenerationId) { LoadPermitId = package.LoadPermitId },
                 cancellationToken).ConfigureAwait(false);
             return new RuntimeAppWebRpcClient(management, session.SessionId, startupTrace);
         }
@@ -41,7 +41,7 @@ internal sealed class RuntimeAppWebRpcClientFactory(
     }
 }
 
-internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClient
+internal sealed partial class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClient
 {
     private readonly RuntimeManagementClient management;
     private readonly string sessionId;
@@ -71,9 +71,9 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        var result = await management.OpenAppRpcCallScopeAsync(
+        var result = await ReadRuntimeAsync(management.OpenAppRpcCallScopeAsync(
             new RuntimeRpcAppCallScopeOpenRequest(sessionId, options?.DeadlineUtc),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         ThrowIfError(result.Error);
         var descriptor = result.Scope
                          ?? throw Protocol(
@@ -93,9 +93,9 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        var response = await management.GetAppRpcProviderAsync(
+        var response = await ReadRuntimeAsync(management.GetAppRpcProviderAsync(
             new RuntimeRpcAppProviderRequest(sessionId, endpoint.Value, callScopeId),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         ThrowIfError(response.Error);
         if (response.Provider is null)
         {
@@ -124,13 +124,13 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(exception);
         ThrowIfDisposed();
-        var response = await management.TryReportAppRpcInvariantViolationAsync(
+        var response = await ReadRuntimeAsync(management.TryReportAppRpcInvariantViolationAsync(
             new RuntimeRpcAppInvariantViolationRequest(
                 sessionId,
                 endpoint.Value,
                 SanitizeExceptionMessage(exception.Message),
                 callScopeId),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         ThrowIfError(response.Error);
         return response.Accepted;
     }
@@ -146,9 +146,9 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        var response = await management.DiscoverAppRpcAsync(
+        var response = await ReadRuntimeAsync(management.DiscoverAppRpcAsync(
             new RuntimeRpcAppDiscoverRequest(sessionId, contractId, callScopeId),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         ThrowIfError(response.Error);
         var snapshot = response.Snapshot
                        ?? throw Protocol("rpc.transport.empty-discovery", "The Runtime returned an empty RPC discovery response.");
@@ -186,9 +186,9 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await foreach (var frame in management.WatchAppRpcAsync(
+        await foreach (var frame in ReadRuntimeStreamAsync(management.WatchAppRpcAsync(
             new RuntimeRpcAppWatchRequest(sessionId, afterRevision, afterSequence, callScopeId),
-                           cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+                           cancellationToken), cancellationToken).ConfigureAwait(false))
         {
             switch (frame.Type)
             {
@@ -239,7 +239,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        var response = await management.InvokeAppRpcAsync(
+        var (response, hasExplicitValidDispatchMetadata) = await ReadRuntimeAsync(management.InvokeAppRpcWithDispatchMetadataAsync(
             new RuntimeRpcAppInvokeRequest(
                 sessionId,
                 endpointReference,
@@ -248,8 +248,10 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
                 request,
                 deadlineUtc,
                 callScopeId),
-            cancellationToken).ConfigureAwait(false);
-        ThrowIfError(response.Error);
+            cancellationToken)).ConfigureAwait(false);
+        if (response.Value is not null && response.Error is not null)
+            throw Protocol("rpc.transport.conflicting-invoke-frame", "The Runtime returned both an RPC result and an error.");
+        ThrowIfError(response.Error, hostAuthenticated: hasExplicitValidDispatchMetadata);
         var value = response.Value
                     ?? throw Protocol("rpc.transport.empty-response", "The Runtime returned an empty RPC invocation response.");
         RecordFirstUsefulRpc("invoke");
@@ -296,7 +298,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        await foreach (var frame in management.SubscribeAppRpcAsync(
+        await foreach (var frame in ReadRuntimeStreamAsync(management.SubscribeAppRpcAsync(
                            new RuntimeRpcAppInvokeRequest(
                                sessionId,
                                endpointReference,
@@ -305,7 +307,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
                                 request,
                                 deadlineUtc,
                                 callScopeId),
-                           cancellationToken).WithCancellation(cancellationToken).ConfigureAwait(false))
+                           cancellationToken), cancellationToken).ConfigureAwait(false))
         {
             switch (frame.Type)
             {
@@ -341,7 +343,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        var response = await management.RegisterAppRpcContentAsync(
+        var response = await ReadRuntimeAsync(management.RegisterAppRpcContentAsync(
             new RuntimeRpcAppContentRegisterMetadata(
                 sessionId,
                 callScopeId,
@@ -355,7 +357,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
                     : RuntimeRpcContentRepeatability.Repeatable,
                 options.MaximumUses),
             source,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         ThrowIfError(response.Error);
         return response.Content is null
             ? throw Protocol(
@@ -370,12 +372,12 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
         CancellationToken cancellationToken)
     {
         ThrowIfDisposed();
-        var result = await management.OpenAppRpcContentAsync(
+        var result = await ReadRuntimeAsync(management.OpenAppRpcContentAsync(
             new RuntimeRpcAppContentOpenRequest(
                 sessionId,
                 callScopeId,
                 ToProtocol(reference)),
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken)).ConfigureAwait(false);
         ThrowIfError(result.Error);
         return result.Content
                ?? throw Protocol(
@@ -385,10 +387,18 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
 
     internal async ValueTask CloseCallScopeAsync(string callScopeId)
     {
-        ThrowIfDisposed();
-        await management.CloseAppRpcCallScopeAsync(
-            new RuntimeRpcAppCallScopeCloseRequest(sessionId, callScopeId),
-            CancellationToken.None).ConfigureAwait(false);
+        // Retiring the caller session also closes its scopes. A borrowed scope can
+        // finish draining after that retirement without reopening the old client.
+        if (Volatile.Read(ref _disposed) != 0) return;
+        try
+        {
+            await management.CloseAppRpcCallScopeAsync(
+                new RuntimeRpcAppCallScopeCloseRequest(sessionId, callScopeId),
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException) when (Volatile.Read(ref _disposed) != 0)
+        {
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -501,18 +511,21 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
             },
             value.Provider is null ? null : ToSdk(value.Provider));
 
-    private void ThrowIfError(RuntimeRpcErrorDescriptor? error)
+    private void ThrowIfError(RuntimeRpcErrorDescriptor? error, bool hostAuthenticated = false)
     {
         if (error is not null)
         {
-            throw ToException(error);
+            throw ToException(error, hostAuthenticated);
         }
     }
 
-    private SunderRpcException ToException(RuntimeRpcErrorDescriptor? error)
-        => error is null
-            ? Protocol("rpc.transport.empty-error", "The Runtime returned an empty RPC error frame.")
-            : new SunderRpcException(new SunderRpcError(
+    private SunderRpcException ToException(RuntimeRpcErrorDescriptor? error, bool hostAuthenticated = false)
+    {
+        if (error is null) return Protocol("rpc.transport.empty-error", "The Runtime returned an empty RPC error frame.");
+        if (!Enum.IsDefined(error.Kind) || !Enum.IsDefined(error.DispatchState) || !Enum.IsDefined(error.RetrySafety)
+            || string.IsNullOrWhiteSpace(error.Code))
+            return Protocol("rpc.transport.invalid-error", "The Runtime returned invalid RPC error metadata.");
+        return new SunderRpcException(new SunderRpcError(
                 error.Kind switch
                 {
                     RuntimeRpcErrorKind.Domain => SunderRpcErrorKind.Domain,
@@ -535,10 +548,49 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
                 error.RetrySafety == RuntimeRpcRetrySafety.Safe
                     ? SunderRpcRetrySafety.Safe
                     : SunderRpcRetrySafety.Unsafe,
-                error.Details));
+                error.Details), hostAuthenticated);
+    }
 
     private static SunderRpcException Protocol(string code, string message)
         => new(new SunderRpcError(SunderRpcErrorKind.Protocol, code, message));
+
+    private static async Task<T> ReadRuntimeAsync<T>(Task<T> operation)
+    {
+        try { return await operation.ConfigureAwait(false); }
+        catch (RuntimeClientException exception) when (exception.StatusCode == HttpStatusCode.ServiceUnavailable)
+        {
+            throw RuntimeUnavailable(exception);
+        }
+    }
+
+    private static async IAsyncEnumerable<T> ReadRuntimeStreamAsync<T>(IAsyncEnumerable<T> source,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var enumerator = source.GetAsyncEnumerator(cancellationToken);
+        while (true)
+        {
+            bool hasNext;
+            try { hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false); }
+            catch (RuntimeClientException exception) when (exception.StatusCode == HttpStatusCode.ServiceUnavailable)
+            {
+                throw RuntimeUnavailable(exception);
+            }
+            if (!hasNext) yield break;
+            yield return enumerator.Current;
+        }
+    }
+
+    private static SunderRpcException RuntimeUnavailable(RuntimeClientException exception)
+    {
+        // Host publication/restart can reject HTTP before an RPC envelope exists.
+        // Package-owned observers need the host-neutral availability kind to recover.
+        // HTTP alone cannot prove dispatch or retry safety; never replay a command here.
+        var result = new SunderRpcException(new SunderRpcError(SunderRpcErrorKind.Unavailable,
+            exception.ErrorCode ?? "rpc.transport.unavailable", "The Runtime RPC transport is temporarily unavailable. Reconnect before retrying.",
+            SunderRpcDispatchState.PossiblyDispatched, SunderRpcRetrySafety.Unsafe));
+        if (!string.IsNullOrWhiteSpace(exception.CorrelationId)) result.Data["RuntimeCorrelationId"] = exception.CorrelationId;
+        return result;
+    }
 
     private static string SanitizeExceptionMessage(string? message)
     {
@@ -557,7 +609,7 @@ internal sealed class RuntimeAppWebRpcClient : IAppWebRpcClient, ISunderRpcClien
 
 internal sealed class RuntimeAppWebRpcCallScope(
     RuntimeAppWebRpcClient client,
-    RuntimeRpcAppCallScopeDescriptor descriptor) : ISunderRpcCallScope
+    RuntimeRpcAppCallScopeDescriptor descriptor) : ISunderRpcCallScope, ISunderRpcTrustedTransportScope
 {
     private int _disposed;
 

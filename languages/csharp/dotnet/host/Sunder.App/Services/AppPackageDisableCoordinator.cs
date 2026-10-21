@@ -12,6 +12,8 @@ internal readonly record struct AppPackageUnloadResult(
     bool WasLoaded,
     AppPackageUiCleanupOutcome CleanupOutcome)
 {
+    internal bool DataSettlementProven { get; init; } = true;
+
     public static AppPackageUnloadResult NotLoaded { get; } = new(
         WasLoaded: false,
         AppPackageUiCleanupOutcome.Proven);

@@ -4,6 +4,7 @@ internal sealed class AppPackageLifecycleGate(string ownerName)
 {
     private readonly SemaphoreSlim _semaphore = new(1, 1);
     private bool _disposed;
+    internal bool IsDisposed => _disposed;
 
     public async Task<IDisposable> EnterAsync(CancellationToken cancellationToken = default)
     {

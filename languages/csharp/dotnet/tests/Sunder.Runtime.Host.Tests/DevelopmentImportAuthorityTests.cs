@@ -18,6 +18,28 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class DevelopmentImportAuthorityTests
 {
+    [Fact]
+    public async Task DevelopmentPrerequisitePreviewRequiresExplicitImportEvidenceWithoutRegistryFallback()
+    {
+        using var fixture = new Fixture(optional: true) { Offline = true };
+        // This App-only fixture has no runtime requirements. No installer, Registry
+        // resolver, upload or package-store dependency should be consulted by preview.
+        var prerequisites = new PackageRuntimePrerequisiteService(null!, null!, null!, null!, null!, null!, null!, fixture.Store);
+        var request = new RuntimePackageRuntimePrerequisiteRequest { DevelopmentFolder = fixture.Folder };
+        var error = await Assert.ThrowsAsync<RuntimePackageValidationException>(() => prerequisites.PreviewAsync(request, default));
+        Assert.Contains("prepare-imports", error.Message);
+        Assert.Contains("--candidate/--platform-catalog", error.Message);
+        Assert.Contains("--registry", error.Message);
+        Assert.Equal(0, fixture.Requests);
+        await fixture.Preparation.PrepareAsync(await fixture.LocalInputs(), default);
+        var plan = await prerequisites.PreviewAsync(request, default);
+        Assert.True(plan.Success);
+        Assert.True(plan.Satisfied);
+        Assert.Equal("example.local", plan.DevelopmentPackageId);
+        Assert.Empty(plan.Requirements);
+        Assert.Equal(0, fixture.Requests);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

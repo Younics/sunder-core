@@ -46,7 +46,8 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
         Assert.Equal(projectImports, SunderRpcCSharpImportPrepass.PrepareOwnedPackageApi(export with { Contracts = export.Contracts.Reverse().ToArray() }, "1.0.0"));
         AssertCompiles(projectImports.Append(new SunderRpcCSharpSourceFile("consumer.cs", """
             using System.Threading.Tasks;
-            using Sunder.Generated.Packages.Example_Shared_Services;
+            using Sunder.Generated.Packages.Example_Shared_Services.CExample_Shared_Chat;
+            using Sunder.Generated.Packages.Example_Shared_Services.CExample_Shared_Run_Control;
             using Sunder.Generated.Packages.Example_Shared_Models;
             public static class Consumer
             {

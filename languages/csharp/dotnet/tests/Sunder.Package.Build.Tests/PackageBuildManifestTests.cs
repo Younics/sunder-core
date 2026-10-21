@@ -106,6 +106,8 @@ public sealed partial class PackageBuildManifestTests
             SunderSdkCapabilities.NotificationsV1,
             SunderSdkCapabilities.BackgroundProcessesV1,
             SunderSdkCapabilities.RpcV1,
+            // The dispatch-evidence fixture calls this member-gated App API.
+            SunderSdkCapabilities.WorkerExecutionObservationsV1,
             SunderSdkCapabilities.ShellViewV1,
             SunderSdkCapabilities.ViewNavigationPreparationV1,
             SunderSdkCapabilities.CallbacksV1,
@@ -235,6 +237,9 @@ public sealed partial class PackageBuildManifestTests
 
     [Theory]
     [InlineData("IPackageSettingsNavigationService", SunderSdkCapabilities.SettingsNavigationV1)]
+    [InlineData("IPackageDevelopmentService", SunderSdkCapabilities.PackageDevelopmentV1)]
+    [InlineData("IPackageLogNavigationService", SunderSdkCapabilities.PackageLogNavigationV1)]
+    [InlineData("IPackageAppStateUpdates", SunderSdkCapabilities.AppStateUpdatesV1)]
     [InlineData("IBackgroundProcessQueue", SunderSdkCapabilities.BackgroundProcessesV1)]
     public void SdkCapabilityCatalog_ResolvesCurrentAnnotatedServiceCapabilities(
         string typeName,
@@ -2355,7 +2360,7 @@ public sealed partial class PackageBuildManifestTests
         try
         {
             holder = AcquireGeneratedOutputLock(output);
-            node = StartCapturedNode(helper, "hold", output, ready, release, attempting);
+            node = StartCapturedNodeInTempRoot(Path.Combine(root, "node-job-temp"), helper, "hold", output, ready, release, attempting);
             var nodeResult = node.WaitForExitAsync(TimeSpan.FromSeconds(15));
             await FileSignal.WaitForAsync(attempting, TimeSpan.FromSeconds(5), () => $"ready={File.Exists(ready)}; {node.Diagnostics}");
             await Eventually.AssertPendingAsync(nodeResult, () => $"attempting={File.Exists(attempting)}; ready={File.Exists(ready)}; {node.Diagnostics}");
@@ -2381,7 +2386,8 @@ public sealed partial class PackageBuildManifestTests
             var crashedReady = Path.Combine(root, "crashed-node.ready");
             var crashedRelease = Path.Combine(root, "crashed-node.release");
             var crashedAttempting = Path.Combine(root, "crashed-node.attempting");
-            crashedNode = StartCapturedNode(helper, "hold", output, crashedReady, crashedRelease, crashedAttempting);
+            var crashedTemp = Path.Combine(root, "crashed-job-temp");
+            crashedNode = StartCapturedNodeInTempRoot(crashedTemp, helper, "hold", output, crashedReady, crashedRelease, crashedAttempting);
             await FileSignal.WaitForAsync(crashedReady, TimeSpan.FromSeconds(5), () => crashedNode.Diagnostics);
             using var ownerDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(
                 output + GeneratedOutputLock.LockSuffix,
@@ -2398,6 +2404,7 @@ public sealed partial class PackageBuildManifestTests
             crashedNode.Process.Kill(entireProcessTree: true);
             var crashedResult = await crashedNode.WaitForExitAsync(TimeSpan.FromSeconds(10));
             Assert.NotEqual(0, crashedResult.ExitCode);
+            Directory.Delete(crashedTemp, recursive: true);
             Assert.True(File.Exists(crashedNodeMarker.Path));
             reclaimed = await reclaimer.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         }
@@ -3658,6 +3665,9 @@ public sealed partial class PackageBuildManifestTests
     }
 
     private static CapturedProcess StartCapturedNode(string helper, params string[] arguments)
+        => StartCapturedNodeInTempRoot(null, helper, arguments);
+
+    private static CapturedProcess StartCapturedNodeInTempRoot(string? tempRoot, string helper, params string[] arguments)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -3665,6 +3675,11 @@ public sealed partial class PackageBuildManifestTests
             WorkingDirectory = FindRepositoryRoot(),
             UseShellExecute = false,
         };
+        if (tempRoot is not null)
+        {
+            Directory.CreateDirectory(tempRoot);
+            foreach (var name in new[] { "TMPDIR", "TMP", "TEMP" }) startInfo.Environment[name] = tempRoot;
+        }
         startInfo.ArgumentList.Add(helper);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
         return CapturedProcess.Start(startInfo);
@@ -4052,6 +4067,7 @@ public sealed partial class PackageBuildManifestTests
             new("Sunder.Package.Build.Tests.SunderRpcAuthoringReceiptTests.Parse_RejectsCrossArtifactSelectionsEvenWhenAuthorityCountAndFormatGraphMatch"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImplementationCodecTests+RuntimeProbe..ctor"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedPackageApiIsLazyOwnsUnaryScopesRejectsDriftAndDoesNotRetry"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.ImportedExample"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCancellation_UsesOriginalCallerAndRetainsRemoteDispatchMetadata"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCatalogBorrowedSelectionProbesFreshPermissionAfterEndpointUnavailable"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InvokeCollectibleImportedGraph"),
@@ -4066,6 +4082,7 @@ public sealed partial class PackageBuildManifestTests
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.ConstructorValues_ExecuteTypedAppWorkerRoundTripsWithIndependentDomainRecords"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedTypedStream_PreservesCancellationErrorsRetirementAndEnumeratorOwnership"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedComposition_OwnsLocalServicesOnceAndPreservesStagedLifecycle"),
+            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedStorageMigrations_SnapshotPlansAndPrepareInDependencyOrderWithoutLifecycleComposition"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedWorkerMixedApi_KeepsOrdinaryCallsLocalAndRoutesHostContextThroughExplicitBrokerUse"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedActivation_PreservesDependencyOrderCancellationAndCandidateCleanup"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedCallbacks_PreserveSdkRoutingAndOwnServicesOnConstructionFailure"),

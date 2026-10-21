@@ -43,8 +43,8 @@ descriptor and validates values with its exact schemas. Domain objects remain
 local; no shared CLR object identity crosses processes. The SDK does not depend on
 `Sunder.Sdk.Worker` or the build tooling.
 
-While the legacy SDK distribution is being retired, exclude its automatic bundle
-asset on implementation-first package references (the new template does this):
+The SDK retains an automatic bundle asset for lower-level consumers. Generated
+packages exclude that asset and use their reviewed platform import (as the template does):
 
 ```xml
 <PackageReference Include="Sunder.Sdk.Stacks" Version="[1.1.0,1.2.0)" ExcludeAssets="buildTransitive" />
@@ -52,15 +52,15 @@ asset on implementation-first package references (the new template does this):
 
 Selection accepts a local Core-exported catalog without a Registry, or the chosen
 Registry's administrator-published catalog. No catalog signing key or trust bundle
-is needed. Select the import before first owned Accept when starting a contributor.
+is needed. Select the import before the first Build when starting a contributor.
 Tests exercise the real six-method `2.0.0`
 descriptor through source and live isolated Registry composition. The Core Host
 now compiles its own internal Stack client, codecs and descriptor from checked
 Core source through a private build-only export. The shared SDK
 `StackContributorRpcClient` and `SunderStackContributorRpc.CreateClient` are removed.
-First-party providers still use legacy descriptor/provider-factory surfaces;
-retiring those remaining assets requires their authenticated-lock migration. Source derivation
-continues to preserve all 48 definitions and both issued descriptor/ABI hashes.
+Canonical first-party providers use reviewed platform locks and generated composition.
+The retained SDK descriptor/provider surface is a separate compatibility boundary;
+source derivation preserves all 48 definitions and both issued descriptor/ABI hashes.
 See [platform imports](https://github.com/Younics/sunder-core/blob/main/docs/package-development/PLATFORM-CONTRACT-IMPORTS.md).
 
 Import preview must be side-effect free. The Runtime owns the resulting expiring, single-use plan and binds it to the validated archive, Runtime generation, exact provider activation, schema versions, selected fragments, inputs, remaps, actions, and conflicts. Import receives the immutable fragment/input/remap snapshot from that plan.

@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using System.Security.Cryptography;
 using Sunder.Sdk.Packaging;
-using Sunder.Sdk.Rpc;
 
 namespace Sunder.ExecutionRuntime.Build;
 
@@ -27,7 +26,6 @@ internal static class ExecutionRuntimeBuildCli
         {
             return args[0] switch
             {
-                "check-platform-catalog-migration" => await CheckPlatformCatalogMigrationAsync(args[1..], output, cancellationToken),
                 "platform-contracts" => await PlatformContractsAsync(args[1..], output, cancellationToken, platformBeforePublication),
                 "core-stack-transport" => await CoreStackTransportAsync(args[1..], output, cancellationToken),
                 _ => throw new CliUsageException($"Unknown command '{args[0]}'."),
@@ -56,40 +54,6 @@ internal static class ExecutionRuntimeBuildCli
             await error.WriteLineAsync(exception.Message);
             return 1;
         }
-    }
-
-    private static async Task<int> CheckPlatformCatalogMigrationAsync(
-        string[] args,
-        TextWriter output,
-        CancellationToken cancellationToken)
-    {
-        var options = ParseOptions(args, ["--descriptor"]);
-        var bytes = await EngineeringFileOperations.ReadStableAsync(
-            Required(options, "--descriptor"), SunderRpcProtocol.MaximumDescriptorBytes, cancellationToken);
-        SunderRpcContractDescriptor descriptor;
-        try
-        {
-            descriptor = SunderRpcContractDescriptor.Parse(bytes);
-        }
-        catch (SunderRpcDescriptorException exception)
-        {
-            throw new InvalidDataException("Invalid Stack migration descriptor.", exception);
-        }
-        // Reviewed migration evidence for the real SDK Stack contract, not the synthetic catalog ping fixture.
-        if (descriptor.ContractId != "sunder.stack.contributor" || descriptor.Version != "2.0.0"
-            || descriptor.DescriptorVersion != 1 || descriptor.SchemaProfile != "sunder.rpc.values.v1"
-            || descriptor.Sha256 != "38c8f49840f951aec29398d3641ff2306c906aee12ea80c2277db734bce49898"
-            || descriptor.AbiSha256 != "6ca6d6385c720290548592de890f3e3ceb86f3d999167f4e80c6afb15f8a02d8"
-            || descriptor.Services.Count != 1 || descriptor.Services[0].ServiceId != "stack-contributor"
-            || !descriptor.Services[0].Methods.Select(static method => method.MethodId).Order(StringComparer.Ordinal)
-                .SequenceEqual(new[] { "export", "import", "import-applied", "list-export-items", "metadata", "preview-import" }, StringComparer.Ordinal))
-        {
-            throw new InvalidDataException("Stack migration descriptor does not match the reviewed identity, descriptor/ABI hashes, and six-method inventory.");
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-        await output.WriteLineAsync(
-            "Stack migration descriptor verified only: sunder.stack.contributor 2.0.0, six methods. No source-derived catalog or release authorization was produced.");
-        return 0;
     }
 
     private static async Task<int> CoreStackTransportAsync(string[] args, TextWriter output, CancellationToken cancellationToken)
@@ -200,9 +164,8 @@ internal static class ExecutionRuntimeBuildCli
 
     private static string Usage()
         => """
-           Core platform catalog and Stack transport engineering tool.
+           Core platform and Stack transport engineering tool.
            Usage:
-             Sunder.ExecutionRuntime.Build check-platform-catalog-migration --descriptor <real-sdk-stack-descriptor-path>
              Sunder.ExecutionRuntime.Build platform-contracts check --core-root <root>
              Sunder.ExecutionRuntime.Build platform-contracts accept --core-root <root> [--key <key>] [--current-version <old> --next-version <next>] [--acknowledge-breaking-change <true|false>]
              Sunder.ExecutionRuntime.Build platform-contracts freeze --core-root <root> --catalog-release <stable-version> [--key <key>]

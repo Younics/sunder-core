@@ -94,6 +94,10 @@ internal sealed class SunderRpcInputSnapshot
 
     public void Verify()
     {
+        // Verification must start with current bytes even inside an analysis
+        // snapshot. Its own bounded read scope shares ancestry work and rereads
+        // every retained input before returning to the publication boundary.
+        using var reads = new SunderBuildReadSnapshot();
         foreach (var (name, membership) in _memberships)
             if (!membership.Paths.SequenceEqual(membership.Read().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal), StringComparer.Ordinal))
                 throw Changed(name);
@@ -101,9 +105,9 @@ internal sealed class SunderRpcInputSnapshot
         {
             try
             {
-                GeneratedOutputPathSafety.EnsureSafeAncestors(path, includeLeaf: true, "RPC authoring input");
                 if (expected.Sha256 is null)
                 {
+                    GeneratedOutputPathSafety.EnsureSafeAncestors(path, includeLeaf: true, "RPC authoring input");
                     if (GeneratedOutputPathSafety.PathExists(path)) throw Changed(path);
                     continue;
                 }

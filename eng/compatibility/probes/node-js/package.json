@@ -1,0 +1,8 @@
+{
+  "name": "sunder-compatibility-js-probe",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "dependencies": { "@sunder/sdk": "1.1.0" },
+  "devDependencies": { "@sunder/package-tool": "1.1.0" }
+}

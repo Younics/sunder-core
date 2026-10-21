@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Tasks;
 using Xunit;
@@ -837,6 +838,41 @@ public sealed class TaskShadowStagingTests
             "Target \"(CoreClean|CoreCompile):[^\\r\\n]*from project \"[^\"]*Sunder.Package.Format.csproj\"");
         Assert.Equal(["CoreClean", "CoreCompile"], phases.Select(match => match.Groups[1].Value));
         Assert.True(File.Exists(reference));
+    }
+
+    [Fact]
+    [Trait("Category", "Artifact")]
+    [Trait("Capability", "Process")]
+    [Trait("Capability", "Filesystem")]
+    public async Task OwnerBuild_DoesNotHoldOutputLeaseWhileBuildingSharedDependencies()
+    {
+        await using var scope = TemporaryDirectoryScope.Create("sunder-task-shadow-reference-lease-order");
+        var root = FindRepositoryRoot();
+        var fixture = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(scope.GetPath("fixture"));
+        CopyDirectory(Path.Combine(root, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/TaskShadowCleanBuild"), fixture);
+        var owner = Path.Combine(fixture, "Sunder.Package.Build/Sunder.Package.Build.csproj");
+        var dependency = Path.Combine(fixture, "Sunder.Package.Format/Sunder.Package.Format.csproj");
+        var lockPath = Path.Combine(fixture, "Sunder.Package.Build/obj/.sunder-package-build-task-source.lock");
+        var sourceLock = Path.Combine(root, "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.SourceLock.targets");
+        var document = XDocument.Load(dependency);
+        document.Root!.Add(XElement.Parse($$"""
+            <UsingTask TaskName="ProbeOwnerOutputLease" TaskFactory="RoslynCodeTaskFactory"
+                       AssemblyFile="$(MSBuildToolsPath)/Microsoft.Build.Tasks.Core.dll">
+              <Task><Code Type="Fragment" Language="cs"><![CDATA[
+                using (var lease = new System.IO.FileStream(@"{{lockPath}}", System.IO.FileMode.OpenOrCreate,
+                    System.IO.FileAccess.ReadWrite, System.IO.FileShare.None)) { }
+              ]]></Code></Task>
+            </UsingTask>
+            """));
+        document.Root.Add(XElement.Parse("""
+            <Target Name="ProbeOwnerLeaseWhileResolvingReferences" BeforeTargets="CoreCompile">
+              <ProbeOwnerOutputLease />
+            </Target>
+            """));
+        document.Save(dependency);
+        AssertSuccess(await RunDotnetAsync(fixture, "restore", owner, "--nologo"));
+        AssertSuccess(await RunMsbuildAsync(owner, fixture, "Build", "-m:2", "-p:BuildProjectReferences=false",
+            "-p:GeneratePackageOnBuild=false", $"-p:SunderPackageBuildSourceLockTargetsPath={sourceLock}"));
     }
 
     [Theory]

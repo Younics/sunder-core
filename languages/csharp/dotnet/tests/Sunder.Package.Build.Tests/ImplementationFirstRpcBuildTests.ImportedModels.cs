@@ -59,13 +59,20 @@ public sealed partial class ImplementationFirstRpcBuildTests
         AssertSuccess(await Build());
         var lockPath = Path.Combine(root, SunderRpcAuthoringDocuments.ContractLockFileName);
 
-        // Reproduce an existing consumer's explicit sidecar-upgrade path. This is
-        // legacy fixture evidence, never a manufactured current hash or grant.
-        var legacy = JsonNode.Parse(await File.ReadAllBytesAsync(lockPath))!;
-        var artifact = legacy["packageArtifacts"]!["example.models"]!.AsObject();
+        // An update cannot infer deliberately removed mandatory model pins. Keep
+        // the genuine command-produced lock for the subsequent current update.
+        var originalLock = await File.ReadAllBytesAsync(lockPath);
+        var damaged = JsonNode.Parse(originalLock)!;
+        var artifact = damaged["packageArtifacts"]!["example.models"]!.AsObject();
         artifact.Remove("modelProjectionBytes"); artifact.Remove("modelProjectionSha256");
-        await File.WriteAllBytesAsync(lockPath, SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(legacy)));
+        var damagedLock = SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(damaged));
+        await File.WriteAllBytesAsync(lockPath, damagedLock);
         var next = await WriteProjectedCandidateAsync(scope.CreateDirectory("candidate-v2"), "2.0.0", declaration);
+        var missingPins = await Select("Update", next);
+        Assert.NotEqual(0, missingPins.ExitCode);
+        Assert.Contains("package-api.model-projection-invalid", missingPins.StandardOutput + missingPins.StandardError, StringComparison.Ordinal);
+        Assert.Equal(damagedLock, await File.ReadAllBytesAsync(lockPath));
+        await File.WriteAllBytesAsync(lockPath, originalLock);
         AssertSuccess(await Select("Update", next));
         var selected = SunderRpcAuthoringDocuments.ReadContractLock(lockPath);
         Assert.Equal("2.0.0", selected.PackageArtifacts["example.models"].SelectedPackageVersion);

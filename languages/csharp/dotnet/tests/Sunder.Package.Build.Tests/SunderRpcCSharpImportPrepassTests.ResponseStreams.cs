@@ -25,7 +25,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             """, "watch");
         var source = $$"""
             using System.Collections.Generic; using System.Threading.Tasks; using Sunder.Sdk.Services;
-            using Sunder.Generated.Packages.Example_Dependency_Services;
+            using Sunder.Generated.Packages.Example_Dependency_Services.CExample_Dependency_Watch;
             [SunderServiceProvider(typeof(IWatchService))] public sealed partial class Provider {
                 {{(target == "Watch" ? "[SunderMethod(" + option + ")]" : "")}}
                 public IAsyncEnumerable<SunderContent> WatchAsync() => throw new System.NotImplementedException();

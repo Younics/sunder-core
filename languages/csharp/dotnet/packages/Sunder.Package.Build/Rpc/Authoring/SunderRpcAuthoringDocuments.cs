@@ -16,7 +16,11 @@ internal sealed record SunderRpcOwnedContractSnapshot(
     string State,
     string Exposure,
     SunderRpcContractDescriptor Descriptor,
-    JsonElement SnapshotJson);
+    JsonElement SnapshotJson)
+{
+    // Companion evidence, deliberately outside the immutable historical snapshot.
+    internal SunderRpcOwnedProjectionReview? ProjectionReview { get; init; }
+}
 
 internal sealed record SunderRpcOwnedContractBaseline(
     string ContractId,
@@ -393,7 +397,7 @@ internal static partial class SunderRpcAuthoringDocuments
     {
         ValidatePublicCompiledContracts(baseline, contracts);
         foreach (var (key, legacy) in baseline.Contracts.Where(pair => !HasPublicEvidence(pair.Value) && pair.Value.Current is not null))
-            throw new InvalidDataException($"rpc-authoring.private-baseline-migration-required: Active private '{key}' ({legacy.ContractId}) requires MigratePrivateSunderContracts; Build never rewrites a baseline.");
+            throw new InvalidDataException($"rpc-authoring.private-baseline-unsupported: Active private '{key}' ({legacy.ContractId}) is unsupported. Restore the current reviewed baseline; Build never rewrites it.");
     }
 
     internal static void ValidatePublicCompiledContracts(SunderRpcOwnedPackageBaseline baseline, IReadOnlyList<SunderRpcCSharpCompiledContract> contracts)
@@ -450,10 +454,11 @@ internal static partial class SunderRpcAuthoringDocuments
                     $"rpc-authoring.baseline-drift: Source RPC contract '{contract.ContractKey}' differs from its accepted owned baseline snapshot. "
                     + DescribeOwnedDrift(contract.ContractKey, snapshot, contract, accepted.History, platform));
             }
+            RequireReviewedProjection(contract.ContractKey, snapshot, contract);
             if (snapshot.State == "draft")
             {
                 ValidateOwnedCandidateHistory(contract.ContractKey, snapshot.Descriptor, snapshot.Exposure,
-                    accepted.History, preserveUnchangedPrerelease: true);
+                    accepted.History, preserveUnchangedPrerelease: true, snapshot.ProjectionReview);
             }
         }
     }
@@ -466,8 +471,7 @@ internal static partial class SunderRpcAuthoringDocuments
         bool platform)
     {
         var comparison = candidate is null ? null : SunderRpcContractCompatibility.Classify(previous.Descriptor, candidate.Descriptor);
-        var kind = candidate is null || previous.Exposure != Exposure(candidate.Exposure)
-            ? SunderRpcContractChangeKind.Major : comparison!.Kind;
+        var kind = candidate is null ? SunderRpcContractChangeKind.Major : ClassifyOwnedChange(previous, candidate);
         string minimum;
         try
         {
@@ -479,9 +483,7 @@ internal static partial class SunderRpcAuthoringDocuments
             var currentVersion = SemanticVersion.Parse(previous.Descriptor.Version);
             foreach (var snapshot in history.Where(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version).Major == currentVersion.Major))
             {
-                var historicalKind = candidate is null || snapshot.Exposure != Exposure(candidate.Exposure)
-                    ? SunderRpcContractChangeKind.Major
-                    : SunderRpcContractCompatibility.Classify(snapshot.Descriptor, candidate.Descriptor).Kind;
+                var historicalKind = candidate is null ? SunderRpcContractChangeKind.Major : ClassifyOwnedChange(snapshot, candidate);
                 var historicalMinimum = GetMinimumOwnedContractVersion(snapshot.Descriptor.Version, historicalKind);
                 if (SemanticVersion.Parse(historicalMinimum).ComparePrecedenceTo(SemanticVersion.Parse(minimum)) > 0)
                 {
@@ -499,6 +501,9 @@ internal static partial class SunderRpcAuthoringDocuments
         var changes = candidate is null ? "contract-removed" : previous.Exposure != Exposure(candidate.Exposure)
             ? "exposure-changed"
             : string.Join(", ", comparison!.Changes.Take(8).Select(static change => $"{JsonSerializer.Serialize(change.Path)}: {change.Code}"));
+        if (candidate is not null)
+            changes += $"; wire classification {comparison!.Kind}, exported source classification {ClassifyProjectionChange(previous, candidate.Descriptor, candidate.ModelProjection, candidate.MethodPolicies)}"
+                + (previous.ProjectionReview is null ? " (historical source projection unavailable)" : "");
         if (platform)
         {
             return $"Contract '{previous.Descriptor.ContractId}' current '{previous.Descriptor.Version}', classified {kind}; minimum next version '{minimum}'. "
@@ -715,9 +720,9 @@ internal static partial class SunderRpcAuthoringDocuments
         RequireObject(
             value,
             $"owned contract '{contractKey}'",
-            ["contractId", "current", "history"],
+            ["contractId", "current", "history", "projectionReviews"],
             ["contractId", "history"],
-            ["current"]);
+            ["current", "projectionReviews"]);
         var contractId = RequirePackageId(value, "contractId", $"owned contract '{contractKey}'");
         var history = RequireProperty(value, "history", JsonValueKind.Array, $"owned contract '{contractKey}'");
         var historyItems = history.EnumerateArray().ToArray();
@@ -769,6 +774,7 @@ internal static partial class SunderRpcAuthoringDocuments
                 $"Removed owned contract '{contractKey}' must retain nonempty immutable history.");
         }
 
+        AttachProjectionReviews(value, contractKey, ref current, snapshots);
         return new(contractId, current, snapshots.AsReadOnly());
     }
 

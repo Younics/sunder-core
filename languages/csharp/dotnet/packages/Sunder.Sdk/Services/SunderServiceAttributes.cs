@@ -124,6 +124,8 @@ public sealed class SunderValueAttribute(string name) : Attribute
 {
     /// <summary>Gets the stable schema definition name.</summary>
     public string Name { get; } = name;
+    /// <summary>Gets or sets the exact portable public model name (1–128 ASCII identifier characters), independent of the source type and schema definition names. Null retains source-derived naming.</summary>
+    public string? PublicName { get; set; }
 }
 
 /// <summary>Includes a public property in a declared service value even when ordinary JSON serialization ignores it.</summary>

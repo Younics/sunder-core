@@ -80,22 +80,13 @@ public sealed partial class ImplementationFirstRpcBuildTests
     [Fact]
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
-    public async Task OrdinaryPublicServiceMigrationRetainsPrivateHistoryAndFrozenPublicBytes()
+    public async Task OrdinaryPublicServicePreservesFrozenBytesAcrossAppPolicyChanges()
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-ordinary-public-service");
         var root = ResolvePhysicalTemporaryPath(scope.GetPath("package"));
-        var project = await CreateSingleProjectFixtureAsync(root, immutableTasks: true, legacyBaseline: true);
+        var project = await CreateSingleProjectFixtureAsync(root, immutableTasks: true);
         var baselinePath = Path.Combine(root, "sunder-contracts.owned.json");
-        using var before = JsonDocument.Parse(await File.ReadAllBytesAsync(baselinePath));
-        var originalPrivate = before.RootElement.GetProperty("contracts").GetProperty("greeting").Clone();
-        AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:MigratePrivateSunderContracts", "-nodeReuse:false", "-v:quiet"]));
-        using (var migrated = JsonDocument.Parse(await File.ReadAllBytesAsync(baselinePath)))
-        {
-            Assert.Empty(migrated.RootElement.GetProperty("contracts").EnumerateObject());
-            Assert.True(JsonElement.DeepEquals(originalPrivate, migrated.RootElement.GetProperty("retiredPrivateContracts").GetProperty("greeting")));
-        }
-        // Private history remains authentic; its public successor uses the sole
-        // current authoring surface. An explicit default App policy is optional.
+        // An explicit default App policy is optional and does not change the public API.
         var source = SingleProjectSource.Replace("[SunderService]", "[SunderService(SunderServiceExposure.Public)]\n[SunderAppUse]", StringComparison.Ordinal);
         await File.WriteAllTextAsync(Path.Combine(root, "Mixed.cs"), source);
         AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:AcceptSunderContracts;FreezeSunderContracts;Build", "-nodeReuse:false", "-v:quiet"]));
@@ -144,7 +135,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         {
             var fixtures = Path.Combine(FindRepositoryRoot(), "specs/rpc/v1");
             var selected = JsonNode.Parse(await File.ReadAllBytesAsync(Path.Combine(fixtures, "authoring/conformance/valid/package-api-contract-lock.json")))!;
-            selected["packageImports"]!["example.dependency"]!.AsObject().Remove("consumerRoles");
+            selected["packageImports"]!["example.dependency"]!["consumerRoles"] = new JsonArray("app", "runtime");
             await File.WriteAllTextAsync(Path.Combine(root, "sunder-contracts.lock.json"), selected.ToJsonString(new JsonSerializerOptions
                 { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n");
             var cache = Path.Combine(root, ".sunder/imports"); Directory.CreateDirectory(cache); SunderRpcContractCacheStore.InitializeRoot(cache);
@@ -153,8 +144,6 @@ public sealed partial class ImplementationFirstRpcBuildTests
             File.Copy(Path.Combine(fixtures, "authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(cache, descriptor.Sha256));
             ModelProjectionTestEvidence.Seed(cache, SunderRpcAuthoringDocuments.ReadContractLock(
                 Path.Combine(fixtures, "authoring/conformance/valid/package-api-contract-lock.json")).PackageArtifacts["example.dependency"]);
-            AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-t:MigrateSunderPackageApiConsumerRoles", "-p:SunderPackageId=example.dependency",
-                "-p:SunderPackageApiConsumerRoles=app%2Cruntime", "-nodeReuse:false", "-v:quiet"]));
         }
         AssertSuccess(await RunDotnetAsync(root, ["build", project, "--no-restore", "--disable-build-servers", "-v:quiet"]));
         Assert.False(File.Exists(baseline));

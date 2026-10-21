@@ -17,7 +17,8 @@ internal sealed class RuntimeRpcInvocationAuthority(
     bool ownsContentAuthority,
     CancellationToken invocationCancellation,
     RuntimeRpcPackageActivation providerActivation,
-    TimeProvider? timeProvider = null) : ISunderRpcInvocationAuthority
+    TimeProvider? timeProvider = null,
+    AppPolicyActivationAuthority? appAuthority = null) : ISunderRpcInvocationAuthority
 {
     private readonly CancellationTokenSource _revocation =
         CancellationTokenSource.CreateLinkedTokenSource(invocationCancellation);
@@ -43,6 +44,7 @@ internal sealed class RuntimeRpcInvocationAuthority(
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(options);
+        using var operation = appAuthority?.Acquire();
         EnsureActive();
         ValidateActivation();
         ValidateOptions(options);
@@ -83,6 +85,7 @@ internal sealed class RuntimeRpcInvocationAuthority(
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
+        using var operation = appAuthority?.Acquire();
         EnsureActive();
         await using var stream = new FileStream(
             Path.GetFullPath(filePath),
@@ -100,6 +103,7 @@ internal sealed class RuntimeRpcInvocationAuthority(
     {
         ArgumentNullException.ThrowIfNull(reference);
         cancellationToken.ThrowIfCancellationRequested();
+        using var operation = appAuthority?.Acquire();
         EnsureActive();
         ValidateActivation();
         var lease = store.AcquireRpcContent(
@@ -113,22 +117,31 @@ internal sealed class RuntimeRpcInvocationAuthority(
                 SunderRpcErrorKind.NotFound,
                 "rpc.content.unavailable",
                 "The RPC content reference is stale, exhausted, or unavailable to this invocation.");
+        IDisposable? lifetime = null;
         try
         {
+            lifetime = appAuthority?.Acquire();
             Stream stream = new RuntimeRpcContentReadStream(
                 lease.Content,
-                () => store.ReleaseRpcContent(lease),
+                () =>
+                {
+                    try { store.ReleaseRpcContent(lease); }
+                    catch (Exception error) { appAuthority?.RecordCleanupFailure(error); throw; }
+                    finally { lifetime?.Dispose(); }
+                },
                 _revocation.Token,
                 () =>
                 {
                     EnsureActive();
                     ValidateActivation();
-                });
+                }, appAuthority is null ? null : appAuthority.Acquire,
+                appAuthority is null ? null : appAuthority.RecordCleanupFailure);
             return ValueTask.FromResult(stream);
         }
         catch
         {
             store.ReleaseRpcContent(lease);
+            lifetime?.Dispose();
             throw;
         }
     }
@@ -212,6 +225,8 @@ internal sealed class RuntimeRpcContentReadStream : Stream
     private readonly Stream _inner;
     private readonly CancellationToken _revocationToken;
     private readonly Action? _validate;
+    private readonly Func<IDisposable>? _acquireOperation;
+    private readonly Action<Exception>? _cleanupFailed;
     private CancellationTokenRegistration _revocationRegistration;
     private Action? _release;
     private int _disposed;
@@ -220,12 +235,16 @@ internal sealed class RuntimeRpcContentReadStream : Stream
         Stream inner,
         Action release,
         CancellationToken revocationToken = default,
-        Action? validate = null)
+        Action? validate = null,
+        Func<IDisposable>? acquireOperation = null,
+        Action<Exception>? cleanupFailed = null)
     {
         _inner = inner;
         _release = release;
         _revocationToken = revocationToken;
         _validate = validate;
+        _acquireOperation = acquireOperation;
+        _cleanupFailed = cleanupFailed;
         if (revocationToken.CanBeCanceled)
         {
             _revocationRegistration = revocationToken.UnsafeRegister(
@@ -244,32 +263,42 @@ internal sealed class RuntimeRpcContentReadStream : Stream
 
     public override int Read(byte[] buffer, int offset, int count)
     {
+        using var operation = _acquireOperation?.Invoke();
         _revocationToken.ThrowIfCancellationRequested();
         _validate?.Invoke();
-        return _inner.Read(buffer, offset, count);
+        var countRead = _inner.Read(buffer, offset, count);
+        _revocationToken.ThrowIfCancellationRequested();
+        return countRead;
     }
 
     public override int Read(Span<byte> buffer)
     {
+        using var operation = _acquireOperation?.Invoke();
         _revocationToken.ThrowIfCancellationRequested();
         _validate?.Invoke();
-        return _inner.Read(buffer);
+        var countRead = _inner.Read(buffer);
+        _revocationToken.ThrowIfCancellationRequested();
+        return countRead;
     }
 
     public override async ValueTask<int> ReadAsync(
         Memory<byte> buffer,
         CancellationToken cancellationToken = default)
     {
+        using var operation = _acquireOperation?.Invoke();
         _revocationToken.ThrowIfCancellationRequested();
         _validate?.Invoke();
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             _revocationToken,
             cancellationToken);
-        return await _inner.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
+        var countRead = await _inner.ReadAsync(buffer, linked.Token).ConfigureAwait(false);
+        linked.Token.ThrowIfCancellationRequested();
+        return countRead;
     }
 
     public override long Seek(long offset, SeekOrigin origin)
     {
+        using var operation = _acquireOperation?.Invoke();
         _revocationToken.ThrowIfCancellationRequested();
         _validate?.Invoke();
         return _inner.Seek(offset, origin);
@@ -296,6 +325,7 @@ internal sealed class RuntimeRpcContentReadStream : Stream
             {
                 await _inner.DisposeAsync().ConfigureAwait(false);
             }
+            catch (Exception error) { _cleanupFailed?.Invoke(error); throw; }
             finally
             {
                 Interlocked.Exchange(ref _release, null)?.Invoke();
@@ -312,6 +342,7 @@ internal sealed class RuntimeRpcContentReadStream : Stream
         {
             _inner.Dispose();
         }
+        catch (Exception error) { _cleanupFailed?.Invoke(error); throw; }
         finally
         {
             Interlocked.Exchange(ref _release, null)?.Invoke();

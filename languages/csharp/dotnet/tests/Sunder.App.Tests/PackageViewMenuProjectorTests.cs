@@ -19,9 +19,9 @@ public sealed class PackageViewMenuProjectorTests
 
         var roots = ShellMenuProjector.Project(
             [
-                CreateView("agent.sessions", "agent", "Sunder Agent", "Sessions", "S", RailPlacement.RightTop, packageIcon: packageIcon),
+                CreateView("agent.sessions", "agent", "AI Agent", "Sessions", "S", RailPlacement.RightTop, packageIcon: packageIcon),
                 CreateView("tools.search", "tools", "Sunder Tools", "Search", "T", RailPlacement.LeftTop),
-                CreateView("agent.chat", "agent", "Sunder Agent", "Chat", "A", RailPlacement.Middle, chatIcon, packageIcon),
+                CreateView("agent.chat", "agent", "AI Agent", "Chat", "A", RailPlacement.Middle, chatIcon, packageIcon),
             ],
             (_, icon) => icon?.AssetPath switch
             {
@@ -42,7 +42,7 @@ public sealed class PackageViewMenuProjectorTests
         Assert.Equal("Packages", packages.Title);
         var agent = packages.Children[0];
         Assert.Equal("package:agent", agent.Id);
-        Assert.Equal("Sunder Agent", agent.Title);
+        Assert.Equal("AI Agent", agent.Title);
         Assert.Same(packageImage, agent.IconImage);
         var chat = agent.Children[0];
         Assert.Equal("view:agent.chat", chat.Id);

@@ -11,7 +11,7 @@ After `npm install`, run `npm test`, `npm run sunder:dev`, or `npm run build`. P
 If the new package needs imports, select them with
 `sunder-package api add|implement --candidate ...` or `platform implement --platform-catalog ...`,
 then bind any imported providers. Local unpublished authoring needs no Registry.
-Add stores App+Runtime consumer intent by default; only present roles receive grants. Existing narrowed roles require explicit reviewed migration/update before widening.
+Add stores App+Runtime consumer intent by default; only present roles receive grants. Existing narrowed roles require a targeted `api update --consumer-roles app,runtime` review before widening. Every input lock must already contain explicit role intent and complete projection pins.
 
 The generated `package` command builds all six exact-RID target records and emits a deterministic universal archive with adjacent ownership evidence. Package-owned native assets may be declared by exact RID; execution-runtime and toolchain files are rejected.
 

@@ -16,6 +16,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly CliInstallationService _cliInstallationService;
     private readonly NotificationCenterService _notificationCenter;
     private readonly DeveloperLogService _developerLog;
+    private readonly AppPackageDeveloperServices? _developerServices;
     private readonly ShellStateService _shellStateService;
     private readonly ShellState _shellState;
     private readonly SunderUpdateService _updateService;
@@ -30,6 +31,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly StacksWindowFactory _stacksWindowFactory;
     private readonly IUiDispatcher _uiDispatcher;
     private readonly OwnedTaskObserver _tasks = new(nameof(WindowLauncher));
+    private readonly Dictionary<string, Task> _retirementReconciliations = new(StringComparer.Ordinal);
     private readonly bool _ownsBackgroundProcessQueue;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
@@ -52,13 +54,15 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         DeveloperLogService? developerLog = null,
         SunderUpdateService? updateService = null,
         BackgroundProcessQueueService? backgroundProcessQueue = null,
-        RuntimeEventSubscriptionService? runtimeEventSubscription = null)
+        RuntimeEventSubscriptionService? runtimeEventSubscription = null,
+        AppPackageDeveloperServices? developerServices = null)
     {
         _packageViewHostService = packageViewHostService;
         _runtimeApiClientFactory = runtimeApiClientFactory;
         _cliInstallationService = cliInstallationService;
         _notificationCenter = notificationCenter;
         _developerLog = developerLog ?? new DeveloperLogService();
+        _developerServices = developerServices;
         _shellStateService = shellStateService;
         _shellState = shellState;
         _updateService = updateService ?? new SunderUpdateService();
@@ -98,6 +102,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 using var registration = token.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(() => dialog.Close(false)));
                 return await result.WaitAsync(token);
             }));
+        _developerServices?.Attach(this, packageViewHostService);
     }
 
     public void AttachShell(MainWindowViewModel viewModel)
@@ -202,13 +207,38 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     public void ShowDeveloperLogs()
     {
-        if (!_developerLog.IsEnabled)
-        {
-            return;
-        }
-
+        _developerLog.Enable();
         _developerLogWindow ??= CreateDeveloperLogWindow();
         ShowWindow(_developerLogWindow);
+    }
+
+    internal void ShowPackageDeveloperLogs(string packageId)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
+        _developerLog.Enable();
+        _developerLogWindow ??= CreateDeveloperLogWindow();
+        ((DeveloperLogWindowViewModel)_developerLogWindow.DataContext!).SelectPackage(packageId);
+        ShowWindow(_developerLogWindow);
+    }
+
+    internal string GetPackageAppReadiness(string packageId, RuntimePackageStamp stamp, string activationFingerprint,
+        string? sourceContentIdentity = null)
+        => _packageViewHostService.GetAppReadiness(packageId, stamp, activationFingerprint, sourceContentIdentity);
+
+    internal async Task<bool> ConfirmDevelopmentRuntimesAsync(string packageId, RuntimePackageRuntimePrerequisitePlan plan, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        var installations = plan.Requirements.Where(item => !item.Satisfied).Select(item => item.Installation!)
+            .DistinctBy(item => item.Resolution!.Artifact.Identity).ToArray();
+        var dialog = new RuntimeConfirmationWindow(new RuntimeConfirmationViewModel(
+            "Prepare development package", $"Install the shared runtimes required by {packageId} before loading its development folder?",
+            "Download & Install Runtimes", installations.SelectMany(item => RuntimeConfirmationViewModel.Install(item).Items).ToArray(),
+            $"Device: {plan.Rid}\nSource: {plan.SourceFingerprint}\nThe development project is loaded directly from its built folder."));
+        var result = dialog.ShowDialog<bool>(GetPackageDialogOwner());
+        using var registration = token.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(() => dialog.Close(false)));
+        return await result.WaitAsync(token);
     }
 
     public void CloseForShutdown()
@@ -248,6 +278,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         }
 
         _disposed = true;
+        _developerServices?.Detach(this);
         _packageOperationService.Dispose();
         _registryPackageInstallService.Dispose();
         _tasks.Dispose();
@@ -413,6 +444,56 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         await ApplyAuxiliaryWindowPackageSnapshotAsync(snapshot, cancellationToken).ConfigureAwait(false);
     }
 
+    internal Task ReconcileDevelopmentReleaseAsync(RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> sources, CancellationToken token)
+    {
+        if (!CanReconcileDevelopment) return Task.CompletedTask;
+        if (AppPackageLoadAdmission.IsCleaningActivation)
+        {
+            // Retirement can be awaited by presentation's own lifecycle gate. Queue
+            // this explicit reconciliation with the shell owner rather than re-enter
+            // that gate from a package's disposer. No cleanup authority flows to UI.
+            if (ExecutionContext.IsFlowSuppressed()) Schedule();
+            else { using (ExecutionContext.SuppressFlow()) Schedule(); }
+            return Task.CompletedTask;
+            void Schedule() => _tasks.Run(Reconcile,
+                "reconciling an acknowledged development-owner release");
+        }
+        return Reconcile(token);
+
+        Task Reconcile(CancellationToken cancellation) => _uiDispatcher.InvokeAsync(() =>
+        {
+            cancellation.ThrowIfCancellationRequested();
+            return CanReconcileDevelopment
+                ? ApplyPackageLifecycleSnapshotAsync(snapshot, sources, null, cancellation)
+                : Task.CompletedTask;
+        });
+    }
+
+    internal bool CanReconcileDevelopment => !Volatile.Read(ref _disposed) && !_packageViewHostService.IsStopping;
+
+    internal Task QueueRetirementReconciliation(string stageId, Func<CancellationToken, Task> reconcile)
+    {
+        lock (_retirementReconciliations)
+        {
+            if (!CanReconcileDevelopment) return Task.CompletedTask;
+            if (_retirementReconciliations.TryGetValue(stageId, out var existing)) return existing;
+            // Keep completed stage identities too: a delayed heartbeat must not
+            // rebuild the same presentation again. No package context owns this task.
+            Task queued;
+            if (ExecutionContext.IsFlowSuppressed()) queued = Schedule();
+            else { using (ExecutionContext.SuppressFlow()) queued = Schedule(); }
+            _retirementReconciliations.Add(stageId, queued);
+            return queued;
+        }
+
+        Task Schedule() => _tasks.RunTracked(async cancellation =>
+        {
+            cancellation.ThrowIfCancellationRequested();
+            if (CanReconcileDevelopment) await reconcile(cancellation).ConfigureAwait(false);
+        }, $"reconciling App retirement for package stage '{stageId}'");
+    }
+
     internal async Task ApplyPackageMetadataSnapshotAsync(
         RuntimePackageSnapshot snapshot,
         CancellationToken cancellationToken)
@@ -480,7 +561,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     {
         if (_settingsWindow?.DataContext is SettingsWindowViewModel viewModel)
         {
-            viewModel.DetachHostedPackageSettingsView();
+            viewModel.DetachHostedPackageSettingsView(preserveRetainedActivation: true);
         }
     }
 

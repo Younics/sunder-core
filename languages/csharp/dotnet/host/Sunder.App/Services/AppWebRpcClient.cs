@@ -48,7 +48,10 @@ internal sealed record ActivePackageWebStamp(
     string ManifestSha256,
     Sunder.Runtime.Contracts.PackageTargetDescriptor Target,
     long SessionGeneration,
-    Guid AppGenerationId);
+    Guid AppGenerationId)
+{
+    internal string? LoadPermitId { get; init; }
+}
 
 internal sealed class UnavailableAppWebRpcClientFactory : IAppWebRpcClientFactory
 {

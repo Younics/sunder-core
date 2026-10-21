@@ -14,9 +14,6 @@ public static class RegistryV1ErrorCodes
     public const string PackageRequirementUnavailable = "registry.v1.package.requirement_unavailable";
     public const string PackageRequirementUnsatisfied = "registry.v1.package.requirement_unsatisfied";
     public const string PackageTargetUnavailable = "registry.v1.package.target_unavailable";
-    public const string BootstrapRequired = "registry.bootstrap-required";
-    public const string PolicyRecoveryRequired = "registry.policy-recovery-required";
-    public const string PolicyEventUnsupported = "registry.policy-event-unsupported";
     public const string Internal = "registry.v1.internal";
 }
 

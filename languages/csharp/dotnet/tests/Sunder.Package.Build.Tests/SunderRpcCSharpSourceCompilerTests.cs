@@ -12,25 +12,24 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed partial class SunderRpcCSharpSourceCompilerTests
 {
-    private static readonly string ParityRoot = Path.Combine(AppContext.BaseDirectory, "RpcAuthoringParity");
+    private static readonly string ParityRoot = Path.Combine(AppContext.BaseDirectory, "CurrentRpcAuthoring");
 
     [Theory]
     [InlineData("naming-defaults")]
     [InlineData("provider-forms")]
     [InlineData("identity-limits")]
     [InlineData("complete")]
-    public void Compile_SimpleParityFixture_ProducesExactCanonicalContractsAndProviders(string fixtureId)
+    public void Compile_CurrentFixture_ProducesExactCanonicalContractsAndProviders(string fixtureId)
     {
         using var expectations = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(ParityRoot, "expectations.json")));
         var fixture = expectations.RootElement.GetProperty("validFixtures")
             .EnumerateArray()
             .Single(candidate => candidate.GetProperty("id").GetString() == fixtureId);
-        var sourcePath = Path.Combine(ParityRoot, fixture.GetProperty("sources").GetProperty("csharp").GetString()!);
-        var historical = new HistoricalSourceProjection(File.ReadAllText(sourcePath));
+        var sourcePath = Path.Combine(ParityRoot, fixture.GetProperty("path").GetString()!);
         var result = new SunderRpcCSharpSourceCompiler().Compile(new(
             fixture.GetProperty("packageId").GetString()!,
             fixture.GetProperty("packageVersion").GetString()!,
-            [new(sourcePath, historical.CurrentText)],
+            [new(sourcePath, File.ReadAllText(sourcePath))],
             CompilationReferences()));
 
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics.Select(FormatDiagnostic)));
@@ -43,33 +42,21 @@ public sealed partial class SunderRpcCSharpSourceCompilerTests
             Assert.Equal(expected.GetProperty("contractId").GetString(), actual.Descriptor.ContractId);
             Assert.Equal(expected.GetProperty("contractVersion").GetString(), actual.Descriptor.Version);
             Assert.Equal(expected.GetProperty("exposure").GetString(), Exposure(actual.Exposure));
-            AssertCanonicalEqual(
-                Convert.FromBase64String(expected.GetProperty("canonicalDescriptorBase64").GetString()!),
-                actual.Descriptor.GetCanonicalUtf8(),
-                $"{fixtureId}/{contractKey} descriptor");
+            Assert.Equal(expected.GetProperty("canonicalDescriptorBytes").GetInt32(), actual.Descriptor.GetCanonicalUtf8().Length);
             Assert.Equal(expected.GetProperty("descriptorSha256").GetString(), actual.Descriptor.Sha256);
-            AssertCanonicalEqual(
-                Convert.FromBase64String(expected.GetProperty("canonicalAbiProjectionBase64").GetString()!),
-                actual.Descriptor.GetCanonicalAbiProjectionUtf8(),
-                $"{fixtureId}/{contractKey} ABI");
+            Assert.Equal(expected.GetProperty("canonicalAbiProjectionBytes").GetInt32(), actual.Descriptor.GetCanonicalAbiProjectionUtf8().Length);
             Assert.Equal(expected.GetProperty("abiSha256").GetString(), actual.Descriptor.AbiSha256);
-
-            // Historical wire tuples are still exact; current transport namespaces
-            // are authority-qualified rather than the captured alias-based Rpc namespace.
-            var packageStem = string.Join("_", fixture.GetProperty("packageId").GetString()!.Split('.')
-                .Select(segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
-            var contractStem = string.Join("_", expected.GetProperty("contractId").GetString()!.Split('.')
-                .Select(segment => char.ToUpperInvariant(segment[0]) + segment[1..]));
-            Assert.Equal($"Sunder.Generated.Packages.{packageStem}_Internal.C{contractStem}", actual.GeneratedLogicalName);
-            var expectedProviders = fixture.GetProperty("providers").EnumerateArray()
-                .Where(provider => provider.GetProperty("contractKey").GetString() == contractKey)
-                .ToArray();
+            Assert.Equal(expected.GetProperty("logicalName").GetString(), actual.GeneratedLogicalName);
+            if (expected.TryGetProperty("contractIdCharacters", out var boundary)) Assert.Equal(boundary.GetInt32(), actual.Descriptor.ContractId.Length);
+            var expectedProviders = expected.GetProperty("providers").EnumerateArray().ToArray();
             Assert.Equal(expectedProviders.Length, actual.Providers.Count);
             foreach (var expectedProvider in expectedProviders)
             {
                 var providerId = expectedProvider.GetProperty("providerId").GetString()!;
                 var actualProvider = Assert.Single(actual.Providers, provider => provider.ProviderId == providerId);
                 Assert.Equal(expectedProvider.GetProperty("audience").GetString(), Audience(actualProvider.Audience));
+                Assert.Equal("runtime", expectedProvider.GetProperty("role").GetString());
+                if (expectedProvider.TryGetProperty("characters", out var providerBoundary)) Assert.Equal(providerBoundary.GetInt32(), actualProvider.ProviderId.Length);
                 Assert.Equal(actual.Descriptor.Services.Single().ServiceId, actualProvider.ServiceId);
             }
         }
@@ -203,63 +190,50 @@ public sealed partial class SunderRpcCSharpSourceCompilerTests
         => Assert.False(SunderRpcCSharpNaming.TryCreate(source, null, out _));
 
     [Fact]
-    public void Compile_InvalidParityFixtures_EmitTheirStableDiagnosticCategory()
+    public void Compile_CurrentInvalidFixtures_EmitReviewedDiagnosticsAtCurrentSourceSpans()
     {
         using var expectations = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(ParityRoot, "expectations.json")));
         foreach (var fixture in expectations.RootElement.GetProperty("invalidFixtures").EnumerateArray())
         {
-            var csharp = fixture.GetProperty("sources").EnumerateArray()
-                .Single(source => source.GetProperty("language").GetString() == "csharp");
-            var relativePath = csharp.GetProperty("path").GetString()!;
+            var relativePath = fixture.GetProperty("path").GetString()!;
             var sourcePath = Path.Combine(ParityRoot, relativePath);
-            var historical = new HistoricalSourceProjection(File.ReadAllText(sourcePath));
+            var source = File.ReadAllText(sourcePath);
             var fixtureId = fixture.GetProperty("id").GetString()!;
-            var packageId = fixture.TryGetProperty("packageId", out var packageIdElement)
-                ? packageIdElement.GetString()!
-                : fixture.TryGetProperty("context", out var context)
-                  && context.TryGetProperty("packageId", out var contextPackageId)
-                    ? contextPackageId.GetString()!
-                    : fixtureId.StartsWith("collision-", StringComparison.Ordinal)
-                        ? "example.collision"
-                        : "example.invalid";
-            var packageVersion = fixture.TryGetProperty("packageVersion", out var packageVersionElement)
-                ? packageVersionElement.GetString()!
-                : "1.0.0";
-            IReadOnlyDictionary<string, string>? baseline = fixtureId == "baseline-drift"
-                ? new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["Example.Invalid.RenamedService"] = fixture.GetProperty("context").GetProperty("acceptedContractId").GetString()!,
-                }
-                : null;
+            if (fixture.TryGetProperty("derivedIdentityCharacters", out var identityLength))
+            {
+                // Independently count these deliberately simple boundary names, without
+                // using the compiler's naming function to manufacture the expectation.
+                var declaration = CSharpSyntaxTree.ParseText(source).GetRoot().DescendantNodes()
+                    .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax>().First();
+                var name = declaration.Identifier.ValueText[..^"Service".Length];
+                var prefix = name.StartsWith("Contract", StringComparison.Ordinal) ? "Contract" : "Provider";
+                var suffix = name == "X" ? "x" : prefix.ToLowerInvariant() + "." + name[prefix.Length..].ToLowerInvariant();
+                var identity = fixture.GetProperty("packageId").GetString() + "." + suffix
+                    + (fixtureId == "source-limit-provider-identity" ? ".provider" : "");
+                Assert.Equal(identityLength.GetInt32(), identity.Length);
+                Assert.True(identity.Length > 128);
+            }
+            var baseline = fixture.TryGetProperty("acceptedIdentities", out var identities)
+                ? identities.EnumerateObject().ToDictionary(property => property.Name, property => property.Value.GetString()!, StringComparer.Ordinal) : null;
             var result = new SunderRpcCSharpSourceCompiler().Compile(new(
-                packageId,
-                packageVersion,
-                [new(sourcePath, historical.CurrentText)],
+                fixture.GetProperty("packageId").GetString()!,
+                "1.0.0",
+                [new(sourcePath, source)],
                 CompilationReferences(),
                 OwnedContractIdsByServiceMetadataName: baseline));
 
             var expectedDiagnostic = fixture.GetProperty("diagnosticId").GetString()!;
             Assert.False(result.Success);
             var diagnostic = Assert.Single(result.Diagnostics);
-            if (fixtureId is "source-limit-contract-identity" or "source-limit-package-id-derived-contract")
+            if (fixture.TryGetProperty("message", out var message))
             {
-                // The reference-target prepass now validates this identity before
-                // CompileService can produce the historical source-local limit diagnostic.
-                // Keep the frozen fixture and require the exact current rejection instead.
-                Assert.Equal("rpc-authoring.source-limit-exceeded", expectedDiagnostic);
-                Assert.Equal("rpc-authoring.model-projection-invalid", diagnostic.Id);
-                Assert.Equal("Model projection identity must use the canonical package-ID grammar.", diagnostic.Message);
+                Assert.Equal(message.GetString(), diagnostic.Message);
                 Assert.Empty(result.Contracts);
                 Assert.Null(diagnostic.Path);
-                Assert.Empty(diagnostic.RelatedSpans ?? []);
-                var limit = fixture.GetProperty("limit");
-                Assert.Equal(limit.GetProperty("actual").GetInt32(), limit.GetProperty("derivedIdentity").GetString()!.Length);
-                Assert.True(limit.GetProperty("actual").GetInt32() > limit.GetProperty("maximum").GetInt32());
-                continue;
             }
             Assert.True(expectedDiagnostic == diagnostic.Id,
                 $"{fixtureId}: expected {expectedDiagnostic}, actual {FormatDiagnostic(diagnostic)}");
-            var expectedSpans = csharp.GetProperty("spans").EnumerateArray().ToArray();
+            var expectedSpans = fixture.GetProperty("spans").EnumerateArray().ToArray();
             var actualSpans = new List<SunderRpcCSharpSourceSpan>();
             if (diagnostic.Path is not null)
             {
@@ -275,12 +249,16 @@ public sealed partial class SunderRpcCSharpSourceCompilerTests
             for (var index = 0; index < expectedSpans.Length; index++)
             {
                 var expectedSpan = expectedSpans[index];
-                var actualSpan = historical.OriginalSpan(actualSpans[index]);
+                var actualSpan = actualSpans[index];
                 Assert.Equal(relativePath.Replace('\\', '/'), Path.GetRelativePath(ParityRoot, actualSpan.Path).Replace('\\', '/'));
-                Assert.Equal(expectedSpan.GetProperty("startLine").GetInt32(), actualSpan.StartLine);
-                Assert.Equal(expectedSpan.GetProperty("startColumn").GetInt32(), actualSpan.StartColumn);
-                Assert.Equal(expectedSpan.GetProperty("endLine").GetInt32(), actualSpan.EndLine);
-                Assert.Equal(expectedSpan.GetProperty("endColumn").GetInt32(), actualSpan.EndColumn);
+                var line = expectedSpan.GetProperty("line").GetInt32();
+                var text = expectedSpan.GetProperty("text").GetString()!;
+                var column = source.Split('\n')[line - 1].IndexOf(text, StringComparison.Ordinal) + 1;
+                Assert.True(column > 0, fixtureId);
+                Assert.Equal(line, actualSpan.StartLine);
+                Assert.Equal(line, actualSpan.EndLine);
+                Assert.Equal(column, actualSpan.StartColumn);
+                Assert.Equal(column + text.Length, actualSpan.EndColumn);
             }
         }
     }
@@ -781,25 +759,6 @@ public sealed partial class SunderRpcCSharpSourceCompilerTests
 
     private static string FormatDiagnostic(SunderRpcCSharpCompilerDiagnostic diagnostic)
         => $"{diagnostic.Id}: {diagnostic.Path}:{diagnostic.Line}:{diagnostic.Column}-{diagnostic.EndLine}:{diagnostic.EndColumn}: {diagnostic.Message}";
-
-    private static void AssertCanonicalEqual(byte[] expected, byte[] actual, string label)
-    {
-        if (expected.AsSpan().SequenceEqual(actual))
-        {
-            return;
-        }
-        var difference = Enumerable.Range(0, Math.Min(expected.Length, actual.Length))
-            .FirstOrDefault(index => expected[index] != actual[index]);
-        var start = Math.Max(0, difference - 120);
-        var expectedLength = Math.Min(expected.Length - start, 240);
-        var actualLength = Math.Min(actual.Length - start, 240);
-        Assert.Fail(
-            $"{label} differs at byte {difference}; expected {expected.Length} bytes, actual {actual.Length}."
-            + Environment.NewLine
-            + $"Expected: {System.Text.Encoding.UTF8.GetString(expected, start, expectedLength)}"
-            + Environment.NewLine
-            + $"Actual:   {System.Text.Encoding.UTF8.GetString(actual, start, actualLength)}");
-    }
 
     private static string Exposure(SunderServiceExposure exposure)
         => exposure switch

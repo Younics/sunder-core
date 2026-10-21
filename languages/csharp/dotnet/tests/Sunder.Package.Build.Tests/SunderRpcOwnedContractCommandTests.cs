@@ -103,7 +103,8 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         Assert.Equal(before, File.ReadAllBytes(BaselinePath));
         Assert.Equal(oldTime, File.GetLastWriteTimeUtc(BaselinePath));
         Assert.Equal(outputs, Snapshot(Generated));
-        Success(Command("Accept"));
+        Failure(Command("Accept"), "acknowledgement");
+        Success(BreakingAcceptance("1.0.0")); // An unissued draft can retain its version after explicit source-Major review.
         Assert.NotEqual(before, File.ReadAllBytes(BaselinePath));
         Assert.Equal("1.0.0", Baseline().Contracts["greeting"].Current!.Descriptor.Version);
         Assert.Equal(outputs, Snapshot(Generated));
@@ -331,8 +332,20 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         snapshotJson["canonicalAbiProjection"] = Encoding.UTF8.GetString(descriptor.GetCanonicalAbiProjectionUtf8());
         snapshotJson["abiSha256"] = descriptor.AbiSha256;
         var contracts = baseline.Contracts.ToDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal);
-        contracts["greeting"] = contract with { Current = snapshot with { Descriptor = descriptor, SnapshotJson = JsonSerializer.SerializeToElement(snapshotJson) } };
-        var expected = SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(baseline with { Contracts = contracts });
+        contracts["greeting"] = contract with
+        {
+            Current = snapshot with
+            {
+                Descriptor = descriptor, SnapshotJson = JsonSerializer.SerializeToElement(snapshotJson),
+                ProjectionReview = SunderRpcAuthoringDocuments.CreateProjectionReview(descriptor,
+                    snapshot.ProjectionReview!.ModelProjection, snapshot.ProjectionReview.MethodPolicies),
+            },
+        };
+        Assert.Contains("immutable-evidence-mutated", Assert.Throws<InvalidDataException>(() =>
+            SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(baseline with { Contracts = contracts })).Message, StringComparison.Ordinal);
+        // Construct a separate synthetic before-image of an already-issued prerelease.
+        // This is not an allowed mutation of the frozen stable tuple above.
+        var expected = SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(new(baseline.PackageId, contracts, [], string.Empty));
         File.WriteAllBytes(BaselinePath, expected);
         Success(Command("Accept"));
         Success(Command("Check"));
@@ -426,6 +439,31 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
     }
 
     [Fact]
+    public void NormalCommitCannotRelabelOwnerEvenWithAnEmptyRoot()
+    {
+        File.WriteAllText(SourcePath, EmptySource);
+        var before = SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(new("example.generated", new Dictionary<string, SunderRpcOwnedContractBaseline>(), [], ""));
+        var after = SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(new("example.successor", new Dictionary<string, SunderRpcOwnedContractBaseline>(), [], ""));
+        File.WriteAllBytes(BaselinePath, before);
+        Assert.Throws<InvalidDataException>(() => GenerateSunderRpcBindingsTask.CommitOwnedBaseline(_root, BaselinePath, before, after, new()));
+        Assert.Equal(before, File.ReadAllBytes(BaselinePath));
+        Assert.Empty(Directory.GetFiles(_root, ".sunder-contract-stage-*"));
+    }
+
+    [Fact]
+    public void Transaction_LostBaselineLeaseNeverPublishes()
+    {
+        Success(Command("Accept"));
+        var baseline = Baseline();
+        var candidate = Command().PrepareOwnedContractCandidate(baseline)!;
+        var proposal = SunderRpcAuthoringDocuments.PlanOwnedBaselineFreeze(baseline, candidate.Contracts, "7.6.5", null);
+        Assert.Throws<IOException>(() => GenerateSunderRpcBindingsTask.CommitOwnedBaseline(_root, BaselinePath,
+            baseline.ExactBytes, proposal, candidate.Inputs, () => Directory.Delete(BaselinePath + GeneratedOutputLock.LockSuffix, true)));
+        Assert.Equal(baseline.ExactBytes, File.ReadAllBytes(BaselinePath));
+        Assert.Empty(Directory.GetFiles(_root, ".sunder-contract-stage-*"));
+    }
+
+    [Fact]
     public void Transaction_RechecksExpectedBytesImmediatelyBeforeRename_AndNeverCleansUserStages()
     {
         Success(Command("Accept"));
@@ -515,7 +553,7 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         Success(Command());
         if (operation == "NoOp") Success(Command("Freeze"));
         if (operation == "Accept") File.WriteAllText(SourcePath, AddMethod(Source));
-        var command = Command(operation == "NoOp" ? "Freeze" : operation);
+        var command = operation == "Accept" ? BreakingAcceptance("1.0.0") : Command("Freeze");
         var (references, referencePath) = PrivateReferences();
         command.ReferencePaths = references;
         var path = input == "source" ? SourcePath : input == "lock" ? LockPath : referencePath;
@@ -938,12 +976,12 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         SourceFiles = [new TaskItem(SourcePath)], ReferencePaths = References.Select(static path => (ITaskItem)new TaskItem(path)).ToArray(),
     };
 
-    private GenerateSunderRpcBindingsTask BreakingAcceptance()
+    private GenerateSunderRpcBindingsTask BreakingAcceptance(string nextVersion = "2.0.0")
     {
         var task = Command("Accept");
         task.ContractKey = "greeting";
         task.ContractCurrentVersion = "1.0.0";
-        task.ContractNextVersion = "2.0.0";
+        task.ContractNextVersion = nextVersion;
         task.AcknowledgeBreakingChange = true;
         return task;
     }

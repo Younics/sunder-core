@@ -67,7 +67,7 @@ internal sealed class AppWebPackageAdapter(
                     manifestHash,
                     source.Target,
                     source.SessionGeneration,
-                    appGenerationId),
+                    appGenerationId) { LoadPermitId = activation.LoadAdmission?.PermitId },
                 cancellationToken).ConfigureAwait(false);
             var lifetime = new AppWebPackageLifetime(
                 package.PackageId,

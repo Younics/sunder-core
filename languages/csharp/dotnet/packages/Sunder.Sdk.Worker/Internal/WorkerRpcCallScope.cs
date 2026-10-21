@@ -5,7 +5,7 @@ using Sunder.Sdk.Rpc;
 
 namespace Sunder.Sdk.Worker.Internal;
 
-internal sealed class WorkerRpcCallScope : ISunderRpcCallScope, IWorkerContentHandleOwner
+internal sealed class WorkerRpcCallScope : ISunderRpcCallScope, IWorkerContentHandleOwner, ISunderRpcTrustedDispatchMetadataScope
 {
     private readonly WorkerRpcClient _client;
     private readonly WorkerEnvironment _environment;

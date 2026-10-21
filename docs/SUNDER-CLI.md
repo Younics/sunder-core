@@ -10,7 +10,7 @@ The public roots are deliberately capability-oriented:
 
 ```text
 sunder
-  runtime status|start|stop|restart|reset|list|info|ensure|import|verify|repair|gc
+  runtime status|start|stop|restart|reset|settings|update|install|remove|list|info|ensure|verify|repair|gc
   package search|info|list|status|install|update|enable|disable|uninstall
   package source adopt
   package config schema|list|get|set|unset
@@ -19,7 +19,7 @@ sunder
   stack search|info|download|open|import|export
   registry auth login|status|logout
   registry package publish|yank|unyank|deprecate|undeprecate|tag
-  registry stack publish|delete
+  registry stack publish|unlist|relist
   dev package validate|prepare-imports|run|smoke
   dev stack inspect
   dev registry package publish-local
@@ -102,21 +102,37 @@ sunder runtime reset --yes
 
 Reset is rejected without `--yes`. It acquires a one-time authenticated challenge from the default local Host. The Host durably stops Runtime, retains lifecycle ownership while it holds the exclusive state lease, validates the exact V1 root identity, and operates only on fixed V1 categories. It never scans legacy roots. The response contains bounded category summaries; the durable receipt contains detailed paths. Partial reset results retain schema/key metadata and are safe to retry.
 
-Manage the immutable execution runtimes used to launch package Workers:
+Manage official .NET/Node runtimes used by package Workers:
 
 ```powershell
 sunder runtime list
-sunder runtime info sunder.runtime.dotnet 10.0.1 1 win-x64 sunder.dotnet-worker-module.v1
+sunder runtime settings
+sunder runtime settings --automatic-updates false
+sunder runtime install sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
 sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
-sunder runtime import --file .\dotnet-10.0.1-win-x64.sunderruntime
-sunder runtime verify sunder.runtime.dotnet 10.0.1 1 win-x64 sunder.dotnet-worker-module.v1
-sunder runtime repair sunder.runtime.dotnet 10.0.1 1 win-x64 sunder.dotnet-worker-module.v1 --yes
+sunder runtime update
 sunder runtime gc
 ```
 
-An exact execution-runtime identity consists of runtime id, semantic version, positive packaging revision, RID, and module ABI. `info` includes dependent installed-package references. `ensure` sends a bounded version requirement to the configured Registry, which must be HTTPS, and installs only the signed current-RID result. `import` streams a trusted `.sunderruntime` archive into Runtime-owned temporary storage; the local path never appears in an API DTO.
+`install` previews and confirms acquisition from Host-configured official sources;
+`ensure` explicitly resolves/acquires a compatible current-RID runtime. Neither uses
+Registry runtime distribution. Installed roots are retained until safe removal.
+Exact `info`, `verify`, `repair` and `remove` use the identity reported by `list`:
+
+```text
+sunder runtime info <source-id> <runtime-id> <vendor-version> <rid> <module-abi> <checksum-algorithm> <checksum-digest>
+```
+
+Sources are `dotnet`/`node`; checksums are vendor SHA-512/SHA-256 respectively. The
+same seven identity arguments apply to verify/repair/remove. Repair and remove use
+their normal confirmation (`--yes` for explicit noninteractive approval).
 
 `verify` performs complete content validation. `repair` is accepted only with `--yes` because Runtime first blocks dependent package launches, stops and drains their Workers, then rebuilds the unhealthy root from its immutable cached archive and reloads installed packages. `gc` is lease- and reference-safe and observes the runtime-store grace interval. Startup and package activation do not implicitly download, repair, garbage-collect, or deeply hash execution runtimes.
+
+Automatic updates default ON. `update` prepares compatible supported releases and
+applies when stopped; `--restart` requires fresh restart-impact consent. Package and
+platform security refresh remains active when binary updates are off. See
+[official runtime management](OFFICIAL-RUNTIME-HANDOFF.md) for the API/store contract.
 
 ## Packages
 
@@ -125,23 +141,23 @@ Anonymous Registry discovery:
 ```powershell
 sunder package search
 sunder package search agent --skip 20 --take 20
-sunder package info sunder.package.agent
-sunder package info sunder.package.agent --version 1.0.0
+sunder package info younics.ai.agent
+sunder package info younics.ai.agent --version 2.0.0
 ```
 
 List installed packages and their source/version policy, or inspect one package's installed and current-session state:
 
 ```powershell
 sunder package list
-sunder package status sunder.package.agent
+sunder package status younics.ai.agent
 ```
 
 Install from the Registry. A tag install defaults to `latest`; an exact version and a tag are mutually exclusive:
 
 ```powershell
-sunder package install sunder.package.agent
-sunder package install sunder.package.agent --tag beta
-sunder package install sunder.package.agent --version 1.0.0
+sunder package install younics.ai.agent
+sunder package install younics.ai.agent --tag beta
+sunder package install younics.ai.agent --version 2.0.0
 ```
 
 The CLI sends the user's exact/tag selection to Runtime rather than resolving installable artifacts itself. Runtime adds its bounded Manifest V1 and Worker V1 compatibility profile, including the complete supported Worker capability set and current exact RID, to every Registry plan request. Anonymous CLI search and version-detail commands remain historical browse operations and do not advertise Host compatibility.
@@ -158,7 +174,7 @@ Local archives are validated and streamed into Runtime-owned temporary storage; 
 Update one managed package or all eligible managed packages:
 
 ```powershell
-sunder package update sunder.package.agent
+sunder package update younics.ai.agent
 sunder package update --all
 sunder package update --all --include-prerelease
 sunder package update --all --registry-origin https://hub.sunderapp.io/
@@ -169,9 +185,9 @@ Updates are provenance-aware and do not require the CLI's configured Registry. R
 Adopt an explicit Registry source and update policy for a migrated, local, or otherwise unmanaged package. Preview and apply are separate operations:
 
 ```powershell
-sunder package source adopt sunder.package.agent --registry-origin https://hub.sunderapp.io/ --tag latest --dry-run
-sunder package source adopt sunder.package.agent --registry-origin https://hub.sunderapp.io/ --tag latest --yes
-sunder package source adopt sunder.package.agent --registry-origin https://hub.sunderapp.io/ --version 1.0.0 --yes
+sunder package source adopt younics.ai.agent --registry-origin https://hub.sunderapp.io/ --tag latest --dry-run
+sunder package source adopt younics.ai.agent --registry-origin https://hub.sunderapp.io/ --tag latest --yes
+sunder package source adopt younics.ai.agent --registry-origin https://hub.sunderapp.io/ --version 2.0.0 --yes
 ```
 
 Exactly one of `--tag` and `--version`, and exactly one of `--dry-run` and `--yes`, is required. `--include-prerelease` applies only to a tag policy. Adoption resolves the proposed replacement before Runtime records the new source; it is never inferred from global configuration.
@@ -179,21 +195,21 @@ Exactly one of `--tag` and `--version`, and exactly one of `--dry-run` and `--ye
 Enable or disable an installed package:
 
 ```powershell
-sunder package enable sunder.package.agent
-sunder package disable sunder.package.agent
+sunder package enable younics.ai.agent
+sunder package disable younics.ai.agent
 ```
 
 Uninstall is always plan-first. Review the Runtime-generated plan without mutation:
 
 ```powershell
-sunder package uninstall sunder.package.agent --dry-run
+sunder package uninstall younics.ai.agent --dry-run
 ```
 
 Apply a freshly generated exact plan:
 
 ```powershell
-sunder package uninstall sunder.package.agent --yes
-sunder package uninstall sunder.package.agent --yes --cascade
+sunder package uninstall younics.ai.agent --yes
+sunder package uninstall younics.ai.agent --yes --cascade
 ```
 
 Exactly one of `--dry-run` and `--yes` is required. If dependents must also be removed, apply is rejected without `--cascade`. Runtime binds apply to a confirmation token for the displayed package set/reload impact, rejects a stale plan, and retains package data in V1.
@@ -201,28 +217,28 @@ Exactly one of `--dry-run` and `--yes` is required. If dependents must also be r
 Inspect and change only configuration fields declared by the package schema:
 
 ```powershell
-sunder package config schema sunder.package.agent
-sunder package config list sunder.package.agent
-sunder package config get sunder.package.agent mode
-sunder package config set sunder.package.agent mode fast
-sunder package config unset sunder.package.agent mode
+sunder package config schema younics.ai.agent
+sunder package config list younics.ai.agent
+sunder package config get younics.ai.agent mode
+sunder package config set younics.ai.agent mode fast
+sunder package config unset younics.ai.agent mode
 ```
 
 Secret values are never accepted as command arguments and are never readable through the CLI. Status reports presence only; writes must come from one environment variable or redirected standard input:
 
 ```powershell
-sunder package secret status sunder.package.agent
-sunder package secret set sunder.package.agent api-key --from-env SUNDER_AGENT_API_KEY
-Get-Content .\api-key.txt | sunder package secret set sunder.package.agent api-key --stdin
-sunder package secret unset sunder.package.agent api-key
+sunder package secret status younics.ai.agent
+sunder package secret set younics.ai.agent api-key --from-env SUNDER_AGENT_API_KEY
+Get-Content .\api-key.txt | sunder package secret set younics.ai.agent api-key --stdin
+sunder package secret unset younics.ai.agent api-key
 ```
 
 Manage a package's declared browser-auth capability independently from Registry auth:
 
 ```powershell
-sunder package auth status sunder.package.agent
-sunder package auth login sunder.package.agent
-sunder package auth logout sunder.package.agent
+sunder package auth status younics.ai.agent
+sunder package auth login younics.ai.agent
+sunder package auth logout younics.ai.agent
 ```
 
 Login launches the Runtime-issued browser URL, waits only until the bounded session reaches a terminal state, and cancels the Runtime session when the CLI is cancelled.
@@ -312,13 +328,13 @@ sunder registry package publish --file .\MyPackage.1.1.0.sunderpkg --no-latest
 Manage immutable versions and tags:
 
 ```powershell
-sunder registry package yank sunder.package.agent 1.0.0
-sunder registry package unyank sunder.package.agent 1.0.0
-sunder registry package deprecate sunder.package.agent 1.0.0 --message "Use 1.1.0 instead."
-sunder registry package undeprecate sunder.package.agent 1.0.0
-sunder registry package tag list sunder.package.agent
-sunder registry package tag set sunder.package.agent beta 1.1.0-beta.1
-sunder registry package tag delete sunder.package.agent beta
+sunder registry package yank younics.ai.agent 2.0.0
+sunder registry package unyank younics.ai.agent 2.0.0
+sunder registry package deprecate younics.ai.agent 2.0.0 --message "Use 2.1.0 instead."
+sunder registry package undeprecate younics.ai.agent 2.0.0
+sunder registry package tag list younics.ai.agent
+sunder registry package tag set younics.ai.agent beta 2.1.0-beta.1
+sunder registry package tag delete younics.ai.agent beta
 ```
 
 Tag listing is anonymous. Mutation commands require Runtime-owned human auth.
@@ -327,10 +343,12 @@ Tag listing is anonymous. Mutation commands require Runtime-owned human auth.
 
 ```powershell
 sunder registry stack publish --file .\MyStack.sunderstack
-sunder registry stack delete example.agent-stack
+sunder registry stack unlist example.agent-stack
+sunder registry stack relist example.agent-stack
 ```
 
-Stack management defaults to Runtime-owned human auth.
+Stack management uses Runtime-owned human auth. Visibility changes retain immutable
+revisions and ownership; there is no package/Stack hard-delete command.
 
 ## CI Publication Credentials
 
@@ -354,8 +372,9 @@ printf '%s' "$PUBLISH_TOKEN" | \
 
 ## Development Package Imports And Loading
 
-Prepare import evidence for an unpublished canonical development folder, then smoke
-or run it through the managed Runtime:
+Current C# local builds emit their manifest-bound import handoff automatically.
+For other producers or explicit preparation, prepare a canonical development folder,
+then smoke or run it through the managed Runtime:
 
 ```powershell
 sunder dev package prepare-imports ./dist/sunder-dev --candidate ./owner.sunderpkg --platform-catalog ./catalog.json

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { lstatSync, readFileSync, unlinkSync, type Stats } from "node:fs";
+import { lstatSync, readFileSync, readlinkSync, unlinkSync, type Stats } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -13,8 +13,8 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
-import { basename, dirname, resolve } from "node:path";
+import { homedir, hostname, tmpdir } from "node:os";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
 export const GENERATED_OUTPUT_MARKER_SUFFIX = ".sunder-generated-output";
@@ -27,6 +27,7 @@ const LOCK_TRANSITION_SUFFIX = ".transition";
 const TARGET_LEAF_DISCOVERY_SUFFIX = ".sunder-target-leaf-container";
 const PROCESS_MARKER_DIRECTORY = "sunder-generated-output/processes";
 const DEFAULT_LOCK_WAIT_MILLISECONDS = 5 * 60_000;
+const UNVERIFIABLE_OWNER_WAIT_MILLISECONDS = 1_000;
 const TRANSACTION_SUFFIX = ".sunder-output-transaction.json";
 const INSTALLED_SUFFIX = ".installed";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -289,6 +290,7 @@ export function markerPath(path: string): string {
 async function acquireOutputLock(key: string, deadline: number, waitMilliseconds: number): Promise<OwnedDirectory> {
   const lockPath = `${key}${LOCK_SUFFIX}`;
   await mkdir(dirname(lockPath), { recursive: true });
+  let unverifiableSince: number | undefined;
   while (true) {
     let acquired: OwnedDirectory | undefined;
     let quarantinePath: string | undefined;
@@ -303,7 +305,9 @@ async function acquireOutputLock(key: string, deadline: number, waitMilliseconds
       } else {
         await ensureRegularDirectory(lockPath, "generated output lock");
         const candidate = await readDirectoryOwner(lockPath);
-        if (candidate !== undefined && await getOwnerState(candidate) === "dead") {
+        const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate);
+        unverifiableSince = checkUnverifiableOwner(state, unverifiableSince, deadline, waitMilliseconds, lockPath);
+        if (candidate !== undefined && state === "dead") {
           const current = await readDirectoryOwner(lockPath);
           if (current?.token === candidate.token) {
             const candidateQuarantine = `${lockPath}.stale-${candidate.token}-${randomUUID()}`;
@@ -377,6 +381,7 @@ async function acquireTransitionGuard(
   waitMilliseconds: number,
 ): Promise<OwnedDirectory> {
   const guardPath = `${lockPath}${LOCK_TRANSITION_SUFFIX}`;
+  let unverifiableSince: number | undefined;
   while (true) {
     const owned = await tryPublishOwnedDirectory(guardPath);
     if (owned !== undefined) return owned;
@@ -389,7 +394,9 @@ async function acquireTransitionGuard(
       throw new Error(`The generated output transition guard '${guardPath}' is not a regular directory.`);
     }
     const candidate = await readDirectoryOwner(guardPath);
-    if (candidate !== undefined && await getOwnerState(candidate) === "dead") {
+    const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate);
+    unverifiableSince = checkUnverifiableOwner(state, unverifiableSince, deadline, waitMilliseconds, guardPath);
+    if (candidate !== undefined && state === "dead") {
       const current = await readDirectoryOwner(guardPath);
       if (current?.token === candidate.token) {
         // The nonempty token tombstone permanently fences contenders that paused
@@ -526,8 +533,8 @@ async function readLockOwner(path: string): Promise<LockOwner | undefined> {
   }
 }
 
-async function getOwnerState(owner: LockOwner): Promise<"alive" | "dead" | "unknown"> {
-  if (!await hasValidLocalProcessMarker(owner)) return "unknown";
+async function getOwnerState(owner: LockOwner): Promise<"alive" | "dead" | "unknown" | "unverifiable"> {
+  if (!await hasValidLocalProcessMarker(owner)) return "unverifiable";
   const actualStartedAt = await processStartedAt(owner.pid);
   if (actualStartedAt === null) return "dead";
   if (actualStartedAt === undefined) return "unknown";
@@ -556,6 +563,18 @@ function throwIfLockTimedOut(deadline: number, waitMilliseconds: number, path: s
   if (Date.now() >= deadline) {
     throw new Error(`Timed out after ${waitMilliseconds} ms waiting for generated output lock '${path}'.`);
   }
+}
+
+function checkUnverifiableOwner(state: string, since: number | undefined, deadline: number, waitMilliseconds: number, path: string): number | undefined {
+  if (state !== "unverifiable") return undefined;
+  const started = since ?? performance.now();
+  throwIfLockTimedOut(deadline, waitMilliseconds, path);
+  if (performance.now() - started >= UNVERIFIABLE_OWNER_WAIT_MILLISECONDS) {
+    throw new Error(`Generated output lock '${path}' has unverifiable ownership evidence (possibly a legacy Worker temp marker). `
+      + "The lock was preserved; PID or age alone is not safe recovery authority. Inspect its owner.json and independently confirm "
+      + "that no producer uses this output before moving only this lock directory aside and retrying. Do not remove the generated output.");
+  }
+  return started;
 }
 
 const execFileAsync = promisify(execFile);
@@ -587,8 +606,10 @@ async function createProcessMarker(): Promise<ProcessMarkerRegistration> {
   };
   const root = processMarkerRoot();
   const path = resolve(root, `${token}.json`);
+  await ensureMarkerAncestors(root);
   await mkdir(root, { recursive: true, mode: 0o700 });
   await ensureRegularDirectory(root, "generated output process marker root");
+  await ensurePrivateMarkerRoot(root);
   await writeDurableFile(path, `${JSON.stringify(marker, null, 2)}\n`, 0o600);
   const registration: ProcessMarkerRegistration = { path, marker, ownedDirectoryCount: 0 };
   process.once("exit", () => cleanupProcessMarkerAtExit(registration));
@@ -622,11 +643,17 @@ async function readCurrentHostIdentity(): Promise<Pick<ProcessMarker, "hostname"
 
 async function hasValidLocalProcessMarker(owner: LockOwner): Promise<boolean> {
   try {
-    const markerRoot = processMarkerRoot();
+    // Do not follow a path supplied by owner.json. Only our computed stable root
+    // and this process's own legacy temp root are eligible ownership authorities.
+    const markerRoot = [processMarkerRoot(), legacyProcessMarkerRoot()].find((root) =>
+      pathOrder(normalizeMarkerPath(owner.processMarkerPath), resolve(root, `${owner.processMarkerToken}.json`)) === 0);
+    if (markerRoot === undefined) return false;
+    await ensureMarkerAncestors(markerRoot);
+    if (pathOrder(markerRoot, processMarkerRoot()) === 0) await ensurePrivateMarkerRoot(markerRoot);
     const rootEntry = await tryLstat(markerRoot);
     if (rootEntry === undefined || !rootEntry.isDirectory() || rootEntry.isSymbolicLink()) return false;
     const expectedMarkerPath = resolve(markerRoot, `${owner.processMarkerToken}.json`);
-    if (pathOrder(resolve(owner.processMarkerPath), expectedMarkerPath) !== 0) return false;
+    if (pathOrder(normalizeMarkerPath(owner.processMarkerPath), expectedMarkerPath) !== 0) return false;
     const entry = await tryLstat(expectedMarkerPath);
     if (entry === undefined || !entry.isFile() || entry.isSymbolicLink()) return false;
     const marker = JSON.parse(await readFile(expectedMarkerPath, "utf8")) as Partial<ProcessMarker>;
@@ -669,7 +696,52 @@ function validLinuxProof(
 }
 
 function processMarkerRoot(): string {
-  return resolve(tmpdir(), ...PROCESS_MARKER_DIRECTORY.split("/"));
+  // Shared with GeneratedOutputLock.cs; never derive new evidence from TMPDIR.
+  const home = homedir();
+  if (!isAbsolute(home)) throw new Error("Could not establish a private user profile for generated output locking.");
+  return normalizeMarkerPath(resolve(home, ".sunder", "generated-output", "processes"));
+}
+
+function legacyProcessMarkerRoot(): string {
+  return normalizeMarkerPath(resolve(tmpdir(), ...PROCESS_MARKER_DIRECTORY.split("/")));
+}
+
+function normalizeMarkerPath(path: string): string {
+  const full = resolve(path);
+  if (process.platform === "darwin") {
+    for (const name of ["var", "tmp", "etc"]) {
+      const alias = `/${name}`;
+      if (full === alias || full.startsWith(`${alias}/`)) {
+        try {
+          if (readlinkSync(alias) === `private/${name}` || readlinkSync(alias) === `/private/${name}`) return `/private${full}`;
+        } catch { /* An unverified system alias is not trusted. */ }
+      }
+    }
+  }
+  return full;
+}
+
+async function ensureMarkerAncestors(path: string): Promise<void> {
+  for (let current = normalizeMarkerPath(path); ; current = dirname(current)) {
+    const entry = await tryLstat(current);
+    if (entry !== undefined && (!entry.isDirectory() || entry.isSymbolicLink())) {
+      throw new Error(`Generated output process marker ancestor '${current}' is not a regular directory.`);
+    }
+    if (dirname(current) === current) return;
+  }
+}
+
+async function ensurePrivateMarkerRoot(root: string): Promise<void> {
+  if (process.platform === "win32") return; // User profile directories inherit the user's ACL.
+  const home = normalizeMarkerPath(homedir());
+  for (let current = root; ; current = dirname(current)) {
+    const entry = await lstat(current);
+    if ((entry.mode & (current === root ? 0o077 : 0o022)) !== 0 || entry.uid !== process.getuid!()) {
+      throw new Error(`Generated output process marker directory '${current}' must be private to the current user (root mode 0700).`);
+    }
+    if (pathOrder(current, home) === 0) return;
+    if (dirname(current) === current) throw new Error("Generated output process marker root is outside the user profile.");
+  }
 }
 
 function retainProcessMarkerOwnership(registration: ProcessMarkerRegistration): void {

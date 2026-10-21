@@ -137,10 +137,28 @@ public sealed class SunderWorkerComposition : IAsyncDisposable
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(context);
+        TaskCompletionSource completion;
         lock (_gate)
         {
-            return _shutdownTask ??= ShutdownCoreAsync(context, cancellationToken);
+            if (_shutdownTask is not null) return _shutdownTask;
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _shutdownTask = completion.Task;
         }
+        _ = CompleteShutdownAsync(completion, context, cancellationToken);
+        return completion.Task;
+    }
+
+    private async Task CompleteShutdownAsync(TaskCompletionSource completion,
+        SunderWorkerShutdownContext context, CancellationToken cancellationToken)
+    {
+        // Publish ownership before any package code can reenter DisposeAsync.
+        await Task.Yield();
+        try
+        {
+            await ShutdownCoreAsync(context, cancellationToken).ConfigureAwait(false);
+            completion.TrySetResult();
+        }
+        catch (Exception exception) { completion.TrySetException(exception); }
     }
 
     /// <summary>Shuts down prepared lifecycle services in reverse order and disposes the package-owned service provider.</summary>
@@ -217,6 +235,7 @@ public sealed class SunderWorkerComposition : IAsyncDisposable
         List<Exception>? failures = null;
         foreach (var service in _preparedServices.AsEnumerable().Reverse())
         {
+            ThrowIfCleanupCancelled();
             try
             {
                 await service.ShutdownAsync(context, cancellationToken).ConfigureAwait(false);
@@ -227,6 +246,7 @@ public sealed class SunderWorkerComposition : IAsyncDisposable
                 failures.Add(exception);
             }
         }
+        ThrowIfCleanupCancelled();
         _preparedServices.Clear();
         try
         {
@@ -247,6 +267,14 @@ public sealed class SunderWorkerComposition : IAsyncDisposable
         if (failures is { Count: > 0 })
         {
             throw new AggregateException("Worker composition shutdown failed.", failures);
+        }
+
+        void ThrowIfCleanupCancelled()
+        {
+            if (!cancellationToken.IsCancellationRequested) return;
+            if (failures?.Any(static failure => failure is not OperationCanceledException) == true)
+                throw new AggregateException("Worker composition shutdown failed before cancellation.", failures);
+            cancellationToken.ThrowIfCancellationRequested();
         }
     }
 }

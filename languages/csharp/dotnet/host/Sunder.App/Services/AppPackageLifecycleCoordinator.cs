@@ -164,6 +164,7 @@ public sealed class AppPackageLifecycleCoordinator
                     RejectCandidate,
                     cancellationToken).ConfigureAwait(false);
                 candidate.QuarantineContext = quarantineContext;
+                candidate.RuntimeStamp = snapshot is null ? null : new(snapshot.RuntimeInstanceId, snapshot.SessionGeneration);
                 await _packageViewHostService.ApplyInheritedQuarantinesAsync(
                     candidate,
                     cancellationToken).ConfigureAwait(false);
@@ -237,7 +238,8 @@ public sealed class AppPackageLifecycleCoordinator
 
     private void RejectCandidate(AppPackageGeneration candidate)
     {
-        candidate.Composition.UnpublishServices();
+        candidate.RevokeUnretainedServices();
+        candidate.ReleaseDataHandoffs();
         Retirement.Enqueue(candidate);
     }
 

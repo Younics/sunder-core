@@ -49,6 +49,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private readonly object _writeQueueGate = new();
     private readonly Dictionary<string, HostCall> _hostCalls = new(StringComparer.Ordinal);
     private int _pendingHostCalls;
+    private int _pendingHostStreams;
     private readonly Dictionary<string, WorkerCall> _workerCalls = new(StringComparer.Ordinal);
     private readonly HashSet<Task> _workerCallCleanup = [];
     private readonly Dictionary<string, WorkerCallScope> _workerCallScopes = new(StringComparer.Ordinal);
@@ -84,6 +85,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private long? _sessionGeneration;
     private string? _shutdownId;
     private Exception? _fault;
+    private ProcessRuntimeGenerationFaultException? _reportedGenerationFault;
     private bool _activationAcknowledged;
     private byte[]? _activationFrameBody;
     private bool _shutdownAcknowledgementReceived;
@@ -581,7 +583,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 _stopStarted = true;
                 if (_state != WorkerState.Faulted)
                 {
-                    _shutdownAdmissionState = _state;
+                    if (_state != WorkerState.Stopping) _shutdownAdmissionState = _state;
                     _state = WorkerState.Stopping;
                 }
                 process = _process;
@@ -629,7 +631,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         {
             try
             {
-                if (!process.HasExited && _fault is null)
+                if (!process.HasExited && CanDrainShutdown())
                 {
                     QueueEnvelope(new
                     {
@@ -643,9 +645,18 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
                 try
                 {
-                    if (!process.HasExited && _fault is null)
+                    if (!process.HasExited && CanDrainShutdown())
                     {
-                        await _shutdownAcknowledged.Task.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                        // A generation fault may arrive after this wait starts. Always
+                        // observe exit as well as ack, then finish reading its fault report.
+                        var exit = process.WaitForExitAsync(shutdown.Token);
+                        var terminal = await Task.WhenAny(_shutdownAcknowledged.Task, exit)
+                            .WaitAsync(shutdown.Token).ConfigureAwait(false);
+                        await terminal.ConfigureAwait(false);
+                        if (ReferenceEquals(terminal, exit))
+                            await _readerTask.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                        if (_reportedGenerationFault is null)
+                            await _shutdownAcknowledged.Task.WaitAsync(shutdown.Token).ConfigureAwait(false);
                     }
                     if (!process.HasExited)
                     {
@@ -724,7 +735,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             serviceId,
             methodId,
             request);
-        ReservePendingHostCall();
+        ReservePendingHostCall(HostCallKind.Unary);
         var reservationHeld = true;
         HostCall? call = null;
         try
@@ -737,17 +748,17 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 providerId,
                 serviceId,
                 methodId,
+                invocation.Body,
                 consumePendingReservation: true);
             reservationHeld = false;
             return await InvokeUnaryCoreAsync(
                 call,
-                invocation.Body,
                 cancellationToken).ConfigureAwait(false);
         }
         finally
         {
             if (call is { InvocationQueued: false }) RemoveUnwrittenHostCall(call);
-            if (reservationHeld) ReleasePendingHostCall();
+            if (reservationHeld) ReleasePendingHostCall(HostCallKind.Unary);
         }
     }
 
@@ -782,7 +793,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             serviceId,
             methodId,
             request);
-        ReservePendingHostCall();
+        ReservePendingHostCall(HostCallKind.ServerStream);
         var reservationHeld = true;
         HostCall? call = null;
         try
@@ -795,11 +806,11 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 providerId,
                 serviceId,
                 methodId,
+                invocation.Body,
                 consumePendingReservation: true);
             reservationHeld = false;
             await foreach (var item in InvokeServerStreamCoreAsync(
                 call,
-                invocation.Body,
                 cancellationToken).ConfigureAwait(false))
             {
                 yield return item;
@@ -808,7 +819,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         finally
         {
             if (call is { InvocationQueued: false }) RemoveUnwrittenHostCall(call);
-            if (reservationHeld) ReleasePendingHostCall();
+            if (reservationHeld) ReleasePendingHostCall(HostCallKind.ServerStream);
         }
     }
 
@@ -851,22 +862,16 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private async ValueTask<JsonElement> InvokeUnaryCoreAsync(
         HostCall call,
-        byte[] body,
         CancellationToken cancellationToken)
     {
-        QueueHostCallBody(body);
-        call.InvocationQueued = true;
         using var registration = cancellationToken.Register(() => CancelHostCall(call, cancellationToken));
         return await call.UnaryCompletion.Task.ConfigureAwait(false);
     }
 
     private async IAsyncEnumerable<JsonElement> InvokeServerStreamCoreAsync(
         HostCall call,
-        byte[] body,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        QueueHostCallBody(body);
-        call.InvocationQueued = true;
         using var registration = cancellationToken.Register(() => CancelHostCall(call, cancellationToken));
         try
         {
@@ -916,6 +921,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             startInfo.Environment[variable.Key] = variable.Value;
         }
         startInfo.Environment["SUNDER_WORKER_PROTOCOL"] = SunderWorkerProtocol.Name;
+        startInfo.Environment["SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"] = "1";
         startInfo.Environment["SUNDER_PACKAGE_ID"] = _package.PackageId;
         startInfo.Environment["SUNDER_PACKAGE_VERSION"] = _package.Version;
         startInfo.Environment["SUNDER_ACTIVATION_ID"] = _activationId.ToString("N");
@@ -1007,8 +1013,11 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         string providerId,
         string serviceId,
         string methodId,
+        byte[] body,
         bool consumePendingReservation = false)
     {
+        var call = new HostCall(id, kind, context, providerId, serviceId, methodId,
+            _transportLimits.MaximumStreamQueueBytes);
         lock (_stateGate)
         {
             ThrowIfFaulted();
@@ -1016,35 +1025,30 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             {
                 throw WorkerActivating();
             }
-        }
-        var call = new HostCall(
-            id,
-            kind,
-            context,
-            providerId,
-            serviceId,
-            methodId,
-            _transportLimits.MaximumStreamQueueBytes);
-        lock (_callGate)
-        {
-            if (!consumePendingReservation
-                && _hostCalls.Count + _pendingHostCalls + _contributionCalls.Count
-                >= _policy.MaxOutstandingHostCalls)
+            lock (_callGate)
             {
-                throw new SunderRpcException(new SunderRpcError(
-                    SunderRpcErrorKind.ResourceExhausted,
-                    "rpc.worker.host-call-limit",
-                    "The process worker outstanding call limit was reached."));
-            }
-            _hostCalls.Add(call.Id, call);
-            if (consumePendingReservation)
-            {
-                if (_pendingHostCalls <= 0)
+                if (!consumePendingReservation) RequireHostCallCapacityUnderGate(kind);
+                if (consumePendingReservation
+                    && (kind == HostCallKind.ServerStream ? _pendingHostStreams : _pendingHostCalls) <= 0)
+                    throw new InvalidOperationException("A process worker Host call reservation was not held.");
+                _hostCalls.Add(call.Id, call);
+                try
+                {
+                    // Fault withdrawal cannot miss this call or enqueue its cancellation
+                    // before the original invocation has entered the ordered writer.
+                    QueueHostCallBody(body);
+                    call.InvocationQueued = true;
+                }
+                catch
                 {
                     _hostCalls.Remove(call.Id);
-                    throw new InvalidOperationException("A process worker Host call reservation was not held.");
+                    throw;
                 }
-                _pendingHostCalls--;
+                if (consumePendingReservation)
+                {
+                    if (kind == HostCallKind.ServerStream) _pendingHostStreams--;
+                    else _pendingHostCalls--;
+                }
             }
         }
         return call;
@@ -1061,7 +1065,21 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
-    private void ReservePendingHostCall()
+    private void RequireHostCallCapacityUnderGate(HostCallKind kind)
+    {
+        var stream = _operationalOutcomesV1 && kind == HostCallKind.ServerStream;
+        var count = _operationalOutcomesV1
+            ? _hostCalls.Values.Count(call => call.Kind == kind) + (stream ? _pendingHostStreams : _pendingHostCalls + _contributionCalls.Count)
+            : _hostCalls.Count + _pendingHostStreams + _pendingHostCalls + _contributionCalls.Count;
+        if (count >= (stream ? _policy.MaxOutstandingHostStreams : _policy.MaxOutstandingHostCalls))
+            throw SunderRpcException.Infrastructure(SunderRpcErrorKind.ResourceExhausted,
+                    stream ? "rpc.worker.host-stream-limit" : "rpc.worker.host-call-limit",
+                    stream ? "The process worker outstanding observation limit was reached."
+                        : "The process worker outstanding call limit was reached.")
+                .WithDispatchMetadata(SunderRpcDispatchState.NotDispatched, SunderRpcRetrySafety.Safe);
+    }
+
+    private void ReservePendingHostCall(HostCallKind kind)
     {
         lock (_stateGate)
         {
@@ -1072,24 +1090,22 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             lock (_callGate)
             {
-                if (_hostCalls.Count + _pendingHostCalls + _contributionCalls.Count
-                    >= _policy.MaxOutstandingHostCalls)
-                {
-                    throw new SunderRpcException(new SunderRpcError(
-                        SunderRpcErrorKind.ResourceExhausted,
-                        "rpc.worker.host-call-limit",
-                        "The process worker outstanding call limit was reached."));
-                }
-                _pendingHostCalls++;
+                RequireHostCallCapacityUnderGate(kind);
+                if (kind == HostCallKind.ServerStream) _pendingHostStreams++;
+                else _pendingHostCalls++;
             }
         }
     }
 
-    private void ReleasePendingHostCall()
+    private void ReleasePendingHostCall(HostCallKind kind)
     {
         lock (_callGate)
         {
-            if (_pendingHostCalls > 0) _pendingHostCalls--;
+            if (kind == HostCallKind.ServerStream)
+            {
+                if (_pendingHostStreams > 0) _pendingHostStreams--;
+            }
+            else if (_pendingHostCalls > 0) _pendingHostCalls--;
         }
     }
 
@@ -1452,17 +1468,43 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private void HandleGenerationFault(WorkerGenerationFaultEnvelope envelope)
     {
+        var failure = new ProcessRuntimeGenerationFaultException(envelope.Code, envelope.Message);
+        HostCall[] calls;
+        WorkerContributionCall[] contributions;
         lock (_stateGate)
         {
-            if (_state != WorkerState.Active
+            if (!(_state == WorkerState.Active || _state == WorkerState.Stopping
+                    && (_shutdownAdmissionState == WorkerState.Active
+                        || _shutdownAdmissionState == WorkerState.Activating && _activationAcknowledged))
+                || _reportedGenerationFault is not null
+                || _shutdownAcknowledgementReceived
                 || !string.Equals(envelope.ActivationId, _activationId.ToString("N"), StringComparison.Ordinal)
                 || envelope.SessionGeneration != _sessionGeneration)
             {
                 throw new SunderWorkerProtocolException(
                     "Process worker generation fault does not identify its exact active generation.");
             }
+            _reportedGenerationFault = failure;
+            _fault = failure;
+            _shutdownAdmissionState = WorkerState.Active;
+            _state = WorkerState.Stopping;
+            lock (_callGate)
+            {
+                calls = _hostCalls.Values.ToArray();
+                contributions = _contributionCalls.Values.ToArray();
+            }
         }
-        Fault(new ProcessRuntimeGenerationFaultException(envelope.Code, envelope.Message));
+        // Withdraw exact-generation authority before draining, while retaining the
+        // control/logging transport needed to release scopes and package resources.
+        _generationCompletion.TrySetException(failure);
+        foreach (var call in calls) CancelHostCall(call, new CancellationToken(canceled: true));
+        foreach (var call in contributions) CancelContributionCall(call, new CancellationToken(canceled: true));
+        _ = ObserveAsync(StopAsync());
+    }
+
+    private bool CanDrainShutdown()
+    {
+        lock (_stateGate) return _state != WorkerState.Faulted && (_fault is null || _reportedGenerationFault is not null);
     }
 
     private void HandleShutdownAcknowledgement(WorkerShutdownAcknowledgementEnvelope envelope)
@@ -1601,7 +1643,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
     }
 
-    private static Exception ReadWorkerError(JsonElement value, HostCall call)
+    private Exception ReadWorkerError(JsonElement value, HostCall call)
     {
         SunderWorkerProtocol.RequireOnlyProperties(value, "kind", "code", "message", "details");
         var kindText = SunderWorkerProtocol.RequiredString(value, "kind", 64);
@@ -1630,6 +1672,28 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         {
             throw new SunderWorkerProtocolException(
                 "Process worker returned a non-provider error after a provider-fault diagnostic.");
+        }
+        if (kindText == "operational")
+        {
+            if (!_operationalOutcomesV1)
+                throw new SunderWorkerProtocolException("Process worker returned an operational outcome without negotiation.");
+            if (details is not null)
+                throw new SunderWorkerProtocolException("Process worker returned details on an operational outcome.");
+            // Worker-controlled strings never become authenticated Host diagnostics. This closed
+            // outcome only says the enclosing provider operation could not finish; it conveys no
+            // permission, nested-call identity, or authority to replay an outer mutation.
+            var (kind, hostCode, hostMessage) = code switch
+            {
+                "resource-exhausted" => (SunderRpcErrorKind.ResourceExhausted,
+                    "rpc.provider.resource-exhausted", "The provider could not complete the RPC operation because resources are exhausted."),
+                "unavailable" => (SunderRpcErrorKind.Unavailable,
+                    "rpc.provider.unavailable", "The provider could not complete the RPC operation because a required service is unavailable."),
+                "deadline-exceeded" => (SunderRpcErrorKind.DeadlineExceeded,
+                    "rpc.provider.deadline-exceeded", "The provider could not complete the RPC operation before a required deadline."),
+                _ => throw new SunderWorkerProtocolException("Process worker returned an unknown operational outcome."),
+            };
+            return SunderRpcException.Infrastructure(kind, hostCode, hostMessage)
+                .WithDispatchMetadata(SunderRpcDispatchState.PossiblyDispatched, SunderRpcRetrySafety.Unsafe);
         }
         if (kindText == "resource-exhausted"
             && string.Equals(code, "rpc.worker.response-limit", StringComparison.Ordinal))
@@ -1664,6 +1728,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         var id = SunderWorkerProtocol.RequiredId(root);
         var control = IsWorkerCleanupControl(type);
         var logging = IsWorkerLogging(type);
+        var stream = type is "worker.watch" or "worker.subscribe";
         WorkerCall call;
         lock (_stateGate)
         {
@@ -1700,33 +1765,51 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             }
             lock (_callGate)
             {
-                if (_rememberedWorkerIds.Contains(id))
+                if (_workerCalls.ContainsKey(id) || _rememberedWorkerIds.Contains(id))
                 {
                     throw new SunderWorkerProtocolException($"Process worker reused duplicate message id '{id}'.");
                 }
                 var laneCount = _workerCalls.Values.Count(item =>
                     item.Control == control
-                    && item.Logging == logging);
+                    && item.Logging == logging
+                    && (!_operationalOutcomesV1 || item.Stream == stream));
                 var laneLimit = control
                     ? _policy.MaxOutstandingWorkerControlCalls
                     : logging
                         ? _policy.MaxOutstandingWorkerLoggingCalls
-                    : _policy.MaxOutstandingWorkerCalls;
+                        : stream && _operationalOutcomesV1
+                            ? _policy.MaxOutstandingWorkerStreams
+                            : _policy.MaxOutstandingWorkerCalls;
+                var parentFrame = ResolveWorkerCallParent(type, root);
                 if (laneCount >= laneLimit)
                 {
-                    throw new SunderWorkerProtocolException(
-                        control
+                    if (control || logging)
+                        throw new SunderWorkerProtocolException(control
                             ? "Process worker exceeded its outstanding Host-control-call limit."
-                            : logging
-                                ? "Process worker exceeded its outstanding logging-call limit."
-                            : "Process worker exceeded its outstanding host-call limit.");
+                            : "Process worker exceeded its outstanding logging-call limit.");
+                    ValidateRejectedWorkerCall(type, root);
+                    ReleaseRejectedWorkerPayload(type, root);
+                    RememberWorkerId(id);
+                    // Reject synchronously, without another running handler or an admission queue.
+                    // The bounded protocol writer remains the final transport-pressure boundary.
+                    QueueEnvelope(new
+                    {
+                        type = "host.error",
+                        id,
+                        error = WorkerWire.Error(new SunderRpcError(
+                            SunderRpcErrorKind.ResourceExhausted,
+                            stream ? "rpc.worker.stream-limit" : "rpc.worker.call-limit",
+                            stream ? "The worker RPC observation limit was reached." : "The worker RPC call limit was reached.",
+                            SunderRpcDispatchState.NotDispatched,
+                            SunderRpcRetrySafety.Safe)),
+                    });
+                    return;
                 }
-                RememberWorkerId(id);
-                var parentFrame = ResolveWorkerCallParent(type, root);
                 call = new WorkerCall(
                     id,
                     control,
                     logging,
+                    stream,
                     parentFrame,
                     CancellationTokenSource.CreateLinkedTokenSource(_forceStop.Token));
                 _workerCalls.Add(id, call);
@@ -1852,6 +1935,11 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             lock (_callGate)
             {
                 _workerCalls.Remove(call.Id);
+                // Live calls have their own bounded dictionary. Start the late
+                // cancellation/duplicate-request history at completion, not
+                // admission: a long-lived observation can outlast many finite
+                // calls, but its terminal response may still cross cancellation.
+                RememberWorkerId(call.Id);
                 if (call.ClosesWorkerScope) _closingWorkerCallScopes--;
                 if (call.ClosingScopeContentHandles > 0)
                 {
@@ -3336,6 +3424,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
 
     private void CompleteExpectedStop()
     {
+        FailOutstandingCalls(_fault ?? new OperationCanceledException("The process worker activation stopped."));
         FailOutstandingContributionCalls(new OperationCanceledException(
             "The process worker activation stopped."));
         lock (_stateGate)
@@ -3434,7 +3523,9 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     {
         if (policy.MaxHeaderBytes <= 0
             || policy.MaxOutstandingHostCalls <= 0
+            || policy.MaxOutstandingHostStreams <= 0
             || policy.MaxOutstandingWorkerCalls <= 0
+            || policy.MaxOutstandingWorkerStreams <= 0
             || policy.MaxOutstandingWorkerLoggingCalls <= 0
             || policy.MaxOutstandingWorkerCallScopes <= 0
             || policy.MaxMaterializedWorkerContentHandles <= 0
@@ -3732,12 +3823,14 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         string id,
         bool control,
         bool logging,
+        bool stream,
         RuntimeRpcCallFrame? parentFrame,
         CancellationTokenSource cancellation)
     {
         public string Id { get; } = id;
         public bool Control { get; } = control;
         public bool Logging { get; } = logging;
+        public bool Stream { get; } = stream;
         public RuntimeRpcCallFrame? ParentFrame { get; } = parentFrame;
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public Task CancellationCallbacks { get; set; } = Task.CompletedTask;

@@ -28,5 +28,5 @@ CLI uses `registry stack unlist <id>` and `registry stack relist <id>`. Runtime'
 removing a user's local copied Stack file remains a separate operation.
 
 Development local publication can supply `IdempotencyKey` and
-`ExpectedPublicationAuthorityRevision`; checkpoint-backed local publication requires
+`ExpectedPublicationAuthorityRevision`; database-policy-backed local publication requires
 them. Unconfigured explicit Development legacy mechanics do not prove V1 authority.

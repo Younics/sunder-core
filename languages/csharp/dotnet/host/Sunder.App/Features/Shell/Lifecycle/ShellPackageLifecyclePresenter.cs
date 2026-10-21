@@ -85,10 +85,12 @@ internal sealed class ShellPackageLifecyclePresenter(
 
     public void CommitPreparedLifecycleChanges(
         ShellPackageLifecyclePresentation presentation,
-        IReadOnlySet<string> stabilizedViewIds)
+        IReadOnlySet<string> stabilizedViewIds,
+        IReadOnlySet<string>? retainedPackageIds = null)
     {
         ApplyProjectionState(presentation.Snapshot.State, shellState);
-        DetachRetainedPackageViews();
+        removeRetainedPackageViews?.Invoke(viewsById.Values.Select(view => view.PackageId)
+            .Where(id => retainedPackageIds?.Contains(id) != true).ToHashSet(StringComparer.OrdinalIgnoreCase));
         viewsById.Clear();
         foreach (var view in presentation.Snapshot.PackageViews)
         {

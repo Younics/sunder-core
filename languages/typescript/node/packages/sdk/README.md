@@ -85,11 +85,12 @@ const message = await own.greeting.greet("Sunder", { signal });
 ```
 
 `Self` uses the normalized source definition keys, even when distinct contracts
-preserve the same wire service name. Selected packages with one public contract
-expose its services directly. Multiple contracts get full-contract-ID camel-case
-scopes: for `example.dependency.first` and `example.dependency.second`, both with
-service `messages`, use `dependency.exampleDependencyFirst.messages.send(request)`
-and `dependency.exampleDependencySecond.messages.send(request)`. Scope and service
+preserve the same wire service name. Selected packages always have a full-contract-ID
+scope, including a selection with only one contract. Scopes retain underscore
+separators: `example.messages` becomes `example_Messages`. For
+`example.dependency.first` and `example.dependency.second`, both with service
+`messages`, use `dependency.example_Dependency_First.messages.send(request)`
+and `dependency.example_Dependency_Second.messages.send(request)`. Scope and service
 name collisions are checked within their actual object scope; no suffix or hash
 chooses a winner. Imported calls take the descriptor's request value (including an
 explicit `{}` for an empty request) and return its result value. They do not guess
@@ -180,8 +181,10 @@ enumerator.abort();
 ```
 
 Use `ServiceReference<typeof sourceDefinition>` for owned declarations and
-`ServiceReference<typeof Services.Weather.forecast>` for an imported service token
+`ServiceReference<typeof Services.Weather.example_Weather.forecast>` for an imported service token
 (the `Services` tree follows the same package/contract/service scopes as `api`).
+The canonical token path is `Services.Contracts.CExample_Weather.forecast`;
+`Services.Self` keeps the source-shaped owned service keys.
 JSDoc uses the identical types through `import("@sunder/sdk")` or the browser entry.
 `SelfModels` and selected `<Token>Models` remain type-only namespaces.
 
@@ -277,7 +280,7 @@ import { defineService } from "@sunder/sdk";
 import { Implementations, Services } from "#sunder/api";
 
 export const holder = defineService({
-  handle(request) { return true; },
+  holderHandle(request) { return true; },
 }, {
   implements: Implementations.holder,
   runtimeUses: [{
@@ -319,9 +322,14 @@ import { defineService } from "@sunder/sdk";
 import { Implementations } from "#sunder/api";
 
 export const extension = defineService({
-  ping(request, context) { context.signal.throwIfAborted(); return request; },
+  examplePing(request, context) { context.signal.throwIfAborted(); return request; },
 }, { implements: Implementations.extension });
 ```
+
+Imported handler names always concatenate the camel-case service ID and Pascal-case
+method ID: service `example` / method `ping` is `examplePing`, even for a
+single-service contract. Adding another service does not rename existing handlers;
+normalized handler-name collisions are rejected within the contract.
 
 Imported types and authority come from the exact lock/cache. No schemas or consumer
 grants are redeclared. A declaration-only extension uses

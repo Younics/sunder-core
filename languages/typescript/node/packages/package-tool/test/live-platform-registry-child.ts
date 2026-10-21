@@ -65,12 +65,12 @@ async function main(): Promise<void> {
     await writeFile(join(project, `src/rpc.${extension}`), `
       import {defineService,RpcError} from '@sunder/sdk'; import {Implementations} from '#sunder/api';
       export const stack=defineService({
-        metadata(request,context){context.signal.throwIfAborted();return {contributorId:'node-stack',displayName:'Node Stack',supportsExport:true,supportsImport:false,supportsImportApplied:false};},
-        listExportItems(request,context){context.signal.throwIfAborted();return {items:[{itemId:'item',displayName:'Item',kind:'sample',defaultSelected:true}]};},
-        export(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
-        previewImport(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
-        import(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
-        importApplied(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});}
+        stackContributorMetadata(request,context){context.signal.throwIfAborted();return {contributorId:'node-stack',displayName:'Node Stack',supportsExport:true,supportsImport:false,supportsImportApplied:false};},
+        stackContributorListExportItems(request,context){context.signal.throwIfAborted();return {items:[{itemId:'item',displayName:'Item',kind:'sample',defaultSelected:true}]};},
+        stackContributorExport(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
+        stackContributorPreviewImport(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
+        stackContributorImport(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});},
+        stackContributorImportApplied(){throw new RpcError({kind:'domain',code:'stack.method.unsupported',message:'Unsupported'});}
       },{implements:Implementations.stackContributor,providerId:'example.owner.stack'});`);
     offline = true;
     const options = { contractCacheRoot: cache };

@@ -121,7 +121,7 @@
   <Target Name="GetSunderPackageAppPreviewInputs" DependsOnTargets="_ValidateSunderPackagePreviewRid;Build" Returns="@(_SunderPackagePreviewInput)">
     <Error Condition="'%(_SunderBuiltRid.HasApp)' != 'true'" Text="package-authoring.preview-unavailable: This package has no generated App role." />
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_GetSunderPackageAppPreviewInput" BuildInParallel="false" StopOnFirstFailure="true"
-             Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderDispatchRid);SunderPackageCompilationRole=app;SunderPackageRidBuild=true;AssemblyName=%(_SunderBuiltRid.AssemblyName);OutputType=Library;SunderPackageProject=true;IntermediateOutputPath=%(_SunderBuiltRid.AppIntermediatePath);OutputPath=%(_SunderBuiltRid.AppOutputPath);AppendRuntimeIdentifierToOutputPath=false;ProjectAssetsFile=%(_SunderBuiltRid.SnapshotRoot)/roles/app/restore/project.assets.json;MSBuildProjectExtensionsPath=%(_SunderBuiltRid.SnapshotRoot)/roles/app/restore/"
+              Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderDispatchRid);SunderPackageCompilationRole=app;SunderPackageRidBuild=true;AssemblyName=%(_SunderBuiltRid.AssemblyName);OutputType=Library;SunderPackageProject=true;IntermediateOutputPath=%(_SunderBuiltRid.AppIntermediatePath);OutputPath=%(_SunderBuiltRid.AppOutputPath);AppendRuntimeIdentifierToOutputPath=false;SunderPackageRoleCompilationRoot=%(_SunderBuiltRid.AppCompilationRoot);ProjectAssetsFile=%(_SunderBuiltRid.AppCompilationRoot)/roles/app/restore/project.assets.json;MSBuildProjectExtensionsPath=%(_SunderBuiltRid.AppCompilationRoot)/roles/app/restore/"
              RemoveProperties="OutDir">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderPackagePreviewInput" />
     </MSBuild>
@@ -164,7 +164,7 @@
          Keep the package import active so its isolation/cleanup hooks still load. -->
     <MSBuild Projects="@(_SunderRoleCleanRequest)" Targets="Clean" BuildInParallel="false" StopOnFirstFailure="true"
              Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);SunderPackageRidBuild=true;SunderPackageProject=true;BuildProjectReferences=false;AppendRuntimeIdentifierToOutputPath=false"
-             RemoveProperties="OutDir;SunderPackageRolePlanPath;SunderPackageRolePlanSha256" />
+              RemoveProperties="OutDir;SunderPackageRolePlanPath;SunderPackageRolePlanSha256;SunderPackageRoleCompilationRoot" />
     <CleanSunderRpcGeneratedOutputTask ProjectDirectory="$(MSBuildProjectDirectory)" GeneratedDirectories="@(_SunderRidAnalysisToClean)" />
     <CleanSunderPackageOutputTask OutputPath="$(_SunderDispatchOutput)sunder-targets/%(_SunderDeclaredRid.Identity)/sunder-dev" OutputDiscoveryRoot="$(_SunderDispatchOutput)sunder-targets/%(_SunderDeclaredRid.Identity)/"
                                   ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)sunder-targets/%(_SunderDeclaredRid.Identity)/" />

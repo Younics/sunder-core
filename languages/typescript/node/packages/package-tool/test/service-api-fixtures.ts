@@ -100,13 +100,15 @@ export async function exerciseServiceApiScopes(toolRoot: string, extension: "ts"
   try {
     // Both Worker source checking and ordinary browser tsc/checkJs consume tokens.
     await writeFile(join(c.root, `src/services.${extension}`), c.source + `
-import {Self, Dependency} from "#sunder/api";
+import {Self, Dependency, Services} from "#sunder/api";
 /** @param {import("@sunder/sdk").WorkerContext} context */
 export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) {
   const own = context.api(Self); const selected = context.api(Dependency);
   return {async onActivated() {
-    const first = await selected.exampleDependencyFirst.messages.send({});
-    const second = await selected.exampleDependencySecond.messages.send({});
+    const first = await selected.example_Dependency_First.messages.send({});
+    const second = await selected.example_Dependency_Second.messages.send({});
+    if (Services.Dependency.example_Dependency_First.messages !== Services.Contracts.CExample_Dependency_First.messages) throw new Error("Different service token");
+    if (Services.Self.messages !== Services.Contracts.CExample_Owner_Messages.messages) throw new Error("Different Self token");
     await own.messages.send(first.message); await own.otherMessages.send(second.message);
   }};
 }
@@ -126,33 +128,33 @@ export function configure(context${extension === "ts" ? ": WorkerContext" : ""})
       }
     }
     assert.deepEqual(await readFile(join(c.root, "sunder-contracts.lock.json")), c.lockBytes);
-    await writeFile(join(c.root, `app/consumer.${extension}`), `import {Self, Dependency} from "#sunder/api";
+    await writeFile(join(c.root, `app/consumer.${extension}`), `import {Self, Dependency, Services} from "#sunder/api";
 import {createBrowserContext} from "@sunder/sdk/browser";
 export function connect() {
   const owner = createBrowserContext(Self); const own = owner.api(Self); const selected = owner.api(Dependency);
   own.messages.send("one").then(value => value.toUpperCase()); own.otherMessages.send("two");
-  selected.exampleDependencyFirst.messages.send({}).then(value => value.payload?.subarray(0));
-  selected.exampleDependencySecond.messages.send({}).then(value => value.metadata?.key?.toUpperCase());
+  selected.example_Dependency_First.messages.send({}).then(value => value.payload?.subarray(0));
+  selected.example_Dependency_Second.messages.send({}).then(value => value.metadata?.key?.toUpperCase());
+  const importedToken = Services.Dependency.example_Dependency_First.messages;
+  const canonicalToken = Services.Contracts.CExample_Dependency_First.messages;
+  const ownToken = Services.Self.messages;
+  void [importedToken, canonicalToken, ownToken];
   // @ts-expect-error No flattened service alias may silently pick one contract.
   selected.messages.send({});
   // @ts-expect-error The descriptor supplies a Request, not guessed producer parameters/Unit omission.
-  selected.exampleDependencyFirst.messages.send();
+  selected.example_Dependency_First.messages.send();
   // @ts-expect-error Self retains its ordinary source argument shape.
   own.messages.send({value:"one"});
   // @ts-expect-error Remote named Response is not an inferred primitive result.
-  selected.exampleDependencySecond.messages.send({}).then(value => value.toUpperCase());
+  selected.example_Dependency_Second.messages.send({}).then(value => value.toUpperCase());
+  // @ts-expect-error The canonical tree already supplies the contract scope.
+  Services.Contracts.CExample_Dependency_First.example_Dependency_First.messages;
   return owner;
 }
 `);
-    await writeFile(join(c.root, "tsconfig.browser.json"), JSON.stringify({ compilerOptions: {
-      target: "ES2023", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2023", "DOM", "DOM.Iterable"], types: [], strict: true,
-      allowJs: true, checkJs: true, noEmit: true, skipLibCheck: false,
-      paths: { "@sunder/sdk/browser": [c.fromTool.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
-        "@sunder/sdk/core": [c.fromTool.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] },
-    }, files: [`app/consumer.${extension}`] }));
-    await promisify(execFile)(process.execPath, [c.fromTool.resolve("typescript/bin/tsc"), "-p", "tsconfig.browser.json"], { cwd: c.root });
+    await checkServiceApiBrowser(c, extension);
     const esbuild: typeof import("esbuild") = c.fromTool("esbuild");
-    const bundled = await esbuild.build({ stdin: { contents: `export {Self, Dependency} from "#sunder/api";
+    const bundled = await esbuild.build({ stdin: { contents: `export {Self, Dependency, Services} from "#sunder/api";
 export {createApiContext, createBrowserContext} from "@sunder/sdk/browser";
 export {connect} from "./app/consumer.${extension}";`, resolveDir: c.root, loader: "ts" }, bundle: true, platform: "browser", format: "cjs", write: false, metafile: true,
       alias: { "@sunder/sdk/browser": c.fromTool.resolve("@sunder/sdk/browser") } });
@@ -179,23 +181,37 @@ export {connect} from "./app/consumer.${extension}";`, resolveDir: c.root, loade
     const owner = api.createApiContext("example.owner", transport);
     const own = owner.api(api.Self); const selected = owner.api(api.Dependency);
     assert.deepEqual(Object.keys(own), ["messages", "otherMessages"]);
-    assert.deepEqual(Object.keys(selected), ["exampleDependencyFirst", "exampleDependencySecond"]);
+    assert.deepEqual(Object.keys(selected), ["example_Dependency_First", "example_Dependency_Second"]);
+    assert.deepEqual(Object.keys(api.Services.Dependency), Object.keys(selected));
+    assert.deepEqual(Object.keys(api.Services.Self), Object.keys(own));
+    assert.equal(api.Services.Dependency.example_Dependency_First.messages, api.Services.Contracts.CExample_Dependency_First.messages);
+    assert.equal(api.Services.Self.messages, api.Services.Contracts.CExample_Owner_Messages.messages);
     assert.equal(discoveries, 0);
     for (const token of [api.Self, api.Dependency]) assert.throws(() => owner.api({...token}), /different package|token/i);
     assert.equal(discoveries, 0);
     assert.equal(await own.messages.send("example.owner.messages"), "example.owner.messages");
     assert.equal(await own.otherMessages.send("example.owner.other.messages"), "example.owner.other.messages");
-    for (const [key, id] of [["exampleDependencyFirst", "example.dependency.first"], ["exampleDependencySecond", "example.dependency.second"]]) {
+    for (const [key, id] of [["example_Dependency_First", "example.dependency.first"], ["example_Dependency_Second", "example.dependency.second"]]) {
       assert.ok(Object.isFrozen(selected[key!])); assert.ok(Object.isFrozen(selected[key!].messages));
       const value = await selected[key!].messages.send({}); assert.equal(value.message, id); assert.deepEqual(value.payload, new Uint8Array([0,1,2,255]));
     }
-    const child = owner.fork(); await child.api(api.Dependency).exampleDependencyFirst.messages.send({}); child.dispose();
+    const child = owner.fork(); await child.api(api.Dependency).example_Dependency_First.messages.send({}); child.dispose();
     assert.equal(closed, 5); assert.equal(calls.length, 5);
     const host = new EventTarget(); const lifetime = new AbortController();
     Object.defineProperty(host, "sunder", { value: Object.freeze({protocol:"sunder.bridge.v1", version:1, signal:lifetime.signal, rpc:transport}), writable:false, configurable:false });
     const browser = api.createBrowserContext(api.Self, host);
-    assert.equal((await browser.api(api.Dependency).exampleDependencySecond.messages.send({})).message, "example.dependency.second");
+    assert.equal((await browser.api(api.Dependency).example_Dependency_Second.messages.send({})).message, "example.dependency.second");
     assert.deepEqual(calls.map(call => call.id), ["example.owner.messages", "example.owner.other.messages", "example.dependency.first", "example.dependency.second", "example.dependency.first", "example.dependency.second"]);
     browser.dispose(); owner.dispose(); lifetime.abort();
   } finally { await c.dispose(); }
+}
+
+export async function checkServiceApiBrowser(c: Pick<Awaited<ReturnType<typeof serviceApiFixture>>, "root" | "fromTool">, extension: "ts" | "js"): Promise<void> {
+  await writeFile(join(c.root, "tsconfig.browser.json"), JSON.stringify({ compilerOptions: {
+    target: "ES2023", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2023", "DOM", "DOM.Iterable"], types: [], strict: true,
+    allowJs: true, checkJs: true, noEmit: true, skipLibCheck: false,
+    paths: { "@sunder/sdk/browser": [c.fromTool.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
+      "@sunder/sdk/core": [c.fromTool.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] },
+  }, files: [`app/consumer.${extension}`] }));
+  await promisify(execFile)(process.execPath, [c.fromTool.resolve("typescript/bin/tsc"), "-p", "tsconfig.browser.json"], { cwd: c.root });
 }
