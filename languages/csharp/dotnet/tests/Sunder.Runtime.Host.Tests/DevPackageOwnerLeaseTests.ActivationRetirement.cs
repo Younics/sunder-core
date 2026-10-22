@@ -14,6 +14,156 @@ public sealed partial class DevPackageOwnerLeaseTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task LeafOwnerReleasePreparesValidatedRetainedWorkersWithoutReconstructingThemAndDiscardDoesNotOwnThem(bool commit)
+    {
+        var resolver = new RetirementBindingResolver();
+        await using var fixture = CreateFixture(executionRuntimeLaunchResolver: resolver);
+        const string token = "retained-release-owner-token-aaaaaaaa";
+        var keep = CreateRetirementRolePackage(fixture.Paths.RootPath, "keep.package");
+        var leaf = CreateRetirementRolePackage(fixture.Paths.RootPath, "leaf.package");
+        await fixture.Host.LoadInstalledPackagesAsync();
+        await fixture.Host.ReplaceDevPackageOwnerAsync("keep", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, keep, false));
+        await fixture.Host.ReplaceDevPackageOwnerAsync("leaf", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, leaf, false));
+        var active = fixture.Host.ActiveSession.LoadedPackageMap["keep.package"];
+        var originalSnapshot = active.Source.SnapshotFolder!;
+        var generation = fixture.Host.SessionGeneration;
+        Assert.Empty(fixture.Host.SessionOwner.GetSnapshot().Warnings);
+        Assert.Empty(fixture.Host.SessionOwner.GetSnapshot().Errors);
+        Assert.All(fixture.Host.GetSessionPackages(), package => Assert.Equal(PackageReadinessState.Ready, package.Readiness));
+        var sources = fixture.Host.GetActiveRuntimePackageSources();
+        var retainedSource = Assert.Single(sources, source => source.PackageId == "keep.package");
+        Assert.Equal(AppActivationFingerprint.Create(Guid.Empty, "keep.package", sources, fixture.Host.GetSessionPackages()),
+            AppActivationFingerprint.Create(Guid.Empty, "keep.package", [retainedSource], fixture.Host.GetSessionPackages()));
+        var runtimeValidations = resolver.Validations;
+        var stage = await fixture.Host.StageOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, 1, "release"));
+        var candidate = Assert.IsType<ActivePackageSession>(fixture.Host.GetStagedLifecycleSession(stage.StageId!));
+        var retained = candidate.LoadedPackageMap["keep.package"];
+        Assert.Same(active.Worker, retained.Worker); // No disposable duplicate Worker/projection/runtime lease was constructed.
+        Assert.Equal(originalSnapshot, retained.Source.SnapshotFolder);
+        Assert.Equal(active.RuntimeActivationId, retained.RuntimeActivationId);
+        Assert.True(resolver.Validations > runtimeValidations); // Continuing process is not a runtime-policy bypass.
+        Assert.Equal(generation, fixture.Host.SessionGeneration);
+        Assert.True(fixture.Host.ContainsDevPackageOwner("leaf")); // Preparation is never acknowledgement.
+        Assert.False(active.Worker.GenerationCompletion.IsCompleted);
+        if (!commit)
+        {
+            Assert.True(await fixture.Host.DiscardPackageLifecycleStageAsync(stage.StageId!));
+            Assert.Same(active.Worker, fixture.Host.ActiveSession.LoadedPackageMap["keep.package"].Worker);
+            Assert.False(active.Worker.GenerationCompletion.IsCompleted);
+            Assert.True(Directory.Exists(originalSnapshot));
+            stage = await fixture.Host.StageOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, 1, "release-again"));
+        }
+        var released = await fixture.Host.CommitOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, stage.StageId!));
+        Assert.Equal("keep.package", Assert.Single(released.Snapshot.ActivePackages).PackageId);
+        Assert.False(fixture.Host.ContainsDevPackageOwner("leaf"));
+        Assert.Same(active.Worker, fixture.Host.ActiveSession.LoadedPackageMap["keep.package"].Worker);
+        Assert.False(active.Worker.GenerationCompletion.IsCompleted);
+        Assert.True(Directory.Exists(originalSnapshot)); // Old session cleanup cannot remove the retained bytes.
+        Assert.Equal(released, await fixture.Host.CommitOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, stage.StageId!)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CanceledRetainedValidationCannotReserveWorkersOrConvertForeignCancellationIntoFallback(bool foreign)
+    {
+        var resolver = new RetirementBindingResolver();
+        await using var fixture = CreateFixture(executionRuntimeLaunchResolver: resolver);
+        const string token = "retained-release-cancellation-token-aaaa";
+        var keep = CreateRetirementRolePackage(fixture.Paths.RootPath, "keep.package");
+        var leaf = CreateRetirementRolePackage(fixture.Paths.RootPath, "leaf.package");
+        await fixture.Host.LoadInstalledPackagesAsync();
+        await fixture.Host.ReplaceDevPackageOwnerAsync("keep", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, keep, false));
+        await fixture.Host.ReplaceDevPackageOwnerAsync("leaf", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, leaf, false));
+        var active = fixture.Host.ActiveSession.LoadedPackageMap["keep.package"];
+        var generation = fixture.Host.SessionGeneration;
+        var validations = resolver.Validations;
+        using var cancellation = new CancellationTokenSource();
+        using var other = new CancellationTokenSource();
+        other.Cancel();
+        resolver.BeforeValidation = () =>
+        {
+            if (foreign) throw new OperationCanceledException(other.Token);
+            cancellation.Cancel();
+        };
+        var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fixture.Host.StageOwnerReleaseAsync("leaf",
+            new(fixture.Host.RuntimeInstanceId, token, 1, "cancelled-release"), cancellation.Token));
+        if (foreign) Assert.Equal(other.Token, failure.CancellationToken);
+        Assert.Equal(validations + 1, resolver.Validations); // No hidden ordinary-loader retry.
+        Assert.Equal(generation, fixture.Host.SessionGeneration);
+        Assert.True(fixture.Host.ContainsDevPackageOwner("leaf"));
+        Assert.Same(active.Worker, fixture.Host.ActiveSession.LoadedPackageMap["keep.package"].Worker);
+        Assert.False(active.Worker.GenerationCompletion.IsCompleted);
+        Assert.True(Directory.Exists(active.Source.SnapshotFolder));
+        resolver.BeforeValidation = null;
+        var stage = await fixture.Host.StageOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, 1, "fresh-release"));
+        await fixture.Host.CommitOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, stage.StageId!));
+        Assert.Same(active.Worker, fixture.Host.ActiveSession.LoadedPackageMap["keep.package"].Worker);
+    }
+
+    [Theory]
+    [InlineData("changed-source")]
+    [InlineData("invalid-source")]
+    [InlineData("invalid-shadow")]
+    [InlineData("installed-fallback")]
+    [InlineData("dependency-removal")]
+    [InlineData("provider-removal")]
+    [InlineData("runtime-binding")]
+    public async Task RetainedOwnerReleaseFallsBackWhenFreshContentOrInstalledAuthorityCannotBeProved(string boundary)
+    {
+        var resolver = new RetirementBindingResolver();
+        await using var fixture = CreateFixture(executionRuntimeLaunchResolver: resolver);
+        const string token = "retained-release-fallback-token-aaaa";
+        var keep = CreateRetirementRolePackage(fixture.Paths.RootPath, "keep.package", consumes: boundary == "provider-removal");
+        var leaf = CreateRetirementRolePackage(fixture.Paths.RootPath, "leaf.package");
+        if (boundary == "dependency-removal")
+        {
+            var path = Path.Combine(keep, SunderPackageFormat.ManifestPath);
+            var manifest = JsonNode.Parse(File.ReadAllText(path))!;
+            manifest["dependsOn"] = JsonNode.Parse("""[{"packageId":"leaf.package","versionRange":">=1.0.0 <2.0.0","presence":"required"}]""");
+            File.WriteAllText(path, manifest.ToJsonString());
+            CanonicalPackageTestBuilder.WriteContentIndex(keep);
+        }
+        if (boundary == "installed-fallback")
+            await AddInstalledPackageAsync(fixture.Store, CreatePackageLayout(fixture.Paths.RootPath, "installed", "leaf.package", "0.9.0"));
+        await fixture.Host.LoadInstalledPackagesAsync();
+        await fixture.Host.ReplaceDevPackageOwnerAsync("leaf", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, leaf, false));
+        await fixture.Host.ReplaceDevPackageOwnerAsync("keep", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, keep, false));
+        var active = fixture.Host.ActiveSession.LoadedPackageMap["keep.package"];
+        if (boundary == "runtime-binding") resolver.ChangedArtifact = true;
+        if (boundary is not ("installed-fallback" or "dependency-removal" or "provider-removal" or "runtime-binding"))
+        {
+            var root = boundary == "invalid-shadow" ? active.Source.SnapshotFolder! : keep;
+            var path = Path.Combine(root, SunderPackageFormat.ManifestPath);
+            var manifest = JsonNode.Parse(File.ReadAllText(path))!;
+            manifest["name"] = "Fresh name";
+            File.WriteAllText(path, manifest.ToJsonString());
+            if (boundary == "changed-source") CanonicalPackageTestBuilder.WriteContentIndex(root);
+        }
+        var stage = await fixture.Host.StageOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, 1, "release"));
+        var candidate = Assert.IsType<ActivePackageSession>(fixture.Host.GetStagedLifecycleSession(stage.StageId!));
+        if (boundary is "invalid-source" or "dependency-removal") Assert.False(candidate.LoadedPackageMap.ContainsKey("keep.package"));
+        else
+        {
+            var rebuilt = candidate.LoadedPackageMap["keep.package"];
+            Assert.NotSame(active.Worker, rebuilt.Worker);
+            Assert.NotEqual(active.Source.SnapshotFolder, rebuilt.Source.SnapshotFolder);
+            if (boundary == "changed-source") Assert.Equal("Fresh name", rebuilt.Descriptor.DisplayName);
+        }
+        if (boundary == "installed-fallback")
+        {
+            var fallback = Assert.Single(candidate.GetActivePackageSources(), source => source.PackageId == "leaf.package");
+            Assert.Equal(PackageSourceKind.Installed, fallback.Kind);
+            Assert.Equal("0.9.0", fallback.Manifest!.Version);
+        }
+        Assert.True(await fixture.Host.DiscardPackageLifecycleStageAsync(stage.StageId!));
+        Assert.False(active.Worker.GenerationCompletion.IsCompleted);
+        Assert.True(fixture.Host.ContainsDevPackageOwner("leaf"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task AcknowledgedAppRetirementAllowsLastOwnerUnloadAndPreservesNonLastOwner(bool web)
     {
         using var policy = new ActivePolicyTestContext();
@@ -230,11 +380,14 @@ public sealed partial class DevPackageOwnerLeaseTests
         var time = new MutableTimeProvider(DateTimeOffset.UtcNow);
         var fixture = CreateFixture(policy: new() { PendingStageLifetime = TimeSpan.FromSeconds(1) }, timeProvider: time);
         const string token = "retirement-stage-expiration-owner-token";
-        var folder = CreatePackageLayout(fixture.Paths.RootPath, "ttl", "test.package", "1.0.0").InstallPath;
+        var folder = CreateRetirementRolePackage(fixture.Paths.RootPath, "test.package");
+        var retainedFolder = CreateRetirementRolePackage(fixture.Paths.RootPath, "keep.package");
         try
         {
             await fixture.Host.LoadInstalledPackagesAsync();
+            await fixture.Host.ReplaceDevPackageOwnerAsync("keep", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, retainedFolder, false));
             await fixture.Host.ReplaceDevPackageOwnerAsync("owner", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, folder, false));
+            var retained = fixture.Host.ActiveSession.LoadedPackageMap["keep.package"];
             var stage = await fixture.Host.StageOwnerReleaseAsync("owner", new(fixture.Host.RuntimeInstanceId, token, 1, "release"));
             time.Advance(TimeSpan.FromSeconds(2));
             await fixture.Host.HeartbeatDevPackageOwnerAsync("owner", new(fixture.Host.RuntimeInstanceId, token));
@@ -242,9 +395,45 @@ public sealed partial class DevPackageOwnerLeaseTests
             await fixture.Host.SweepLifecycleStagesAsync(time.GetUtcNow());
             Assert.Null(fixture.Host.GetStagedLifecycleSession(stage.StageId!));
             Assert.True(fixture.Host.ContainsDevPackageOwner("owner"));
-            Assert.Single(fixture.Host.GetActivePackages());
+            Assert.Equal(2, fixture.Host.GetActivePackages().Count);
+            Assert.Same(retained.Worker, fixture.Host.ActiveSession.LoadedPackageMap["keep.package"].Worker);
+            Assert.False(retained.Worker.GenerationCompletion.IsCompleted);
+            Assert.True(Directory.Exists(retained.Source.SnapshotFolder));
         }
         finally { await fixture.DisposeAsync(); }
+    }
+
+    private static string CreateRetirementRolePackage(string root, string id, bool consumes = false)
+    {
+        // Healthy provider-bearing fixtures produce no missing-provider warnings.
+        // A true leaf removal cannot change a survivor's observed provider closure;
+        // the consumes countercase explicitly opts into that dependency.
+        var folder = CreateRolePackage(root, id);
+        var path = Path.Combine(folder, SunderPackageFormat.ManifestPath);
+        var manifest = JsonNode.Parse(File.ReadAllText(path))!;
+        manifest["provides"]![0]!["providerId"] = id + ".provider";
+        if (!consumes) manifest["usesContracts"] = new JsonArray();
+        File.WriteAllText(path, manifest.ToJsonString());
+        CanonicalPackageTestBuilder.WriteContentIndex(folder);
+        return folder;
+    }
+
+    private sealed class RetirementBindingResolver : IExecutionRuntimeLaunchResolver, ITestOnlyInstalledExecutionRuntimeBindingResolver
+    {
+        internal int Validations;
+        internal bool ChangedArtifact;
+        internal Action? BeforeValidation;
+        public Task<ResolvedExecutionRuntimeLaunch> ResolveAsync(PreparedRuntimePackage package, Guid activation, CancellationToken token)
+            => TestExecutionRuntimeLaunchResolver.Instance.ResolveAsync(package, activation, token);
+        public async Task<ResolvedEphemeralExecutionRuntimeBinding> ResolveEphemeralBindingAsync(SunderPackageTargetKey key,
+            SunderPackageTargetManifest target, CancellationToken token)
+        {
+            Interlocked.Increment(ref Validations);
+            BeforeValidation?.Invoke();
+            await using var result = await TestExecutionRuntimeLaunchResolver.Instance.ResolveEphemeralBindingAsync(key, target, token);
+            return new(ChangedArtifact ? result.Binding with
+            { InstalledArtifact = result.Binding.InstalledArtifact with { ContentIdentity = new string('e', 64) } } : result.Binding);
+        }
     }
 
     private static string CreateRequiredAppPackage(string root, bool web)

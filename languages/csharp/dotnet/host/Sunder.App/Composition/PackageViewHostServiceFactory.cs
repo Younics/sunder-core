@@ -9,7 +9,7 @@ public sealed class PackageViewHostServiceFactory(
     AppPackageSettingsNavigationService settingsNavigationService,
     RuntimeClientTransport runtimeTransport,
     NotificationCenterService notificationCenter,
-    BackgroundProcessQueueService backgroundProcessQueue,
+    BackgroundTaskQueueService backgroundTaskQueue,
     AppPackageResourceAssemblyRegistry packageResourceAssemblyRegistry,
     IUiDispatcher uiDispatcher)
 {
@@ -25,7 +25,7 @@ public sealed class PackageViewHostServiceFactory(
             shellViewService,
             settingsNavigationService,
             notificationCenter,
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             packageResourceAssemblyRegistry,
             runtimeTransport.GetConnectionInfo,
             uiDispatcher,

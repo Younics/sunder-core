@@ -10,7 +10,7 @@ public sealed class SettingsWindowFactory(
     IRuntimeApiClientFactory runtimeApiClientFactory,
     CliInstallationService cliInstallationService,
     SunderUpdateService updateService,
-    BackgroundProcessQueueService backgroundProcessQueue,
+    BackgroundTaskQueueService backgroundTaskQueue,
     ShellStateService shellStateService,
     ShellState shellState,
     AppRuntimeResourcePolicySettingsService runtimeResourcePolicySettingsService,
@@ -18,7 +18,7 @@ public sealed class SettingsWindowFactory(
 {
     internal SettingsWindow Create(
         PackageViewHostService packageViewHostService,
-        Action<double, double>? persistBackgroundProcessPopoverSize,
+        Action<double, double>? persistBackgroundTaskPopoverSize,
         Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>>? waitForPresentation = null,
         IRuntimeExecutionRuntimeStatusSource? runtimeStatusSource = null)
     {
@@ -26,7 +26,7 @@ public sealed class SettingsWindowFactory(
         var runtimes = new SettingsPackageRuntimesViewModel(
             runtimeApiClientFactory.CreateClient<IRuntimeExecutionRuntimeManagementClient>(),
             (review, token) => RuntimeManagementDialogs.ShowAsync(window, review, token),
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             () => runtimeApiClientFactory.CreateClient<IRuntimeExecutionRuntimeManagementClient>(),
             waitForPresentation: waitForPresentation,
             changes: runtimeStatusSource);
@@ -35,10 +35,10 @@ public sealed class SettingsWindowFactory(
                 packageViewHostService,
                 cliInstallationService,
                 updateService,
-                backgroundProcessQueue,
-                shellState.BackgroundProcessPopoverWidth,
-                shellState.BackgroundProcessPopoverHeight,
-                persistBackgroundProcessPopoverSize,
+                backgroundTaskQueue,
+                shellState.BackgroundTaskPopoverWidth,
+                shellState.BackgroundTaskPopoverHeight,
+                persistBackgroundTaskPopoverSize,
                 runtimeResourcePolicySettingsService,
                 runtimeResourcePolicyStatusSource,
                 runtimes);

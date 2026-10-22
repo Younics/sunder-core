@@ -7,54 +7,54 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.ViewModels;
 
-public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, IDisposable
+public sealed partial class BackgroundTaskMonitorViewModel : ViewModelBase, IDisposable
 {
-    public const double MinimumPopoverWidth = ShellState.MinimumBackgroundProcessPopoverWidth;
-    public const double MaximumPopoverWidth = ShellState.MaximumBackgroundProcessPopoverWidth;
-    public const double MinimumPopoverHeight = ShellState.MinimumBackgroundProcessPopoverHeight;
-    public const double MaximumPopoverHeight = ShellState.MaximumBackgroundProcessPopoverHeight;
+    public const double MinimumPopoverWidth = ShellState.MinimumBackgroundTaskPopoverWidth;
+    public const double MaximumPopoverWidth = ShellState.MaximumBackgroundTaskPopoverWidth;
+    public const double MinimumPopoverHeight = ShellState.MinimumBackgroundTaskPopoverHeight;
+    public const double MaximumPopoverHeight = ShellState.MaximumBackgroundTaskPopoverHeight;
 
-    private readonly BackgroundProcessQueueService? _backgroundProcesses;
-    private readonly BackgroundProcessIndicator _indicator;
+    private readonly BackgroundTaskQueueService? _backgroundTasks;
+    private readonly BackgroundTaskIndicator _indicator;
     private readonly string _emptyText;
     private readonly Action<double, double>? _persistPopoverSize;
     private readonly IUiDispatcher _uiDispatcher;
-    private readonly OwnedTaskObserver _tasks = new(nameof(BackgroundProcessMonitorViewModel));
+    private readonly OwnedTaskObserver _tasks = new(nameof(BackgroundTaskMonitorViewModel));
     private bool _disposed;
 
-    public BackgroundProcessMonitorViewModel(
-        BackgroundProcessQueueService backgroundProcesses,
-        BackgroundProcessIndicator indicator,
-        string emptyText = "No active processes.",
+    public BackgroundTaskMonitorViewModel(
+        BackgroundTaskQueueService backgroundTasks,
+        BackgroundTaskIndicator indicator,
+        string emptyText = "No active tasks.",
         double popoverWidth = 500,
         double popoverHeight = 360,
         Action<double, double>? persistPopoverSize = null,
         IUiDispatcher? uiDispatcher = null)
     {
-        _backgroundProcesses = backgroundProcesses;
+        _backgroundTasks = backgroundTasks;
         _indicator = indicator;
         _emptyText = emptyText;
         _persistPopoverSize = persistPopoverSize;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         PopoverWidth = ClampPopoverWidth(popoverWidth);
         PopoverHeight = ClampPopoverHeight(popoverHeight);
-        _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
+        _backgroundTasks.TaskChanged += BackgroundTasks_OnTaskChanged;
         Refresh();
     }
 
-    private BackgroundProcessMonitorViewModel()
+    private BackgroundTaskMonitorViewModel()
     {
         _uiDispatcher = AvaloniaUiDispatcher.Instance;
-        _indicator = BackgroundProcessIndicator.Hidden;
-        _emptyText = "No active processes.";
+        _indicator = BackgroundTaskIndicator.Hidden;
+        _emptyText = "No active tasks.";
         FooterStatusText = _emptyText;
         PopoverWidth = 500;
         PopoverHeight = 360;
     }
 
-    public static BackgroundProcessMonitorViewModel Empty { get; } = new();
+    public static BackgroundTaskMonitorViewModel Empty { get; } = new();
 
-    public ObservableCollection<BackgroundProcessItemViewModel> Processes { get; } = [];
+    public ObservableCollection<BackgroundTaskItemViewModel> Processes { get; } = [];
 
     public bool HasProcesses => Processes.Count > 0;
 
@@ -104,9 +104,9 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
         }
 
         _disposed = true;
-        if (_backgroundProcesses is not null)
+        if (_backgroundTasks is not null)
         {
-            _backgroundProcesses.ProcessChanged -= BackgroundProcesses_OnProcessChanged;
+            _backgroundTasks.TaskChanged -= BackgroundTasks_OnTaskChanged;
         }
 
         Processes.Clear();
@@ -122,7 +122,7 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
     public void PersistPopoverSize()
         => _persistPopoverSize?.Invoke(PopoverWidth, PopoverHeight);
 
-    private void BackgroundProcesses_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
+    private void BackgroundTasks_OnTaskChanged(object? sender, BackgroundTaskChangedEventArgs e)
     {
         if (_disposed)
         {
@@ -141,36 +141,36 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
             {
                 Refresh();
             }
-        }), "refreshing background process presentation");
+        }), "refreshing background task presentation");
     }
 
     public void Refresh()
     {
-        if (_disposed || _backgroundProcesses is null)
+        if (_disposed || _backgroundTasks is null)
         {
             return;
         }
 
-        var snapshots = _backgroundProcesses.ListProcesses()
+        var snapshots = _backgroundTasks.ListTasks()
             .Where(snapshot => snapshot.IsActive)
             .Where(snapshot => snapshot.Indicator == _indicator)
             .OrderBy(ProcessSortKey)
             .ThenBy(snapshot => snapshot.QueuedAtUtc)
             .ToArray();
 
-        Processes.ReplaceWith(snapshots.Select(snapshot => new BackgroundProcessItemViewModel(snapshot, CancelProcess)));
+        Processes.ReplaceWith(snapshots.Select(snapshot => new BackgroundTaskItemViewModel(snapshot, CancelProcess)));
         ActiveProcessCount = snapshots.Length;
-        RunningProcessCount = snapshots.Count(snapshot => snapshot.State is BackgroundProcessState.Running or BackgroundProcessState.Cancelling);
+        RunningProcessCount = snapshots.Count(snapshot => snapshot.State is BackgroundTaskState.Running or BackgroundTaskState.Cancelling);
 
         var footerProcess = RunningProcessCount == 1
-            ? snapshots.FirstOrDefault(snapshot => snapshot.State is BackgroundProcessState.Running or BackgroundProcessState.Cancelling)
+            ? snapshots.FirstOrDefault(snapshot => snapshot.State is BackgroundTaskState.Running or BackgroundTaskState.Cancelling)
             : RunningProcessCount == 0
                 ? snapshots.FirstOrDefault()
                 : null;
 
         if (RunningProcessCount > 1)
         {
-            FooterStatusText = $"{RunningProcessCount} processes running";
+            FooterStatusText = $"{RunningProcessCount} tasks running";
             FooterIsIndeterminate = true;
             FooterProgressPercent = 0;
             AdditionalActiveProcessCount = Math.Max(0, ActiveProcessCount - RunningProcessCount);
@@ -194,18 +194,18 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
         NotifyCollectionStateChanged();
     }
 
-    private static int ProcessSortKey(BackgroundProcessSnapshot snapshot)
+    private static int ProcessSortKey(BackgroundTaskSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Cancelling => 0,
-            BackgroundProcessState.Running => 1,
-            BackgroundProcessState.Queued => 2,
+            BackgroundTaskState.Cancelling => 0,
+            BackgroundTaskState.Running => 1,
+            BackgroundTaskState.Queued => 2,
             _ => 3,
         };
 
     private void CancelProcess(Guid processId)
     {
-        if (_backgroundProcesses?.Cancel(processId) == true)
+        if (_backgroundTasks?.Cancel(processId) == true)
         {
             Refresh();
         }
@@ -219,12 +219,12 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
         OnPropertyChanged(nameof(ShowFooterProgress));
     }
 
-    private static string FormatFooterStatus(BackgroundProcessSnapshot snapshot)
+    private static string FormatFooterStatus(BackgroundTaskSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) || snapshot.StatusText == "Queued"
+            BackgroundTaskState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) || snapshot.StatusText == "Queued"
                 ? $"Queued: {snapshot.Title}" : snapshot.StatusText,
-            BackgroundProcessState.Cancelling => "Cancelling...",
+            BackgroundTaskState.Cancelling => "Cancelling...",
             _ => string.IsNullOrWhiteSpace(snapshot.StatusText) ? snapshot.Title : snapshot.StatusText,
         };
 
@@ -235,14 +235,14 @@ public sealed partial class BackgroundProcessMonitorViewModel : ViewModelBase, I
         => Math.Clamp(value, MinimumPopoverHeight, MaximumPopoverHeight);
 }
 
-public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
+public sealed partial class BackgroundTaskItemViewModel : ViewModelBase
 {
     private readonly Guid _processId;
     private readonly Action<Guid> _cancelProcess;
 
-    public BackgroundProcessItemViewModel(BackgroundProcessSnapshot snapshot, Action<Guid> cancelProcess)
+    public BackgroundTaskItemViewModel(BackgroundTaskSnapshot snapshot, Action<Guid> cancelProcess)
     {
-        _processId = snapshot.ProcessId;
+        _processId = snapshot.TaskId;
         _cancelProcess = cancelProcess;
         Title = snapshot.Title;
         GroupKey = snapshot.GroupKey;
@@ -251,7 +251,7 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
         ProgressPercent = snapshot.ProgressPercent ?? 0;
         IsIndeterminate = snapshot.ProgressPercent is null;
         State = snapshot.State;
-        CanCancel = snapshot.CanCancel && snapshot.State is not BackgroundProcessState.Cancelling;
+        CanCancel = snapshot.CanCancel && snapshot.State is not BackgroundTaskState.Cancelling;
     }
 
     public string Title { get; }
@@ -266,7 +266,7 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
 
     public bool IsIndeterminate { get; }
 
-    public BackgroundProcessState State { get; }
+    public BackgroundTaskState State { get; }
 
     public bool CanCancel { get; }
 
@@ -283,16 +283,16 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
         }
     }
 
-    private static string FormatStatus(BackgroundProcessSnapshot snapshot)
+    private static string FormatStatus(BackgroundTaskSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) ? "Queued" : snapshot.StatusText,
-            BackgroundProcessState.Running => string.IsNullOrWhiteSpace(snapshot.StatusText) ? "Running" : snapshot.StatusText,
-            BackgroundProcessState.Cancelling => "Cancelling",
+            BackgroundTaskState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) ? "Queued" : snapshot.StatusText,
+            BackgroundTaskState.Running => string.IsNullOrWhiteSpace(snapshot.StatusText) ? "Running" : snapshot.StatusText,
+            BackgroundTaskState.Cancelling => "Cancelling",
             _ => snapshot.StatusText,
         };
 
-    private static string BuildDetailText(BackgroundProcessSnapshot snapshot)
+    private static string BuildDetailText(BackgroundTaskSnapshot snapshot)
     {
         var parts = new List<string>();
         if (PackageOperationMetadata.TryCreate(snapshot.Metadata, out var packageMetadata))
@@ -300,7 +300,7 @@ public sealed partial class BackgroundProcessItemViewModel : ViewModelBase
             parts.Add(packageMetadata.DisplayName);
             if (packageMetadata.PackageIds.Count > 1) parts.Add(string.Join(", ", packageMetadata.PackageIds));
         }
-        else if (PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var packageProcessMetadata))
+        else if (PackageScopedBackgroundTaskMetadata.TryCreate(snapshot.Metadata, out var packageProcessMetadata))
         {
             parts.Add(packageProcessMetadata.PackageDisplayName);
         }

@@ -276,6 +276,7 @@ def core_stage(store, directory, component, channel, finalize=False):
     expected = core_names(component, version, channel)
     if component == "sdk":
         verify_sdk_compatibility(directory)
+        verify_sdk_documentation(directory, source)
     release = store.resolve() if finalize else store.create(source, f"Sunder {component.title()} {version}")
     c.require(release is not None and release["target_commitish"] == source
               and release["prerelease"] is ("-" in version), "Missing source-bound release")
@@ -342,6 +343,11 @@ def verify_sdk_compatibility(directory):
                     "verify", "--directory", str(directory)], check=True, cwd=ROOT)
 
 
+def verify_sdk_documentation(directory, source):
+    import sdk_release_documentation as documentation
+    documentation.verify(ROOT, [directory], source)
+
+
 def verify_catalog(directory, release_id, tag, source, draft):
     # Import lazily: catalog retention uses this module's transport. The closed
     # catalog receipt also binds numeric asset identity, not just equal file bytes.
@@ -396,6 +402,7 @@ def main():
             c.require(set(files) == core_names(component, version, args.channel) | EVIDENCE, "Incomplete component inventory")
             if component == "sdk":
                 verify_sdk_compatibility(args.directory)
+                verify_sdk_documentation(args.directory, source)
             verify_evidence(files, args.release_id, store.repository, store.tag, source, os.environ["GITHUB_RUN_ID"])
             value = store.get(args.release_id)
             c.require(value["target_commitish"] == source and value["prerelease"] is ("-" in version), "Release source/version changed")

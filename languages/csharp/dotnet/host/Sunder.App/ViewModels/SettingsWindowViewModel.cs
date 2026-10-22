@@ -32,10 +32,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         PackageViewHostService packageViewHostService,
         CliInstallationService cliInstallationService,
         SunderUpdateService? updateService = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
-        double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
-        double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
-        Action<double, double>? persistBackgroundProcessPopoverSize = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null,
+        double backgroundTaskPopoverWidth = ShellState.DefaultBackgroundTaskPopoverWidth,
+        double backgroundTaskPopoverHeight = ShellState.DefaultBackgroundTaskPopoverHeight,
+        Action<double, double>? persistBackgroundTaskPopoverSize = null,
         AppRuntimeResourcePolicySettingsService? runtimeResourcePolicySettingsService = null,
         IRuntimeResourcePolicyStatusSource? runtimeResourcePolicyStatusSource = null,
         SettingsPackageRuntimesViewModel? packageRuntimes = null)
@@ -60,15 +60,15 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             () => OnPropertyChanged(nameof(PackageSettings)),
             value => IsBusy = value,
             value => StatusText = value);
-        BackgroundProcesses = backgroundProcessQueue is null
-            ? BackgroundProcessMonitorViewModel.Empty
-            : new BackgroundProcessMonitorViewModel(
-                backgroundProcessQueue,
-                BackgroundProcessIndicator.Settings,
-                "No background processes.",
-                backgroundProcessPopoverWidth,
-                backgroundProcessPopoverHeight,
-                persistBackgroundProcessPopoverSize);
+        BackgroundTasks = backgroundTaskQueue is null
+            ? BackgroundTaskMonitorViewModel.Empty
+            : new BackgroundTaskMonitorViewModel(
+                backgroundTaskQueue,
+                BackgroundTaskIndicator.Settings,
+                "No background tasks.",
+                backgroundTaskPopoverWidth,
+                backgroundTaskPopoverHeight,
+                persistBackgroundTaskPopoverSize);
 
         CoreSections =
         [
@@ -128,7 +128,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<string> SelectedCoreLines { get; }
 
-    public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
+    public BackgroundTaskMonitorViewModel BackgroundTasks { get; }
 
     public bool IsCoreSelection => !IsPackageSelection;
 
@@ -526,9 +526,9 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         _tasks.Dispose();
         ReleaseStagedHostedSettingsView();
         HostedSettingsView = null;
-        if (!ReferenceEquals(BackgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
+        if (!ReferenceEquals(BackgroundTasks, BackgroundTaskMonitorViewModel.Empty))
         {
-            BackgroundProcesses.Dispose();
+            BackgroundTasks.Dispose();
         }
 
         _runtimeApiClient.Dispose();

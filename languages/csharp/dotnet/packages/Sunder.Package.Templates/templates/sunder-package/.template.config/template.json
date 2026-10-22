@@ -107,38 +107,38 @@
       "defaultValue": false,
       "description": "Add the Stack contributor example; building requires explicit local or Registry platform-contract selection."
     },
-    "withHostDependency": {
+    "withPackageDependency": {
       "type": "parameter",
       "datatype": "bool",
       "defaultValue": false,
       "description": "Add package dependency metadata for another Sunder package."
     },
-    "hostPackageId": {
+    "dependencyPackageId": {
       "type": "parameter",
       "datatype": "text",
-      "isRequired": "withHostDependency == true",
-      "isEnabled": "withHostDependency == true",
+      "isRequired": "withPackageDependency == true",
+      "isEnabled": "withPackageDependency == true",
       "description": "The package id this package depends on.",
-      "replaces": "SUNDER_HOST_PACKAGE_ID_TEXT"
+      "replaces": "SUNDER_DEPENDENCY_PACKAGE_ID_TEXT"
     },
-    "hostPackageIdCSharp": {
+    "dependencyPackageIdCSharp": {
       "type": "derived",
-      "valueSource": "hostPackageId",
+      "valueSource": "dependencyPackageId",
       "valueTransform": "csharpString",
-      "replaces": "SUNDER_HOST_PACKAGE_ID_CSHARP"
+      "replaces": "SUNDER_DEPENDENCY_PACKAGE_ID_CSHARP"
     },
-    "hostPackageVersionRange": {
+    "dependencyVersionRange": {
       "type": "parameter",
       "datatype": "text",
-      "defaultValue": ">=1.1.0 <1.2.0",
-      "isEnabled": "withHostDependency == true",
+      "isRequired": "withPackageDependency == true",
+      "isEnabled": "withPackageDependency == true",
       "description": "The SemVer range accepted for the dependency."
     },
-    "hostPackageVersionRangeCSharp": {
+    "dependencyVersionRangeCSharp": {
       "type": "derived",
-      "valueSource": "hostPackageVersionRange",
+      "valueSource": "dependencyVersionRange",
       "valueTransform": "csharpString",
-      "replaces": "SUNDER_HOST_PACKAGE_VERSION_RANGE_CSHARP"
+      "replaces": "SUNDER_DEPENDENCY_VERSION_RANGE_CSHARP"
     },
     "noDefaultView": {
       "type": "parameter",
@@ -231,21 +231,21 @@
           ]
         },
         {
-          "condition": "(!withHostDependency)",
+          "condition": "(!withPackageDependency)",
           "exclude": [
-            "PackageMetadata.host.cs"
+            "PackageMetadata.dependency.cs"
           ],
           "rename": {
-            "PackageMetadata.no-host.cs": "PackageMetadata.cs"
+            "PackageMetadata.standalone.cs": "PackageMetadata.cs"
           }
         },
         {
-          "condition": "(withHostDependency)",
+          "condition": "(withPackageDependency)",
           "exclude": [
-            "PackageMetadata.no-host.cs"
+            "PackageMetadata.standalone.cs"
           ],
           "rename": {
-            "PackageMetadata.host.cs": "PackageMetadata.cs"
+            "PackageMetadata.dependency.cs": "PackageMetadata.cs"
           }
         },
         {

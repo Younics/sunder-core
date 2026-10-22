@@ -19,7 +19,7 @@ export async function generatedProviders(root: string): Promise<readonly RpcProv
   const result = await build({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.ts")], bundle: true,
     platform: "node", format: "cjs", write: false, logLevel: "silent",
     ...workerResolutionOptions,
-    alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "#sunder/api": resolve(root, ".sunder/generated/rpc/api.js") } });
+    alias: { ...workerResolutionOptions.alias, "#sunder/api": resolve(root, ".sunder/generated/rpc/api.js") } });
   const module = { exports: {} as { providers: readonly RpcProviderRegistration[] } };
   new Function("require", "module", "exports", result.outputFiles[0]!.text)(require, module, module.exports);
   return module.exports.providers;

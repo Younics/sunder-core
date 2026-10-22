@@ -11,7 +11,7 @@ public sealed class RegistryPackageInstallServiceTests
     [Fact]
     public async Task CombinedApprovalPrecedesBothJobsAndPreservesExactCapabilityConsent()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var client = new RegistryInstallationTestClient();
         var shown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var approve = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -19,7 +19,7 @@ public sealed class RegistryPackageInstallServiceTests
         using var service = new RegistryPackageInstallService((review, _) =>
         {
             prompts++;
-            Assert.Empty(queue.ListProcesses());
+            Assert.Empty(queue.ListTasks());
             Assert.Equal(1024, review.SharedRuntimeDownloadBytes);
             Assert.Equal(client.Consents, review.Plan.RequiredCapabilityConsents);
             shown.SetResult();
@@ -35,18 +35,18 @@ public sealed class RegistryPackageInstallServiceTests
         var install = Assert.Single(client.Installs);
         Assert.Equal(client.Consents, install.CapabilityConsents);
         Assert.Equal(RuntimeManagementTestClient.Hash, install.RuntimePrerequisiteExpectation!.SourceFingerprint);
-        Assert.Equal(2, queue.ListProcesses().Count);
-        Assert.All(queue.ListProcesses(), row => Assert.Equal(BackgroundProcessState.Completed, row.State));
+        Assert.Equal(2, queue.ListTasks().Count);
+        Assert.All(queue.ListTasks(), row => Assert.Equal(BackgroundTaskState.Completed, row.State));
     }
 
     [Fact]
     public async Task InitialCancelEnqueuesNothingAndDoesNotAcquireRuntime()
     {
-        using var queue = new BackgroundProcessQueueService();
+        using var queue = new BackgroundTaskQueueService();
         var client = new RegistryInstallationTestClient();
         using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(false), queue);
         Assert.False((await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client)).Success);
-        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(queue.ListTasks());
         Assert.Null(client.InstallConfirmation);
         Assert.Empty(client.Installs);
     }
@@ -56,7 +56,7 @@ public sealed class RegistryPackageInstallServiceTests
     [InlineData("execution-runtime.plan-stale", "Runtime preview changed; review again")]
     public async Task RuntimeFailureCancelsQueuedPackageAndKeepsExactError(string code, string message)
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var client = new RegistryInstallationTestClient
         { InstallHandler = (_, _) => Task.FromResult(new RuntimeExecutionRuntimeOperationResult(false, code, message, "install", null, false)) };
         using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true), queue);
@@ -64,8 +64,8 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.False(result.Success);
         Assert.Contains(message, result.Message);
         Assert.Empty(client.Installs);
-        Assert.Single(queue.ListProcesses(), row => row.State == BackgroundProcessState.Failed);
-        Assert.Single(queue.ListProcesses(), row => row.State == BackgroundProcessState.Cancelled);
+        Assert.Single(queue.ListTasks(), row => row.State == BackgroundTaskState.Failed);
+        Assert.Single(queue.ListTasks(), row => row.State == BackgroundTaskState.Cancelled);
     }
 
     [Theory]
@@ -74,10 +74,10 @@ public sealed class RegistryPackageInstallServiceTests
     [InlineData("permissions")]
     public async Task MaterialDriftWhileQueuedRequiresFreshApproval(string change)
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(new("Other operation", PackageOperationService.PackageStoreGroupKey, BackgroundProcessIndicator.Packages,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup, true, context => release.Task.WaitAsync(context.CancellationToken)));
+        queue.Enqueue(new("Other operation", PackageOperationService.PackageStoreGroupKey, BackgroundTaskIndicator.Packages,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup, true, context => release.Task.WaitAsync(context.CancellationToken)));
         var client = new RegistryInstallationTestClient();
         var approved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var prompts = 0;
@@ -99,7 +99,7 @@ public sealed class RegistryPackageInstallServiceTests
     {
         var client = new RegistryInstallationTestClient { RuntimeReady = true };
         var prompts = 0;
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         using var service = new RegistryPackageInstallService((_, _) => { prompts++; return Task.FromResult(true); }, queue);
         var result = await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
         Assert.True(result.Success, result.Message);
@@ -107,15 +107,15 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.Null(client.InstallConfirmation);
         Assert.True(client.PreviewCount > 1);
         Assert.Single(client.Installs);
-        var job = Assert.Single(queue.ListProcesses());
+        var job = Assert.Single(queue.ListTasks());
         Assert.Equal("package", job.Metadata["sunder.installationPhase"]);
-        Assert.Equal(BackgroundProcessState.Completed, job.State);
+        Assert.Equal(BackgroundTaskState.Completed, job.State);
     }
 
     [Fact]
     public async Task HealthyRuntimeBecomingUnavailableAfterApprovalCannotTriggerUnapprovedAcquisition()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var client = new RegistryInstallationTestClient { RuntimeReady = true };
         using var service = new RegistryPackageInstallService((_, _) =>
         {
@@ -129,13 +129,13 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.Contains("runtime is not ready", result.Message);
         Assert.Null(client.InstallConfirmation);
         Assert.Empty(client.Installs);
-        Assert.Equal(BackgroundProcessState.Failed, Assert.Single(queue.ListProcesses()).State);
+        Assert.Equal(BackgroundTaskState.Failed, Assert.Single(queue.ListTasks()).State);
     }
 
     [Fact]
     public async Task CacheOnlyRuntimePreviewCannotBeSilentlyUpgradedToRetainedInstallation()
     {
-        using var queue = new BackgroundProcessQueueService();
+        using var queue = new BackgroundTaskQueueService();
         var runtimes = RuntimeManagementTestClient.Prerequisites(false);
         var client = new RegistryInstallationTestClient
         {
@@ -150,7 +150,7 @@ public sealed class RegistryPackageInstallServiceTests
         using var service = new RegistryPackageInstallService((_, _) => throw new InvalidOperationException("Must not ask for approval"), queue);
 
         Assert.False((await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client)).Success);
-        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(queue.ListTasks());
         Assert.Empty(client.InstallPreviews);
         Assert.Null(client.InstallConfirmation);
         Assert.Empty(client.Installs);
@@ -159,7 +159,7 @@ public sealed class RegistryPackageInstallServiceTests
     [Fact]
     public async Task StackBatchWaitsOutsideOneSlotQueueAndCommitsOneBackendTransaction()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var client = new RegistryInstallationTestClient { PackageIds = ["demo", "other"] };
         using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true), queue);
         var result = await service.InstallPackagesAsync([new() { PackageId = "demo" }, new() { PackageId = "other" }],
@@ -167,7 +167,7 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.True(result.Success, result.Message);
         Assert.Equal(2, Assert.Single(client.Batches).Packages.Count);
         Assert.Empty(client.Installs);
-        var package = Assert.Single(queue.ListProcesses(), row => row.Metadata["sunder.installationPhase"] == "package");
+        var package = Assert.Single(queue.ListTasks(), row => row.Metadata["sunder.installationPhase"] == "package");
         Assert.Contains("other", package.Metadata["sunder.installationMembers"]);
     }
 
@@ -219,7 +219,7 @@ public sealed class RegistryPackageInstallServiceTests
     [InlineData(false)]
     public async Task InvalidOrConflictingPackagePreviewCannotReachConfirmationOrQueue(bool invalidFingerprint)
     {
-        using var queue = new BackgroundProcessQueueService();
+        using var queue = new BackgroundTaskQueueService();
         var client = new RegistryInstallationTestClient
         {
             TransformPreview = preview => invalidFingerprint
@@ -228,7 +228,7 @@ public sealed class RegistryPackageInstallServiceTests
         };
         using var service = new RegistryPackageInstallService((_, _) => throw new InvalidOperationException("Must not ask for approval"), queue);
         Assert.False((await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client)).Success);
-        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(queue.ListTasks());
         Assert.Empty(client.Installs);
         Assert.Null(client.InstallConfirmation);
     }

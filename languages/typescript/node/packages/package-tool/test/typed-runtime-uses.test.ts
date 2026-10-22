@@ -86,7 +86,7 @@ for(const language of ["ts","js"] as const)test(`${language} provider-only Updat
       const contract=c.project.contracts.find(value=>value.descriptorSha256===hash)!;
       assert.equal((await readFile(join(c.cache,hash+".receipt.json"))).toString(),JSON.stringify({schemaVersion:1,contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorBytes:bytes.length,descriptorSha256:hash,abiSha256:contract.abiSha256},null,2)+"\n");
     }
-    const bundle=await build({entryPoints:[join(c.consumer,".sunder/generated/rpc/adapter.js")],bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"#sunder/api":join(c.consumer,".sunder/generated/rpc/api.js")}});
+    const bundle=await build({entryPoints:[join(c.consumer,".sunder/generated/rpc/adapter.js")],bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated"),"#sunder/api":join(c.consumer,".sunder/generated/rpc/api.js")}});
     const module={exports:{} as {providers:readonly unknown[]}};new Function("require","module","exports",bundle.outputFiles[0]!.text)(require,module,module.exports);assert.equal(module.exports.providers.length,1);
     if(language==="ts"){
       const modulePath=join(c.consumer,"dist/work/worker.cjs"),rid=currentRid();const notice=await bundleProduction(loaded,rid,modulePath);

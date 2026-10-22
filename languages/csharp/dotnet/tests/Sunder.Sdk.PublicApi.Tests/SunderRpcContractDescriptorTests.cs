@@ -136,6 +136,11 @@ public sealed class SunderRpcContractDescriptorTests
     [Fact]
     public void CSharpGenerator_IsDeterministicAndEmitsBindingScaffolding()
     {
+        // Moving implementation back into the runtime SDK would re-expand its
+        // public contract even if a candidate snapshot was subsequently updated.
+        Assert.Equal("Sunder.Package.Build", typeof(SunderRpcCSharpGenerator).Assembly.GetName().Name);
+        Assert.False(typeof(SunderRpcCSharpGenerator).IsVisible);
+        Assert.Null(typeof(SunderRpcContractDescriptor).Assembly.GetType("Sunder.Sdk.Rpc.SunderRpcCSharpGenerator"));
         var descriptor = SunderRpcContractDescriptor.Parse(Descriptor());
 
         var first = SunderRpcCSharpGenerator.Generate(descriptor, "Example.Generated");

@@ -13,7 +13,7 @@ internal interface IAppPackageDevelopmentBackend
     Task<string> GetAppReadinessAsync(string packageId, RuntimePackageStamp stamp, CancellationToken token);
     async Task<AppDevelopmentApplicationObservation> GetAppObservationAsync(string packageId, RuntimePackageStamp stamp,
         string? sourceContentIdentity, CancellationToken token)
-        => new(await GetAppReadinessAsync(packageId, stamp, token).ConfigureAwait(false), null);
+        => new(AppPackageDevelopmentService.ParseAppReadiness(await GetAppReadinessAsync(packageId, stamp, token).ConfigureAwait(false)), null);
     Task OpenLogsAsync(string packageId, AppPackageGenerationPublication publication, CancellationToken token);
     Task ReleaseOwnerAsync(IDevPackageOwnerSession owner, CancellationToken token)
         => owner.DisposeAsync().AsTask();
@@ -21,12 +21,42 @@ internal interface IAppPackageDevelopmentBackend
     void QueueAvailabilityReconciliation(Guid activationId) { }
 }
 
-internal sealed record AppDevelopmentApplicationObservation(string Readiness, string? AppliedSourceContentIdentity);
+internal sealed record AppDevelopmentApplicationObservation(PackageDevelopmentAppReadiness Readiness, string? AppliedSourceContentIdentity);
 
 // One instance per package activation, never a root SDK service. The shared Client owns
 // lease tokens, heartbeat/reconnection and ambiguous-mutation recovery.
 internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService, IPackageLogNavigationService, IAsyncDisposable
 {
+    // A boundary mapping, never a cast between SDK and Host DTO enum identities.
+    internal static PackageDevelopmentAppReadiness ParseAppReadiness(string? value) => value switch
+    {
+        "Pending" => PackageDevelopmentAppReadiness.Pending,
+        "Activated" => PackageDevelopmentAppReadiness.Activated,
+        "Quarantined" => PackageDevelopmentAppReadiness.Quarantined,
+        "Unavailable" => PackageDevelopmentAppReadiness.Unavailable,
+        "NotApplicable" => PackageDevelopmentAppReadiness.NotApplicable,
+        _ => PackageDevelopmentAppReadiness.Unknown,
+    };
+
+    private static PackageDevelopmentRuntimeReadiness RuntimeReadiness(PackageReadinessState value) => value switch
+    {
+        PackageReadinessState.Ready => PackageDevelopmentRuntimeReadiness.Ready,
+        PackageReadinessState.NeedsConfiguration => PackageDevelopmentRuntimeReadiness.NeedsConfiguration,
+        PackageReadinessState.Degraded => PackageDevelopmentRuntimeReadiness.Degraded,
+        PackageReadinessState.Failed => PackageDevelopmentRuntimeReadiness.Failed,
+        PackageReadinessState.Disabled => PackageDevelopmentRuntimeReadiness.Disabled,
+        _ => PackageDevelopmentRuntimeReadiness.Unknown,
+    };
+
+    private static PackageDevelopmentHostState HostState(RuntimeBootstrapState value) => value switch
+    {
+        RuntimeBootstrapState.Starting => PackageDevelopmentHostState.Starting,
+        RuntimeBootstrapState.Ready => PackageDevelopmentHostState.Ready,
+        RuntimeBootstrapState.Failed => PackageDevelopmentHostState.Failed,
+        RuntimeBootstrapState.ShuttingDown => PackageDevelopmentHostState.ShuttingDown,
+        _ => PackageDevelopmentHostState.Unknown,
+    };
+
     private readonly IAppPackageDevelopmentBackend? _backend;
     private readonly AppPackageGenerationPublication _publication;
     private readonly string _ownerPrefix;
@@ -193,8 +223,8 @@ internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService,
                         || snapshot.SessionGeneration < 0))
                         throw new InvalidDataException("The Runtime returned an invalid development source content identity.");
                     var hasApp = observed && (current!.HostRoles & PackageHostRoles.App) != 0;
-                    var app = !observed ? new AppDevelopmentApplicationObservation("Pending", null)
-                        : !hasApp ? new("NotApplicable", null)
+                    var app = !observed ? new AppDevelopmentApplicationObservation(PackageDevelopmentAppReadiness.Pending, null)
+                        : !hasApp ? new(PackageDevelopmentAppReadiness.NotApplicable, null)
                         : await service.Backend.GetAppObservationAsync(PackageId, new(snapshot.RuntimeInstanceId, snapshot.SessionGeneration),
                             sourceIdentity, operation.Token).ConfigureAwait(false);
                     if (app.AppliedSourceContentIdentity is { } appIdentity && !IsSourceIdentity(appIdentity))
@@ -203,18 +233,20 @@ internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService,
                         : new PackageDevelopmentRevision(snapshot.RuntimeInstanceId, snapshot.SessionGeneration, sourceIdentity);
                     var applied = revision is not null && current!.IsEnabled
                         && current.Readiness is PackageReadinessState.Ready or PackageReadinessState.Degraded
-                        && (!hasApp || app.Readiness == "Activated" && app.AppliedSourceContentIdentity == sourceIdentity)
+                        && (!hasApp || app.Readiness == PackageDevelopmentAppReadiness.Activated && app.AppliedSourceContentIdentity == sourceIdentity)
                             ? revision : null;
                     var ownerPackage = lease.Packages[0];
                     var effectiveWatch = ownerPackage.EffectiveWatch
                         ?? throw new InvalidDataException("Update the Host to observe effective development watch state.");
                     operation.Token.ThrowIfCancellationRequested();
                     return new(PackageId, observed, effectiveWatch,
-                        observed ? $"Runtime:{current!.Readiness}" : !sameGeneration ? "Runtime:Reconnecting"
-                            : snapshot.BootstrapState == RuntimeBootstrapState.Ready ? "Runtime:NotLoaded" : $"Runtime:{snapshot.BootstrapState}",
+                        observed ? RuntimeReadiness(current!.Readiness)
+                            : sameGeneration && snapshot.BootstrapState == RuntimeBootstrapState.Ready
+                                ? PackageDevelopmentRuntimeReadiness.NotLoaded : PackageDevelopmentRuntimeReadiness.Unknown,
                         observed ? current!.LastError : sameGeneration && snapshot.Errors.Count > 0 ? string.Join(" | ", snapshot.Errors)
                             : "The Host has not yet confirmed this development owner in its current package snapshot.",
                         observed && installed) { RequestedWatch = ownerPackage.Watch, AppReadiness = app.Readiness,
+                            HostState = sameGeneration ? HostState(snapshot.BootstrapState) : PackageDevelopmentHostState.Reconnecting,
                             RuntimeRevision = revision, AppliedRevision = applied };
                 }
                 finally { _gate.Release(); }

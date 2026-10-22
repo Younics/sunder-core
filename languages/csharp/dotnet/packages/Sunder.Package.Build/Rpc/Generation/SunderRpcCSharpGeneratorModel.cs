@@ -1,8 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Sunder.Sdk.Rpc;
 
-namespace Sunder.Sdk.Rpc;
+namespace Sunder.Package.Build.Rpc.Generation;
 
 internal static class SunderRpcCSharpGeneratorModelBuilder
 {

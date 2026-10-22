@@ -67,13 +67,34 @@
              RemoveProperties="OutDir;SunderPackageCompilationRole;SunderPackageInnerBuild">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderBuiltRid" />
     </MSBuild>
-    <AggregateSunderPackageTask TargetLeaves="@(_SunderBuiltRid)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+    <PropertyGroup>
+      <_SunderDevelopmentBuildRoot>$(_SunderDispatchOutput)</_SunderDevelopmentBuildRoot>
+      <_SunderDevelopmentBuildRoot Condition="'$(SunderPackageDevelopmentStagingRoot)' != ''">$(SunderPackageDevelopmentStagingRoot)</_SunderDevelopmentBuildRoot>
+    </PropertyGroup>
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderBuiltRid)" OutputPath="$(_SunderDevelopmentBuildRoot)/sunder-dev" OutputDiscoveryRoot="$(_SunderDevelopmentBuildRoot)"
                                 ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
-                                ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)" ExpectedPackageVersion="$(Version)" />
+                                ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDevelopmentBuildRoot)" ExpectedPackageVersion="$(Version)" />
     <ManageSunderPackageOperationLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_SunderPackageDispatchLease)">
       <Output TaskParameter="LeaseId" PropertyName="_SunderPackageDispatchLease" />
     </ManageSunderPackageOperationLockTask>
     <OnError ExecuteTargets="_ReleaseSunderPackageDispatchLease" />
+  </Target>
+
+  <!-- Builder Watch keeps the normal role/intermediate paths for MSBuild incrementality.
+       Only the final composition is deferred. Promotion revalidates the complete candidate
+       with the existing aggregator; it must never restore or compile a second time. -->
+  <Target Name="_ValidateSunderDevelopmentWatch" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch">
+    <Error Condition="'$(SunderPackageDevelopmentStagingRoot)' == '' or '$(SunderPackageDevelopmentRevisionFile)' == ''"
+           Text="package-build.watch-publication-invalid: Watch requires a private staging root and revision file." />
+  </Target>
+  <Target Name="_PublishSunderDevelopmentWatch" DependsOnTargets="_ValidateSunderDevelopmentWatch">
+    <ItemGroup>
+      <_SunderDevelopmentCandidate Include="$(SunderPackageDevelopmentStagingRoot)/sunder-dev" DiscoveryRoot="$(SunderPackageDevelopmentStagingRoot)" />
+    </ItemGroup>
+    <AggregateSunderPackageTask TargetLeaves="@(_SunderDevelopmentCandidate)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
+                                ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                                ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)" ExpectedPackageVersion="$(Version)"
+                                DevelopmentRevisionFile="$(SunderPackageDevelopmentRevisionFile)" DevelopmentRevision="$(SunderPackageDevelopmentRevision)" />
   </Target>
 
   <PropertyGroup>

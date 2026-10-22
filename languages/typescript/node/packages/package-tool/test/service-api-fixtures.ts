@@ -157,7 +157,7 @@ export function connect() {
     const bundled = await esbuild.build({ stdin: { contents: `export {Self, Dependency, Services} from "#sunder/api";
 export {createApiContext, createBrowserContext} from "@sunder/sdk/browser";
 export {connect} from "./app/consumer.${extension}";`, resolveDir: c.root, loader: "ts" }, bundle: true, platform: "browser", format: "cjs", write: false, metafile: true,
-      alias: { "@sunder/sdk/browser": c.fromTool.resolve("@sunder/sdk/browser") } });
+      alias: { "@sunder/sdk/browser": c.fromTool.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": c.fromTool.resolve("@sunder/sdk/generated") } });
     assert.ok(Object.keys(bundled.metafile!.inputs).every(path => !/worker|node:/u.test(path)));
     assert.doesNotMatch(bundled.outputFiles[0]!.text, /runWorker|node:fs/u);
     const result = { exports: {} as any }; new Function("module", "exports", bundled.outputFiles[0]!.text)(result, result.exports);
@@ -211,6 +211,7 @@ export async function checkServiceApiBrowser(c: Pick<Awaited<ReturnType<typeof s
     target: "ES2023", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2023", "DOM", "DOM.Iterable"], types: [], strict: true,
     allowJs: true, checkJs: true, noEmit: true, skipLibCheck: false,
     paths: { "@sunder/sdk/browser": [c.fromTool.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
+      "@sunder/sdk/generated": [c.fromTool.resolve("@sunder/sdk/generated").replace(/\.js$/u, ".d.ts")],
       "@sunder/sdk/core": [c.fromTool.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] },
   }, files: [`app/consumer.${extension}`] }));
   await promisify(execFile)(process.execPath, [c.fromTool.resolve("typescript/bin/tsc"), "-p", "tsconfig.browser.json"], { cwd: c.root });

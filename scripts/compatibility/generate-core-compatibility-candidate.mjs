@@ -290,9 +290,11 @@ function generateCandidate(sourceCommit) {
       executables: ["Sunder.App", "Sunder.Host.Supervisor", "Sunder.Runtime.Host", "sunder"],
       payloadPolicy: {
         pdb: "excluded from runtime package payloads",
-        xmlDocumentation: "excluded from public developer NuGet and runtime package payloads",
+        xmlDocumentation: "included beside the four Sunder.Sdk* developer DLLs; generated companions excluded from runtime package and build-task payloads",
         evidence: {
           publicDeveloperNuget: sourceFingerprint("languages/csharp/dotnet/Directory.Build.props"),
+          sdkDocumentationProjects: ["Sunder.Sdk", "Sunder.Sdk.Avalonia", "Sunder.Sdk.Stacks", "Sunder.Sdk.Worker"]
+            .map((name) => sourceFingerprint(`languages/csharp/dotnet/packages/${name}/${name}.csproj`)),
           runtimePackage: sourceFingerprint(
             "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.targets",
           ),
@@ -467,13 +469,13 @@ function collectMsbuildSurface(baselines) {
         "languages/csharp/dotnet/packages/Sunder.Package.Build/Tasks/GenerateSunderRpcBindingsTask.cs",
       ),
       sourceFingerprint(
-        "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcCSharpGenerator.cs",
+        "languages/csharp/dotnet/packages/Sunder.Package.Build/Rpc/Generation/SunderRpcCSharpGenerator.cs",
       ),
       sourceFingerprint(
-        "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcCSharpEmitter.cs",
+        "languages/csharp/dotnet/packages/Sunder.Package.Build/Rpc/Generation/SunderRpcCSharpEmitter.cs",
       ),
       sourceFingerprint(
-        "languages/csharp/dotnet/packages/Sunder.Sdk/Rpc/SunderRpcCSharpGeneratorModel.cs",
+        "languages/csharp/dotnet/packages/Sunder.Package.Build/Rpc/Generation/SunderRpcCSharpGeneratorModel.cs",
       ),
     ],
     outputs,
@@ -945,8 +947,8 @@ function collectTemplates() {
       },
       roleMetadataSources: [
         sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/Sunder.Package.Template.csproj`),
-        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.no-host.cs`),
-        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.host.cs`),
+        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.standalone.cs`),
+        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.dependency.cs`),
       ],
       packedBehaviorGate: "Sunder.Package.Templates.Tests.PackageTemplateTests",
     },

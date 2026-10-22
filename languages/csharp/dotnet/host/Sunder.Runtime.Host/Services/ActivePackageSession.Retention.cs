@@ -12,6 +12,7 @@ internal sealed partial class ActivePackageSession
     private readonly Dictionary<IRuntimePackageWorker, Task> _workerMonitors = new(ReferenceEqualityComparer.Instance);
     private readonly HashSet<RuntimeSessionDirectory> _snapshotDirectories = [];
     private ActivePackageSession? _retentionOwner;
+    private ActivePackageSession? _preparedRetentionOwner;
 
     private bool IsContinuingWorker(IRuntimePackageWorker worker) => _borrowedWorkers.Contains(worker) || _preservedWorkers.Contains(worker);
     private Task[] LifecycleOperationsToDrain() => _lifecycleOperations
@@ -19,15 +20,30 @@ internal sealed partial class ActivePackageSession
 
     private void InitializeSnapshotDirectories()
     {
-        if (SessionFolder is null) return;
-        var directory = new RuntimeSessionDirectory(SessionFolder);
-        _snapshotDirectories.Add(directory);
+        var directory = SessionFolder is null ? null : new RuntimeSessionDirectory(SessionFolder);
+        if (directory is not null) _snapshotDirectories.Add(directory);
         foreach (var source in _packageSourceMap.Values)
         {
             source.SnapshotDirectory ??= directory;
-            if (_snapshotDirectories.Add(source.SnapshotDirectory)) source.SnapshotDirectory.Retain();
+            if (source.SnapshotDirectory is { } sourceDirectory && _snapshotDirectories.Add(sourceDirectory)) sourceDirectory.Retain();
             if (source.WorkerSnapshotDirectory is { } workerDirectory && _snapshotDirectories.Add(workerDirectory)) workerDirectory.Retain();
         }
+    }
+
+    internal ActivePackageSession CreateRetainedRemovalCandidate(IReadOnlyList<RuntimePackageSource> remaining)
+    {
+        // Pending stages borrow, but do not reserve/stop live Workers. Directory
+        // references keep their already validated shadows alive across discard,
+        // expiration and the old session's eventual disposal after publication.
+        var ids = remaining.Select(source => source.PackageId).ToHashSet(StringComparer.Ordinal);
+        var candidate = new ActivePackageSession(null,
+            _loadedPackageMap.Where(pair => ids.Contains(pair.Key)).ToDictionary(),
+            _sessionPackageMap.Where(pair => ids.Contains(pair.Key)).ToDictionary(),
+            workersStarted: false, readySources: remaining,
+            maximumWorkerStartupConcurrency: _maximumWorkerStartupConcurrency)
+        { _preparedRetentionOwner = this };
+        foreach (var package in candidate._loadedPackageMap.Values) candidate._borrowedWorkers.Add(package.Worker);
+        return candidate;
     }
 
     internal async Task RetainUnchangedWorkersAsync(ActivePackageSession previous, IReadOnlyCollection<string> forceRestart, CancellationToken token,
@@ -55,6 +71,29 @@ internal sealed partial class ActivePackageSession
                 .Any(dependency => dependency != id && previous._loadedPackageMap.ContainsKey(dependency)
                     && (!retained.Contains(dependency) || !_loadedPackageMap.ContainsKey(dependency)))) != 0;
         } while (changed);
+
+        if (_preparedRetentionOwner is { } preparedOwner)
+        {
+            if (!ReferenceEquals(previous, preparedOwner) || forceRestart.Count != 0 || developmentWorkerContinuation
+                || retained.Count != _loadedPackageMap.Count || retained.Any(id =>
+                    !ReferenceEquals(_loadedPackageMap[id].Worker, previous._loadedPackageMap[id].Worker)
+                    || _loadedPackageMap[id].RuntimeActivationId != previous._loadedPackageMap[id].RuntimeActivationId))
+                throw new RuntimeStaleGenerationException("The validated retained withdrawal candidate no longer matches its active Workers.");
+            token.ThrowIfCancellationRequested();
+            _retentionOwner = previous;
+            _preparedRetentionOwner = null;
+            foreach (var id in retained)
+            {
+                var worker = _loadedPackageMap[id].Worker;
+                previous._preservedWorkers.Add(worker);
+                if (previous._workerMonitors.TryGetValue(worker, out var monitor))
+                {
+                    _workerMonitors[worker] = monitor;
+                    TrackLifecycleOperation(monitor);
+                }
+            }
+            return;
+        }
 
         _retentionOwner = previous;
         foreach (var id in retained)

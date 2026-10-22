@@ -70,13 +70,13 @@ internal sealed record PackageOperationMetadata(
     }
 }
 
-internal sealed class PackageOperationChangedEventArgs(BackgroundProcessSnapshot snapshot) : EventArgs
+internal sealed class PackageOperationChangedEventArgs(BackgroundTaskSnapshot snapshot) : EventArgs
 {
-    public BackgroundProcessSnapshot Snapshot { get; } = snapshot;
+    public BackgroundTaskSnapshot Snapshot { get; } = snapshot;
 
     public PackageOperationMetadata Metadata => PackageOperationMetadata.TryCreate(Snapshot.Metadata, out var metadata)
         ? metadata
-        : throw new InvalidOperationException("Background process is not a package operation.");
+        : throw new InvalidOperationException("Background task is not a package operation.");
 }
 
 internal sealed partial class PackageOperationService : IPackageOperationExecutor, IDisposable
@@ -84,7 +84,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     public const string PackageStoreGroupKey = "package-store";
     private static readonly TimeSpan DefaultPresentationWaitTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan CommitReconciliationTimeout = TimeSpan.FromSeconds(2);
-    private readonly BackgroundProcessQueueService _backgroundProcesses;
+    private readonly BackgroundTaskQueueService _backgroundTasks;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory;
     private readonly Func<Uri, IRegistryClient> _createRegistryClient;
     private readonly RegistryPackageInstallService _registryInstallService;
@@ -98,7 +98,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     private volatile bool _disposed;
 
     public PackageOperationService(
-        BackgroundProcessQueueService backgroundProcesses,
+        BackgroundTaskQueueService backgroundTasks,
         IRuntimeApiClientFactory runtimeApiClientFactory,
         Func<RuntimePackageStamp, CancellationToken, Task> waitUntilPresentationAppliedAsync,
         NotificationCenterService notificationCenter,
@@ -109,7 +109,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? confirmLocalPackage = null,
         TimeProvider? uploadRetentionClock = null)
     {
-        _backgroundProcesses = backgroundProcesses;
+        _backgroundTasks = backgroundTasks;
         _lifetimeToken = _lifetime.Token;
         _uploadRetentionClock = uploadRetentionClock ?? TimeProvider.System;
         _confirmLocalPackage = confirmLocalPackage;
@@ -133,9 +133,9 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             }),
             notificationCenter,
             presentationWaitTimeout ?? DefaultPresentationWaitTimeout);
-        _registryInstallService = registryInstallService ?? new RegistryPackageInstallService(backgroundProcesses: backgroundProcesses);
+        _registryInstallService = registryInstallService ?? new RegistryPackageInstallService(backgroundTasks: backgroundTasks);
         _createRegistryClient = registryClientFactory ?? (registryUrl => new RegistryApiClient(registryUrl));
-        _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
+        _backgroundTasks.TaskChanged += BackgroundTasks_OnTaskChanged;
     }
 
     public event EventHandler<PackageOperationChangedEventArgs>? OperationChanged;
@@ -154,23 +154,23 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
 
         _lifetime.Cancel();
         _lifetime.Dispose();
-        _backgroundProcesses.ProcessChanged -= BackgroundProcesses_OnProcessChanged;
+        _backgroundTasks.TaskChanged -= BackgroundTasks_OnTaskChanged;
         GC.SuppressFinalize(this);
     }
 
-    public IReadOnlyList<BackgroundProcessSnapshot> ListOperations()
+    public IReadOnlyList<BackgroundTaskSnapshot> ListOperations()
     {
         ThrowIfDisposed();
         return ListOperationsCore();
     }
 
-    public BackgroundProcessSnapshot? GetActiveOperationForPackage(string packageId)
+    public BackgroundTaskSnapshot? GetActiveOperationForPackage(string packageId)
     {
         ThrowIfDisposed();
         return GetActiveOperationForPackageCore(packageId);
     }
 
-    public BackgroundProcessSnapshot? GetActivePackageStoreOperation()
+    public BackgroundTaskSnapshot? GetActivePackageStoreOperation()
     {
         ThrowIfDisposed();
         return ListOperationsCore().FirstOrDefault(snapshot => snapshot.IsActive);
@@ -179,20 +179,20 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     public bool CancelOperation(Guid processId)
     {
         ThrowIfDisposed();
-        var snapshot = _backgroundProcesses.GetProcess(processId);
+        var snapshot = _backgroundTasks.GetTask(processId);
         return snapshot is not null
                && IsPackageOperation(snapshot)
-               && _backgroundProcesses.Cancel(processId);
+               && _backgroundTasks.Cancel(processId);
     }
 
     public bool CancelActiveOperationForPackage(string packageId)
     {
         ThrowIfDisposed();
         var operation = GetActiveOperationForPackage(packageId);
-        return operation is not null && _backgroundProcesses.Cancel(operation.ProcessId);
+        return operation is not null && _backgroundTasks.Cancel(operation.TaskId);
     }
 
-    public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceInstallAsync(
+    public Task<BackgroundTaskSnapshot?> EnqueueMarketplaceInstallAsync(
         string packageId,
         string displayName,
         Uri registryUrl,
@@ -208,7 +208,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             }, cancellationToken);
     }
 
-    public Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(
+    public Task<BackgroundTaskSnapshot?> EnqueueLocalInstallAsync(
         string packagePath,
         string expectedSha256,
         bool deleteAfterUse)
@@ -218,14 +218,14 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             deleteAfterUse,
             capabilityConsent: null);
 
-    public Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(
+    public Task<BackgroundTaskSnapshot?> EnqueueLocalInstallAsync(
         string packagePath,
         string expectedSha256,
         bool deleteAfterUse,
         PackageCapabilityConsent? capabilityConsent)
         => EnqueueLocalInstallAsync(new PackageArchiveSelection(packagePath, expectedSha256, deleteAfterUse, capabilityConsent));
 
-    public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceUpdateAsync(
+    public Task<BackgroundTaskSnapshot?> EnqueueMarketplaceUpdateAsync(
         string packageId,
         string displayName,
         string version,
@@ -235,7 +235,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             $"Update {displayName}", (client, token) => _registryInstallService.PrepareUpdateAsync(packageId, client, token), cancellationToken);
     }
 
-    public Task<BackgroundProcessSnapshot?> EnqueueRegistrySourceAdoptionAsync(
+    public Task<BackgroundTaskSnapshot?> EnqueueRegistrySourceAdoptionAsync(
         string packageId,
         string displayName,
         Uri registryUrl,
@@ -245,7 +245,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             $"Adopt Registry source for {displayName}", (client, token) => _registryInstallService.PrepareAdoptionAsync(packageId, registryUrl, client, token), cancellationToken);
     }
 
-    private async Task<BackgroundProcessSnapshot?> QueueRegistryInstallationAsync(string? packageId, string displayName,
+    private async Task<BackgroundTaskSnapshot?> QueueRegistryInstallationAsync(string? packageId, string displayName,
         PackageOperationKind kind, string title,
         Func<IRuntimePackageChangeClient, CancellationToken, Task<PreparedRegistryPackageInstallation?>> prepare,
         CancellationToken cancellationToken)
@@ -269,7 +269,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         finally { if (!enqueued) client.Dispose(); }
     }
 
-    public BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName)
+    public BackgroundTaskSnapshot EnqueueEnable(string packageId, string displayName)
     {
         return EnqueuePackageStoreOperation(
             packageId,
@@ -289,7 +289,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             });
     }
 
-    public BackgroundProcessSnapshot EnqueueDisable(string packageId, string displayName)
+    public BackgroundTaskSnapshot EnqueueDisable(string packageId, string displayName)
     {
         return EnqueuePackageStoreOperation(
             packageId,
@@ -309,7 +309,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             });
     }
 
-    public BackgroundProcessSnapshot EnqueueUninstall(
+    public BackgroundTaskSnapshot EnqueueUninstall(
         string packageId,
         string displayName,
         bool allowCascade = false)
@@ -339,14 +339,14 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             });
     }
 
-    public Task<BackgroundProcessSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
+    public Task<BackgroundTaskSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
         => QueueRegistryInstallationAsync(null, "All packages", PackageOperationKind.UpdateAll, "Update all packages",
             (client, token) => _registryInstallService.PrepareUpdateAsync(null, client, token), cancellationToken);
 
     public async Task CancelAllAsync(CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
-        await _backgroundProcesses.CancelMatchingAsync(IsPackageOperation, cancellationToken).ConfigureAwait(false);
+        await _backgroundTasks.CancelMatchingAsync(IsPackageOperation, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<PackageOperationResult> StageCommitPackageStoreAsync(
@@ -468,13 +468,13 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         }
     }
 
-    private BackgroundProcessSnapshot EnqueuePackageStoreOperation(
+    private BackgroundTaskSnapshot EnqueuePackageStoreOperation(
         string? packageId,
         string displayName,
         PackageOperationKind kind,
         string title,
         bool canCancel,
-        Func<BackgroundProcessContext, Task> executeAsync)
+        Func<BackgroundTaskContext, Task> executeAsync)
     {
         lock (_operationGate)
         {
@@ -492,30 +492,30 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
                 return updateAllOperation;
             }
 
-            return _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
+            return _backgroundTasks.Enqueue(new BackgroundTaskRequest(
                 title,
                 PackageStoreGroupKey,
-                BackgroundProcessIndicator.Packages,
-                BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+                BackgroundTaskIndicator.Packages,
+                BackgroundTaskConcurrencyMode.SequentialWithinGroup,
                 canCancel,
                 executeAsync,
                 new PackageOperationMetadata(packageId, kind, displayName).ToMetadata()));
         }
     }
 
-    private IReadOnlyList<BackgroundProcessSnapshot> ListOperationsCore()
-        => _backgroundProcesses.ListProcesses()
+    private IReadOnlyList<BackgroundTaskSnapshot> ListOperationsCore()
+        => _backgroundTasks.ListTasks()
             .Where(IsPackageOperation)
             .ToArray();
 
-    private BackgroundProcessSnapshot? GetActiveOperationForPackageCore(string packageId)
+    private BackgroundTaskSnapshot? GetActiveOperationForPackageCore(string packageId)
         => ListOperationsCore()
             .Where(snapshot => snapshot.IsActive)
             .OrderBy(snapshot => snapshot.Metadata.GetValueOrDefault("sunder.installationPhase") == "runtime" ? 1 : 0)
             .FirstOrDefault(snapshot => PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
                                         && metadata.PackageIds.Contains(packageId, StringComparer.OrdinalIgnoreCase));
 
-    private BackgroundProcessSnapshot? GetActiveUpdateAllOperationCore()
+    private BackgroundTaskSnapshot? GetActiveUpdateAllOperationCore()
         => ListOperationsCore().FirstOrDefault(snapshot => snapshot.IsActive
             && PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
             && metadata.Kind == PackageOperationKind.UpdateAll);
@@ -523,7 +523,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     private void ThrowIfDisposed()
         => ObjectDisposedException.ThrowIf(_disposed, this);
 
-    private static void ReportRegistryProgress(BackgroundProcessContext context, RegistryPackageInstallProgress progress)
+    private static void ReportRegistryProgress(BackgroundTaskContext context, RegistryPackageInstallProgress progress)
     {
         if (progress.ProgressPercent is null)
         {
@@ -534,11 +534,11 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         context.ReportProgress(progress.ProgressPercent.Value, progress.StatusText);
     }
 
-    private void BackgroundProcesses_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
+    private void BackgroundTasks_OnTaskChanged(object? sender, BackgroundTaskChangedEventArgs e)
     {
         if (!e.Snapshot.IsActive)
         {
-            CleanupTemporaryLocalArchive(e.Snapshot.ProcessId);
+            CleanupTemporaryLocalArchive(e.Snapshot.TaskId);
         }
         if (!_disposed && IsPackageOperation(e.Snapshot))
         {
@@ -552,7 +552,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         {
             _temporaryLocalArchives[processId] = packagePath;
         }
-        if (_backgroundProcesses.GetProcess(processId) is not { IsActive: true })
+        if (_backgroundTasks.GetTask(processId) is not { IsActive: true })
         {
             CleanupTemporaryLocalArchive(processId);
         }
@@ -571,7 +571,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         }
     }
 
-    private static bool IsPackageOperation(BackgroundProcessSnapshot snapshot)
+    private static bool IsPackageOperation(BackgroundTaskSnapshot snapshot)
         => PackageOperationMetadata.TryCreate(snapshot.Metadata, out _);
 
     private sealed record CommitReconciliation(PackageOperationResult? Result, bool CanDiscard)

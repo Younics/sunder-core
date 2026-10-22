@@ -15,9 +15,9 @@ public sealed class AppPackageDisableCoordinatorTests
     {
         var disabled = false;
         var attempts = 0;
-        await using var backgroundProcesses = new BackgroundProcessQueueService();
+        await using var backgroundTasks = new BackgroundTaskQueueService();
         var coordinator = CreateCoordinator(
-            backgroundProcesses,
+            backgroundTasks,
             _ => disabled ? false : disabled = true,
             _ => disabled);
 
@@ -65,9 +65,9 @@ public sealed class AppPackageDisableCoordinatorTests
     public async Task DisablePackageAsync_WhenCleanupThrowsFatalFault_PropagatesIt()
     {
         var disabled = false;
-        await using var backgroundProcesses = new BackgroundProcessQueueService();
+        await using var backgroundTasks = new BackgroundTaskQueueService();
         var coordinator = CreateCoordinator(
-            backgroundProcesses,
+            backgroundTasks,
             _ => disabled ? false : disabled = true,
             _ => disabled);
         var fatal = new OutOfMemoryException("fatal cleanup fault");
@@ -91,9 +91,9 @@ public sealed class AppPackageDisableCoordinatorTests
     {
         var disabled = false;
         var attempts = 0;
-        await using var backgroundProcesses = new BackgroundProcessQueueService();
+        await using var backgroundTasks = new BackgroundTaskQueueService();
         var coordinator = CreateCoordinator(
-            backgroundProcesses,
+            backgroundTasks,
             _ => disabled ? false : disabled = true,
             _ => disabled);
 
@@ -134,7 +134,7 @@ public sealed class AppPackageDisableCoordinatorTests
     public async Task TryBeginDisablePackage_WhenViewDisposalFails_ReportsCleanupAsUnproven()
     {
         var disabled = false;
-        await using var backgroundProcesses = new BackgroundProcessQueueService();
+        await using var backgroundTasks = new BackgroundTaskQueueService();
         var viewRegistry = new AppPackageViewRegistry(ImmediateUiDispatcher.Instance);
         viewRegistry.RegisterPackageView(
             "agent",
@@ -148,7 +148,7 @@ public sealed class AppPackageDisableCoordinatorTests
         var coordinator = new AppPackageDisableCoordinator(
             viewRegistry,
             viewFacade,
-            new AppPackageRuntimeWorkStopper(backgroundProcesses),
+            new AppPackageRuntimeWorkStopper(backgroundTasks),
             new AppPackageFaultNotifier(notificationService: null),
             _ => disabled ? false : disabled = true,
             _ => disabled);
@@ -172,7 +172,7 @@ public sealed class AppPackageDisableCoordinatorTests
     }
 
     private static AppPackageDisableCoordinator CreateCoordinator(
-        BackgroundProcessQueueService backgroundProcesses,
+        BackgroundTaskQueueService backgroundTasks,
         Func<string, bool> markPackageDisabled,
         Func<string, bool> isPackageDisabled)
     {
@@ -184,7 +184,7 @@ public sealed class AppPackageDisableCoordinatorTests
         return new AppPackageDisableCoordinator(
             viewRegistry,
             viewFacade,
-            new AppPackageRuntimeWorkStopper(backgroundProcesses),
+            new AppPackageRuntimeWorkStopper(backgroundTasks),
             new AppPackageFaultNotifier(notificationService: null),
             markPackageDisabled,
             isPackageDisabled);
@@ -196,7 +196,7 @@ public sealed class AppPackageDisableCoordinatorTests
     public async Task Unload_WhenViewDisposalFails_StillDrainsOwnedServicesWithoutRetirementAcknowledgement(bool useDeadline)
     {
         using var temporary = TemporaryDirectoryScope.Create("app-failed-view-drain");
-        await using var background = new BackgroundProcessQueueService();
+        await using var background = new BackgroundTaskQueueService();
         using var assemblies = new AppSharedAssemblyRegistry([]);
         var registry = new AppPackageViewRegistry(ImmediateUiDispatcher.Instance);
         registry.RegisterPackageView("agent", new PackageViewRegistration("agent.chat", "Chat"), static () => new ThrowingDisposeView());

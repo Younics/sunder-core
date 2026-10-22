@@ -11,6 +11,23 @@ namespace Sunder.App.Tests;
 public sealed class ShellStateServiceTests
 {
     [Fact]
+    public void TaskTerminologyPreservesExistingPopoverSettingKeys()
+    {
+        var path = Path.Combine(CreateTempDirectory(), "shell-state.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, """{"LayoutVersion":2,"BackgroundProcessPopoverWidth":612,"BackgroundProcessPopoverHeight":418}""");
+        var service = new ShellStateService(path);
+        var state = service.Load();
+        Assert.Equal(612, state.BackgroundTaskPopoverWidth);
+        Assert.Equal(418, state.BackgroundTaskPopoverHeight);
+        service.Save(state);
+        using var document = JsonDocument.Parse(File.ReadAllText(path));
+        Assert.Equal(612, document.RootElement.GetProperty("BackgroundProcessPopoverWidth").GetDouble());
+        Assert.Equal(418, document.RootElement.GetProperty("BackgroundProcessPopoverHeight").GetDouble());
+        Assert.False(document.RootElement.TryGetProperty("BackgroundTaskPopoverWidth", out _));
+    }
+
+    [Fact]
     public void Load_WhenFileIsMissing_ReturnsDefaults()
     {
         var statePath = Path.Combine(CreateTempDirectory(), "missing-shell-state.json");

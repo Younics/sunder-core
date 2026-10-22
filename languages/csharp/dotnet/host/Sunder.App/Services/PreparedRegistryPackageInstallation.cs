@@ -30,10 +30,10 @@ internal sealed class PreparedRegistryPackageInstallation(
         return current;
     }
 
-    public Task InstallRuntimesAsync(BackgroundProcessContext context)
+    public Task InstallRuntimesAsync(BackgroundTaskContext context)
         => _runtimes.InstallRuntimesAsync(client, async token => (await RefreshAsync(token).ConfigureAwait(false)).Runtimes, context);
 
-    public async Task<RuntimeRegistryPackageChangeResult> ApplyAsync(BackgroundProcessContext context)
+    public async Task<RuntimeRegistryPackageChangeResult> ApplyAsync(BackgroundTaskContext context)
     {
         context.ReportIndeterminate("Rechecking the approved package changes…");
         var current = await RefreshAsync(context.CancellationToken).ConfigureAwait(false);

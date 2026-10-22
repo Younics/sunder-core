@@ -538,8 +538,23 @@ internal sealed partial class RuntimeRpcBroker
                     SunderRpcCatalogEventKind.ResetRequired,
                     null);
             }
-            await foreach (var item in subscription.Reader.ReadAllAsync(linked.Token).ConfigureAwait(false))
+            await using var events = subscription.Reader.ReadAllAsync(linked.Token).GetAsyncEnumerator();
+            while (true)
             {
+                bool hasNext;
+                try { hasNext = await events.MoveNextAsync().ConfigureAwait(false); }
+                catch (OperationCanceledException) when (caller is RuntimeRpcAppCallerSession
+                    && !cancellationToken.IsCancellationRequested && !_hostStopping.IsCancellationRequested
+                    && (scope is null || _timeProvider.GetUtcNow() < scope.DeadlineUtc)
+                    && (callerLease.RetirementToken.IsCancellationRequested || sessionLease.GenerationRetirementToken.IsCancellationRequested))
+                {
+                    // Catalog observation has no provider invocation to classify
+                    // this linked cancellation. Preserve only proved App retirement;
+                    // request/scope/permission cancellation keeps its own boundary.
+                    throw RetiredAppCaller();
+                }
+                if (!hasNext) break;
+                var item = events.Current;
                 RuntimeRpcProviderActivation? provider = null;
                 if (item.Provider is not null)
                 {
@@ -1696,7 +1711,9 @@ internal sealed partial class RuntimeRpcBroker
         }
         if (exception is OperationCanceledException || call.CancellationToken.IsCancellationRequested)
         {
-            return call.DeadlineElapsed || _timeProvider.GetUtcNow() >= call.Frame.DeadlineUtc
+            return call.AppCallerRetirementRequested
+                ? RetiredAppCaller()
+                : call.DeadlineElapsed || _timeProvider.GetUtcNow() >= call.Frame.DeadlineUtc
                 ? DeadlineExceeded()
                 : SunderRpcException.Infrastructure(
                     SunderRpcErrorKind.Cancelled,
@@ -1836,6 +1853,8 @@ internal sealed partial class RuntimeRpcBroker
                     SunderRpcErrorKind.StaleEndpoint,
                     "rpc.endpoint.stale",
                     "The RPC endpoint identifies a retired provider activation.")
+                : call.AppCallerRetirementRequested
+                    ? RetiredAppCaller()
                 : call.DeadlineElapsed || _timeProvider.GetUtcNow() >= call.Frame.DeadlineUtc
                     ? DeadlineExceeded()
                     : SunderRpcException.Infrastructure(
@@ -1844,6 +1863,10 @@ internal sealed partial class RuntimeRpcBroker
                         "The RPC call was cancelled.");
         }
     }
+
+    private static SunderRpcException RetiredAppCaller()
+        => SunderRpcException.Infrastructure(SunderRpcErrorKind.Unavailable,
+            "rpc.app-session.retired", "The App RPC caller session is unavailable or retired.");
 
     private async ValueTask<SunderRpcException> FaultProviderAsync(
         RuntimeRpcCallLease call,
@@ -2179,6 +2202,11 @@ internal sealed class RuntimeRpcCallLease : IDisposable
     public SunderRpcInvocationContext Context { get; }
     public CancellationToken CancellationToken => _linked.Token;
     public bool DeadlineElapsed => _deadline.IsCancellationRequested;
+    // A retained provider is not retired merely because an App connection loses
+    // its caller session/generation. Preserve that exact boundary without turning
+    // unrelated request, scope, permission or provider cancellation into a handoff.
+    public bool AppCallerRetirementRequested => Caller is RuntimeRpcAppCallerSession
+        && (_callerLease.RetirementToken.IsCancellationRequested || SessionLease.GenerationRetirementToken.IsCancellationRequested);
     public bool ProviderRetirementRequested =>
         Provider.Snapshot.State != SunderRpcProviderState.Active
         || _calleeLease.RetirementToken.IsCancellationRequested;

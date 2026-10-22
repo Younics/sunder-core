@@ -2,42 +2,42 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal sealed class PackageScopedBackgroundProcessQueue(
+internal sealed class PackageScopedBackgroundTaskQueue(
     string packageId,
     string packageDisplayName,
-    BackgroundProcessQueueService backgroundProcesses,
+    BackgroundTaskQueueService backgroundTasks,
     Guid? ownerId = null)
-    : IBackgroundProcessQueue, IDisposable, IAsyncDisposable
+    : IBackgroundTaskQueue, IDisposable, IAsyncDisposable
 {
     private readonly string _packageId = packageId;
     private readonly string _packageDisplayName = packageDisplayName;
-    private readonly BackgroundProcessQueueService _backgroundProcesses = backgroundProcesses;
+    private readonly BackgroundTaskQueueService _backgroundTasks = backgroundTasks;
     private readonly Guid? _ownerId = ownerId;
     private readonly object _lifecycleGate = new();
     private bool _disposed;
     private bool _started;
 
-    public event EventHandler<BackgroundProcessChangedEventArgs>? ProcessChanged;
+    public event EventHandler<BackgroundTaskChangedEventArgs>? TaskChanged;
 
-    public BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request)
+    public BackgroundTaskSnapshot Enqueue(BackgroundTaskRequest request)
         => Enqueue(request, Guid.NewGuid());
 
-    internal BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request, Guid processId)
+    internal BackgroundTaskSnapshot Enqueue(BackgroundTaskRequest request, Guid processId)
     {
-        BackgroundProcessRequestValidator.Validate(request);
+        BackgroundTaskRequestValidator.Validate(request);
 
-        var metadata = PackageScopedBackgroundProcessMetadata.Create(
+        var metadata = PackageScopedBackgroundTaskMetadata.Create(
             _packageId,
             _packageDisplayName,
             request.GroupKey,
             request.Metadata,
             _ownerId);
 
-        BackgroundProcessSnapshot snapshot;
+        BackgroundTaskSnapshot snapshot;
         lock (_lifecycleGate)
         {
             ThrowIfDisposed();
-            snapshot = _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
+            snapshot = _backgroundTasks.Enqueue(new BackgroundTaskRequest(
                 request.Title,
                 BuildHostGroupKey(_packageId, request.GroupKey, _ownerId),
                 request.Indicator,
@@ -50,7 +50,7 @@ internal sealed class PackageScopedBackgroundProcessQueue(
         return ToPackageSnapshot(snapshot, metadata);
     }
 
-    public IReadOnlyList<BackgroundProcessSnapshot> ListProcesses(string? groupKey = null)
+    public IReadOnlyList<BackgroundTaskSnapshot> ListTasks(string? groupKey = null)
     {
         lock (_lifecycleGate)
         {
@@ -60,7 +60,7 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             }
         }
 
-        return ListProcessesCore(groupKey);
+        return ListTasksCore(groupKey);
     }
 
     public bool Cancel(Guid processId)
@@ -73,8 +73,8 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             }
         }
 
-        var snapshot = _backgroundProcesses.GetProcess(processId);
-        return snapshot is not null && TryMap(snapshot, out _) && _backgroundProcesses.Cancel(processId);
+        var snapshot = _backgroundTasks.GetTask(processId);
+        return snapshot is not null && TryMap(snapshot, out _) && _backgroundTasks.Cancel(processId);
     }
 
     public void Dispose()
@@ -83,11 +83,11 @@ internal sealed class PackageScopedBackgroundProcessQueue(
         {
             if (_ownerId is { } ownerId)
             {
-                _backgroundProcesses.CancelPackageOwnerProcesses(_packageId, ownerId);
+                _backgroundTasks.CancelPackageOwnerProcesses(_packageId, ownerId);
             }
             else
             {
-                _backgroundProcesses.CancelOwnerlessPackageProcesses(_packageId);
+                _backgroundTasks.CancelOwnerlessPackageProcesses(_packageId);
             }
         }
 
@@ -106,11 +106,11 @@ internal sealed class PackageScopedBackgroundProcessQueue(
         {
             if (_ownerId is { } ownerId)
             {
-                await _backgroundProcesses.CancelPackageOwnerProcessesAsync(_packageId, ownerId, cancellationToken).ConfigureAwait(false);
+                await _backgroundTasks.CancelPackageOwnerProcessesAsync(_packageId, ownerId, cancellationToken).ConfigureAwait(false);
             }
             else
             {
-                await _backgroundProcesses.CancelOwnerlessPackageProcessesAsync(_packageId, cancellationToken).ConfigureAwait(false);
+                await _backgroundTasks.CancelOwnerlessPackageProcessesAsync(_packageId, cancellationToken).ConfigureAwait(false);
             }
         }
     }
@@ -126,11 +126,11 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             }
 
             _started = true;
-            _backgroundProcesses.ProcessChanged += BackgroundProcesses_OnProcessChanged;
+            _backgroundTasks.TaskChanged += BackgroundTasks_OnTaskChanged;
         }
     }
 
-    private void BackgroundProcesses_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
+    private void BackgroundTasks_OnTaskChanged(object? sender, BackgroundTaskChangedEventArgs e)
     {
         lock (_lifecycleGate)
         {
@@ -142,7 +142,7 @@ internal sealed class PackageScopedBackgroundProcessQueue(
 
         if (TryMap(e.Snapshot, out var packageSnapshot))
         {
-            ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(packageSnapshot));
+            TaskChanged?.Invoke(this, new BackgroundTaskChangedEventArgs(packageSnapshot));
         }
     }
 
@@ -163,16 +163,16 @@ internal sealed class PackageScopedBackgroundProcessQueue(
 
         if (wasStarted)
         {
-            _backgroundProcesses.ProcessChanged -= BackgroundProcesses_OnProcessChanged;
+            _backgroundTasks.TaskChanged -= BackgroundTasks_OnTaskChanged;
         }
 
         return true;
     }
 
-    private IReadOnlyList<BackgroundProcessSnapshot> ListProcessesCore(string? groupKey = null)
+    private IReadOnlyList<BackgroundTaskSnapshot> ListTasksCore(string? groupKey = null)
     {
-        var snapshots = new List<BackgroundProcessSnapshot>();
-        foreach (var snapshot in _backgroundProcesses.ListProcesses())
+        var snapshots = new List<BackgroundTaskSnapshot>();
+        foreach (var snapshot in _backgroundTasks.ListTasks())
         {
             if (TryMap(snapshot, out var packageSnapshot)
                 && (string.IsNullOrWhiteSpace(groupKey)
@@ -189,13 +189,13 @@ internal sealed class PackageScopedBackgroundProcessQueue(
     {
         if (_disposed)
         {
-            throw new ObjectDisposedException(nameof(PackageScopedBackgroundProcessQueue));
+            throw new ObjectDisposedException(nameof(PackageScopedBackgroundTaskQueue));
         }
     }
 
-    private bool TryMap(BackgroundProcessSnapshot snapshot, out BackgroundProcessSnapshot packageSnapshot)
+    private bool TryMap(BackgroundTaskSnapshot snapshot, out BackgroundTaskSnapshot packageSnapshot)
     {
-        if (PackageScopedBackgroundProcessMetadata.TryCreate(snapshot.Metadata, out var metadata)
+        if (PackageScopedBackgroundTaskMetadata.TryCreate(snapshot.Metadata, out var metadata)
             && string.Equals(metadata.PackageId, _packageId, StringComparison.OrdinalIgnoreCase)
             && metadata.OwnerId == _ownerId)
         {
@@ -207,11 +207,11 @@ internal sealed class PackageScopedBackgroundProcessQueue(
         return false;
     }
 
-    private static BackgroundProcessSnapshot ToPackageSnapshot(
-        BackgroundProcessSnapshot snapshot,
-        PackageScopedBackgroundProcessMetadata metadata)
+    private static BackgroundTaskSnapshot ToPackageSnapshot(
+        BackgroundTaskSnapshot snapshot,
+        PackageScopedBackgroundTaskMetadata metadata)
         => new(
-            snapshot.ProcessId,
+            snapshot.TaskId,
             snapshot.Title,
             metadata.PackageGroupKey,
             snapshot.Indicator,
@@ -232,7 +232,7 @@ internal sealed class PackageScopedBackgroundProcessQueue(
             : $"package:{packageId}:{ownerId:N}:{groupKey}";
 }
 
-internal sealed record PackageScopedBackgroundProcessMetadata(
+internal sealed record PackageScopedBackgroundTaskMetadata(
     string PackageId,
     string PackageDisplayName,
     string PackageGroupKey,
@@ -245,7 +245,7 @@ internal sealed record PackageScopedBackgroundProcessMetadata(
     private const string PackageMetadataKeyPrefix = "sunder.package.metadata.";
     private const string OwnerIdMetadataKey = "sunder.package.ownerId";
 
-    public static PackageScopedBackgroundProcessMetadata Create(
+    public static PackageScopedBackgroundTaskMetadata Create(
         string packageId,
         string packageDisplayName,
         string packageGroupKey,
@@ -260,7 +260,7 @@ internal sealed record PackageScopedBackgroundProcessMetadata(
                 : new Dictionary<string, string>(packageMetadata, StringComparer.OrdinalIgnoreCase),
             ownerId);
 
-    public static bool TryCreate(IReadOnlyDictionary<string, string> hostMetadata, out PackageScopedBackgroundProcessMetadata metadata)
+    public static bool TryCreate(IReadOnlyDictionary<string, string> hostMetadata, out PackageScopedBackgroundTaskMetadata metadata)
     {
         if (hostMetadata.TryGetValue(PackageIdMetadataKey, out var packageId)
             && hostMetadata.TryGetValue(PackageDisplayNameMetadataKey, out var packageDisplayName)
@@ -270,7 +270,7 @@ internal sealed record PackageScopedBackgroundProcessMetadata(
                             && Guid.TryParse(ownerIdText, out var parsedOwnerId)
                 ? parsedOwnerId
                 : null;
-            metadata = new PackageScopedBackgroundProcessMetadata(
+            metadata = new PackageScopedBackgroundTaskMetadata(
                 packageId,
                 packageDisplayName,
                 packageGroupKey,

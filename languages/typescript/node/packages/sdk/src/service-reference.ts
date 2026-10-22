@@ -102,7 +102,7 @@ export function createServiceCatalog<T>(context:ApiBindingContext,token:ServiceT
     async resolve(options?:RpcCallOptions){const snapshot=await list(options);if(snapshot.resetRequired)throw staleReference();
       const matches=snapshot.providers.filter(provider=>provider.snapshot.state==="active"&&provider.snapshot.packageId===identity.packageId
         &&(identity.packageRange===undefined||isVersionInRange(provider.snapshot.packageVersion,identity.packageRange)&&(identity.includePrerelease||!provider.snapshot.packageVersion.split("+",1)[0]!.includes("-"))));
-      if(matches.length!==1)throw new Error(matches.length?"Service provider selection is ambiguous.":"No active provider matches the selected service.");return matches[0]!;},
+       if(matches.length!==1)throw new RpcError({kind:"not-found",code:matches.length?"rpc.provider-ambiguous":"rpc.provider-not-found",message:matches.length?"Service provider selection is ambiguous.":"No active provider matches the selected service."});return matches[0]!;},
     watch(afterRevision:number,afterSequence:number,options?:RpcCallOptions){
       const captured=options?{...options,...(options.deadline?{deadline:new Date(options.deadline.getTime())}:{})}:undefined;
        return {async *[Symbol.asyncIterator](){const owner=capture();await owner.serviceBindings().discover(target.contractId,captured);const transport=await owner.transport(captured);if(!transport.watch)throw new Error("The RPC transport does not expose its existing provider catalog watch operation.");

@@ -90,7 +90,7 @@ export const echo = defineService({roundTrip});`;
   try {
     await generateRpcBindings(root);
     const built = await build({ entryPoints: [join(root, ".sunder/generated/rpc/adapter.ts")], platform: "node", format: "cjs", bundle: true, write: false,
-      alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
+      alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
     const loaded = { exports: {} as { providers?: Array<{ handler: { invokeUnary(context: unknown, service: string, method: string, request: unknown): Promise<unknown> } }> } };
     new Function("require", "module", "exports", built.outputFiles[0]!.text)(require, loaded, loaded.exports);
     const invoke = (value: unknown) => loaded.exports.providers![0]!.handler.invokeUnary({ signal: new AbortController().signal }, "echo", "round-trip", value);

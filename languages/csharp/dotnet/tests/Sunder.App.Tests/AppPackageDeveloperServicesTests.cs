@@ -2,6 +2,7 @@ using Sunder.App.Services;
 using Sunder.App.Tests.TestSupport;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -15,7 +16,7 @@ public sealed class AppPackageDeveloperServicesTests
     {
         using var transport = new RuntimeClientTransport(() => null);
         using var client = new RuntimeManagementTestClient();
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var approved = false;
         var installed = false;
         var requests = new List<RuntimePackageRuntimePrerequisiteRequest>();
@@ -28,6 +29,11 @@ public sealed class AppPackageDeveloperServicesTests
         client.InstallHandler = (_, _) =>
         {
             Assert.True(approved);
+            var tasks = queue.ListTasks();
+            Assert.Equal(2, tasks.Count);
+            Assert.All(tasks, task => Assert.Equal(BackgroundTaskIndicator.Main, task.Indicator));
+            Assert.Equal(BackgroundTaskState.Running, Assert.Single(tasks, task => task.Metadata["sunder.installationPhase"] == "runtime").State);
+            Assert.Equal(BackgroundTaskState.Queued, Assert.Single(tasks, task => task.Metadata["sunder.installationPhase"] == "package").State);
             installed = true;
             return Task.FromResult(new RuntimeExecutionRuntimeOperationResult(true, null, "Installed", "install", RuntimeManagementTestClient.Installed(), false));
         };
@@ -37,7 +43,7 @@ public sealed class AppPackageDeveloperServicesTests
             {
                 Assert.Equal("demo", packageId);
                 Assert.Equal(RuntimeManagementTestClient.Identity, Assert.Single(review.Requirements).Installation!.Resolution!.Artifact.Identity);
-                Assert.Empty(queue.ListProcesses());
+                Assert.Empty(queue.ListTasks());
                 Assert.DoesNotContain("runtime-install", client.Calls);
                 approved = true;
                 return Task.FromResult(true);
@@ -53,8 +59,8 @@ public sealed class AppPackageDeveloperServicesTests
         {
             Assert.Equal("demo", await backend.PrepareAsync(Path.GetFullPath("dev"), default));
             Assert.True(installed);
-            Assert.Equal(2, queue.ListProcesses().Count);
-            Assert.All(queue.ListProcesses(), job => Assert.Equal(Sunder.Sdk.Abstractions.BackgroundProcessState.Completed, job.State));
+            Assert.Equal(2, queue.ListTasks().Count);
+            Assert.All(queue.ListTasks(), job => Assert.Equal(Sunder.Sdk.Abstractions.BackgroundTaskState.Completed, job.State));
         }
         Assert.All(requests, request =>
         {

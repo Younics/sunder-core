@@ -3,15 +3,15 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Sunder.App.ViewModels"
-             x:Class="Sunder.App.Views.Controls.BackgroundProcessMonitor"
-             x:DataType="vm:BackgroundProcessMonitorViewModel"
+             x:Class="Sunder.App.Views.Controls.BackgroundTaskMonitor"
+             x:DataType="vm:BackgroundTaskMonitorViewModel"
              ClipToBounds="False"
              mc:Ignorable="d">
   <Grid ClipToBounds="False">
     <Button x:Name="MonitorButton"
             Classes="process-monitor-button"
             IsVisible="{Binding ShowFooter}"
-            ToolTip.Tip="Show background processes"
+            ToolTip.Tip="Show background tasks"
             Click="MonitorButton_OnClick">
       <Button.Content>
         <Grid Width="300"
@@ -62,7 +62,7 @@
                   ColumnSpacing="12"
                   VerticalAlignment="Center">
               <TextBlock Classes="section-title"
-                         Text="Processes"
+                         Text="Tasks"
                          HorizontalAlignment="Center" />
                <Button Grid.Column="1"
                        Classes="window-action-button process-monitor-close-button"
@@ -81,7 +81,7 @@
                     Classes="notification-empty-state"
                     IsVisible="{Binding HasNoProcesses}">
               <TextBlock Classes="caption"
-                         Text="No active processes."
+                         Text="No active tasks."
                          TextWrapping="Wrap" />
             </Border>
 
@@ -94,7 +94,7 @@
                             HorizontalAlignment="Stretch"
                             ClipToBounds="True">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:BackgroundProcessItemViewModel">
+                  <DataTemplate x:DataType="vm:BackgroundTaskItemViewModel">
                     <Border Classes="process-monitor-row"
                             HorizontalAlignment="Stretch"
                             ClipToBounds="True">

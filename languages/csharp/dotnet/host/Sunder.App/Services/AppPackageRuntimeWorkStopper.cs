@@ -1,7 +1,7 @@
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageRuntimeWorkStopper(
-    BackgroundProcessQueueService backgroundProcessQueue,
+    BackgroundTaskQueueService backgroundTaskQueue,
     Guid? ownerId = null,
     Func<string, CancellationToken, Task?>? retainedPackageStopper = null)
 {
@@ -14,19 +14,19 @@ internal sealed class AppPackageRuntimeWorkStopper(
         }
         if (ownerId is { } generationOwnerId)
         {
-            await backgroundProcessQueue
+            await backgroundTaskQueue
                 .CancelPackageOwnerProcessesAsync(packageId, generationOwnerId, CancellationToken.None)
                 .ConfigureAwait(false);
             return;
         }
 
-        await backgroundProcessQueue
+        await backgroundTaskQueue
             .CancelAllPackageProcessesAsync(packageId, CancellationToken.None)
             .ConfigureAwait(false);
     }
 
     public Task StopAllOwnedWorkAsync(CancellationToken cancellationToken)
         => ownerId is { } generationOwnerId
-            ? backgroundProcessQueue.CancelOwnerProcessesAsync(generationOwnerId, CancellationToken.None)
+            ? backgroundTaskQueue.CancelOwnerProcessesAsync(generationOwnerId, CancellationToken.None)
             : Task.CompletedTask;
 }

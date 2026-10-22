@@ -14,7 +14,7 @@ internal sealed class MainWindowSubscriptionScope : IDisposable
     private readonly PackageViewHostService _packageViewHostService;
     private readonly NotificationCenterService _notificationCenter;
     private readonly AppPackageShellViewService? _shellViewService;
-    private readonly BackgroundProcessMonitorViewModel _backgroundProcesses;
+    private readonly BackgroundTaskMonitorViewModel _backgroundTasks;
     private readonly IDisposable _shellStatePersistence;
     private readonly PropertyChangedEventHandler _runtimeStatusPropertyChanged;
     private readonly PropertyChangedEventHandler _notificationTrayPropertyChanged;
@@ -33,7 +33,7 @@ internal sealed class MainWindowSubscriptionScope : IDisposable
         PackageViewHostService packageViewHostService,
         NotificationCenterService notificationCenter,
         AppPackageShellViewService? shellViewService,
-        BackgroundProcessMonitorViewModel backgroundProcesses,
+        BackgroundTaskMonitorViewModel backgroundTasks,
         IDisposable shellStatePersistence,
         PropertyChangedEventHandler runtimeStatusPropertyChanged,
         PropertyChangedEventHandler notificationTrayPropertyChanged,
@@ -50,7 +50,7 @@ internal sealed class MainWindowSubscriptionScope : IDisposable
         _packageViewHostService = packageViewHostService;
         _notificationCenter = notificationCenter;
         _shellViewService = shellViewService;
-        _backgroundProcesses = backgroundProcesses;
+        _backgroundTasks = backgroundTasks;
         _shellStatePersistence = shellStatePersistence;
         _runtimeStatusPropertyChanged = runtimeStatusPropertyChanged;
         _notificationTrayPropertyChanged = notificationTrayPropertyChanged;
@@ -88,9 +88,9 @@ internal sealed class MainWindowSubscriptionScope : IDisposable
         _packageViewHostService.PackageFaulted -= _packageFaulted;
         _notificationCenter.NotificationsChanged -= _notificationsChanged;
         _notificationCenter.ToastQueued -= _toastQueued;
-        if (!ReferenceEquals(_backgroundProcesses, BackgroundProcessMonitorViewModel.Empty))
+        if (!ReferenceEquals(_backgroundTasks, BackgroundTaskMonitorViewModel.Empty))
         {
-            _backgroundProcesses.Dispose();
+            _backgroundTasks.Dispose();
         }
 
         if (_windowLauncher is WindowLauncher concreteWindowLauncher)

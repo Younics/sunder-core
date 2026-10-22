@@ -87,7 +87,7 @@ export const documents=defineService({async *watch(){yield SunderContent.fromByt
   try{
     await put(source);const opted=await c.load();
     await generateRpcBindingsForLoadedProject(opted);
-    const bundle=await build({stdin:{contents:'export {providers} from "./.sunder/generated/rpc/adapter.js";export {RpcError} from "@sunder/sdk";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser")}});
+    const bundle=await build({stdin:{contents:'export {providers} from "./.sunder/generated/rpc/adapter.js";export {RpcError} from "@sunder/sdk";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});
     const module={exports:{} as any};new Function("require","module","exports",bundle.outputFiles[0]!.text)(require,module,module.exports);
     const {providers,RpcError}=module.exports;
     let registrations=0;const proof=new WeakMap<object,AbortSignal>();
@@ -171,7 +171,7 @@ async echo(request/*:Reply*/)/*:Promise<Reply>*/{
     await writeFile(join(c.root,`src/services.${extension}`),fixtureSource(source,extension));
     const project=await c.load();await generateRpcBindingsForLoadedProject(project);
     const bundle=join(c.root,"natural-provider.cjs");
-    await build({entryPoints:[join(c.root,".sunder/generated/rpc/adapter.ts")],outfile:bundle,bundle:true,platform:"node",format:"cjs",alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser")}});
+    await build({entryPoints:[join(c.root,".sunder/generated/rpc/adapter.ts")],outfile:bundle,bundle:true,platform:"node",format:"cjs",alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});
     // Reuse the strict framed Worker harness, including its hostile Host cases.
     // SDK test compilation is a prerequisite (the workspace test order builds it first).
     const harness=join(require.resolve("@sunder/sdk"),"../../dist-test/test/worker.test.js");
@@ -219,8 +219,8 @@ async outputMixed()/*:Promise<MixedInput>*/{const provider=await worker.api(Self
     const config=JSON.parse(await readFile(join(c.root,"sunder.package.json"),"utf8"));config.id="example.package";await writeFile(join(c.root,"sunder.package.json"),JSON.stringify(config));
     const project=await c.load();await generateRpcBindingsForLoadedProject(project);
     const bundle=join(c.root,"optional-provider.cjs");
-    const sdk=join(require.resolve("@sunder/sdk"),"../../dist-test/src/index.js"),browser=join(sdk,"../browser.js");
-    await build({stdin:{contents:`export * from "./.sunder/generated/rpc/adapter.js";export {Self} from "./.sunder/generated/rpc/api.js";export {configure} from "./src/services.${extension}";`,resolveDir:c.root,loader:"ts"},outfile:bundle,bundle:true,platform:"node",format:"cjs",external:[sdk,browser],alias:{"@sunder/sdk":sdk,"@sunder/sdk/browser":browser,"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
+    const sdk=join(require.resolve("@sunder/sdk"),"../../dist-test/src/index.js"),browser=join(sdk,"../browser.js"),generated=join(sdk,"../generated.js");
+    await build({stdin:{contents:`export * from "./.sunder/generated/rpc/adapter.js";export {Self} from "./.sunder/generated/rpc/api.js";export {configure} from "./src/services.${extension}";`,resolveDir:c.root,loader:"ts"},outfile:bundle,bundle:true,platform:"node",format:"cjs",external:[sdk,browser,generated],alias:{"@sunder/sdk":sdk,"@sunder/sdk/browser":browser,"@sunder/sdk/generated":generated,"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
     const env:NodeJS.ProcessEnv={...process.env,SUNDER_TEST_OPTIONAL_PROVIDER:bundle};delete env.NODE_TEST_CONTEXT;
     const harness=join(require.resolve("@sunder/sdk"),"../../dist-test/test/worker.test.js");
     const result=spawnSync(process.execPath,["--test","--test-reporter=tap","--test-name-pattern=^source optional references",harness],{env,encoding:"utf8",timeout:90_000});
@@ -260,14 +260,14 @@ export async function consume(owner/*:ApiContext*/,caller/*:AbortSignal*/,enumer
 }`,extension);
     await writeFile(consumer,consumerSource);
     const compilerOptions:ts.CompilerOptions={target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.ESNext,moduleResolution:ts.ModuleResolutionKind.Bundler,strict:true,allowJs:true,checkJs:true,noEmit:true,types:[],skipLibCheck:false,
-      paths:{"@sunder/sdk/browser":[require.resolve("@sunder/sdk/browser").replace(/\.js$/u,".d.ts")],"@sunder/sdk/core":[require.resolve("@sunder/sdk/core").replace(/\.js$/u,".d.ts")]}};
+       paths:{"@sunder/sdk/browser":[require.resolve("@sunder/sdk/browser").replace(/\.js$/u,".d.ts")],"@sunder/sdk/generated":[require.resolve("@sunder/sdk/generated").replace(/\.js$/u,".d.ts")],"@sunder/sdk/core":[require.resolve("@sunder/sdk/core").replace(/\.js$/u,".d.ts")]}};
     const program=ts.createProgram([consumer],compilerOptions);
     assert.deepEqual(ts.getPreEmitDiagnostics(program).map(value=>`${value.file?.fileName}:${value.start}: ${ts.flattenDiagnosticMessageText(value.messageText,"\n")}`),[]);
     await writeFile(consumer,consumerSource.replace('run("browser")','run(42)').replace(".openRead()",'.openRead("not-a-signal")'));
     const invalid=ts.createProgram([consumer],compilerOptions);
     assert.deepEqual(ts.getPreEmitDiagnostics(invalid).map(value=>value.code),[2345,2345],"Both TS and genuine checkJs consumers must reject wrongly typed natural resource calls.");
     const browser=await build({stdin:{contents:'export {Self,Services} from "#sunder/api";export {SunderContent,createBrowserContext} from "@sunder/sdk/browser";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"browser",format:"cjs",write:false,metafile:true,
-      alias:{"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser")}});
+       alias:{"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});
     assert.ok(Object.keys(browser.metafile!.inputs).every(path=>!/(?:node:|\/worker\.|\/content-node\.)/u.test(path)));assert.doesNotMatch(browser.outputFiles[0]!.text,/node:fs|SelfModels/);
   }finally{await c.dispose();}
 });
@@ -277,9 +277,10 @@ async function runtime(c:Awaited<ReturnType<typeof fixture>>,project:Awaited<Ret
 export {createProviders} from "./.sunder/generated/rpc/adapter.js";
 export {configure} from ${JSON.stringify("./"+project.config.services!.module.replace(/\.[jt]s$/u,".js"))};
 export * as Authored from ${JSON.stringify("./"+project.config.services!.module.replace(/\.[jt]s$/u,".js"))};
-export {createApiContext,bindApiContext,SunderContent,RpcError} from "@sunder/sdk";
+export {createApiContext,SunderContent,RpcError} from "@sunder/sdk";
+export {bindApiContext} from "@sunder/sdk/generated";
 ${consumerRoot?`export * as Consumer from ${JSON.stringify(join(consumerRoot,".sunder/generated/rpc/api.js"))};`:""}`,resolveDir:c.root,loader:"ts"},bundle:true,platform:"node",format:"cjs",write:false,
-    alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
+    alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated"),"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
   const module={exports:{} as any};new Function("require","module","exports",bundle.outputFiles[0]!.text)(require,module,module.exports);const api=module.exports;
   let sequence=0;let allowed=true;let endpointFailure:unknown;let endpointQueries=0;const watchSignals:AbortSignal[]=[];const snapshots=project.config.providers.map(provider=>{const contract=project.contracts.find(contract=>contract.descriptor.contractId===provider.contractId)!;
     return {...provider,packageId:project.config.id,packageVersion:project.config.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,

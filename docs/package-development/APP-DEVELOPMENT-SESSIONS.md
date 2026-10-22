@@ -18,11 +18,12 @@ public interface IPackageDevelopmentSession : IAsyncDisposable
 }
 
 public sealed record PackageDevelopmentStatus(
-    string PackageId, bool IsLoaded, bool WatchEnabled, string Readiness,
+    string PackageId, bool IsLoaded, bool WatchEnabled, PackageDevelopmentRuntimeReadiness RuntimeReadiness,
     string? ErrorMessage, bool OverridesInstalledPackage)
 {
     public bool RequestedWatch { get; init; }
-    public string AppReadiness { get; init; } = "Pending";
+    public PackageDevelopmentHostState HostState { get; init; }
+    public PackageDevelopmentAppReadiness AppReadiness { get; init; }
     public PackageDevelopmentRevision? RuntimeRevision { get; init; }
     public PackageDevelopmentRevision? AppliedRevision { get; init; }
 }
@@ -146,10 +147,19 @@ lifetimes and cannot be revived by a new successful query.
 ## Status
 
 `GetStatusAsync` confirms ownership through the existing Host owner protocol and
-reads the current Host package snapshot. `Readiness` is prefixed with `Runtime:`
-(for example `Runtime:Ready`, `Runtime:Failed`, or `Runtime:Reconnecting`). It does
-not assert App view activation or presentation readiness. `AppReadiness` separately
-reports `Pending`, `Activated`, `Quarantined`, `Unavailable`, or `NotApplicable`.
+reads the current Host package snapshot. SDK-owned enums keep three independent
+observations separate:
+
+- `HostState`: `Unknown`, `Reconnecting`, `Starting`, `Ready`, `Failed`, or `ShuttingDown`.
+- `RuntimeReadiness`: `Unknown`, `NotLoaded`, `Ready`, `NeedsConfiguration`,
+  `Degraded`, `Failed`, or `Disabled`.
+- `AppReadiness`: `Unknown`, `Pending`, `Activated`, `Quarantined`, `Unavailable`,
+  or `NotApplicable`.
+
+Unknown or unrecognized values must not be treated as ready. `HostState.Ready`
+only describes bootstrap, not the package Runtime, App, DOM or business calls.
+Package authors do not reference `Sunder.Runtime.Contracts` to interpret status.
+
 `Activated` requires the matching Host stamp and current activation fingerprint to have been published by App; it does
 not assert that every lazily created view has been opened. `ErrorMessage` carries
 the observed Host package failure. `IsLoaded` means the owner and current Host

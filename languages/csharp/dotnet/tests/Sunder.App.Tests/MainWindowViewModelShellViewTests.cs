@@ -3739,13 +3739,13 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
                 .GetAwaiter()
                 .GetResult();
             services
-                .GetRequiredService<IBackgroundProcessQueue>()
+                .GetRequiredService<IBackgroundTaskQueue>()
                 .Enqueue(
-                    new BackgroundProcessRequest(
+                    new BackgroundTaskRequest(
                         "Candidate work",
                         "candidate",
-                        BackgroundProcessIndicator.Hidden,
-                        BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+                        BackgroundTaskIndicator.Hidden,
+                        BackgroundTaskConcurrencyMode.SequentialWithinGroup,
                         CanCancel: true,
                         _ =>
                         {

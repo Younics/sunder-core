@@ -44,6 +44,10 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     public string? ContractLockPath { get; set; }
     public string ContractCacheRoot { get; set; } = SunderRpcContractCache.DefaultRoot;
     public bool AllowDevelopmentRegistryOrigin { get; set; }
+    // Optional Builder Watch fence, used only for the final canonical promotion.
+    // Ordinary CLI builds and role-local output composition are unchanged.
+    public string DevelopmentRevisionFile { get; set; } = string.Empty;
+    public string DevelopmentRevision { get; set; } = string.Empty;
 
     [Output]
     public string NormalizedOutputPath { get; private set; } = string.Empty;
@@ -204,6 +208,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                     ContractLockPath, ContractCacheRoot, AllowDevelopmentRegistryOrigin, ProjectDirectory)
                 : "null\n"u8.ToArray());
             CancellationToken.ThrowIfCancellationRequested();
+            using var publication = SunderDevelopmentPublication.Acquire(DevelopmentRevisionFile, DevelopmentRevision);
             GeneratedOutputTransaction.Commit(
                 new GeneratedOutputTransaction.StagedOutput(output, temporaryPath),
                 new GeneratedOutputTransaction.StagedOutput(markerPath, temporaryMarkerPath),

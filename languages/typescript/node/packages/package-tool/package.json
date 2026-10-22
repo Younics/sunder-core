@@ -24,7 +24,8 @@
     "NOTICE"
   ],
   "bin": {
-    "sunder-package": "dist/cli.js"
+    "sunder-package": "dist/cli.js",
+    "sunder-rpc-gen": "dist/generator-cli.js"
   },
   "engines": {
     "node": ">=24.18.1 <25.0.0"

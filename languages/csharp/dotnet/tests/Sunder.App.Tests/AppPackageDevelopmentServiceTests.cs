@@ -15,6 +15,8 @@ public sealed class AppPackageDevelopmentServiceTests
     [InlineData(PackageReadinessState.Ready, "Quarantined", true, true, false)]
     [InlineData(PackageReadinessState.Ready, "Activated", false, true, false)]
     [InlineData(PackageReadinessState.Failed, "Activated", true, true, false)]
+    [InlineData((PackageReadinessState)99, "Activated", true, true, false)]
+    [InlineData(PackageReadinessState.Ready, "FutureUnknownState", true, true, false)]
     [InlineData(PackageReadinessState.Ready, "Pending", false, false, true)]
     public async Task AppliedRevisionRequiresReadyRuntimeAndMatchingPublishedAppSource(PackageReadinessState state,
         string appReadiness, bool sameAppSource, bool hasApp, bool applied)
@@ -45,7 +47,7 @@ public sealed class AppPackageDevelopmentServiceTests
         await using var service = new AppPackageDevelopmentService(backend, publication, Guid.NewGuid());
         await using var session = await service.LoadAsync("first", true);
         var status = await session.GetStatusAsync();
-        Assert.Equal("Activated", status.AppReadiness);
+        Assert.Equal(PackageDevelopmentAppReadiness.Activated, status.AppReadiness);
         Assert.Null(status.RuntimeRevision);
         Assert.Null(status.AppliedRevision);
         backend.SourceContentIdentity = "not-a-content-identity";
@@ -111,13 +113,15 @@ public sealed class AppPackageDevelopmentServiceTests
         var status = await session.GetStatusAsync();
         Assert.True(status.IsLoaded);
         Assert.True(status.OverridesInstalledPackage);
-        Assert.Equal("Runtime:Failed", status.Readiness);
+        Assert.Equal(PackageDevelopmentHostState.Ready, status.HostState);
+        Assert.Equal(PackageDevelopmentRuntimeReadiness.Failed, status.RuntimeReadiness);
         Assert.Equal("Worker failed", status.ErrorMessage);
         backend.SnapshotRuntimeId = Guid.NewGuid();
         status = await session.GetStatusAsync();
         Assert.False(status.IsLoaded);
         Assert.False(status.OverridesInstalledPackage);
-        Assert.Equal("Runtime:Reconnecting", status.Readiness);
+        Assert.Equal(PackageDevelopmentHostState.Reconnecting, status.HostState);
+        Assert.Equal(PackageDevelopmentRuntimeReadiness.Unknown, status.RuntimeReadiness);
     }
 
     [Fact]
@@ -131,7 +135,7 @@ public sealed class AppPackageDevelopmentServiceTests
         var status = await session.GetStatusAsync();
         Assert.True(status.WatchEnabled);
         Assert.False(status.RequestedWatch);
-        Assert.Equal("Pending", status.AppReadiness);
+        Assert.Equal(PackageDevelopmentAppReadiness.Pending, status.AppReadiness);
     }
 
     [Fact]
@@ -368,7 +372,7 @@ public sealed class AppPackageDevelopmentServiceTests
         }
         public async Task<AppDevelopmentApplicationObservation> GetAppObservationAsync(string packageId, RuntimePackageStamp stamp,
             string? sourceContentIdentity, CancellationToken token)
-            => new(await GetAppReadinessAsync(packageId, stamp, token), AppliedContentIdentity);
+            => new(AppPackageDevelopmentService.ParseAppReadiness(await GetAppReadinessAsync(packageId, stamp, token)), AppliedContentIdentity);
         public async Task<RuntimePackageSnapshot> GetSnapshotAsync(CancellationToken token)
         {
             if (BeforeStatusAsync is not null) await BeforeStatusAsync("snapshot", token);

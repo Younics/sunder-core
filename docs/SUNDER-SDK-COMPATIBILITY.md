@@ -24,7 +24,12 @@ SDK-backed targets contain distinct V1-form capability ids. Targets built on the
 
 Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`. Coordinated npm package dependencies, generated Node templates, and runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
 
-The six public developer NuGets exclude generated assembly XML documentation companions. Runtime package archives exclude generated XML companions and symbol files after publish-file computation while retaining explicitly authored XML content. Release package-set verification rejects a NuGet that reintroduces a DLL-matched XML companion.
+The four `Sunder.Sdk*` developer NuGets include matching XML API documentation beside
+their consumer DLLs for IntelliSense. Release verification requires the expected
+documentation paths and matching assembly identity. Build-task/tooling assets have
+no blanket documentation exception. Runtime package archives continue excluding
+generated XML companions and symbol files after publish-file computation while
+retaining explicitly authored XML content.
 
 ## Registry Resolution Profile
 
@@ -382,7 +387,7 @@ Current SDK capabilities are:
 | `settings-navigation.v1` | package settings navigation service |
 | `package-development-revisions.v1` | managed .NET App-only `RuntimeRevision` / `AppliedRevision` status members and validated full-source revision values |
 | `worker-execution-observations.v1` | managed .NET App-only exact Worker execution capture, owner-authorized cleanup evidence and member-gated `SunderRpcException.HasTrustedNoDispatchEvidence` |
-| `background-processes.v1` | queued background process API, progress reporting, cancellation, and indicator placement |
+| `background-processes.v1` | queued background task API, progress reporting, cancellation, and indicator placement; existing capability identity retained |
 | `background-services.v1` | package-owned `ISunderWorkerLifecycleService` composition and monitored active work |
 | `runtime-generations.v1` | staged Worker candidate preparation, exact generation commit, activation, completion, and shutdown |
 | `settings.schema.v1` | host-rendered package settings schema contracts |

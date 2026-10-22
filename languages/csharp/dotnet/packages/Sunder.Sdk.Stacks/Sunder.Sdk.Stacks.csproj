@@ -10,6 +10,7 @@
     <Version>$(SunderDeveloperPackageVersion)</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk.Stacks</Title>
     <Description>Public contracts for contributing package data to Sunder Stack discovery, export, preview, and import operations.</Description>

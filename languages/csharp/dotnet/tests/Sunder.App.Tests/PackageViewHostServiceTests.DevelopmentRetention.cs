@@ -260,8 +260,8 @@ public sealed partial class PackageViewHostServiceTests
         stabilizeBuilder = true;
         var workStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var workCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.GetRequiredService<IBackgroundProcessQueue>().Enqueue(new("Builder work", "retention-test", BackgroundProcessIndicator.Hidden,
-            BackgroundProcessConcurrencyMode.ParallelWithinGroup, true, async context =>
+        provider.GetRequiredService<IBackgroundTaskQueue>().Enqueue(new("Builder work", "retention-test", BackgroundTaskIndicator.Hidden,
+            BackgroundTaskConcurrencyMode.ParallelWithinGroup, true, async context =>
             {
                 workStarted.TrySetResult();
                 try { await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken); }
@@ -278,7 +278,7 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(overridesInstalled, loaded.OverridesInstalledPackage);
         Assert.True(loaded.WatchEnabled); // Another owner's watch is effective.
         Assert.False(loaded.RequestedWatch);
-        Assert.Equal("Activated", loaded.AppReadiness);
+        Assert.Equal(PackageDevelopmentAppReadiness.Activated, loaded.AppReadiness);
         Assert.Equal("Pending", host.GetAppReadiness("project", new(backend.RuntimeId, generation), new string('f', 64)));
         Assert.Equal(0, backend.Releases);
         Assert.Equal(0, stagedViews);

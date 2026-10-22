@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { access, readFile, readdir, rm, mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import test from "node:test";
@@ -10,8 +11,65 @@ import { fileURLToPath } from "node:url";
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const inventoryPath = resolve(repositoryRoot, "eng/test-oracles/core-public-packages.json");
 const nodeWorkspaceRoot = resolve(repositoryRoot, "languages/typescript/node");
+const sdkSourceRoot = resolve(nodeWorkspaceRoot, "packages/sdk/src");
 const staleSentinelName = ".sunder-stale-artifact-oracle";
 const commonEntries = ["package.json", "README.md", "LICENSE", "NOTICE"];
+const generatedAbiExports = [
+  "ApiBindingContext", "ApiIdentity", "OptionalServiceReferenceMember", "RpcDomainError", "RpcMarshallingContext",
+  "ServiceDomainError", "apiTokenOwner", "assertServiceOptions", "bindApiContext", "createApiToken",
+  "createServiceCatalog", "createServiceContract", "createServiceToken", "getApiBindingContext",
+  "getServiceErrorDetails", "setServiceErrorDetails", "validateRpcInstance",
+];
+const authorBindingExports = new Map([
+  ["api.ts", ["ApiContext", "ApiProvider", "ApiToken", "ApiTransport", "ServiceStream", "createApiContext"]],
+  ["services.ts", ["ServiceContext", "ServiceMethods", "ServiceUse", "ServiceRuntimeUse", "ServiceConstraints",
+    "ServiceOptions", "ServiceError", "ServiceContract", "ServiceDefinition", "defineService", "defineServiceError"]],
+  ["service-reference.ts", ["ServiceApi", "ServiceToken", "OptionalServiceReference", "ServiceCatalogSnapshot",
+    "ServiceCatalog", "ServiceReference", "ServiceProvider"]],
+  ["service-bindings.ts", []],
+  ["resources.ts", ["ServiceDomainError"]],
+]);
+
+test("public npm source manifests retain inventoried roles and entry points", async () => {
+  const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
+  assert.equal(inventory.schemaVersion, 1);
+  assertPublicWorkspaceCoverage(inventory.npm, await discoverPublicWorkspaces());
+  for (const contract of inventory.npm) {
+    const manifest = JSON.parse(await readFile(resolve(repositoryRoot, contract.project, "package.json"), "utf8"));
+    assert.equal(manifest.name, contract.name);
+    assert.equal(manifest.version, inventory.coordinatedVersion);
+    assert.equal(manifest.engines?.node, ">=24.18.1 <25.0.0");
+    verifyRole(contract.role, manifest);
+    verifyExportTargets(manifest, [...commonEntries, ...contract.requiredEntries]);
+  }
+});
+
+test("SDK author entry points exclude tool generation and generated binding helpers", () => {
+  const model = loadSdkSourceModel(["index", "browser"]);
+  for (const entry of ["index", "browser"]) verifySdkAuthorExports(model, entry);
+});
+
+test("SDK generated runtime ABI is explicit and browser-safe without runtime dependencies", () => {
+  const model = loadSdkSourceModel(["generated", "browser"], { browser: true });
+  assert.deepEqual(sdkEntryExports(model, "generated").map((symbol) => symbol.name).sort(ordinal), generatedAbiExports.toSorted(ordinal));
+  verifySdkBrowserClosure(model);
+});
+
+test("SDK entry-point oracle rejects seeded wildcard, aliased helper, tool, and Node leaks", async () => {
+  const index = await readFile(resolve(sdkSourceRoot, "index.ts"), "utf8");
+  for (const statement of [
+    'export * from "./api";',
+    'export { createApiToken as accidentalHelper } from "./api";',
+    'export { generateTypeScriptBindings as accidentalGenerator } from "../../package-tool/src/generator";',
+  ]) {
+    const model = loadSdkSourceModel(["index"], { overrides: { "index.ts": `${index}\n${statement}\n` } });
+    assert.throws(() => verifySdkAuthorExports(model, "index"), /must use explicit named exports|generated binding helper|tool generation/u);
+  }
+  const generated = await readFile(resolve(sdkSourceRoot, "generated.ts"), "utf8");
+  const model = loadSdkSourceModel(["generated"], { browser: true,
+    overrides: { "generated.ts": `${generated}\nimport "node:crypto";\n` } });
+  assert.throws(() => verifySdkBrowserClosure(model), /browser-safe/u);
+});
 
 test("every public npm package has its inventoried role and deterministic artifact", async () => {
   const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
@@ -109,6 +167,73 @@ async function discoverPublicWorkspaces() {
   return projects.sort((left, right) => ordinal(left.project, right.project));
 }
 
+function loadSdkSourceModel(entries, { browser = false, overrides = {} } = {}) {
+  const require = createRequire(resolve(nodeWorkspaceRoot, "package.json"));
+  const ts = require("typescript");
+  const configPath = resolve(sdkSourceRoot, "../tsconfig.json");
+  const config = ts.readConfigFile(configPath, ts.sys.readFile);
+  assert.equal(config.error, undefined);
+  const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, dirname(configPath));
+  assert.equal(parsed.errors.length, 0);
+  const options = { ...parsed.options, noEmit: true, ...(browser ? { types: [] } : {}) };
+  const host = ts.createCompilerHost(options);
+  const getSourceFile = host.getSourceFile;
+  host.getSourceFile = (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
+    const override = overrides[relative(sdkSourceRoot, fileName).replaceAll("\\", "/")];
+    return override === undefined
+      ? getSourceFile(fileName, languageVersion, onError, shouldCreateNewSourceFile)
+      : ts.createSourceFile(fileName, override, languageVersion, true);
+  };
+  host.writeFile = () => assert.fail("The SDK source boundary oracle must not write build outputs.");
+  const program = ts.createProgram(entries.map((entry) => resolve(sdkSourceRoot, `${entry}.ts`)), options, host);
+  return { ts, program, checker: program.getTypeChecker() };
+}
+
+function sdkEntryExports({ ts, program, checker }, entry) {
+  const source = program.getSourceFile(resolve(sdkSourceRoot, `${entry}.ts`));
+  assert.ok(source, `SDK entry point '${entry}' is missing.`);
+  for (const statement of source.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      assert.ok(statement.exportClause && ts.isNamedExports(statement.exportClause), `${entry} must use explicit named exports.`);
+    }
+  }
+  const symbol = checker.getSymbolAtLocation(source);
+  assert.ok(symbol, `SDK entry point '${entry}' must be a module.`);
+  return checker.getExportsOfModule(symbol);
+}
+
+function verifySdkAuthorExports(model, entry) {
+  const { ts, checker } = model;
+  for (const exported of sdkEntryExports(model, entry)) {
+    const symbol = exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
+    const declarations = symbol.getDeclarations() ?? [];
+    assert.ok(declarations.length > 0, `${entry} export '${exported.name}' has no resolved declaration.`);
+    for (const declaration of declarations) {
+      const source = relative(sdkSourceRoot, declaration.getSourceFile().fileName).replaceAll("\\", "/");
+      assert.ok(!source.startsWith("../") && !/^(?:generator(?:-cli)?|authoring)\./u.test(source),
+        `${entry} must not export tool generation: '${exported.name}' from '${source}'.`);
+      const allowed = authorBindingExports.get(source);
+      if (allowed !== undefined) {
+        assert.ok(allowed.includes(symbol.name), `${entry} must not export generated binding helper '${exported.name}' (${source}:${symbol.name}).`);
+      }
+    }
+  }
+}
+
+function verifySdkBrowserClosure({ ts, program }) {
+  for (const source of program.getSourceFiles()) {
+    if (program.isSourceFileDefaultLibrary(source)) continue;
+    const path = relative(sdkSourceRoot, source.fileName).replaceAll("\\", "/");
+    assert.ok(!path.startsWith("../"), `SDK browser-safe entry points must be dependency-free: '${path}'.`);
+  }
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  assert.equal(diagnostics.length, 0, `SDK entry points must remain browser-safe with DOM libraries and no Node types.\n${ts.formatDiagnostics(diagnostics, {
+    getCanonicalFileName: (path) => path,
+    getCurrentDirectory: () => repositoryRoot,
+    getNewLine: () => "\n",
+  })}`);
+}
+
 function assertPublicWorkspaceCoverage(contracts, publicWorkspaces) {
   const declared = contracts
     .map(({ name, project }) => ({ name, project }))
@@ -176,15 +301,19 @@ function verifyRole(role, manifest) {
         ".": { types: "./dist/index.d.ts", require: "./dist/index.js", default: "./dist/index.js" },
         "./browser": { types: "./dist/browser.d.ts", require: "./dist/browser.js", default: "./dist/browser.js" },
         "./core": { types: "./dist/core.d.ts", require: "./dist/core.js", default: "./dist/core.js" },
+        "./generated": { types: "./dist/generated.d.ts", require: "./dist/generated.js", default: "./dist/generated.js" },
         "./react": { types: "./dist/react.d.ts", require: "./dist/react.js", default: "./dist/react.js" },
       });
       assert.deepEqual(manifest.dependencies ?? {}, {}, "The main SDK remains runtime-dependency-free.");
       assert.deepEqual(manifest.peerDependencies, { react: ">=19.2.0 <20.0.0" });
       assert.deepEqual(manifest.peerDependenciesMeta, { react: { optional: true } });
-      assert.equal(manifest.bin["sunder-rpc-gen"], "dist/generator-cli.js");
+      assert.deepEqual(manifest.bin ?? {}, {}, "The SDK must not own build-time command-line tools.");
       break;
     case "node-package-tool":
-      assert.equal(manifest.bin["sunder-package"], "dist/cli.js");
+      assert.deepEqual(manifest.bin, {
+        "sunder-package": "dist/cli.js",
+        "sunder-rpc-gen": "dist/generator-cli.js",
+      });
       assert.equal(manifest.types, "dist/index.d.ts");
       break;
     case "node-template-tool":

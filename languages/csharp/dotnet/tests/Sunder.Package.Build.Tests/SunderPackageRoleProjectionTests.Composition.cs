@@ -214,22 +214,22 @@ public sealed partial class SunderPackageRoleProjectionTests
             {
                 public ViewModel() => throw new InvalidOperationException("The selected constructor was ignored.");
                 public ViewModel(Formatter formatter, Sunder.Sdk.Abstractions.IPackageContext context,
-                    Sunder.Sdk.Notifications.IPackageNotificationService notifications, Sunder.Sdk.Abstractions.IBackgroundProcessQueue background,
+                    Sunder.Sdk.Notifications.IPackageNotificationService notifications, Sunder.Sdk.Abstractions.IBackgroundTaskQueue background,
                     Sunder.Sdk.Abstractions.IPackageSettingsNavigationService navigation, Sunder.Sdk.Abstractions.IPackageShellViewService shell)
                     => throw new InvalidOperationException("Concrete argument types changed the selected overload.");
                 public ViewModel(IFormatter formatter, Sunder.Sdk.Abstractions.IPackageContext context,
-                    Sunder.Sdk.Notifications.IPackageNotificationService notifications, Sunder.Sdk.Abstractions.IBackgroundProcessQueue background,
+                    Sunder.Sdk.Notifications.IPackageNotificationService notifications, Sunder.Sdk.Abstractions.IBackgroundTaskQueue background,
                     Sunder.Sdk.Abstractions.IPackageSettingsNavigationService navigation, Sunder.Sdk.Abstractions.IPackageShellViewService shell, string? state)
                     => throw new InvalidOperationException("An untyped null changed the selected overload.");
                 [Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructor]
                 public ViewModel(IFormatter formatter, Sunder.Sdk.Abstractions.IPackageContext context,
-                    Sunder.Sdk.Notifications.IPackageNotificationService notifications, Sunder.Sdk.Abstractions.IBackgroundProcessQueue background,
+                    Sunder.Sdk.Notifications.IPackageNotificationService notifications, Sunder.Sdk.Abstractions.IBackgroundTaskQueue background,
                     Sunder.Sdk.Abstractions.IPackageSettingsNavigationService navigation, Sunder.Sdk.Abstractions.IPackageShellViewService shell, object? state = null)
                 { Formatter = formatter; Context = context; Notifications = notifications; Background = background; Navigation = navigation; Shell = shell; if (state is not null) throw new Exception("Default changed."); }
                 public IFormatter Formatter { get; }
                 public Sunder.Sdk.Abstractions.IPackageContext Context { get; }
                 public Sunder.Sdk.Notifications.IPackageNotificationService Notifications { get; }
-                public Sunder.Sdk.Abstractions.IBackgroundProcessQueue Background { get; }
+                public Sunder.Sdk.Abstractions.IBackgroundTaskQueue Background { get; }
                 public Sunder.Sdk.Abstractions.IPackageSettingsNavigationService Navigation { get; }
                 public Sunder.Sdk.Abstractions.IPackageShellViewService Shell { get; }
             }
@@ -244,7 +244,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             var collection = new ServiceCollection();
             var context = DispatchProxy.Create<IPackageContext, MetadataOnlyContext>();
             var notifications = DispatchProxy.Create<IPackageNotificationService, MetadataOnlyContext>();
-            var background = DispatchProxy.Create<IBackgroundProcessQueue, MetadataOnlyContext>();
+            var background = DispatchProxy.Create<IBackgroundTaskQueue, MetadataOnlyContext>();
             var navigation = DispatchProxy.Create<IPackageSettingsNavigationService, MetadataOnlyContext>();
             var shell = DispatchProxy.Create<IPackageShellViewService, MetadataOnlyContext>();
             module.ConfigureAppServices(collection, context);
@@ -252,7 +252,7 @@ public sealed partial class SunderPackageRoleProjectionTests
             // capabilities. A generated module must not attempt to replace them.
             Assert.DoesNotContain(collection, descriptor => descriptor.ServiceType == typeof(IPackageContext)
                 || descriptor.ServiceType == typeof(IPackageNotificationService) || descriptor.ServiceType == typeof(ISunderRpcClient)
-                || descriptor.ServiceType == typeof(IBackgroundProcessQueue) || descriptor.ServiceType == typeof(IPackageSettingsNavigationService)
+                || descriptor.ServiceType == typeof(IBackgroundTaskQueue) || descriptor.ServiceType == typeof(IPackageSettingsNavigationService)
                 || descriptor.ServiceType == typeof(IPackageShellViewService));
             collection.AddSingleton(context);
             collection.AddSingleton(notifications);

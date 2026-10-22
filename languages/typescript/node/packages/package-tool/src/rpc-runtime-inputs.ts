@@ -8,7 +8,7 @@ import { build as esbuild, type BuildOptions, type Loader, type OnLoadResult, ty
 // import/require/default conditions still follow the syntax at each import site.
 export const workerResolutionOptions = {
   conditions: ["node"], mainFields: ["main"],
-  alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/core": require.resolve("@sunder/sdk/core") },
+  alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/core": require.resolve("@sunder/sdk/core"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") },
 } satisfies BuildOptions;
 
 export interface OwnedRuntimeInputs {

@@ -46,7 +46,7 @@ internal static class AppShutdownBudgets
 {
     public static readonly TimeSpan OwnedTasks = TimeSpan.FromSeconds(3);
     public static readonly TimeSpan RuntimeSubscription = TimeSpan.FromSeconds(5);
-    public static readonly TimeSpan BackgroundProcesses = TimeSpan.FromSeconds(5);
+    public static readonly TimeSpan BackgroundTasks = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan UiCleanup = TimeSpan.FromSeconds(3);
     public static readonly TimeSpan PackageHost = TimeSpan.FromSeconds(10);
     public static readonly TimeSpan ServiceProvider = TimeSpan.FromSeconds(5);

@@ -59,14 +59,14 @@ internal static class SunderAppComposition
         services.AddSingleton<AppRuntimeResourcePolicySettingsService>();
         services.AddSingleton<IRuntimeResourcePolicyStatusSource, RuntimeResourcePolicyStatusSource>();
         services.AddSingleton<SunderUpdateService>();
-        services.AddSingleton<BackgroundProcessQueueService>();
-        services.AddSingleton<IBackgroundProcessQueue>(provider => provider.GetRequiredService<BackgroundProcessQueueService>());
+        services.AddSingleton<BackgroundTaskQueueService>();
+        services.AddSingleton<IBackgroundTaskQueue>(provider => provider.GetRequiredService<BackgroundTaskQueueService>());
         services.AddSingleton<RegistryPackageInstallService>();
         services.AddSingleton<LocalStackLibraryService>();
         services.AddSingleton<ExternalBrowserService>();
         services.AddSingleton<RegistryAuthService>();
         services.AddSingleton(provider => new PackageUpdateStartupCheckService(
-            provider.GetRequiredService<IBackgroundProcessQueue>(),
+            provider.GetRequiredService<IBackgroundTaskQueue>(),
             provider.GetRequiredService<IRuntimeApiClientFactory>(),
             provider.GetRequiredService<IPackageNotificationService>()));
         services.AddSingleton<AppPackageShellViewService>();
@@ -88,7 +88,7 @@ internal static class SunderAppComposition
         services.AddSingleton(provider => new PackageViewHostServiceFactory(
             provider.GetRequiredService<AppPackageShellViewService>(), provider.GetRequiredService<AppPackageSettingsNavigationService>(),
             provider.GetRequiredService<AppRuntimeProcessTransport>().Transport, provider.GetRequiredService<NotificationCenterService>(),
-            provider.GetRequiredService<BackgroundProcessQueueService>(), provider.GetRequiredService<AppPackageResourceAssemblyRegistry>(),
+            provider.GetRequiredService<BackgroundTaskQueueService>(), provider.GetRequiredService<AppPackageResourceAssemblyRegistry>(),
             provider.GetRequiredService<IUiDispatcher>())
         {
             PackagePolicy = provider.GetRequiredService<AppProcessPolicySupervisor>(),

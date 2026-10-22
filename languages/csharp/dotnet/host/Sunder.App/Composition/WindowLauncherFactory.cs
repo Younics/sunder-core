@@ -11,7 +11,7 @@ public sealed class WindowLauncherFactory(
     ShellStateService shellStateService,
     ShellState shellState,
     SunderUpdateService updateService,
-    BackgroundProcessQueueService backgroundProcessQueue,
+    BackgroundTaskQueueService backgroundTaskQueue,
     SettingsWindowFactory settingsWindowFactory,
     PackagesWindowFactory packagesWindowFactory,
     StacksWindowFactory stacksWindowFactory,
@@ -34,7 +34,7 @@ public sealed class WindowLauncherFactory(
             uiDispatcher,
             developerLog,
             updateService,
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             runtimeEventSubscription,
             developerServices);
 }

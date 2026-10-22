@@ -58,7 +58,7 @@ public sealed class PackagesWindowViewModelTests
         var runtimeClient = new FakeRuntimeApiClient(
             [CreateInstalledPackage("agent", isEnabled: false)]
         );
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
         var lifecycleApplications = new List<RuntimePackageStamp>();
         using var operationService = new PackageOperationService(
@@ -74,7 +74,7 @@ public sealed class PackagesWindowViewModelTests
             runtimeClient,
             new FakePackageArchivePicker(),
             operationService,
-            backgroundProcessQueue: queue,
+            backgroundTaskQueue: queue,
             registryClientFactory: null)
         {
             Mode = PackageWindowMode.Installed,
@@ -83,7 +83,7 @@ public sealed class PackagesWindowViewModelTests
 
         await viewModel.InitializeAsync();
         await viewModel.EnableSelectedPackageCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => queue.ListProcesses().Any(IsCompletedEnableOperation));
+        await WaitForConditionAsync(() => queue.ListTasks().Any(IsCompletedEnableOperation));
 
         Assert.Equal(["agent"], runtimeClient.EnabledPackageIds);
         Assert.Single(lifecycleApplications);
@@ -1172,13 +1172,13 @@ public sealed class PackagesWindowViewModelTests
             "RefreshAfterPackageOperationAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(method);
-        var snapshot = new BackgroundProcessSnapshot(
+        var snapshot = new BackgroundTaskSnapshot(
             Guid.NewGuid(),
             "Install AI Agent",
             PackageOperationService.PackageStoreGroupKey,
-            BackgroundProcessIndicator.Packages,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
-            BackgroundProcessState.Completed,
+            BackgroundTaskIndicator.Packages,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskState.Completed,
             "Completed",
             100,
             true,
@@ -1446,8 +1446,8 @@ public sealed class PackagesWindowViewModelTests
     private static string ToDisplayName(string packageId) =>
         string.Concat(packageId[..1].ToUpperInvariant(), packageId[1..]);
 
-    private static bool IsCompletedEnableOperation(BackgroundProcessSnapshot snapshot)
-        => snapshot.State == BackgroundProcessState.Completed
+    private static bool IsCompletedEnableOperation(BackgroundTaskSnapshot snapshot)
+        => snapshot.State == BackgroundTaskState.Completed
            && PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
            && metadata.Kind == PackageOperationKind.Enable
            && string.Equals(metadata.PackageId, "agent", StringComparison.OrdinalIgnoreCase);
@@ -1476,13 +1476,13 @@ public sealed class PackagesWindowViewModelTests
 
         public Uri? AdoptionRegistryUrl { get; private set; }
 
-        public BackgroundProcessSnapshot? GetActiveOperationForPackage(string packageId) => null;
+        public BackgroundTaskSnapshot? GetActiveOperationForPackage(string packageId) => null;
 
-        public BackgroundProcessSnapshot? GetActivePackageStoreOperation() => null;
+        public BackgroundTaskSnapshot? GetActivePackageStoreOperation() => null;
 
         public bool CancelActiveOperationForPackage(string packageId) => false;
 
-        public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceInstallAsync(
+        public Task<BackgroundTaskSnapshot?> EnqueueMarketplaceInstallAsync(
             string packageId,
             string displayName,
             Uri registryUrl,
@@ -1491,44 +1491,44 @@ public sealed class PackagesWindowViewModelTests
         {
             MarketplaceInstallPackageId = packageId;
             MarketplaceInstallVersion = version;
-            return Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.InstallMarketplace, displayName));
+            return Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.InstallMarketplace, displayName));
         }
 
-        public Task<BackgroundProcessSnapshot?> EnqueueMarketplaceUpdateAsync(
+        public Task<BackgroundTaskSnapshot?> EnqueueMarketplaceUpdateAsync(
             string packageId,
             string displayName,
             string version, CancellationToken cancellationToken = default)
-            => Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName));
+            => Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.UpdateMarketplace, displayName));
 
-        public Task<BackgroundProcessSnapshot?> EnqueueRegistrySourceAdoptionAsync(
+        public Task<BackgroundTaskSnapshot?> EnqueueRegistrySourceAdoptionAsync(
             string packageId,
             string displayName,
             Uri registryUrl, CancellationToken cancellationToken = default)
         {
             AdoptedPackageId = packageId;
             AdoptionRegistryUrl = registryUrl;
-            return Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.AdoptRegistrySource, displayName));
+            return Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.AdoptRegistrySource, displayName));
         }
 
-        public Task<BackgroundProcessSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
-            => Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages"));
+        public Task<BackgroundTaskSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(null, PackageOperationKind.UpdateAll, "All packages"));
 
-        public Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(PackageArchiveSelection selection, CancellationToken cancellationToken = default)
-            => Task.FromResult<BackgroundProcessSnapshot?>(CreateSnapshot(null, PackageOperationKind.InstallLocal, Path.GetFileName(selection.PackagePath)));
+        public Task<BackgroundTaskSnapshot?> EnqueueLocalInstallAsync(PackageArchiveSelection selection, CancellationToken cancellationToken = default)
+            => Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(null, PackageOperationKind.InstallLocal, Path.GetFileName(selection.PackagePath)));
 
-        public BackgroundProcessSnapshot EnqueueEnable(string packageId, string displayName)
+        public BackgroundTaskSnapshot EnqueueEnable(string packageId, string displayName)
         {
             EnabledPackageIds.Add(packageId);
             return CreateSnapshot(packageId, PackageOperationKind.Enable, displayName);
         }
 
-        public BackgroundProcessSnapshot EnqueueDisable(string packageId, string displayName)
+        public BackgroundTaskSnapshot EnqueueDisable(string packageId, string displayName)
             => CreateSnapshot(packageId, PackageOperationKind.Disable, displayName);
 
-        public BackgroundProcessSnapshot EnqueueUninstall(string packageId, string displayName, bool allowCascade = false)
+        public BackgroundTaskSnapshot EnqueueUninstall(string packageId, string displayName, bool allowCascade = false)
             => CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName);
 
-        private static BackgroundProcessSnapshot CreateSnapshot(
+        private static BackgroundTaskSnapshot CreateSnapshot(
             string? packageId,
             PackageOperationKind kind,
             string displayName)
@@ -1536,9 +1536,9 @@ public sealed class PackagesWindowViewModelTests
                 Guid.NewGuid(),
                 displayName,
                 PackageOperationService.PackageStoreGroupKey,
-                BackgroundProcessIndicator.Packages,
-                BackgroundProcessConcurrencyMode.SequentialWithinGroup,
-                BackgroundProcessState.Queued,
+                BackgroundTaskIndicator.Packages,
+                BackgroundTaskConcurrencyMode.SequentialWithinGroup,
+                BackgroundTaskState.Queued,
                 "Queued",
                 null,
                 true,

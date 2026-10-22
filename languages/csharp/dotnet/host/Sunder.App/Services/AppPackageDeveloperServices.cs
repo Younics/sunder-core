@@ -1,12 +1,13 @@
 using System.Diagnostics;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
 /// <summary>App composition bridge. SDK services themselves are created per package activation.</summary>
 public sealed class AppPackageDeveloperServices(RuntimeClientTransport transport, IRuntimeApiClientFactory clients,
-    BackgroundProcessQueueService queue, IUiDispatcher dispatcher) : IAppPackageDevelopmentBackend
+    BackgroundTaskQueueService queue, IUiDispatcher dispatcher) : IAppPackageDevelopmentBackend
 {
     private WindowLauncher? _launcher;
     private PackageViewHostService? _packageHost;
@@ -169,7 +170,7 @@ public sealed class AppPackageDeveloperServices(RuntimeClientTransport transport
                 new Dictionary<string, string> { ["sunder.packageId"] = packageId },
                 context => approval.InstallRuntimesAsync(client, Refresh, context),
                 async context => approval.Validate(await Refresh(context.CancellationToken).ConfigureAwait(false), requireReady: true),
-                token, () => ValueTask.CompletedTask);
+                token, () => ValueTask.CompletedTask, indicator: BackgroundTaskIndicator.Main);
             // Completion includes cancellation of queued jobs, so the client is retained
             // until all delegates have stopped even when the owning activation is revoked.
             var completion = await cohort.Completion.ConfigureAwait(false);
@@ -194,7 +195,7 @@ public sealed class AppPackageDeveloperServices(RuntimeClientTransport transport
     }
 
     async Task<string> IAppPackageDevelopmentBackend.GetAppReadinessAsync(string packageId, RuntimePackageStamp stamp, CancellationToken token)
-        => (await GetAppObservationAsync(packageId, stamp, null, token).ConfigureAwait(false)).Readiness;
+        => (await GetAppObservationAsync(packageId, stamp, null, token).ConfigureAwait(false)).Readiness.ToString();
 
     Task<AppDevelopmentApplicationObservation> IAppPackageDevelopmentBackend.GetAppObservationAsync(string packageId,
         RuntimePackageStamp stamp, string? sourceContentIdentity, CancellationToken token)
@@ -207,12 +208,13 @@ public sealed class AppPackageDeveloperServices(RuntimeClientTransport transport
         var sources = await client.GetActivePackageUiSnapshotsAsync(AppPackageTargetEnvironment.CurrentRid, token).ConfigureAwait(false);
         var source = sources.SingleOrDefault(item => item.PackageId == packageId);
         if (source?.SessionGeneration != stamp.SessionGeneration || source.ActivationFingerprint is null
-            || sourceContentIdentity is not null && source.SourceContentIdentity != sourceContentIdentity) return new("Pending", null);
+            || sourceContentIdentity is not null && source.SourceContentIdentity != sourceContentIdentity) return new(PackageDevelopmentAppReadiness.Pending, null);
         return await dispatcher.InvokeAsync(() =>
         {
             var readiness = _launcher?.GetPackageAppReadiness(packageId, stamp, source.ActivationFingerprint, sourceContentIdentity) ?? "Unavailable";
-            return new AppDevelopmentApplicationObservation(readiness,
-                readiness == "Activated" && sourceContentIdentity is not null ? sourceContentIdentity : null);
+            var observed = AppPackageDevelopmentService.ParseAppReadiness(readiness);
+            return new AppDevelopmentApplicationObservation(observed,
+                observed == PackageDevelopmentAppReadiness.Activated && sourceContentIdentity is not null ? sourceContentIdentity : null);
         }, token).ConfigureAwait(false);
     }
 

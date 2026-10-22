@@ -7,12 +7,67 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class BackgroundProcessQueueServiceTests
+public sealed class BackgroundTaskQueueServiceTests
 {
+    [Fact]
+    public async Task QueuedSuccessorUsesItsOwnSubmissionContextIncludingSuppressedFlow()
+    {
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var authority = new AsyncLocal<string?>();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observed = new ConcurrentQueue<string?>();
+        authority.Value = "first";
+        queue.Enqueue(CreateRequest("first", "work", async _ =>
+        {
+            observed.Enqueue(authority.Value);
+            authority.Value = "first-internal-authority";
+            started.SetResult();
+            await release.Task;
+        }));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        authority.Value = "second";
+        queue.Enqueue(CreateRequest("second", "work", async _ =>
+        {
+            await Task.Yield();
+            observed.Enqueue(authority.Value);
+        }));
+        using (ExecutionContext.SuppressFlow())
+            queue.Enqueue(CreateRequest("suppressed", "work", _ =>
+            {
+                observed.Enqueue(authority.Value);
+                return Task.CompletedTask;
+            }));
+        authority.Value = "caller-after-enqueue";
+        release.SetResult();
+        await WaitForConditionAsync(() => queue.ListTasks().All(task => task.IsTerminal));
+        Assert.Equal(new string?[] { "first", "second", null }, observed.ToArray());
+        Assert.Equal("caller-after-enqueue", authority.Value);
+    }
+
+    [Fact]
+    public async Task ForeignCancellationRacingTaskCancellationRemainsAFailure()
+    {
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var task = queue.Enqueue(CreateRequest("foreign-cancellation", "work", async _ =>
+        {
+            started.SetResult();
+            await release.Task;
+            throw new OperationCanceledException("Callback did not cancel on the task's token.", new CancellationToken(true));
+        }));
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.True(queue.Cancel(task.TaskId));
+        release.SetResult();
+        await WaitForConditionAsync(() => queue.GetTask(task.TaskId)?.IsTerminal == true);
+        Assert.Equal(BackgroundTaskState.Failed, queue.GetTask(task.TaskId)!.State);
+    }
+
     [Fact]
     public async Task Enqueue_WithSequentialGroup_BlocksSameGroupButRunsOtherGroups()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 2);
         var started = new ConcurrentQueue<string>();
         var releaseA = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseB = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -42,16 +97,16 @@ public sealed class BackgroundProcessQueueServiceTests
 
         releaseB.SetResult();
         releaseC.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Fact]
     public async Task ReportProgress_UpdatesSnapshotStatusAndProgress()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        var snapshots = new ConcurrentQueue<BackgroundProcessSnapshot>();
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var snapshots = new ConcurrentQueue<BackgroundTaskSnapshot>();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.ProcessChanged += (_, e) => snapshots.Enqueue(e.Snapshot);
+        queue.TaskChanged += (_, e) => snapshots.Enqueue(e.Snapshot);
 
         queue.Enqueue(CreateRequest("progress", "work", async context =>
         {
@@ -61,7 +116,7 @@ public sealed class BackgroundProcessQueueServiceTests
 
         await WaitForConditionAsync(() => snapshots.Any(snapshot => snapshot.ProgressPercent == 42 && snapshot.StatusText == "Halfway there"));
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Theory]
@@ -70,7 +125,7 @@ public sealed class BackgroundProcessQueueServiceTests
     [InlineData(double.NegativeInfinity)]
     public async Task ReportProgress_WithNonFiniteValue_FailsProcess(double progress)
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
 
         var process = queue.Enqueue(CreateRequest("progress", "work", context =>
         {
@@ -78,16 +133,16 @@ public sealed class BackgroundProcessQueueServiceTests
             return Task.CompletedTask;
         }));
 
-        await WaitForConditionAsync(() => queue.GetProcess(process.ProcessId)?.IsTerminal == true);
-        var failed = queue.GetProcess(process.ProcessId);
-        Assert.Equal(BackgroundProcessState.Failed, failed?.State);
+        await WaitForConditionAsync(() => queue.GetTask(process.TaskId)?.IsTerminal == true);
+        var failed = queue.GetTask(process.TaskId);
+        Assert.Equal(BackgroundTaskState.Failed, failed?.State);
         Assert.False(failed?.CanCancel);
     }
 
     [Fact]
     public async Task Snapshots_FreezeMetadataAndOnlyAdvertiseActionableCancellation()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["item"] = "original",
@@ -104,8 +159,8 @@ public sealed class BackgroundProcessQueueServiceTests
         Assert.Throws<NotSupportedException>(() =>
             ((IDictionary<string, string>)queued.Metadata).Clear());
 
-        await WaitForConditionAsync(() => queue.GetProcess(queued.ProcessId)?.IsTerminal == true);
-        var completed = queue.GetProcess(queued.ProcessId);
+        await WaitForConditionAsync(() => queue.GetTask(queued.TaskId)?.IsTerminal == true);
+        var completed = queue.GetTask(queued.TaskId);
         Assert.NotNull(completed);
         Assert.False(completed.CanCancel);
         Assert.Equal("original", completed.Metadata["ITEM"]);
@@ -114,30 +169,30 @@ public sealed class BackgroundProcessQueueServiceTests
     [Fact]
     public void Enqueue_RejectsNullDelegateAndUnknownEnumValues()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
 
         Assert.Throws<ArgumentNullException>(() => queue.Enqueue(null!));
         Assert.Throws<ArgumentException>(() => queue.Enqueue(CreateRequest("invalid", "work", null!)));
         Assert.Throws<ArgumentOutOfRangeException>(() => queue.Enqueue(CreateRequest("invalid", "work", _ => Task.CompletedTask) with
         {
-            Indicator = (BackgroundProcessIndicator)99,
+            Indicator = (BackgroundTaskIndicator)99,
         }));
         Assert.Throws<ArgumentOutOfRangeException>(() => queue.Enqueue(CreateRequest("invalid", "work", _ => Task.CompletedTask) with
         {
-            ConcurrencyMode = (BackgroundProcessConcurrencyMode)99,
+            ConcurrencyMode = (BackgroundTaskConcurrencyMode)99,
         }));
     }
 
     [Fact]
-    public void ProcessChanged_WhenSubscriberThrows_ContinuesNotifyingRemainingSubscribers()
+    public void TaskChanged_WhenSubscriberThrows_ContinuesNotifyingRemainingSubscribers()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var receivedQueuedSnapshot = false;
 
-        queue.ProcessChanged += (_, _) => throw new InvalidOperationException("Subscriber failed.");
-        queue.ProcessChanged += (_, e) =>
+        queue.TaskChanged += (_, _) => throw new InvalidOperationException("Subscriber failed.");
+        queue.TaskChanged += (_, e) =>
         {
-            if (e.Snapshot.State == BackgroundProcessState.Queued)
+            if (e.Snapshot.State == BackgroundTaskState.Queued)
             {
                 receivedQueuedSnapshot = true;
             }
@@ -151,7 +206,7 @@ public sealed class BackgroundProcessQueueServiceTests
     [Fact]
     public async Task Cancel_WhenProcessIsQueued_MarksCancelledWithoutStartingIt()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var started = new ConcurrentQueue<string>();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         queue.Enqueue(CreateRequest("a", "work", async _ =>
@@ -166,38 +221,38 @@ public sealed class BackgroundProcessQueueServiceTests
         }));
 
         await WaitForConditionAsync(() => started.Contains("a"));
-        Assert.True(queue.Cancel(queued.ProcessId));
+        Assert.True(queue.Cancel(queued.TaskId));
 
-        var cancelled = queue.GetProcess(queued.ProcessId);
-        Assert.Equal(BackgroundProcessState.Cancelled, cancelled?.State);
+        var cancelled = queue.GetTask(queued.TaskId);
+        Assert.Equal(BackgroundTaskState.Cancelled, cancelled?.State);
         Assert.False(cancelled?.CanCancel);
         Assert.DoesNotContain("b", started);
 
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Fact]
     public async Task CancelAllAsync_CancelsRunningAndQueuedProcessesRegardlessOfCanCancel()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         queue.Enqueue(CreateRequest("a", "work", async context =>
         {
             await Task.Delay(TimeSpan.FromMinutes(1), context.CancellationToken);
         }, canCancel: false));
         var queued = queue.Enqueue(CreateRequest("b", "work", _ => Task.CompletedTask, canCancel: false));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Any(process => process.State == BackgroundProcessState.Running));
+        await WaitForConditionAsync(() => queue.ListTasks().Any(process => process.State == BackgroundTaskState.Running));
         await queue.CancelAllAsync();
 
-        Assert.All(queue.ListProcesses(), process => Assert.Equal(BackgroundProcessState.Cancelled, process.State));
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(queued.ProcessId)?.State);
+        Assert.All(queue.ListTasks(), process => Assert.Equal(BackgroundTaskState.Cancelled, process.State));
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(queued.TaskId)?.State);
     }
 
     [Fact]
     public async Task DisposeAsync_CancelsQueuedAndRunningProcessesAndWaitsForCleanup()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -227,20 +282,20 @@ public sealed class BackgroundProcessQueueServiceTests
         await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.False(disposeTask.IsCompleted);
-        Assert.Equal(BackgroundProcessState.Cancelling, queue.GetProcess(running.ProcessId)?.State);
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(queued.ProcessId)?.State);
+        Assert.Equal(BackgroundTaskState.Cancelling, queue.GetTask(running.TaskId)?.State);
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(queued.TaskId)?.State);
         Assert.False(queuedStarted);
 
         allowCleanup.SetResult();
         await disposeTask.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.All(queue.ListProcesses(), process => Assert.Equal(BackgroundProcessState.Cancelled, process.State));
+        Assert.All(queue.ListTasks(), process => Assert.Equal(BackgroundTaskState.Cancelled, process.State));
     }
 
     [Fact]
     public async Task Dispose_CancelsRunningProcessesWithoutWaitingForCleanup()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -263,16 +318,16 @@ public sealed class BackgroundProcessQueueServiceTests
         queue.Dispose();
 
         await cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal(BackgroundProcessState.Cancelling, queue.GetProcess(running.ProcessId)?.State);
+        Assert.Equal(BackgroundTaskState.Cancelling, queue.GetTask(running.TaskId)?.State);
 
         allowCleanup.SetResult();
-        await WaitForConditionAsync(() => queue.GetProcess(running.ProcessId)?.State == BackgroundProcessState.Cancelled);
+        await WaitForConditionAsync(() => queue.GetTask(running.TaskId)?.State == BackgroundTaskState.Cancelled);
     }
 
     [Fact]
     public void Enqueue_AfterDispose_ThrowsObjectDisposedException()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         queue.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => queue.Enqueue(CreateRequest("after dispose", "work", _ => Task.CompletedTask)));
@@ -281,7 +336,7 @@ public sealed class BackgroundProcessQueueServiceTests
     [Fact]
     public async Task Cancellation_AfterDispose_IsSafeNoOp()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         queue.Dispose();
 
         Assert.False(queue.Cancel(Guid.NewGuid()));
@@ -291,7 +346,7 @@ public sealed class BackgroundProcessQueueServiceTests
     [Fact]
     public async Task Cancel_WhenRunningProcessReturnsAfterCancellation_MarksCancelled()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -302,36 +357,36 @@ public sealed class BackgroundProcessQueueServiceTests
         }));
 
         await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.True(queue.Cancel(process.ProcessId));
+        Assert.True(queue.Cancel(process.TaskId));
         release.SetResult();
 
-        await WaitForConditionAsync(() => queue.GetProcess(process.ProcessId)?.IsTerminal == true);
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(process.ProcessId)?.State);
+        await WaitForConditionAsync(() => queue.GetTask(process.TaskId)?.IsTerminal == true);
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(process.TaskId)?.State);
     }
 
     [Fact]
     public void Enqueue_WhenHiddenIndicatorIsSet_ExposesHiddenSnapshot()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
 
-        var process = queue.Enqueue(CreateRequest("hidden", "work", _ => Task.CompletedTask, indicator: BackgroundProcessIndicator.Hidden));
+        var process = queue.Enqueue(CreateRequest("hidden", "work", _ => Task.CompletedTask, indicator: BackgroundTaskIndicator.Hidden));
 
-        Assert.Equal(BackgroundProcessIndicator.Hidden, process.Indicator);
-        Assert.Equal(BackgroundProcessIndicator.Hidden, queue.GetProcess(process.ProcessId)?.Indicator);
+        Assert.Equal(BackgroundTaskIndicator.Hidden, process.Indicator);
+        Assert.Equal(BackgroundTaskIndicator.Hidden, queue.GetTask(process.TaskId)?.Indicator);
     }
 
     [Fact]
     public async Task CompletedHistory_TrimsToConfiguredMaximum()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1, maxCompletedHistory: 2);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1, maxCompletedHistory: 2);
 
         queue.Enqueue(CreateRequest("a", "work-a", _ => Task.CompletedTask));
         queue.Enqueue(CreateRequest("b", "work-b", _ => Task.CompletedTask));
         queue.Enqueue(CreateRequest("c", "work-c", _ => Task.CompletedTask));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count == 2 && queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().Count == 2 && queue.ListTasks().All(process => process.IsTerminal));
 
-        var titles = queue.ListProcesses().Select(process => process.Title).ToArray();
+        var titles = queue.ListTasks().Select(process => process.Title).ToArray();
         Assert.DoesNotContain("a", titles);
         Assert.Contains("b", titles);
         Assert.Contains("c", titles);
@@ -340,84 +395,84 @@ public sealed class BackgroundProcessQueueServiceTests
     [Fact]
     public async Task CompletedHistory_WhenMaximumIsZero_RemovesTerminalProcesses()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1, maxCompletedHistory: 0);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1, maxCompletedHistory: 0);
 
         queue.Enqueue(CreateRequest("removed", "work", _ => Task.CompletedTask));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count == 0);
+        await WaitForConditionAsync(() => queue.ListTasks().Count == 0);
     }
 
     [Fact]
     public async Task Enqueue_WhenProcessFails_PublishesFailedSnapshotWithErrorMessage()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        var snapshots = new ConcurrentQueue<BackgroundProcessSnapshot>();
-        queue.ProcessChanged += (_, e) => snapshots.Enqueue(e.Snapshot);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var snapshots = new ConcurrentQueue<BackgroundTaskSnapshot>();
+        queue.TaskChanged += (_, e) => snapshots.Enqueue(e.Snapshot);
 
         var process = queue.Enqueue(CreateRequest("failure", "work", _ => throw new InvalidOperationException("boom")));
 
-        await WaitForConditionAsync(() => queue.GetProcess(process.ProcessId)?.State == BackgroundProcessState.Failed);
+        await WaitForConditionAsync(() => queue.GetTask(process.TaskId)?.State == BackgroundTaskState.Failed);
 
-        var failed = queue.GetProcess(process.ProcessId);
+        var failed = queue.GetTask(process.TaskId);
         Assert.Equal("boom", failed?.ErrorMessage);
-        Assert.Contains(snapshots, snapshot => snapshot.ProcessId == process.ProcessId
-                                              && snapshot.State == BackgroundProcessState.Failed
+        Assert.Contains(snapshots, snapshot => snapshot.TaskId == process.TaskId
+                                              && snapshot.State == BackgroundTaskState.Failed
                                               && snapshot.ErrorMessage == "boom");
     }
 
     [Fact]
-    public async Task BackgroundProcessMonitor_WithMainIndicatorFilter_ExcludesHiddenProcesses()
+    public async Task BackgroundTaskMonitor_WithMainIndicatorFilter_ExcludesHiddenProcesses()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 2);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(CreateRequest("hidden", "hidden-work", async _ => await release.Task, indicator: BackgroundProcessIndicator.Hidden));
-        queue.Enqueue(CreateRequest("visible", "visible-work", async _ => await release.Task, indicator: BackgroundProcessIndicator.Main));
+        queue.Enqueue(CreateRequest("hidden", "hidden-work", async _ => await release.Task, indicator: BackgroundTaskIndicator.Hidden));
+        queue.Enqueue(CreateRequest("visible", "visible-work", async _ => await release.Task, indicator: BackgroundTaskIndicator.Main));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
-        using var monitor = new BackgroundProcessMonitorViewModel(queue, BackgroundProcessIndicator.Main);
+        await WaitForConditionAsync(() => queue.ListTasks().Count(process => process.State == BackgroundTaskState.Running) == 2);
+        using var monitor = new BackgroundTaskMonitorViewModel(queue, BackgroundTaskIndicator.Main);
 
         Assert.Collection(monitor.Processes, process => Assert.Equal("visible", process.Title));
 
         monitor.Dispose();
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Fact]
-    public async Task BackgroundProcessMonitor_WithPackageIndicatorFilter_IncludesOnlyPackageProcesses()
+    public async Task BackgroundTaskMonitor_WithPackageIndicatorFilter_IncludesOnlyPackageProcesses()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 2);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(CreateRequest("package", PackageOperationService.PackageStoreGroupKey, async _ => await release.Task, indicator: BackgroundProcessIndicator.Packages));
-        queue.Enqueue(CreateRequest("visible", "other", async _ => await release.Task, indicator: BackgroundProcessIndicator.Main));
+        queue.Enqueue(CreateRequest("package", PackageOperationService.PackageStoreGroupKey, async _ => await release.Task, indicator: BackgroundTaskIndicator.Packages));
+        queue.Enqueue(CreateRequest("visible", "other", async _ => await release.Task, indicator: BackgroundTaskIndicator.Main));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
-        using var monitor = new BackgroundProcessMonitorViewModel(
+        await WaitForConditionAsync(() => queue.ListTasks().Count(process => process.State == BackgroundTaskState.Running) == 2);
+        using var monitor = new BackgroundTaskMonitorViewModel(
             queue,
-            BackgroundProcessIndicator.Packages);
+            BackgroundTaskIndicator.Packages);
 
         Assert.Collection(monitor.Processes, process => Assert.Equal("package", process.Title));
 
         monitor.Dispose();
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_MapsPackageProcessesAndPublishesChanges()
+    public async Task PackageScopedBackgroundTaskQueue_MapsPackageProcessesAndPublishesChanges()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        using var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        using var packageQueue = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue);
         packageQueue.Start();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var changes = new ConcurrentQueue<BackgroundProcessSnapshot>();
-        packageQueue.ProcessChanged += (_, e) => changes.Enqueue(e.Snapshot);
+        var changes = new ConcurrentQueue<BackgroundTaskSnapshot>();
+        packageQueue.TaskChanged += (_, e) => changes.Enqueue(e.Snapshot);
 
-        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+        var snapshot = packageQueue.Enqueue(new BackgroundTaskRequest(
             "Pull image",
             "docker-image-pulls",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             async context =>
             {
@@ -429,65 +484,65 @@ public sealed class BackgroundProcessQueueServiceTests
                 ["imageReference"] = "agent0ai/agent-zero:latest",
             }));
 
-        Assert.Equal(BackgroundProcessIndicator.Settings, snapshot.Indicator);
+        Assert.Equal(BackgroundTaskIndicator.Settings, snapshot.Indicator);
         Assert.Equal("docker-image-pulls", snapshot.GroupKey);
         Assert.Equal("agent0ai/agent-zero:latest", snapshot.Metadata["imageReference"]);
         await WaitForConditionAsync(() => changes.Any(change => change.StatusText == "Pulling layer"));
 
-        var appSnapshot = Assert.Single(queue.ListProcesses());
+        var appSnapshot = Assert.Single(queue.ListTasks());
         Assert.Equal("package:test.package:docker-image-pulls", appSnapshot.GroupKey);
-        Assert.True(PackageScopedBackgroundProcessMetadata.TryCreate(appSnapshot.Metadata, out var packageMetadata));
+        Assert.True(PackageScopedBackgroundTaskMetadata.TryCreate(appSnapshot.Metadata, out var packageMetadata));
         Assert.Equal("Test Package", packageMetadata.PackageDisplayName);
 
-        var listed = Assert.Single(packageQueue.ListProcesses("docker-image-pulls"));
-        Assert.Equal(snapshot.ProcessId, listed.ProcessId);
+        var listed = Assert.Single(packageQueue.ListTasks("docker-image-pulls"));
+        Assert.Equal(snapshot.TaskId, listed.TaskId);
 
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_Start_WhenCalledTwice_DoesNotDuplicateChangeEvents()
+    public async Task PackageScopedBackgroundTaskQueue_Start_WhenCalledTwice_DoesNotDuplicateChangeEvents()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        using var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        using var packageQueue = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue);
         packageQueue.Start();
         packageQueue.Start();
         var queuedChangeCount = 0;
-        packageQueue.ProcessChanged += (_, e) =>
+        packageQueue.TaskChanged += (_, e) =>
         {
-            if (e.Snapshot.State == BackgroundProcessState.Queued)
+            if (e.Snapshot.State == BackgroundTaskState.Queued)
             {
                 queuedChangeCount++;
             }
         };
 
-        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+        var snapshot = packageQueue.Enqueue(new BackgroundTaskRequest(
             "Package work",
             "work",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             _ => Task.CompletedTask));
 
         Assert.Equal(1, queuedChangeCount);
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_StopAsync_CancelsAndAwaitsRunningProcesses()
+    public async Task PackageScopedBackgroundTaskQueue_StopAsync_CancelsAndAwaitsRunningProcesses()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue);
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+        var snapshot = packageQueue.Enqueue(new BackgroundTaskRequest(
             "Long package work",
             "work",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             CanCancel: false,
             async context =>
             {
@@ -511,41 +566,41 @@ public sealed class BackgroundProcessQueueServiceTests
 
         allowCleanup.SetResult();
         await stopTask.WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(snapshot.ProcessId)?.State);
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(snapshot.TaskId)?.State);
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_AfterStop_RejectsNewWorkAndHidesPackageProcesses()
+    public async Task PackageScopedBackgroundTaskQueue_AfterStop_RejectsNewWorkAndHidesPackageProcesses()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
-        var snapshot = packageQueue.Enqueue(new BackgroundProcessRequest(
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue);
+        var snapshot = packageQueue.Enqueue(new BackgroundTaskRequest(
             "Package work",
             "work",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             _ => Task.CompletedTask));
 
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
         await packageQueue.StopAsync();
 
-        Assert.Empty(packageQueue.ListProcesses());
-        Assert.False(packageQueue.Cancel(snapshot.ProcessId));
-        Assert.Throws<ObjectDisposedException>(() => packageQueue.Enqueue(new BackgroundProcessRequest(
+        Assert.Empty(packageQueue.ListTasks());
+        Assert.False(packageQueue.Cancel(snapshot.TaskId));
+        Assert.Throws<ObjectDisposedException>(() => packageQueue.Enqueue(new BackgroundTaskRequest(
             "Late package work",
             "work",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             _ => Task.CompletedTask)));
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_StartAfterStop_ThrowsObjectDisposedException()
+    public async Task PackageScopedBackgroundTaskQueue_StartAfterStop_ThrowsObjectDisposedException()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
-        var packageQueue = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var packageQueue = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue);
 
         await packageQueue.StopAsync();
 
@@ -553,41 +608,41 @@ public sealed class BackgroundProcessQueueServiceTests
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_TwoGenerationsIsolateListsEventsAndCancellation()
+    public async Task PackageScopedBackgroundTaskQueue_TwoGenerationsIsolateListsEventsAndCancellation()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 2);
         var firstOwner = Guid.NewGuid();
         var secondOwner = Guid.NewGuid();
-        await using var first = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, firstOwner);
-        await using var second = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, secondOwner);
+        await using var first = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue, firstOwner);
+        await using var second = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue, secondOwner);
         first.Start();
         second.Start();
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var firstChanges = new ConcurrentQueue<Guid>();
         var secondChanges = new ConcurrentQueue<Guid>();
-        first.ProcessChanged += (_, e) => firstChanges.Enqueue(e.Snapshot.ProcessId);
-        second.ProcessChanged += (_, e) => secondChanges.Enqueue(e.Snapshot.ProcessId);
+        first.TaskChanged += (_, e) => firstChanges.Enqueue(e.Snapshot.TaskId);
+        second.TaskChanged += (_, e) => secondChanges.Enqueue(e.Snapshot.TaskId);
 
         var firstProcess = first.Enqueue(CreateRequest("first generation", "work", async _ => await release.Task));
         var secondProcess = second.Enqueue(CreateRequest("second generation", "work", async _ => await release.Task));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
-        Assert.Collection(first.ListProcesses(), process => Assert.Equal(firstProcess.ProcessId, process.ProcessId));
-        Assert.Collection(second.ListProcesses(), process => Assert.Equal(secondProcess.ProcessId, process.ProcessId));
-        Assert.All(firstChanges, processId => Assert.Equal(firstProcess.ProcessId, processId));
-        Assert.All(secondChanges, processId => Assert.Equal(secondProcess.ProcessId, processId));
-        Assert.False(first.Cancel(secondProcess.ProcessId));
+        await WaitForConditionAsync(() => queue.ListTasks().Count(process => process.State == BackgroundTaskState.Running) == 2);
+        Assert.Collection(first.ListTasks(), process => Assert.Equal(firstProcess.TaskId, process.TaskId));
+        Assert.Collection(second.ListTasks(), process => Assert.Equal(secondProcess.TaskId, process.TaskId));
+        Assert.All(firstChanges, processId => Assert.Equal(firstProcess.TaskId, processId));
+        Assert.All(secondChanges, processId => Assert.Equal(secondProcess.TaskId, processId));
+        Assert.False(first.Cancel(secondProcess.TaskId));
 
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     [Fact]
-    public async Task PackageScopedBackgroundProcessQueue_OwnerStopDoesNotCancelOtherGenerationButPackageAllDoes()
+    public async Task PackageScopedBackgroundTaskQueue_OwnerStopDoesNotCancelOtherGenerationButPackageAllDoes()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
-        await using var first = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, Guid.NewGuid());
-        await using var second = new PackageScopedBackgroundProcessQueue("test.package", "Test Package", queue, Guid.NewGuid());
+        var queue = new BackgroundTaskQueueService(maxParallelism: 2);
+        await using var first = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue, Guid.NewGuid());
+        await using var second = new PackageScopedBackgroundTaskQueue("test.package", "Test Package", queue, Guid.NewGuid());
         var firstCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -614,31 +669,31 @@ public sealed class BackgroundProcessQueueServiceTests
             }
         }));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
+        await WaitForConditionAsync(() => queue.ListTasks().Count(process => process.State == BackgroundTaskState.Running) == 2);
         await first.StopAsync().WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(firstCancelled.Task.IsCompletedSuccessfully);
         Assert.False(secondCancelled.Task.IsCompleted);
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(firstProcess.ProcessId)?.State);
-        Assert.Equal(BackgroundProcessState.Running, queue.GetProcess(secondProcess.ProcessId)?.State);
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(firstProcess.TaskId)?.State);
+        Assert.Equal(BackgroundTaskState.Running, queue.GetTask(secondProcess.TaskId)?.State);
 
         await queue.CancelAllPackageProcessesAsync("test.package").WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(secondCancelled.Task.IsCompletedSuccessfully);
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(secondProcess.ProcessId)?.State);
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(secondProcess.TaskId)?.State);
     }
 
-    private static BackgroundProcessRequest CreateRequest(
+    private static BackgroundTaskRequest CreateRequest(
         string title,
         string groupKey,
-        Func<BackgroundProcessContext, Task> executeAsync,
+        Func<BackgroundTaskContext, Task> executeAsync,
         bool canCancel = true,
-        BackgroundProcessIndicator indicator = BackgroundProcessIndicator.Hidden)
+        BackgroundTaskIndicator indicator = BackgroundTaskIndicator.Hidden)
         => new(
             title,
             groupKey,
             indicator,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             canCancel,
             executeAsync);
 

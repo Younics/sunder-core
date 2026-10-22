@@ -1,5 +1,8 @@
 # Sunder.Package.Build
 
+> **Current source status: UNFROZEN / UNRELEASED.** No supported SDK release has
+> been established. After a supported baseline, compatible fixes remain allowed.
+
 > **Release/source channel:** The NuGet README describes that published build package. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
 
 `Sunder.Package.Build` contains the MSBuild targets and tasks that turn a Sunder package project into local development output and distributable `.sunderpkg` archives.
@@ -32,6 +35,18 @@ Typical package project reference:
 
 Use `PrivateAssets="all"` because this package is build tooling for the package project. It should not flow as a runtime dependency of your package.
 The NuGet package exposes no compile or runtime assembly asset; its task assembly and private dependencies live only under `tasks/net10.0` and are loaded by `buildTransitive/Sunder.Package.Build.targets`.
+
+Build-time C# descriptor emission is internal to this tooling assembly under
+`Rpc/Generation`, not a public runtime-SDK generator API. Generated packages still
+use the supported marshalling, binding and resource-lifetime contracts in
+`Sunder.Sdk`. Hiding those runtime helpers from IntelliSense does not make them
+private or exempt them from supported-consumer compatibility. See the
+[surface map](https://github.com/Younics/sunder-core/blob/main/docs/package-development/SDK-SURFACE.md).
+
+Authored service/method XML comments flow to generated interfaces in both editor
+and build compilations. The implicit invocation-context parameter is omitted from
+the consumer signature and its parameter documentation; ordinary argument and
+cancellation documentation remains. Comment-only edits do not change wire ABI.
 
 ## Source Task Loading
 

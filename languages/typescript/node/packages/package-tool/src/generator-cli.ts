@@ -3,12 +3,12 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import { lstat, open, rename, unlink, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join, parse, relative, resolve, sep } from "node:path";
-import { parseRpcContractDescriptor } from "./descriptor";
+import { parseRpcContractDescriptor } from "@sunder/sdk";
 import {
   SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-} from "./descriptor-v1";
+} from "@sunder/sdk";
 import { generateTypeScriptBindings } from "./generator";
 
 async function main(): Promise<void> {

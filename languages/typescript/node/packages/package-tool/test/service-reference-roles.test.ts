@@ -75,7 +75,8 @@ async function checkAppState(root: string, language: "ts" | "js", namespace = "S
   await writeFile(path, language === "ts" ? `export const state: {active?: ${model}} = {};` : `/** @type {{active?: ${model}}} */ export const state = {};`);
   const program = ts.createProgram([path], {target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.ESNext,moduleResolution:ts.ModuleResolutionKind.Bundler,
     strict:true,allowJs:true,checkJs:true,noEmit:true,types:[],skipLibCheck:false,paths:{
-      "@sunder/sdk/browser":[require.resolve("@sunder/sdk/browser").replace(/\.js$/u,".d.ts")],
+     "@sunder/sdk/browser":[require.resolve("@sunder/sdk/browser").replace(/\.js$/u,".d.ts")],
+     "@sunder/sdk/generated":[require.resolve("@sunder/sdk/generated").replace(/\.js$/u,".d.ts")],
       "@sunder/sdk/core":[require.resolve("@sunder/sdk/core").replace(/\.js$/u,".d.ts")],
     }});
   assert.deepEqual(ts.getPreEmitDiagnostics(program).map(value=>ts.flattenDiagnosticMessageText(value.messageText,"\n")),[]);

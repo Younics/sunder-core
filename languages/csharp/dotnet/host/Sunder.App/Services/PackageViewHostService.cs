@@ -38,7 +38,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         [],
         [],
         sessionFolder: null,
-        backgroundProcessQueue: null);
+        backgroundTaskQueue: null);
 
     private readonly AppPackageLifecycleGate _lifecycleGate = new(nameof(PackageViewHostService));
     private readonly OwnedTaskObserver _faultTasks;
@@ -71,7 +71,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
         NotificationCenterService? notificationCenter = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo = null,
         Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task>? downloadPackageUiSnapshotAsync = null,
@@ -160,7 +160,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
             settingsNavigationService,
             _faultNoticeCoordinator,
             notificationCenter,
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             getRuntimeConnectionInfo,
             _uiDispatcher,
             packagePolicy,
@@ -243,7 +243,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null,
         NotificationCenterService? notificationCenter = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null,
         CancellationToken cancellationToken = default)
         => await CreateForPackagesCoreAsync(
             activePackages,
@@ -251,7 +251,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
             shellViewService,
             settingsNavigationService,
             notificationCenter,
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             resourceAssemblyRegistry: null,
             getRuntimeConnectionInfo: null,
             uiDispatcher: null,
@@ -263,7 +263,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
         NotificationCenterService? notificationCenter,
-        BackgroundProcessQueueService? backgroundProcessQueue,
+        BackgroundTaskQueueService? backgroundTaskQueue,
         AppPackageResourceAssemblyRegistry resourceAssemblyRegistry,
         Func<RuntimeConnectionInfo?> getRuntimeConnectionInfo,
         IUiDispatcher uiDispatcher,
@@ -276,7 +276,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
             shellViewService,
             settingsNavigationService,
             notificationCenter,
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             resourceAssemblyRegistry,
             getRuntimeConnectionInfo,
             uiDispatcher,
@@ -288,7 +288,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
         NotificationCenterService? notificationCenter,
-        BackgroundProcessQueueService? backgroundProcessQueue,
+        BackgroundTaskQueueService? backgroundTaskQueue,
         AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
         IUiDispatcher? uiDispatcher,
@@ -307,7 +307,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
             shellViewService: shellViewService,
             settingsNavigationService: settingsNavigationService,
             notificationCenter: notificationCenter,
-            backgroundProcessQueue: backgroundProcessQueue,
+            backgroundTaskQueue: backgroundTaskQueue,
             resourceAssemblyRegistry: resourceAssemblyRegistry,
             getRuntimeConnectionInfo: getRuntimeConnectionInfo,
             uiDispatcher: uiDispatcher,

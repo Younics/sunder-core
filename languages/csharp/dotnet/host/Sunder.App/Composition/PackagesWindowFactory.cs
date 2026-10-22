@@ -8,24 +8,24 @@ namespace Sunder.App.Composition;
 
 public sealed class PackagesWindowFactory(
     IRuntimeApiClientFactory runtimeApiClientFactory,
-    BackgroundProcessQueueService backgroundProcessQueue,
+    BackgroundTaskQueueService backgroundTaskQueue,
     ShellStateService shellStateService,
     ShellState shellState,
     RemoteImageService remoteImageService)
 {
     internal PackagesWindow Create(
         PackageOperationService packageOperationService,
-        Action<double, double>? persistBackgroundProcessPopoverSize)
+        Action<double, double>? persistBackgroundTaskPopoverSize)
     {
         var window = new PackagesWindow(shellStateService, shellState);
         window.DataContext = new PackagesWindowViewModel(
             runtimeApiClientFactory.CreateClient<IRuntimePackagesClient>(),
             new PackageArchivePicker(window),
             packageOperationService,
-            backgroundProcessQueue,
-            backgroundProcessPopoverWidth: shellState.BackgroundProcessPopoverWidth,
-            backgroundProcessPopoverHeight: shellState.BackgroundProcessPopoverHeight,
-            persistBackgroundProcessPopoverSize: persistBackgroundProcessPopoverSize,
+            backgroundTaskQueue,
+            backgroundTaskPopoverWidth: shellState.BackgroundTaskPopoverWidth,
+            backgroundTaskPopoverHeight: shellState.BackgroundTaskPopoverHeight,
+            persistBackgroundTaskPopoverSize: persistBackgroundTaskPopoverSize,
             remoteImageService: remoteImageService,
             confirmSharedRuntimeRepair: async (impact, cancellationToken) =>
             {

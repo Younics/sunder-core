@@ -25,7 +25,7 @@ internal sealed class AppPackageGenerationBuilder(
     IPackageSettingsNavigationService? settingsNavigationService,
     AppPackageFaultNoticeCoordinator faultNoticeCoordinator,
     NotificationCenterService? notificationCenter,
-    BackgroundProcessQueueService? backgroundProcessQueue,
+    BackgroundTaskQueueService? backgroundTaskQueue,
     Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
     IUiDispatcher uiDispatcher,
     IAppPackagePolicy? packagePolicy = null,
@@ -365,7 +365,7 @@ internal sealed class AppPackageGenerationBuilder(
             shellViewService,
             settingsNavigationService,
             notificationCenter,
-            backgroundProcessQueue,
+            backgroundTaskQueue,
             getRuntimeConnectionInfo,
             uiDispatcher,
             webRpcClientFactory: getRuntimeConnectionInfo is null

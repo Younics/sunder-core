@@ -9,6 +9,18 @@ internal sealed class PackageSessionReconciler(
     ILogger<PackageSessionReconciler> logger,
     PackageSessionStartupTraceWriter? startupTraceWriter = null)
 {
+    internal async Task<PackageSessionLoadResult> LoadOwnerWithdrawalAsync(ActivePackageSession? previous,
+        IReadOnlyCollection<PackageSessionDevOverlay> overlays, long baseGeneration, CancellationToken token)
+    {
+        // Read the current installed catalog even for an all-development session:
+        // a newly available/disabled/policy-bound fallback must use normal admission.
+        var installed = await installedPackageStore.ListAsync(token).ConfigureAwait(false);
+        if (installed.Count == 0 && previous is not null
+            && await loader.TryRetainOwnerWithdrawalAsync(previous, overlays, token).ConfigureAwait(false) is { } retained)
+            return new(retained, [], []);
+        return await LoadMergedSessionAsync(installed, overlays, baseGeneration, cancellationToken: token).ConfigureAwait(false);
+    }
+
     public async Task<PackageSessionLoadResult> LoadMergedSessionAsync(
         IReadOnlyCollection<PackageSessionDevOverlay> devOverlays,
         long baseGeneration,

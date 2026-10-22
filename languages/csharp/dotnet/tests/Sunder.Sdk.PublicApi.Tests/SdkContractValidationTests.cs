@@ -10,27 +10,27 @@ namespace Sunder.Sdk.PublicApi.Tests;
 public sealed class SdkContractValidationTests
 {
     [Fact]
-    public void BackgroundProcessContracts_DefensivelyFreezeMetadata()
+    public void BackgroundTaskContracts_DefensivelyFreezeMetadata()
     {
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["item"] = "original",
         };
-        var request = new BackgroundProcessRequest(
+        var request = new BackgroundTaskRequest(
             "Work",
             "work",
-            BackgroundProcessIndicator.Hidden,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Hidden,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             _ => Task.CompletedTask,
             metadata);
-        var snapshot = new BackgroundProcessSnapshot(
+        var snapshot = new BackgroundTaskSnapshot(
             Guid.NewGuid(),
             request.Title,
             request.GroupKey,
             request.Indicator,
             request.ConcurrencyMode,
-            BackgroundProcessState.Queued,
+            BackgroundTaskState.Queued,
             "Queued",
             null,
             true,
@@ -44,7 +44,7 @@ public sealed class SdkContractValidationTests
 
         Assert.Equal("original", request.Metadata!["ITEM"]);
         Assert.Equal("original", snapshot.Metadata["ITEM"]);
-        Assert.False((snapshot with { State = BackgroundProcessState.Completed }).CanCancel);
+        Assert.False((snapshot with { State = BackgroundTaskState.Completed }).CanCancel);
         Assert.Throws<NotSupportedException>(() =>
             ((IDictionary<string, string>)request.Metadata).Clear());
         Assert.Throws<NotSupportedException>(() =>
@@ -55,9 +55,9 @@ public sealed class SdkContractValidationTests
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]
     [InlineData(double.NegativeInfinity)]
-    public void BackgroundProcessContext_RejectsNonFiniteProgress(double progress)
+    public void BackgroundTaskContext_RejectsNonFiniteProgress(double progress)
     {
-        var context = new BackgroundProcessContext(
+        var context = new BackgroundTaskContext(
             CancellationToken.None,
             _ => { },
             (_, _) => { },
@@ -70,10 +70,10 @@ public sealed class SdkContractValidationTests
     [InlineData(-1, 0)]
     [InlineData(42.5, 42.5)]
     [InlineData(101, 100)]
-    public void BackgroundProcessContext_ClampsFiniteProgress(double progress, double expected)
+    public void BackgroundTaskContext_ClampsFiniteProgress(double progress, double expected)
     {
         double? reported = null;
-        var context = new BackgroundProcessContext(
+        var context = new BackgroundTaskContext(
             CancellationToken.None,
             _ => { },
             (value, _) => reported = value,

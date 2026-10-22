@@ -8,7 +8,8 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { build } from "esbuild";
-import { authoringBindingModel, canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder/sdk";
+import { authoringBindingModel } from "../src/generator";
 import { inventoryBytes, parseContractLock } from "../src/rpc-contract-lock";
 import { publishContractCache } from "../src/rpc-contract-cache";
 import { loadProjectWithOwnedFrame, currentRid } from "../src/model";
@@ -71,7 +72,7 @@ test("generated discovery keeps exact tuples, compatible ranges, opaque endpoint
     const project = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }); await generateRpcBindingsForLoadedProject(project);
     const bundled = join(c.root, "apis.cjs");
     await build({ entryPoints: [join(c.root, ".sunder/generated/rpc/catalogs.ts")], bundle: true, platform: "browser", format: "cjs", outfile: bundled,
-      alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") }, logLevel: "silent" });
+      alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") }, logLevel: "silent" });
     const { packageApis } = createRequire(__filename)(bundled);
     const raw = { packageId: "example.dependency", packageVersion: "1.9.9+new.content", providerId: "example.implementation", contractId: c.requirement.contractId,
       contractVersion: c.requirement.contractVersion, descriptorSha256: c.requirement.descriptorSha256, abiSha256: c.requirement.abiSha256,

@@ -150,7 +150,7 @@ public sealed class RuntimeAppWebRpcClientTests
             });
         })).BuildServiceProvider();
         _ = services.GetRequiredService<CleanupOwner>();
-        await using var runtimeWork = new BackgroundProcessQueueService();
+        await using var runtimeWork = new BackgroundTaskQueueService();
         using var assemblies = new AppSharedAssemblyRegistry([]);
         var unload = new AppPackageUnloadCoordinator(new AppPackageViewRegistry(new InlineUiDispatcher()), new AppPackageRuntimeWorkStopper(runtimeWork),
             new AppPackageAssemblyTracker(), assemblies, _ => { }, _ => { });

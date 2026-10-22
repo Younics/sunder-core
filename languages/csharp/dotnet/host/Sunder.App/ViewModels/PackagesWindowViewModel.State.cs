@@ -54,13 +54,13 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         IRuntimePackagesClient runtimeApiClient,
         IPackageArchivePicker packageArchivePicker,
         IPackageOperationExecutor packageOperationExecutor,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null,
         Func<Uri, IRegistryPackageBrowseClient>? registryClientFactory = null,
         TimeSpan? marketplaceSearchThrottleDelay = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null,
-        double backgroundProcessPopoverWidth = ShellState.DefaultBackgroundProcessPopoverWidth,
-        double backgroundProcessPopoverHeight = ShellState.DefaultBackgroundProcessPopoverHeight,
-        Action<double, double>? persistBackgroundProcessPopoverSize = null,
+        double backgroundTaskPopoverWidth = ShellState.DefaultBackgroundTaskPopoverWidth,
+        double backgroundTaskPopoverHeight = ShellState.DefaultBackgroundTaskPopoverHeight,
+        Action<double, double>? persistBackgroundTaskPopoverSize = null,
         IUiDispatcher? uiDispatcher = null,
         RemoteImageService? remoteImageService = null,
         Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null)
@@ -108,15 +108,15 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         _marketplaceSearchScheduler = new MarketplaceSearchScheduler(
             RefreshMarketplaceAsync,
             marketplaceSearchThrottleDelay ?? TimeSpan.FromMilliseconds(MarketplaceSearchThrottleDelayMilliseconds));
-        PackageProcesses = backgroundProcessQueue is null
-            ? BackgroundProcessMonitorViewModel.Empty
-            : new BackgroundProcessMonitorViewModel(
-                backgroundProcessQueue,
-                BackgroundProcessIndicator.Packages,
-                "No package processes.",
-                backgroundProcessPopoverWidth,
-                backgroundProcessPopoverHeight,
-                persistBackgroundProcessPopoverSize);
+        PackageProcesses = backgroundTaskQueue is null
+            ? BackgroundTaskMonitorViewModel.Empty
+            : new BackgroundTaskMonitorViewModel(
+                backgroundTaskQueue,
+                BackgroundTaskIndicator.Packages,
+                "No package tasks.",
+                backgroundTaskPopoverWidth,
+                backgroundTaskPopoverHeight,
+                persistBackgroundTaskPopoverSize);
         RegistryUrlText = RegistryUrlHelper.DefaultRegistryUrl.ToString();
         _packageOperationExecutor.OperationChanged += PackageOperationService_OnOperationChanged;
     }
@@ -129,7 +129,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<RegistrySearchSortOptionViewModel> MarketplaceSortOptions { get; } = new(RegistrySearchSortOptionViewModel.Defaults);
 
-    public BackgroundProcessMonitorViewModel PackageProcesses { get; }
+    public BackgroundTaskMonitorViewModel PackageProcesses { get; }
 
     public ObservableCollection<PackageExecutionRuntimeStatusViewModel> SelectedPackageExecutionRuntimes { get; } = [];
 

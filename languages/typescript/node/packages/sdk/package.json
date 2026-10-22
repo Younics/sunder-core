@@ -24,9 +24,6 @@
     "LICENSE",
     "NOTICE"
   ],
-  "bin": {
-    "sunder-rpc-gen": "dist/generator-cli.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -42,6 +39,11 @@
       "types": "./dist/core.d.ts",
       "require": "./dist/core.js",
       "default": "./dist/core.js"
+    },
+    "./generated": {
+      "types": "./dist/generated.d.ts",
+      "require": "./dist/generated.js",
+      "default": "./dist/generated.js"
     },
     "./react": {
       "types": "./dist/react.d.ts",

@@ -325,7 +325,19 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
 
         var destinationPath = normalizedPath.ToPlatformPath(outputPath);
         Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
-        File.Copy(sourcePath, destinationPath, overwrite: false);
+        if (OperatingSystem.IsMacOS())
+        {
+            // APFS clonefile (used by File.Copy) can report Created/Changed on the
+            // unchanged source the first time it becomes copy-on-write shared. Runtime
+            // files can come directly from observed NuGet inputs, not just generated
+            // output. Stream every input here rather than suppressing source notifications.
+            using (var source = File.OpenRead(sourcePath))
+            using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                source.CopyTo(destination);
+            File.SetUnixFileMode(destinationPath, File.GetUnixFileMode(sourcePath));
+            File.SetLastWriteTimeUtc(destinationPath, File.GetLastWriteTimeUtc(sourcePath));
+        }
+        else File.Copy(sourcePath, destinationPath, overwrite: false);
     }
 
     private static string GetRelativePath(string rootPath, string filePath, string label)

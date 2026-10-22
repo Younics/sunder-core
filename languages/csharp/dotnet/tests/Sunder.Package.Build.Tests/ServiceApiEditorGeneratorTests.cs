@@ -43,6 +43,24 @@ public sealed class ServiceApiEditorGeneratorTests
         Assert.True(build.Compilation.Success, string.Join(Environment.NewLine, build.Compilation.Diagnostics.Select(value => value.Message)));
         Assert.Equal(Signatures(build.Compilation.SourceCompilation!), Signatures(live));
         var method = Assert.Single(live.GetTypeByMetadataName(ApiName)!.GetMembers("ReadAsync").OfType<IMethodSymbol>());
+        var liveDocumentation = method.GetDocumentationCommentXml();
+        var buildMethod = Assert.Single(build.Compilation.SourceCompilation!.GetTypeByMetadataName(ApiName)!.GetMembers("ReadAsync"));
+        Assert.Equal(liveDocumentation, buildMethod.GetDocumentationCommentXml());
+        Assert.Contains("Reads a note.", liveDocumentation);
+        Assert.Contains("name=\"request\"", liveDocumentation);
+        Assert.Contains("name=\"token\"", liveDocumentation);
+        Assert.DoesNotContain("name=\"context\"", liveDocumentation);
+        Assert.DoesNotContain("<include", liveDocumentation);
+        Assert.DoesNotContain("<inheritdoc", liveDocumentation);
+        Assert.Contains("Uses context metadata.", liveDocumentation);
+        var editedComments = SunderRpcCSharpOwnedClientPrepass.Compile(new SunderRpcCSharpSourceCompiler(),
+            new("example.editor", "1.0.0", [new("service.cs", source.Replace("Reads a note.", "Reads the current note.", StringComparison.Ordinal))],
+                ReferencePaths, AssemblyName: "EditorPackage", GenerateServiceInterfaces: true));
+        Assert.True(editedComments.Compilation.Success, string.Join(Environment.NewLine, editedComments.Compilation.Diagnostics));
+        var originalDescriptor = Assert.Single(build.Compilation.Contracts).Descriptor;
+        var editedDescriptor = Assert.Single(editedComments.Compilation.Contracts).Descriptor;
+        Assert.Equal(originalDescriptor.GetCanonicalUtf8(), editedDescriptor.GetCanonicalUtf8());
+        Assert.Equal(originalDescriptor.AbiSha256, editedDescriptor.AbiSha256);
         Assert.Null(live.GetTypeByMetadataName("Example.INotesService"));
         Assert.Equal(2, method.Parameters.Length);
         Assert.True(method.Parameters[1].HasExplicitDefaultValue);
@@ -192,6 +210,12 @@ public sealed class ServiceApiEditorGeneratorTests
         [SunderService]
         public sealed partial class NotesService
         {
+            /// <summary>Reads a note.</summary>
+            /// <remarks>Uses <paramref name="context"/> metadata.<include file="not-an-isolated-role-input.xml" path="docs"/><inheritdoc/></remarks>
+            /// <param name="request">The note to read.</param>
+            /// <param name="context">Host invocation context, not a caller argument.</param>
+            /// <param name="token">Cancels the operation.</param>
+            /// <returns>The matching note.</returns>
             public Task<Note> ReadAsync(NoteRequest request, SunderRpcInvocationContext context, CancellationToken token = default)
                 => Task.FromResult(new Note { Number = request.Number });
             public IAsyncEnumerable<Note> WatchAsync(CancellationToken token = default) => throw new NotSupportedException();

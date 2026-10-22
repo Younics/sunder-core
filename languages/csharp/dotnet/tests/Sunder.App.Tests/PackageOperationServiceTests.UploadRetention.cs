@@ -15,7 +15,7 @@ public sealed partial class PackageOperationServiceTests
     [Fact]
     public async Task RetentionCoversCombinedConfirmationQueuedWaitAndRuntimeDownload()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var clock = new ManualTimeProvider();
         var engine = new RuntimeManagementTestClient();
         var client = new FakeRuntimeApiClient { PrerequisiteClient = engine };
@@ -38,20 +38,20 @@ public sealed partial class PackageOperationServiceTests
             confirmLocalPackage: (_, _) => { shown.SetResult(); return approve.Task; }, uploadRetentionClock: clock);
         var preparing = service.EnqueueLocalInstallAsync(LocalSelection("agent.sunderpkg"));
         await shown.Task;
-        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(queue.ListTasks());
         Assert.Single(client.UploadRetention.Retains);
         clock.Advance(TimeSpan.FromMinutes(10));
         await WaitForConditionAsync(() => client.UploadRetention.Renewals.Count == 1 && clock.PendingTimerCount == 1);
         approve.SetResult(true);
         var package = (await preparing)!;
         await downloading.Task;
-        Assert.Equal(BackgroundProcessState.Queued, queue.GetProcess(package.ProcessId)!.State);
+        Assert.Equal(BackgroundTaskState.Queued, queue.GetTask(package.TaskId)!.State);
         Assert.Empty(client.StagedRequests);
         clock.Advance(TimeSpan.FromMinutes(10));
         await WaitForConditionAsync(() => client.UploadRetention.Renewals.Count == 2 && clock.PendingTimerCount == 1);
         download.SetResult();
         await WaitForConditionAsync(() => client.UploadRetention.Releases.Count == 1);
-        Assert.Equal(BackgroundProcessState.Completed, queue.GetProcess(package.ProcessId)!.State);
+        Assert.Equal(BackgroundTaskState.Completed, queue.GetTask(package.TaskId)!.State);
         var stage = Assert.Single(client.StagedRequests);
         var handle = Assert.Single(client.UploadRetention.Releases);
         Assert.All(requests, request => Assert.Equal(handle, request.Local!.Mutations[0].UploadRetention));
@@ -65,17 +65,17 @@ public sealed partial class PackageOperationServiceTests
     [InlineData(true)]
     public async Task RetainedQueuedPackageCancelledWithoutDelegateStillReleases(bool ownerShutdown)
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(new("Other work", "other", BackgroundProcessIndicator.Main, BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+        queue.Enqueue(new("Other work", "other", BackgroundTaskIndicator.Main, BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true, context => blocker.Task.WaitAsync(context.CancellationToken)));
         var clock = new ManualTimeProvider();
         var client = new FakeRuntimeApiClient();
         using var service = CreateService(queue, new FakeRuntimeApiClientFactory(client), (_, _) => Task.CompletedTask,
             new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")), uploadRetentionClock: clock);
         var operation = (await service.EnqueueLocalInstallAsync(LocalSelection("agent.sunderpkg")))!;
-        Assert.Equal(BackgroundProcessState.Queued, queue.GetProcess(operation.ProcessId)!.State);
-        if (ownerShutdown) service.Dispose(); else service.CancelOperation(operation.ProcessId);
+        Assert.Equal(BackgroundTaskState.Queued, queue.GetTask(operation.TaskId)!.State);
+        if (ownerShutdown) service.Dispose(); else service.CancelOperation(operation.TaskId);
         await WaitForConditionAsync(() => client.UploadRetention.Releases.Count == 1);
         Assert.Empty(client.StagedRequests);
         Assert.Equal(0, clock.PendingTimerCount);
@@ -89,9 +89,9 @@ public sealed partial class PackageOperationServiceTests
     [InlineData("conflict")]
     public async Task RetainedQueuedSourceCannotBeResurrectedAfterAvailabilityFailure(string failure)
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        queue.Enqueue(new("Other work", "other", BackgroundProcessIndicator.Main, BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+        queue.Enqueue(new("Other work", "other", BackgroundTaskIndicator.Main, BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true, context => blocker.Task.WaitAsync(context.CancellationToken)));
         var client = new FakeRuntimeApiClient();
         using var service = CreateService(queue, new FakeRuntimeApiClientFactory(client), (_, _) => Task.CompletedTask,
@@ -103,18 +103,18 @@ public sealed partial class PackageOperationServiceTests
                 failure == "conflict" ? RuntimePackageUploadRetentionErrorCodes.Conflict : RuntimePackageUploadRetentionErrorCodes.Unavailable));
         blocker.SetResult();
         await WaitForConditionAsync(() => client.UploadRetention.Releases.Count == 1);
-        Assert.Equal(BackgroundProcessState.Failed, queue.GetProcess(operation.ProcessId)!.State);
+        Assert.Equal(BackgroundTaskState.Failed, queue.GetTask(operation.TaskId)!.State);
         Assert.Empty(client.StagedRequests);
         Assert.Single(client.UploadRetention.Retains);
-        Assert.Contains("Select the original package file again", queue.GetProcess(operation.ProcessId)!.ErrorMessage);
+        Assert.Contains("Select the original package file again", queue.GetTask(operation.TaskId)!.ErrorMessage);
     }
 
     [Fact]
     public async Task RetentionRenewalFailureCancelsQueuedPackageAndDoesNotTouchUnrelatedWork()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var blocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var other = queue.Enqueue(new("Other work", "other", BackgroundProcessIndicator.Main, BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+        var other = queue.Enqueue(new("Other work", "other", BackgroundTaskIndicator.Main, BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true, context => blocker.Task.WaitAsync(context.CancellationToken)));
         var clock = new ManualTimeProvider();
         var client = new FakeRuntimeApiClient();
@@ -124,8 +124,8 @@ public sealed partial class PackageOperationServiceTests
         client.UploadRetention.Renew = (_, _) => Task.FromResult(PackageUploadRetentionTestClient.Unavailable("Absolute expiry"));
         clock.Advance(TimeSpan.FromMinutes(10));
         await WaitForConditionAsync(() => client.UploadRetention.Releases.Count == 1);
-        Assert.Equal(BackgroundProcessState.Cancelled, queue.GetProcess(operation.ProcessId)!.State);
-        Assert.Equal(BackgroundProcessState.Running, queue.GetProcess(other.ProcessId)!.State);
+        Assert.Equal(BackgroundTaskState.Cancelled, queue.GetTask(operation.TaskId)!.State);
+        Assert.Equal(BackgroundTaskState.Running, queue.GetTask(other.TaskId)!.State);
         Assert.Empty(client.StagedRequests);
         Assert.Equal(0, clock.PendingTimerCount);
         blocker.SetResult();
@@ -134,7 +134,7 @@ public sealed partial class PackageOperationServiceTests
     [Fact]
     public async Task ConsumptionStopsRenewalAndReleaseFailureCannotUndoCompletedPackage()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var clock = new ManualTimeProvider();
         var client = new FakeRuntimeApiClient
         {
@@ -145,7 +145,7 @@ public sealed partial class PackageOperationServiceTests
             new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")), uploadRetentionClock: clock);
         var operation = (await service.EnqueueLocalInstallAsync(LocalSelection("agent.sunderpkg")))!;
         await WaitForConditionAsync(() => client.UploadRetention.Releases.Count == 1);
-        Assert.Equal(BackgroundProcessState.Completed, queue.GetProcess(operation.ProcessId)!.State);
+        Assert.Equal(BackgroundTaskState.Completed, queue.GetTask(operation.TaskId)!.State);
         Assert.Equal(["agent"], client.InstalledPackageIds);
         Assert.Empty(client.UploadRetention.Renewals);
     }

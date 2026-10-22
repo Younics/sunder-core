@@ -20,3 +20,4 @@ export {
 export * from "./module";
 export * from "./registry";
 export { generateRpcBindings } from "./rpc-bindings";
+export { generateTypeScriptBindings, authoringBindingModel, type TypeScriptGeneratorOptions } from "./generator";

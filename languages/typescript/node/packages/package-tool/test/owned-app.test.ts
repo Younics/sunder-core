@@ -10,7 +10,7 @@ import type { BrowserRpcProvider, SunderBrowserRpc } from "@sunder/sdk/browser";
 import Ajv2020 from "ajv/dist/2020";
 import { loadProject, currentRid } from "../src/model";
 import { generateRpcBindings } from "../src/rpc-bindings";
-import { assertServiceOptions } from "@sunder/sdk";
+import { assertServiceOptions } from "@sunder/sdk/generated";
 import { contractsCommand } from "../src/rpc-contracts";
 import { liveCatalogWatch, writeSourceFile as writeFile } from "./service-fixtures";
 
@@ -68,7 +68,7 @@ test(`owned ${extension} ${exposure} App defaults and managed calls keep exact i
     assert.equal(validate(runtime), true, JSON.stringify(validate.errors));
     const bundle = resolve(root, "browser-test.cjs");
     await esbuild({ stdin: { contents: `export {Self} from ${JSON.stringify(resolve(root, ".sunder/generated/rpc/api.ts"))}; export {createApiContext,RpcError} from "@sunder/sdk/browser";`, resolveDir: root, loader: "ts" }, outfile: bundle, bundle: true, platform: "browser", format: "cjs",
-      alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
+      alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
     const browser = await readFile(bundle, "utf8");
     assert.doesNotMatch(browser, /node:fs|runWorker|owned-provider-bind/);
     const good: BrowserRpcProvider = { packageId: "example.app", packageVersion: "99.0.0", providerId: "example.app.messages.provider",
@@ -208,7 +208,7 @@ for (const extension of ["ts", "js"] as const) test(`${extension} public App def
     // which would otherwise silently recover the broader default action set.
     const bundle = resolve(root, "policy-test.cjs");
     await esbuild({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.js")], outfile: bundle,
-      bundle: true, platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
+      bundle: true, platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
     let bound = 0;
     const router = (policy: unknown) => ({ options: { exposure: "public", appUse: policy } });
     const bind = (value: unknown) => { assertServiceOptions(value as never, {exposure:"public",appUse:{actions:["discover"]}}); bound++; };
@@ -329,7 +329,7 @@ for (const extension of ["ts", "js"] as const) for (const exposure of ["package"
       }
       const bundle = resolve(root, "runtime-policy-test.cjs");
       await esbuild({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.js")], outfile: bundle, bundle: true,
-        platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser") } });
+        platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
        let bound = 0;
        const router = (runtimeUse: unknown) => ({ options: { exposure, runtimeUse } });
        const bind = (value: unknown) => { assertServiceOptions(value as never, {exposure,runtimeUse:{actions:["subscribe"]}}); bound++; };

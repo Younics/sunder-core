@@ -25,7 +25,7 @@
       </StackPanel>
 
       <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Spacing="8">
-        <controls:BackgroundProcessMonitor DataContext="{Binding BackgroundProcesses}" />
+        <controls:BackgroundTaskMonitor DataContext="{Binding BackgroundTasks}" />
         <TextBlock Classes="status-text" Text="Default" />
       </StackPanel>
     </DockPanel>

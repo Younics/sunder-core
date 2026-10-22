@@ -27,7 +27,7 @@ public sealed class SunderPackageCompositionPlannerTests
     [InlineData("System.Lazy<IStore> store", "public interface IStore { } public class One : IStore { } public class Two : IStore { }", "di-ambiguous")]
     [InlineData("System.Lazy<ICounterService> self", "", "di-cycle")]
     [InlineData("Sunder.Sdk.Notifications.IPackageNotificationService notifications", "", "di-unresolved")]
-    [InlineData("Sunder.Sdk.Abstractions.IBackgroundProcessQueue background", "", "di-unresolved")]
+    [InlineData("Sunder.Sdk.Abstractions.IBackgroundTaskQueue background", "", "di-unresolved")]
     [InlineData("Sunder.Sdk.Abstractions.IPackageSettingsNavigationService navigation", "", "di-unresolved")]
     [InlineData("Sunder.Sdk.Abstractions.IPackageShellViewService shell", "", "di-unresolved")]
     [InlineData("Sunder.Sdk.Abstractions.IPackageDevelopmentService development", "", "di-unresolved")]

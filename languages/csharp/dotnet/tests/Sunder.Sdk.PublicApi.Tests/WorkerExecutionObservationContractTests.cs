@@ -56,7 +56,7 @@ public sealed class WorkerExecutionObservationContractTests
     }
 
     [Fact]
-    public void DevelopmentRevisionValidatesOriginAndCanonicalIdentityWithoutChangingTheOldStatusConstructor()
+    public void DevelopmentRevisionValidatesOriginAndCanonicalIdentityIndependentlyOfReadiness()
     {
         var runtime = Guid.NewGuid();
         var hash = new string('a', 64);
@@ -66,11 +66,13 @@ public sealed class WorkerExecutionObservationContractTests
             Assert.Throws<ArgumentException>(() => new PackageDevelopmentRevision(runtime, 4, invalid!));
         var revision = new PackageDevelopmentRevision(runtime, 4, hash);
         Assert.Equal(revision, JsonSerializer.Deserialize<PackageDevelopmentRevision>(JsonSerializer.Serialize(revision)));
-        var status = new PackageDevelopmentStatus("package", false, false, "Unknown", null, false);
+        var status = new PackageDevelopmentStatus("package", false, false, PackageDevelopmentRuntimeReadiness.Unknown, null, false);
         var (package, loaded, watch, readiness, error, installed) = status;
         Assert.Equal("package", package);
         Assert.False(loaded || watch || installed);
-        Assert.Equal("Unknown", readiness);
+        Assert.Equal(PackageDevelopmentRuntimeReadiness.Unknown, readiness);
+        Assert.Equal(PackageDevelopmentHostState.Unknown, status.HostState);
+        Assert.Equal(PackageDevelopmentAppReadiness.Unknown, status.AppReadiness);
         Assert.Null(error);
         Assert.Null(status.RuntimeRevision);
         Assert.Null(status.AppliedRevision);

@@ -216,7 +216,7 @@ for(const extension of ["ts","js"]) test(`${extension} generated Worker executes
   try{
     await run(root,"build");await exerciseOwnedWorker(root,false,"7.6.5");await run(root,"dev");await exerciseOwnedWorker(root,true,"7.6.5");
     const path=resolve(root,".sunder/generated/rpc/authoring-receipt.v1.json");const before=await readFile(path);const time=(await stat(path)).mtimeMs;await run(root,"generate");assert.equal((await stat(path)).mtimeMs,time);
-    const browser=await esbuild({entryPoints:[resolve(root,".sunder/generated/rpc/api.js")],bundle:true,platform:"browser",write:false,alias:{"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser")}});assert.doesNotMatch(browser.outputFiles[0]!.text,/node:fs|runWorker/);
+    const browser=await esbuild({entryPoints:[resolve(root,".sunder/generated/rpc/api.js")],bundle:true,platform:"browser",write:false,alias:{"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});assert.doesNotMatch(browser.outputFiles[0]!.text,/node:fs|runWorker/);
     await writeFile(resolve(root,`src/services.${extension}`),echoSource.replace('return request;','return {...request,count:"wrong"};'));await assert.rejects(generateRpcBindings(root),/handler-incomplete/);assert.deepEqual(await readFile(path),before);
   }finally{await rm(root,{recursive:true,force:true});}
 });

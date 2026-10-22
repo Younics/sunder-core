@@ -1,19 +1,12 @@
 # Sunder.Sdk
 
-> **Release/source channel:** The NuGet README describes that published SDK version. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+> **SDK status: UNFROZEN / UNRELEASED.** This README describes the current source
+> candidate, not a supported release. The supported-release ledger contains no releases.
 
-`Sunder.Sdk` contains package-author contracts only. Runtime Host owns package state persistence,
-settings, encrypted secrets, storage allocation, platform credential integration, and persistent
-package logs. App activation receives Runtime-backed package capabilities and never creates those
-resources locally.
-
-`PackageStorageValidation` defines the shared storage/settings contract: case-sensitive portable ASCII
-keys are limited to 256 characters, string values to 1 MiB of UTF-8, portable `/`-separated relative
-paths to 1024 characters with 255-character segments, and files to 16 MiB. Missing values are represented
-by `null`, and key lists are stable ordinally sorted snapshots. File-name casing follows the host filesystem;
-Runtime contains file-store paths beneath their package root and rejects symbolic-link/reparse-point traversal.
-
-`Sunder.Sdk` contains the public contracts used to build Sunder packages.
+`Sunder.Sdk` contains package-author contracts only. Start with the coordinated
+template, write ordinary services and business models, and inject the generated
+`I<Service>` API into your optional UI. Sunder generates isolated Worker/App roles,
+registration, clients and bootstrap; normal packages do not author those layers.
 
 Normal service authoring uses `Sunder.Sdk.Services`: `[SunderService]`, ordinary public async methods,
 business records authored once and generated service injection. Services default to
@@ -24,60 +17,95 @@ full package version; public contracts retain explicit reviewed evolution. See t
 for role-reviewed imported services and explicit baseline/lock migrations. The older
 RPC-prefixed authoring declarations are removed; Services is the sole source surface.
 
-Avalonia view/settings contracts and theme resources are distributed separately in `Sunder.Sdk.Avalonia`. Stack import/export and Stack contributor contracts are distributed separately in `Sunder.Sdk.Stacks`. Standalone .NET Runtime workers use the exact coordinated `Sunder.Sdk.Worker` package.
+SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK
+requirements automatically. After the first supported release, compatible fixes
+and additions remain allowed while supported source, binary and behavioral contracts
+must be preserved. See the [compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md).
 
-Use this package for ordinary services, App lifecycle roles, shared values and package-scoped capability abstractions. Runtime executables use `Sunder.Sdk.Worker`, which depends on the exact coordinated `Sunder.Sdk` version. Add `Sunder.Sdk.Avalonia` only for Avalonia views/settings and theme resources.
+## Start With The Template
 
-SDK/Host compatibility is capability-based. `Sunder.Package.Build` infers SDK requirements automatically; see `docs/SUNDER-SDK-COMPATIBILITY.md` in the Sunder Core repository for the full policy.
-
-App development tools can inject `IPackageDevelopmentService` for activation-owned
-development-folder sessions and `IPackageLogNavigationService` for explicit navigation
-to package-filtered logs. Both require a published App activation and are rejected in
-Worker V1. See the [App development-session guide](https://github.com/Younics/sunder-core/blob/main/docs/package-development/APP-DEVELOPMENT-SESSIONS.md)
-for prerequisite approval, disposal, generation lifetime, and Host-only readiness.
-
-## Install
+Use matching locally packed candidates or a coordinated candidate feed while the SDK
+is unreleased. Install your candidate template package, then create one authored project:
 
 ```powershell
-dotnet add package Sunder.Sdk
+dotnet new install "<path-to-candidate-template.nupkg>"
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --output MyPackage
 ```
 
-App/UI packages also install:
+The template sets `SunderPackageProject=true` on a Library project, references
+`Sunder.Sdk.Worker` and `Sunder.Package.Build`, and creates metadata, a private service
+and an empty contract lock. `Sunder.Sdk.Worker` brings the coordinated `Sunder.Sdk`.
+Add `--withAvalonia` for a starter view/view model or `--withStacks` for Stack support.
+Ordinary installed-package dependencies use `--withPackageDependency` together with
+`--dependencyPackageId` and an explicit `--dependencyVersionRange`; there is no default
+range, and the dependency range is not the SDK version.
 
-```powershell
-dotnet add package Sunder.Sdk.Avalonia
+See [Getting Started](../../../../../docs/package-development/GETTING-STARTED.md)
+for restore, Build, watch and Pack.
+
+## Ordinary Services And Optional UI
+
+The template service uses ordinary public async methods:
+
+```csharp
+using Sunder.Sdk.Services;
+
+namespace MyPackage;
+
+[SunderService]
+public sealed partial class SampleService
+{
+    public Task<string> GreetAsync(string name, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult($"Hello, {name}!");
+    }
+}
 ```
 
-Stack-contributing packages also install the coordinated Stack contracts package:
+For package ID `my.company.package`, an App view model injects the generated interface,
+not `SampleService`:
 
-```powershell
-dotnet add package Sunder.Sdk.Stacks
+```csharp
+using Sunder.Generated.Packages.My_Company_Package_Services;
+using Sunder.Sdk.Abstractions;
+
+namespace MyPackage.Views;
+
+public sealed class DefaultPackageViewModel(IPackageContext packageContext, ISampleService sample)
+{
+    public string PackageId { get; } = packageContext.PackageId;
+
+    public Task<string> GreetAsync(string name, CancellationToken cancellationToken)
+        => sample.GreetAsync(name, cancellationToken);
+}
 ```
 
-Most package projects should also reference `Sunder.Package.Build` so builds generate the Sunder manifest, development output, and distributable archive:
+Author business records once alongside services; owned roles reuse those source types.
+Optional views use `[SunderPackageView(..., ViewModel = typeof(...))]` and settings
+views use `[SunderPackageSettingsView]`. Generated composition handles DI and App
+registration. Private services need no Accept/Freeze step; public exposure and imported
+APIs require explicit review. See [single-project authoring](../../../../../docs/package-development/SINGLE-PROJECT-AUTHORING.md).
 
-```powershell
-dotnet add package Sunder.Package.Build --private-assets all
-```
-
-For a new package project, the quickest path is the template package:
-
-```powershell
-dotnet new install Sunder.Package.Templates
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
-```
-
-Decision summary:
+## Developer Packages
 
 | Need | Package/tool |
 | --- | --- |
-| Worker V1 Runtime leaf | `Sunder.Sdk.Worker` |
-| Canonical package source and App contracts | `Sunder.Sdk` |
-| Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to that App leaf |
-| Stack contributor | Add `Sunder.Sdk.Stacks` to the implementing leaf |
+| Ordinary service and App capability contracts | `Sunder.Sdk` |
+| Worker contracts and generated Worker composition | `Sunder.Sdk.Worker` |
+| Avalonia views/settings | Add `Sunder.Sdk.Avalonia` to the authored project |
+| Stack contributor | Add `Sunder.Sdk.Stacks` to the authored project |
 | Canonical C# build/archive | `Sunder.Package.Build` with `PrivateAssets="all"` |
 | New canonical .NET package | Install `Sunder.Package.Templates` as a scaffold tool |
-| Node worker or web App | Use the coordinated npm packages; `@sunder/sdk` is an RPC/worker/browser subset, not this .NET API surface |
+
+These remain the six public developer NuGets. The four `Sunder.Sdk*` packages include
+matching XML API documentation beside their consumer DLLs for IntelliSense. That
+developer documentation is separate from runtime `.sunderpkg` content: packaging
+excludes generated XML companions and symbol files after publish-file computation,
+while retaining explicitly authored XML content.
+
+Node workers and web Apps use the coordinated npm packages; `@sunder/sdk` is a
+service/worker/browser subset, not this .NET API surface.
 
 ## Package Shape
 
@@ -94,7 +122,9 @@ Typical package projects:
 
 ## Package Metadata
 
-Package identity and runtime dependencies are declared with assembly attributes from `Sunder.Sdk.Packaging`.
+Package identity and ordinary runtime dependencies use assembly attributes from
+`Sunder.Sdk.Packaging`. Dependencies from selected APIs are derived from reviewed
+locks; do not duplicate them with authored dependency attributes.
 
 ```csharp
 using Sunder.Sdk.Packaging;
@@ -118,9 +148,11 @@ using Sunder.Sdk.Packaging;
     Icon = "assets/icon.png")]
 
 [assembly: SunderPackageDependency(
-    PackageId = "sunder.package.host",
-    VersionRange = ">=1.1.0 <1.2.0")]
+    PackageId = "example.dependency",
+    VersionRange = ">=2.0.0 <3.0.0")]
 ```
+
+Choose the range for that dependency's reviewed API; it is not inferred from the SDK.
 
 Package id rules:
 
@@ -132,7 +164,13 @@ Package id rules:
 
 The package version comes from normal MSBuild properties such as `Version`, not from the metadata attributes.
 
-## App Module
+`Sunder.Sdk.Packaging` owns the canonical `PackageId`, strict `SemanticVersion`, and `PackageVersionRange` primitives used by package authors, build tooling, Hosts, and Registry clients. Their `Parse`/`TryParse` methods are the V1 validators; do not implement a second package identity or version grammar.
+
+## Advanced: Handwritten App Modules
+
+The following low-level contract is used by generated App composition. Handwritten
+App modules, explicit role leaves and Worker bootstrap are advanced integration
+details, not steps to add to a normal template-created project.
 
 An App target may expose one public `ISunderAppPackageModule`. It must be non-abstract and have a public parameterless constructor.
 
@@ -159,11 +197,12 @@ public sealed class PackageModule : ISunderAppPackageModule
 }
 ```
 
-The App constructs the module through its public parameterless constructor, configures and builds the App-specific provider, and then registers contributions; the module itself is not resolved from that provider. Runtime workers own their process-local composition and immutable contribution catalog through `SunderWorkerOptions`; the worker-native `ISunderWorkerLifecycleService` contract lives in `Sunder.Sdk.Worker`. `Sunder.Sdk` does not expose a managed Runtime module, background-service, or generation-participant contract.
+The App constructs the module through its public parameterless constructor, configures and builds the App-specific provider, and then registers contributions; the module itself is not resolved from that provider. Generated Runtime workers own their process-local composition and immutable contribution catalog through `SunderWorkerOptions`; the worker-native `ISunderWorkerLifecycleService` contract lives in `Sunder.Sdk.Worker`. `Sunder.Sdk` does not expose a managed Runtime module, background-service, or generation-participant contract.
 
-`Sunder.Sdk.Packaging` owns the canonical `PackageId`, strict `SemanticVersion`, and `PackageVersionRange` primitives used by package authors, build tooling, Hosts, and Registry clients. Their `Parse`/`TryParse` methods are the V1 validators; do not implement a second package identity or version grammar.
+## Advanced: Explicit Contribution Registration
 
-## Contributions
+Normal projects use view/settings attributes. Low-level App modules use these
+registration methods instead:
 
 `Sunder.Sdk.Avalonia` adds these registrations to `ISunderAppContributionRegistry`:
 
@@ -181,7 +220,13 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 
 ## Package Context
 
-`IPackageContext` gives App modules and compatible Worker contexts access to host-provided package services:
+Runtime Host owns package state persistence, settings, encrypted secrets, storage
+allocation, platform credential integration and persistent package logs. App
+activation receives Runtime-backed package capabilities and never creates those
+resources locally.
+
+`IPackageContext` gives ordinary package services, App views and compatible Worker
+contexts access to host-provided package services:
 
 - `PackageId`
 - `Version` (the canonical SemVer 2.0 string from the package manifest)
@@ -191,7 +236,13 @@ registry.RegisterPackageView<MyView>(new PackageViewRegistration(
 - `Secrets`
 - `Logging`
 
-Host-provided services can also be injected into package services and views, including `IBackgroundProcessQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, and `IPackageSettingsNavigationService` for opening settings.
+Host-provided App services can also be injected into App-side package services and views, including `IBackgroundTaskQueue` for long-running package work, `IPackageNotificationService` for user-visible notifications, `IPackageShellViewService` for hotbar and panel navigation, and `IPackageSettingsNavigationService` for opening settings. These App capabilities are not available in Workers.
+
+`PackageStorageValidation` defines the shared storage/settings contract: case-sensitive portable ASCII
+keys are limited to 256 characters, string values to 1 MiB of UTF-8, portable `/`-separated relative
+paths to 1024 characters with 255-character segments, and files to 16 MiB. Missing values are represented
+by `null`, and key lists are stable ordinally sorted snapshots. File-name casing follows the host filesystem;
+Runtime contains file-store paths beneath their package root and rejects symbolic-link/reparse-point traversal.
 
 Use `Settings` for schema-declared user preferences, `Storage.State` for opaque operational state, and `Secrets` for sensitive values. Settings are writable and persisted independently from state. `GetValueAsync` returns a stored setting or its schema default; `GetStoredValueAsync` returns only a stored value. Setting writes reject undeclared keys, secret fields, and values that do not satisfy the schema.
 
@@ -240,6 +291,36 @@ Use `PackageStorageKeyMigration.DynamicCleanup` only for a bounded package-owned
 Runtime applies the declared rewrites atomically under the document lock, retains the pre-migration document, and treats repeat execution as a no-op. Every legacy key must match exactly one rule. Unknown invalid keys, ambiguous rules, and unequal destination collisions fail closed instead of discarding data. `IPackageSecrets` implements the same migration capability without exposing secret enumeration.
 
 `Storage.RoleLocalWorkspace` provides paths for APIs such as SQLite, process working directories, and atomic directory trees. It belongs to the current package activation and host role. App and Runtime workspaces are separate, the host owns their lifecycle, and package code must not dispose the capability.
+
+### App Development Sessions
+
+App development tools can inject `IPackageDevelopmentService` for activation-owned
+development-folder sessions and `IPackageLogNavigationService` for explicit navigation
+to package-filtered logs. Both require a published App activation and are rejected in
+Worker V1.
+
+`PackageDevelopmentStatus` exposes independent SDK-owned readiness observations:
+
+| Member | SDK enum |
+| --- | --- |
+| `HostState` | `PackageDevelopmentHostState` |
+| `RuntimeReadiness` | `PackageDevelopmentRuntimeReadiness` |
+| `AppReadiness` | `PackageDevelopmentAppReadiness` |
+
+Each enum has `Unknown`; an absent or unrecognized observation is not readiness.
+Host readiness does not imply Runtime readiness, and Runtime readiness does not imply
+App activation. App `Activated` means the applicable activation was published, not
+that every lazy view was opened.
+
+`RequestedWatch` is this session's request; `WatchEnabled` is the observed Host
+aggregate. Neither proves that a source producer is running, a build succeeded, or
+output was applied. `RuntimeRevision` identifies the validated source sampled from
+Runtime. `AppliedRevision` additionally requires a ready Runtime and the matching
+applicable published App activation. Null revision metadata is unknown, not success;
+an unrelated session-generation increment is not a new source revision.
+
+See the [App development-session guide](https://github.com/Younics/sunder-core/blob/main/docs/package-development/APP-DEVELOPMENT-SESSIONS.md)
+for prerequisite approval, disposal and generation lifetime.
 
 <a id="owner-and-cross-package-rpc"></a>
 
@@ -324,9 +405,11 @@ Descriptors are strict UTF-8 JSON with `descriptorVersion: 1`, exact `schemaProf
 
 Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI hashes use the domain-separated structural RPC V1 identity. Every descriptor number must decode to a finite IEEE-754 binary64 value. Integer-valued keywords and safe-integer schema values remain mathematical integers in the inclusive range `-9007199254740991` through `9007199254740991`; floating-point schemas select their wire semantics explicitly with `format: "float32"` or `format: "float64"`.
 
-Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. `SunderRpcException` represents bounded domain failures. The raw content-reference and binding-generator APIs serve advanced transport integration; ordinary services use `SunderContent`.
+Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. `SunderRpcException` represents bounded domain failures. Raw content-reference and transport APIs serve advanced integration; ordinary services use `SunderContent`.
 
-`SunderRpcCSharpGenerator.Generate(descriptor, namespaceName)` preserves the public generated surface. The overload accepting `SunderRpcCSharpAccessibility` can instead emit every top-level generated declaration as `Internal`; undefined enum values are rejected. Accessibility is uniform for one generated binding, so use internal mode only when its DTOs, provider interface, client, and handler stay in the same assembly behind intentional handwritten public contracts.
+C# source/binding generation belongs to `Sunder.Package.Build`, not the public runtime
+SDK. Normal Build and Pack generate the required bindings and composition; package
+authors do not call a generator from `Sunder.Sdk`.
 
 The designated Agent orchestrator may call `ISunderRpcClient.TryReportInvariantViolationAsync` when a package-local adapter detects malformed provider behavior that Host schema validation cannot observe. The endpoint reference attributes the report to one exact active provider; stale, invisible, or unauthorized reports return `false`, and accepted reports fault only the owning package activation under the Host's normal RPC fault policy.
 
@@ -340,16 +423,19 @@ var opened = await settingsNavigation.OpenPackageSettingsAsync(
     cancellationToken: cancellationToken);
 ```
 
-## Background Processes
+## Background Tasks
 
-Use `IBackgroundProcessQueue` for package work that should keep running outside the current button click or view lifecycle, such as downloads, imports, model pulls, or indexing.
+Use `IBackgroundTaskQueue` for package work that should keep running outside the current button click or view lifecycle, such as downloads, imports, model pulls, or indexing. Sunder itself uses the same queue contract; packages receive an activation-scoped adapter.
+
+The public names are `IBackgroundTaskQueue` and `BackgroundTask*`, without a `Package`
+prefix. A queued task is not an OS process, durable job or Worker cleanup receipt.
 
 ```csharp
-queue.Enqueue(new BackgroundProcessRequest(
+queue.Enqueue(new BackgroundTaskRequest(
     Title: "Import dataset",
     GroupKey: "my.company.package:imports",
-    Indicator: BackgroundProcessIndicator.Settings,
-    ConcurrencyMode: BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+    Indicator: BackgroundTaskIndicator.Settings,
+    ConcurrencyMode: BackgroundTaskConcurrencyMode.SequentialWithinGroup,
     CanCancel: true,
     ExecuteAsync: async context =>
     {
@@ -363,7 +449,7 @@ queue.Enqueue(new BackgroundProcessRequest(
     }));
 ```
 
-`BackgroundProcessIndicator.Hidden` keeps the process out of all footer indicators. `Main`, `Packages`, and `Settings` show it in exactly one host indicator surface. `GroupKey` is for concurrency and package-side listing; it is not used for UI placement.
+`BackgroundTaskIndicator.Hidden` keeps the task out of all footer indicators. `Main`, `Packages`, and `Settings` show it in exactly one host indicator surface. `GroupKey` is for concurrency and package-side listing; it is not used for UI placement.
 
 Request metadata and returned metadata are immutable snapshots. `ReportProgress` clamps finite values to 0 through 100 and rejects `NaN` and infinities. Terminal snapshots never advertise cancellation.
 
@@ -387,7 +473,11 @@ return declared domain errors; infrastructure failures remain Host-authenticated
 
 The host owns the callback listener, redirect path, leases, expiry, duplicate completion, and unload/shutdown cancellation. Package callback handlers must not create listeners. Implement `CancelCallbackAsync` when a provider task or delegate can remain in flight after `StartCallbackAsync` returns. `IPackageAuthHandler` remains the auth-specific status/disconnect surface projected over generic sessions.
 
-Assign generic callback handlers to `SunderWorkerOptions.CallbackHandlers` and an auth implementation to `SunderWorkerOptions.AuthHandler`; Runtime exposes the latter through its reserved `auth` callback route.
+In a canonical project, concrete callback/auth handlers are discovered and registered
+by generated Worker composition. Advanced handwritten Worker bootstrap assigns
+generic handlers to `SunderWorkerOptions.CallbackHandlers` and an auth implementation
+to `SunderWorkerOptions.AuthHandler`; Runtime exposes the latter through its reserved
+`auth` callback route.
 
 ## Theme Resources
 
@@ -464,6 +554,9 @@ sunder dev package validate .\MyPackage\bin\Release\net10.0\MyPackage.1.0.0.sund
 ```
 
 ## More Documentation
+
+These repository links follow current source. Before publishing a package README,
+provide documentation bound to its actual release; no release tag is implied here.
 
 - Package author manual: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
 - Callbacks and auth: https://github.com/Younics/sunder-core/blob/main/docs/package-development/CALLBACKS-AND-AUTH.md

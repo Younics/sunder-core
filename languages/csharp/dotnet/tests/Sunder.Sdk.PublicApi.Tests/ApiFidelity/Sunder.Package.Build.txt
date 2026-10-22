@@ -2,6 +2,8 @@ type Sunder.Package.Build.Tasks.AggregateSunderPackageTask
   property System.Boolean AllowDevelopmentRegistryOrigin { public get; public set; }
   property System.String ContractCacheRoot { public get; public set; }
   property System.String ContractLockPath { public get; public set; }
+  property System.String DevelopmentRevision { public get; public set; }
+  property System.String DevelopmentRevisionFile { public get; public set; }
   property System.String ExpectedPackageVersion { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.String NormalizedOutputPath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String OutputDiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]

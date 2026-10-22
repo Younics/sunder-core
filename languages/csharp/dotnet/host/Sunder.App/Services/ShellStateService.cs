@@ -46,8 +46,8 @@ public sealed class ShellStateService
                 state.SettingsSidebarWidth = ClampSecondarySidebarWidth(state.SettingsSidebarWidth, ShellState.DefaultSettingsSidebarWidth);
                 state.PackagesSidebarWidth = ClampSecondarySidebarWidth(state.PackagesSidebarWidth, ShellState.DefaultPackagesSidebarWidth);
                 state.StacksSidebarWidth = ClampSecondarySidebarWidth(state.StacksSidebarWidth, ShellState.DefaultStacksSidebarWidth);
-                state.BackgroundProcessPopoverWidth = ClampBackgroundProcessPopoverWidth(state.BackgroundProcessPopoverWidth);
-                state.BackgroundProcessPopoverHeight = ClampBackgroundProcessPopoverHeight(state.BackgroundProcessPopoverHeight);
+                state.BackgroundTaskPopoverWidth = ClampBackgroundTaskPopoverWidth(state.BackgroundTaskPopoverWidth);
+                state.BackgroundTaskPopoverHeight = ClampBackgroundTaskPopoverHeight(state.BackgroundTaskPopoverHeight);
                 return state;
             }
             catch (Exception ex)
@@ -165,23 +165,23 @@ public sealed class ShellStateService
         return Math.Clamp(value, 180, 900);
     }
 
-    private static double ClampBackgroundProcessPopoverWidth(double value)
+    private static double ClampBackgroundTaskPopoverWidth(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
         {
-            return ShellState.DefaultBackgroundProcessPopoverWidth;
+            return ShellState.DefaultBackgroundTaskPopoverWidth;
         }
 
-        return Math.Clamp(value, ShellState.MinimumBackgroundProcessPopoverWidth, ShellState.MaximumBackgroundProcessPopoverWidth);
+        return Math.Clamp(value, ShellState.MinimumBackgroundTaskPopoverWidth, ShellState.MaximumBackgroundTaskPopoverWidth);
     }
 
-    private static double ClampBackgroundProcessPopoverHeight(double value)
+    private static double ClampBackgroundTaskPopoverHeight(double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
         {
-            return ShellState.DefaultBackgroundProcessPopoverHeight;
+            return ShellState.DefaultBackgroundTaskPopoverHeight;
         }
 
-        return Math.Clamp(value, ShellState.MinimumBackgroundProcessPopoverHeight, ShellState.MaximumBackgroundProcessPopoverHeight);
+        return Math.Clamp(value, ShellState.MinimumBackgroundTaskPopoverHeight, ShellState.MaximumBackgroundTaskPopoverHeight);
     }
 }

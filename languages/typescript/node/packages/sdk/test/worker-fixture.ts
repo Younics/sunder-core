@@ -3,7 +3,8 @@ import { PackageStorageKeyMigration, PackageStorageKeyMigrationAction, RpcDomain
 import { workerV1ConformanceCorpus, type StorageMigrationRule } from "./worker-v1-conformance-corpus";
 import {RpcMarshallingContext} from "../src/resources";
 import {SunderContent} from "../src/content";
-import {generateTypeScriptBindings,authoringBindingModel} from "../src/generator";
+// Test-only source generation belongs to the workspace's build tool, never the Worker SDK.
+import {generateTypeScriptBindings,authoringBindingModel} from "@sunder/package-tool";
 import type {RpcContractDescriptor,RpcProviderHandler} from "../src/types";
 import {bindApiContext} from "../src/api";
 
@@ -37,7 +38,7 @@ function generatedNaturalHandler():RpcProviderHandler{
     Content:{type:"object",logicalType:"content-reference"},
   },services:{messages:{methods:{download:{kind:"unary",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Request"},responseSchema:{$ref:"#/$defs/Event"}},echo:{kind:"unary",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Event"},responseSchema:{$ref:"#/$defs/Event"}}}}}};
   const ts=require("typescript") as typeof import("typescript");
-  const source=generateTypeScriptBindings(descriptor,{moduleSpecifier:"../src/index",resources:{content:true,serviceReferences:{}}});
+   const source=generateTypeScriptBindings(descriptor,{moduleSpecifier:"../src/index",valueModuleSpecifier:"../src/generated",resources:{content:true,serviceReferences:{}}});
   const output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
   const module={exports:{} as Record<string,any>};new Function("require","module","exports",output)(require,module,module.exports);
   const model=authoringBindingModel(descriptor);
@@ -58,7 +59,7 @@ function generatedRetirementHandler(complete:boolean):RpcProviderHandler{
       Event:{type:"object",properties:{revision:{type:"integer"},content:{$ref:"#/$defs/Content"}},required:["revision","content"],additionalProperties:false},
       Content:{type:"object",logicalType:"content-reference"},
     },services:{messages:{methods:{watch:{kind:"server-stream",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Request"},eventSchema:{$ref:"#/$defs/Event"}},get:{kind:"unary",idempotency:"none",errors:[],requestSchema:{$ref:"#/$defs/Request"},responseSchema:{$ref:"#/$defs/Event"}}}}}};
-    const source=generateTypeScriptBindings(descriptor,{moduleSpecifier:"../src/index",resources:{content:true,serviceReferences:{}}});
+     const source=generateTypeScriptBindings(descriptor,{moduleSpecifier:"../src/index",valueModuleSpecifier:"../src/generated",resources:{content:true,serviceReferences:{}}});
     const ts= require("typescript") as typeof import("typescript");
     const output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
     const module={exports:{} as Record<string,any>};new Function("require","module","exports",output)(require,module,module.exports);

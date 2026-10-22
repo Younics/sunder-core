@@ -7,11 +7,11 @@ internal sealed record PackageInstallationCompletion(bool Success, bool Cancelle
 /// <summary>Owns cancellation and resource cleanup for the two jobs of one approved installation.</summary>
 internal sealed class PackageInstallationCohort
 {
-    private readonly BackgroundProcessQueueService _queue;
+    private readonly BackgroundTaskQueueService _queue;
     private readonly Guid? _runtimeId;
     private readonly Guid _packageId = Guid.NewGuid();
     private readonly object _gate = new();
-    private readonly Dictionary<Guid, BackgroundProcessSnapshot> _terminal = [];
+    private readonly Dictionary<Guid, BackgroundTaskSnapshot> _terminal = [];
     private readonly Func<ValueTask> _release;
     private readonly Func<Exception, Task>? _notifyFailure;
     private readonly Func<Exception?>? _resourceFailure;
@@ -22,7 +22,7 @@ internal sealed class PackageInstallationCohort
     private bool _enrolled;
     private bool _finishing;
 
-    private PackageInstallationCohort(BackgroundProcessQueueService queue, bool hasRuntime,
+    private PackageInstallationCohort(BackgroundTaskQueueService queue, bool hasRuntime,
         Func<ValueTask> release, Func<Exception, Task>? notifyFailure, Func<Exception?>? resourceFailure)
     {
         _queue = queue;
@@ -32,21 +32,22 @@ internal sealed class PackageInstallationCohort
         _resourceFailure = resourceFailure;
     }
 
-    public BackgroundProcessSnapshot PackageJob { get; private set; } = null!;
-    public BackgroundProcessSnapshot? RuntimeJob { get; private set; }
+    public BackgroundTaskSnapshot PackageJob { get; private set; } = null!;
+    public BackgroundTaskSnapshot? RuntimeJob { get; private set; }
     public Task<PackageInstallationCompletion> Completion => _completion.Task;
 
-    internal static PackageInstallationCohort Enqueue(BackgroundProcessQueueService queue, string title,
+    internal static PackageInstallationCohort Enqueue(BackgroundTaskQueueService queue, string title,
         IReadOnlyDictionary<string, string> metadata,
-        Func<BackgroundProcessContext, Task>? installRuntime,
-        Func<BackgroundProcessContext, Task> installPackage,
+        Func<BackgroundTaskContext, Task>? installRuntime,
+        Func<BackgroundTaskContext, Task> installPackage,
         CancellationToken ownerToken, Func<ValueTask> release,
-        Func<Exception, Task>? notifyFailure = null, Func<Exception?>? resourceFailure = null)
+        Func<Exception, Task>? notifyFailure = null, Func<Exception?>? resourceFailure = null,
+        BackgroundTaskIndicator indicator = BackgroundTaskIndicator.Packages)
     {
         ownerToken.ThrowIfCancellationRequested();
         var cohort = new PackageInstallationCohort(queue, installRuntime is not null, release, notifyFailure, resourceFailure);
         var installationId = Guid.NewGuid().ToString("N");
-        var requests = new List<QueuedBackgroundProcess>();
+        var requests = new List<QueuedBackgroundTask>();
         if (installRuntime is not null)
             requests.Add(new(cohort._runtimeId!.Value, Request("Download & install package runtimes", "runtime",
                 context => cohort.RunAsync(context, installRuntime, ownerToken))));
@@ -54,7 +55,7 @@ internal sealed class PackageInstallationCohort
             context => cohort.RunAsync(context, installPackage, ownerToken)),
             installRuntime is null ? "Queued" : "Queued — waiting for runtime"));
 
-        queue.ProcessChanged += cohort.OnChanged;
+        queue.TaskChanged += cohort.OnChanged;
         cohort._ownerRegistration = ownerToken.Register(cohort.Cancel);
         try
         {
@@ -68,21 +69,21 @@ internal sealed class PackageInstallationCohort
         }
         catch
         {
-            queue.ProcessChanged -= cohort.OnChanged;
+            queue.TaskChanged -= cohort.OnChanged;
             cohort._ownerRegistration.Unregister();
             // Preparation still owns release if enrollment is rejected.
             throw;
         }
 
-        BackgroundProcessRequest Request(string jobTitle, string phase, Func<BackgroundProcessContext, Task> execute)
+        BackgroundTaskRequest Request(string jobTitle, string phase, Func<BackgroundTaskContext, Task> execute)
         {
             var values = new Dictionary<string, string>(metadata, StringComparer.OrdinalIgnoreCase)
             {
                 ["sunder.installationId"] = installationId,
                 ["sunder.installationPhase"] = phase,
             };
-            return new(jobTitle, PackageOperationService.PackageStoreGroupKey, BackgroundProcessIndicator.Packages,
-                BackgroundProcessConcurrencyMode.SequentialWithinGroup, true, execute, values);
+            return new(jobTitle, PackageOperationService.PackageStoreGroupKey, indicator,
+                BackgroundTaskConcurrencyMode.SequentialWithinGroup, true, execute, values);
         }
     }
 
@@ -103,7 +104,7 @@ internal sealed class PackageInstallationCohort
         if (_runtimeId is { } runtime) _queue.Cancel(runtime, reason);
     }
 
-    private async Task RunAsync(BackgroundProcessContext context, Func<BackgroundProcessContext, Task> action, CancellationToken ownerToken)
+    private async Task RunAsync(BackgroundTaskContext context, Func<BackgroundTaskContext, Task> action, CancellationToken ownerToken)
     {
         try
         {
@@ -125,22 +126,22 @@ internal sealed class PackageInstallationCohort
         }
     }
 
-    private void OnChanged(object? sender, BackgroundProcessChangedEventArgs args)
+    private void OnChanged(object? sender, BackgroundTaskChangedEventArgs args)
     {
         var snapshot = args.Snapshot;
-        if (snapshot.ProcessId != _packageId && snapshot.ProcessId != _runtimeId) return;
+        if (snapshot.TaskId != _packageId && snapshot.TaskId != _runtimeId) return;
         var cancel = false;
         lock (_gate)
         {
-            if (!snapshot.IsActive) _terminal[snapshot.ProcessId] = snapshot;
-            if (snapshot.State is BackgroundProcessState.Cancelled or BackgroundProcessState.Cancelling)
+            if (!snapshot.IsActive) _terminal[snapshot.TaskId] = snapshot;
+            if (snapshot.State is BackgroundTaskState.Cancelled or BackgroundTaskState.Cancelling)
                 _cancelled = cancel = true;
-            if (snapshot.State == BackgroundProcessState.Failed)
+            if (snapshot.State == BackgroundTaskState.Failed)
             {
                 _failure ??= new InvalidOperationException(snapshot.ErrorMessage ?? snapshot.StatusText);
                 cancel = true;
             }
-            if (snapshot.State == BackgroundProcessState.Queued && (_cancelled || _failure is not null)) cancel = true;
+            if (snapshot.State == BackgroundTaskState.Queued && (_cancelled || _failure is not null)) cancel = true;
         }
         if (cancel) CancelJobs();
         TryFinish();
@@ -154,7 +155,7 @@ internal sealed class PackageInstallationCohort
                 || _runtimeId is { } runtime && !_terminal.ContainsKey(runtime)) return;
             _finishing = true;
         }
-        _queue.ProcessChanged -= OnChanged;
+        _queue.TaskChanged -= OnChanged;
         _ownerRegistration.Unregister();
         _ = FinishAsync();
     }

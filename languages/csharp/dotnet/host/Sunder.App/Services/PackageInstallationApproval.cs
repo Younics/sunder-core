@@ -21,7 +21,7 @@ internal sealed class PackageInstallationApproval(RuntimePackageRuntimePrerequis
 
     public async Task InstallRuntimesAsync(IRuntimePackageRuntimePrerequisiteClient client,
         Func<CancellationToken, Task<RuntimePackageRuntimePrerequisitePlan>> refresh,
-        BackgroundProcessContext context)
+        BackgroundTaskContext context)
     {
         var current = await refresh(context.CancellationToken).ConfigureAwait(false);
         Validate(current);

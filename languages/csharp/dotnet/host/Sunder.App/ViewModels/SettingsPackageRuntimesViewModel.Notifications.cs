@@ -78,7 +78,7 @@ public sealed partial class SettingsPackageRuntimesViewModel
         }
     }
 
-    private void OnQueuedProcessChanged(object? sender, BackgroundProcessChangedEventArgs args)
+    private void OnQueuedTaskChanged(object? sender, BackgroundTaskChangedEventArgs args)
     {
         if (!args.Snapshot.Metadata.ContainsKey(RuntimeSourceMetadataKey)) return;
         _tasks.Observe(_dispatcher.InvokeAsync(() =>
@@ -91,14 +91,14 @@ public sealed partial class SettingsPackageRuntimesViewModel
 
     private void RefreshQueuedOperations()
     {
-        var processes = _queue.ListProcesses(PackageOperationService.PackageStoreGroupKey);
+        var processes = _queue.ListTasks(PackageOperationService.PackageStoreGroupKey);
         foreach (var family in Families)
         {
             if (ReferenceEquals(family, _foregroundFamily)) continue;
             var process = processes.Where(item => item.Metadata.GetValueOrDefault(RuntimeSourceMetadataKey) == family.Source.ToString())
                 .OrderByDescending(item => item.IsActive).ThenByDescending(item => item.QueuedAtUtc).FirstOrDefault();
             family.SetOperation(process?.IsActive == true ? process.StatusText : null,
-                process?.ProgressPercent, process?.State == BackgroundProcessState.Failed ? process.ErrorMessage : null);
+                process?.ProgressPercent, process?.State == BackgroundTaskState.Failed ? process.ErrorMessage : null);
         }
     }
 

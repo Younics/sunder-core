@@ -50,7 +50,7 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
         await using var app = await StartOfficialAdoptionHttpAsync(fixture);
         using var transport = new RuntimeClientTransport(() => new RuntimeConnectionInfo(new Uri(Assert.Single(app.Urls)), "management-test-token"));
         using var client = new RuntimeApiClient(transport);
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var shown = new TaskCompletionSource<RegistryPackageChangePreflight>(TaskCreationOptions.RunContinuationsAsynchronously);
         var approve = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var prompts = 0;
@@ -72,7 +72,7 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
             await Task.WhenAny(shown.Task, execution).WaitAsync(timeout.Token);
             if (!shown.Task.IsCompleted) Assert.Fail((await execution).Message);
             var review = await shown.Task.WaitAsync(timeout.Token);
-            Assert.Empty(queue.ListProcesses());
+            Assert.Empty(queue.ListTasks());
             Assert.Equal(0, registry.Downloads);
             Assert.DoesNotContain("download", fixture.Handler.Operations);
             Assert.Equal(published.PlanItem.PackageContentIdentity, Assert.Single(review.Plan.Items).PackageContentIdentity);
@@ -89,9 +89,9 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
                 if (!fixture.Handler.DownloadEntered.IsCompleted) Assert.Fail((await execution).Message
                     + "; official requests: " + string.Join(", ", fixture.Handler.Operations));
                 await fixture.Handler.DownloadEntered.WaitAsync(timeout.Token);
-                var jobs = queue.ListProcesses();
+                var jobs = queue.ListTasks();
                 Assert.Equal(2, jobs.Count);
-                Assert.Equal(BackgroundProcessState.Queued, Assert.Single(jobs, job => job.Metadata["sunder.installationPhase"] == "package").State);
+                Assert.Equal(BackgroundTaskState.Queued, Assert.Single(jobs, job => job.Metadata["sunder.installationPhase"] == "package").State);
                 Assert.Equal(0, registry.Downloads);
                 var waiting = (await fixture.InstalledPackages.ListAsync()).Single(package => package.PackageId == original.PackageId);
                 Assert.Equal(original.Version, waiting.Version);
@@ -102,8 +102,8 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
             var result = await execution.WaitAsync(timeout.Token);
             Assert.True(result.Success, result.Message + string.Join("; ", result.Errors));
             Assert.Equal(1, prompts);
-            Assert.Equal(missingRuntime ? 2 : 1, queue.ListProcesses().Count);
-            Assert.All(queue.ListProcesses(), job => Assert.Equal(BackgroundProcessState.Completed, job.State));
+            Assert.Equal(missingRuntime ? 2 : 1, queue.ListTasks().Count);
+            Assert.All(queue.ListTasks(), job => Assert.Equal(BackgroundTaskState.Completed, job.State));
             var packages = await fixture.InstalledPackages.ListAsync();
             var updated = packages.Single(package => package.PackageId == original.PackageId);
             Assert.Equal("1.0.1", updated.Version);

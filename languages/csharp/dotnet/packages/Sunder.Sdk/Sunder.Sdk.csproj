@@ -9,6 +9,7 @@
     <Version>$(SunderDeveloperPackageVersion)</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk</Title>
     <Description>Public contracts and abstractions for authoring Sunder packages, including App lifecycle, settings, storage, logging, callbacks, authentication, RPC, and package metadata.</Description>

@@ -29,7 +29,7 @@ public sealed partial class PackagesWindowViewModel
             await RefreshAfterPackageOperationAsync(e.Snapshot);
         }), "refreshing a completed package operation");
 
-    private async Task RefreshAfterPackageOperationAsync(BackgroundProcessSnapshot snapshot)
+    private async Task RefreshAfterPackageOperationAsync(BackgroundTaskSnapshot snapshot)
     {
         if (_disposed)
         {
@@ -43,9 +43,9 @@ public sealed partial class PackagesWindowViewModel
 
             Operations.StatusText = snapshot.State switch
             {
-                BackgroundProcessState.Completed => snapshot.StatusText,
-                BackgroundProcessState.Cancelled => $"Cancelled {snapshot.Title}.",
-                BackgroundProcessState.Failed => snapshot.ErrorMessage ?? snapshot.StatusText,
+                BackgroundTaskState.Completed => snapshot.StatusText,
+                BackgroundTaskState.Cancelled => $"Cancelled {snapshot.Title}.",
+                BackgroundTaskState.Failed => snapshot.ErrorMessage ?? snapshot.StatusText,
                 _ => Operations.StatusText,
             };
         }
@@ -55,7 +55,7 @@ public sealed partial class PackagesWindowViewModel
         }
     }
 
-    private string? GetPreferredPackageIdForCompletedOperation(BackgroundProcessSnapshot snapshot)
+    private string? GetPreferredPackageIdForCompletedOperation(BackgroundTaskSnapshot snapshot)
     {
         if (PackageOperationMetadata.TryCreate(snapshot.Metadata, out var metadata)
             && metadata.PackageId is { Length: > 0 } packageId)
@@ -377,7 +377,7 @@ public sealed partial class PackagesWindowViewModel
         _selectedPackageIconObserver.Dispose();
         _marketplace.Dispose();
         _installedPackages.Dispose();
-        if (!ReferenceEquals(PackageProcesses, BackgroundProcessMonitorViewModel.Empty))
+        if (!ReferenceEquals(PackageProcesses, BackgroundTaskMonitorViewModel.Empty))
         {
             PackageProcesses.Dispose();
         }

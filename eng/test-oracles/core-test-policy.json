@@ -101,7 +101,7 @@
     {
       "id": "node-sdk-output-symlink-capability",
       "framework": "node",
-      "source": "languages/typescript/node/packages/sdk/test/generator.test.ts",
+      "source": "languages/typescript/node/packages/package-tool/test/generator.test.ts",
       "name": "generator CLI refuses a symbolic-link output without changing its target",
       "owner": "node",
       "reason": "The runner cannot create the symbolic-link fixture.",
@@ -110,7 +110,7 @@
     {
       "id": "node-sdk-input-symlink-capability",
       "framework": "node",
-      "source": "languages/typescript/node/packages/sdk/test/generator.test.ts",
+      "source": "languages/typescript/node/packages/package-tool/test/generator.test.ts",
       "name": "generator CLI refuses a symbolic-link descriptor source",
       "owner": "node",
       "reason": "The runner cannot create the symbolic-link fixture.",
@@ -119,7 +119,7 @@
     {
       "id": "node-sdk-parent-symlink-capability",
       "framework": "node",
-      "source": "languages/typescript/node/packages/sdk/test/generator.test.ts",
+      "source": "languages/typescript/node/packages/package-tool/test/generator.test.ts",
       "name": "generator CLI refuses symbolic-link output parents",
       "owner": "node",
       "reason": "The runner cannot create the symbolic-link fixture.",

@@ -3,6 +3,7 @@ import test from "node:test";
 import { bindApiContext, createApiContext, createApiToken, createDeferredApi, type ApiIdentity, type ApiTransport } from "../src/api";
 import { createBrowserContext, getSunder, waitForSunder, type SunderBrowserApi } from "../src/browser";
 import {liveWatch,provider} from "./service-binding-fixture";
+import { RpcError } from "../src/types";
 
 const identity: ApiIdentity = { packageId: "example.provider", contractId: "example.service", contractVersion: "1.0.0", descriptorSha256: "a".repeat(64), abiSha256: "b".repeat(64) };
 function transport() {
@@ -43,7 +44,9 @@ test("selection ambiguity/hash mismatch rejects without invoking or retrying and
   for (const duplicate of [false, true]) {
     const { value, calls } = transport(); const original = value.discover;
     value.discover = async (...args) => { const snapshot = await original(...args); return { ...snapshot, providers: duplicate ? [...snapshot.providers, ...snapshot.providers.map(provider=>({...provider,providerId:"example.other",endpointReference:"other"}))] : snapshot.providers.map(provider => ({ ...provider, abiSha256: "c".repeat(64) })) }; };
-    const owner = createApiContext("example.owner", value); await assert.rejects(owner.api(Token).call(), /ambiguous|No active/);
+    const owner = createApiContext("example.owner", value); await assert.rejects(owner.api(Token).call(), error =>
+      error instanceof RpcError && error.error.code === (duplicate ? "rpc.provider-ambiguous" : "rpc.provider-not-found")
+        && !error.isHostAuthenticated);
     assert.equal(calls.invoke, 0); assert.equal(calls.discover, 3); assert.equal(calls.close, 1); owner.dispose();
     assert.throws(() => createApiContext("another.owner", value).api(Token), /different package/);
   }

@@ -67,7 +67,10 @@ public sealed partial class PackageTemplateTests
                         .GetProperty("value")
                         .GetString());
                 var symbols = document.RootElement.GetProperty("symbols");
-                Assert.True(symbols.TryGetProperty("withHostDependency", out _));
+                Assert.True(symbols.TryGetProperty("withPackageDependency", out _));
+                var dependencyRange = symbols.GetProperty("dependencyVersionRange");
+                Assert.Equal("withPackageDependency == true", dependencyRange.GetProperty("isRequired").GetString());
+                Assert.False(dependencyRange.TryGetProperty("defaultValue", out _));
                 Assert.DoesNotContain(archive.Entries, entry => entry.FullName.Contains(".Protocol/", StringComparison.Ordinal)
                     || entry.FullName.EndsWith(".rpc.json", StringComparison.Ordinal));
                 var service = Assert.Single(archive.Entries, entry => entry.FullName.EndsWith("/SampleService.cs", StringComparison.Ordinal));
@@ -104,6 +107,13 @@ public sealed partial class PackageTemplateTests
                 Path.Combine(root, "missing-identity"));
             Assert.NotEqual(0, missingIdentity.ExitCode);
 
+            var missingDependencyRange = await RunDotnetAsync(repositoryRoot, "new", "--debug:custom-hive", hive,
+                "sunder-package", "--name", "Missing.Dependency.Range", "--packageId", "missing.dependency.range",
+                "--packageName", "Missing Range", "--withPackageDependency", "--dependencyPackageId", "another.package",
+                "--output", Path.Combine(root, "missing-dependency-range"));
+            Assert.NotEqual(0, missingDependencyRange.ExitCode);
+            Assert.Contains("dependencyVersionRange", missingDependencyRange.StandardOutput + missingDependencyRange.StandardError, StringComparison.Ordinal);
+
             const string packageName = "Package & \"Quoted\" <Name> \\ Path";
             var output = Path.Combine(root, "Escaped.Sample");
             var generate = await RunDotnetAsync(
@@ -120,11 +130,11 @@ public sealed partial class PackageTemplateTests
                 packageName,
                 "--withAvalonia",
                 "--withStacks",
-                "--withHostDependency",
-                "--hostPackageId",
+                "--withPackageDependency",
+                "--dependencyPackageId",
                 "host.package",
-                "--hostPackageVersionRange",
-                ">=1.1.0 <1.2.0");
+                "--dependencyVersionRange",
+                ">=3.2.0 <4.0.0");
             AssertSuccess(generate);
 
             var xmlFiles = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories)
@@ -200,7 +210,7 @@ public sealed partial class PackageTemplateTests
                     && element.Attribute("FontSize") is not null).Attribute("Text")?.Value);
 
             Assert.Contains(
-                "VersionRange = \">=1.1.0 <1.2.0\"",
+                "VersionRange = \">=3.2.0 <4.0.0\"",
                 packageMetadata,
                 StringComparison.Ordinal);
 
@@ -288,7 +298,7 @@ public sealed partial class PackageTemplateTests
                 new GeneratedShape("Stacks", ["--withStacks"], 1, 6, HasApp: false, HasDependency: false),
                 new GeneratedShape(
                     "HostDependency",
-                    ["--withHostDependency", "--hostPackageId", "host.package", "--hostPackageVersionRange", ">=1.1.0 <1.2.0"],
+                    ["--withPackageDependency", "--dependencyPackageId", "host.package", "--dependencyVersionRange", ">=1.1.0 <1.2.0"],
                     1,
                     6,
                     HasApp: false,

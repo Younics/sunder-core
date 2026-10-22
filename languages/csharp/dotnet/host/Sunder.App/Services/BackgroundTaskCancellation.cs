@@ -1,6 +1,6 @@
 namespace Sunder.App.Services;
 
-internal static class BackgroundProcessCancellation
+internal static class BackgroundTaskCancellation
 {
     public static async Task WaitForRunningTasksAsync(Task[] runningTasks, CancellationToken cancellationToken)
     {
@@ -62,7 +62,7 @@ internal static class BackgroundProcessCancellation
         }
         catch (Exception exception)
         {
-            AppSessionLog.WriteError("A background process cancellation callback failed.", exception);
+            AppSessionLog.WriteError("A background task cancellation callback failed.", exception);
         }
     }
 }

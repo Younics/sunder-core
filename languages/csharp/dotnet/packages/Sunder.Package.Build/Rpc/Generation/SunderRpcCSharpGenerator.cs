@@ -1,10 +1,9 @@
-using Sunder.Sdk.Compatibility;
+using Sunder.Sdk.Rpc;
 
-namespace Sunder.Sdk.Rpc;
+namespace Sunder.Package.Build.Rpc.Generation;
 
 /// <summary>Controls the accessibility of top-level types emitted by the C# RPC binding generator.</summary>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
-public enum SunderRpcCSharpAccessibility
+internal enum SunderRpcCSharpAccessibility
 {
     /// <summary>Emits public top-level binding types. This is the compatibility default.</summary>
     Public,
@@ -19,8 +18,7 @@ public enum SunderRpcCSharpAccessibility
 /// scalars and collection aliases deliberately collapse to their ergonomic CLR value types; named string enums,
 /// records, and tagged unions retain generated contract types because their names carry useful domain semantics.
 /// </remarks>
-[SunderSdkCapability(SunderSdkCapabilities.RpcV1)]
-public static class SunderRpcCSharpGenerator
+internal static class SunderRpcCSharpGenerator
 {
     /// <summary>Generates one deterministic C# source file for a validated descriptor.</summary>
     public static string Generate(SunderRpcContractDescriptor descriptor, string namespaceName)

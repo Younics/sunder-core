@@ -24,18 +24,18 @@ public sealed record RegistryPackageInstallProgress(string StatusText, double? P
 public sealed class RegistryPackageInstallService : IDisposable
 {
     private readonly Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? _confirmation;
-    private readonly BackgroundProcessQueueService _queue;
+    private readonly BackgroundTaskQueueService _queue;
     private readonly bool _ownsQueue;
     private readonly Func<Exception, Task>? _notifyFailure;
 
     public RegistryPackageInstallService(
         Func<RegistryPackageChangePreflight, CancellationToken, Task<bool>>? confirmationPrompt = null,
-        BackgroundProcessQueueService? backgroundProcesses = null,
+        BackgroundTaskQueueService? backgroundTasks = null,
         Func<Exception, Task>? notifyFailure = null)
     {
         _confirmation = confirmationPrompt;
-        _ownsQueue = backgroundProcesses is null;
-        _queue = backgroundProcesses ?? new BackgroundProcessQueueService();
+        _ownsQueue = backgroundTasks is null;
+        _queue = backgroundTasks ?? new BackgroundTaskQueueService();
         _notifyFailure = notifyFailure;
     }
 
@@ -140,7 +140,7 @@ public sealed class RegistryPackageInstallService : IDisposable
 
     internal PackageInstallationCohort EnqueuePrepared(PreparedRegistryPackageInstallation prepared, string title,
         PackageOperationMetadata metadata, CancellationToken token, Func<ValueTask> release,
-        Func<BackgroundProcessContext, RegistryPackageInstallExecutionResult, Task>? applied = null)
+        Func<BackgroundTaskContext, RegistryPackageInstallExecutionResult, Task>? applied = null)
         => PackageInstallationCohort.Enqueue(_queue, title, (metadata with { PackageIds = prepared.PackageIds }).ToMetadata(),
             prepared.NeedsRuntimeInstallation ? prepared.InstallRuntimesAsync : null,
             async context =>

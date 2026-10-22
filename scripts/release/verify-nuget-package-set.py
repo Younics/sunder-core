@@ -18,6 +18,7 @@ PACKAGE_IDS = (
     "Sunder.Package.Build",
     "Sunder.Package.Templates",
 )
+DOCUMENTED_SDK_IDS = frozenset(PACKAGE_IDS[:4])
 PRERELEASE_IDENTIFIER = r"(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
 SEMVER = re.compile(
     rf"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
@@ -71,15 +72,38 @@ def verify_archive(
                 ):
                     fail(f"NuGet artifact contains an unsafe ZIP path '{name}': {path.name}")
             folded_names = {name.casefold() for name in names}
+            documentation_name = f"lib/net10.0/{package_id}.xml" if package_id in DOCUMENTED_SDK_IDS else None
             for name in names:
                 candidate = PurePosixPath(name)
                 if (
                     candidate.suffix.casefold() == ".xml"
                     and candidate.with_suffix(".dll").as_posix().casefold() in folded_names
+                    and name != documentation_name
                 ):
                     fail(
-                        f"NuGet artifact contains XML documentation companion '{name}': {path.name}"
+                        f"NuGet artifact contains an unexpected XML documentation companion '{name}': {path.name}"
                     )
+            if documentation_name is not None:
+                assembly_name = documentation_name[:-4] + ".dll"
+                if documentation_name not in names or assembly_name not in names:
+                    fail(f"SDK artifact must contain its DLL and XML API documentation: {path.name}")
+                entry = archive.getinfo(documentation_name)
+                if entry.file_size > 8 * 1024 * 1024:
+                    fail(f"SDK XML API documentation exceeds its size bound: {path.name}")
+                try:
+                    documentation = archive.read(documentation_name).decode("utf-8-sig")
+                except UnicodeDecodeError:
+                    fail(f"SDK XML API documentation must be UTF-8: {path.name}")
+                if "<!DOCTYPE" in documentation.upper() or "<!ENTITY" in documentation.upper():
+                    fail(f"SDK XML API documentation must not declare entities: {path.name}")
+                try:
+                    document = ET.fromstring(documentation)
+                except ET.ParseError as exception:
+                    fail(f"SDK XML API documentation is invalid: {path.name}: {exception}")
+                if document.tag != "doc" or document.findtext("assembly/name") != package_id:
+                    fail(f"SDK XML API documentation assembly identity is unexpected: {path.name}")
+                if not document.findall("members/member"):
+                    fail(f"SDK XML API documentation contains no documented members: {path.name}")
             corrupt_entry = archive.testzip()
             if corrupt_entry is not None:
                 fail(f"NuGet artifact has a corrupt ZIP entry '{corrupt_entry}': {path.name}")

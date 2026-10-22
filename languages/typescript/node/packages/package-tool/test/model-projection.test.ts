@@ -116,7 +116,7 @@ test("TS/checkJs source-wide models, transparent aliases and recursive closures 
       await writeFile(consumer, extension === "ts" ? `import type {SelfModels} from "#sunder/api"; export const value: SelfModels.Item = {name:"ok",status:"ready",detail:{count:1n}};`
         : `/** @type {import("#sunder/api").SelfModels.Item} */ export const value = {name:"ok",status:"ready",detail:{count:1n}};`);
       const program = ts.createProgram([consumer], { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, strict: true, allowJs: true, checkJs: true, noEmit: true,
-        types: [], skipLibCheck: false, paths: { "@sunder/sdk/browser": [require.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")], "@sunder/sdk/core": [require.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] } });
+        types: [], skipLibCheck: false, paths: { "@sunder/sdk/browser": [require.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")], "@sunder/sdk/generated": [require.resolve("@sunder/sdk/generated").replace(/\.js$/u, ".d.ts")], "@sunder/sdk/core": [require.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] } });
       assert.deepEqual(ts.getPreEmitDiagnostics(program).map(value => `${value.file?.fileName}: ${ts.flattenDiagnosticMessageText(value.messageText, "\n")}`), [], program.getSourceFiles().filter(file => file.fileName.startsWith(c.root)).map(file => file.fileName).join("\n"));
     } finally { await c.dispose(); }
   }

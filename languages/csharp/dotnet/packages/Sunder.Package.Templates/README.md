@@ -24,9 +24,9 @@ Use `--output` to select an empty destination.
 | `--withAvalonia` | Adds Avalonia references and a starter package view. |
 | `--noDefaultView` | With Avalonia, retains SDK references but omits the starter view. No empty App role is emitted until UI source is added. |
 | `--withStacks` | Adds the domain Stack contributor; requires explicit local or Registry platform-contract selection. |
-| `--withHostDependency` | Adds `[SunderPackageDependency]` metadata. |
-| `--hostPackageId <id>` | Required with `--withHostDependency`. |
-| `--hostPackageVersionRange <range>` | Reviewed dependency range; defaults to `>=1.1.0 <1.2.0`. |
+| `--withPackageDependency` | Adds an installed-package dependency, independently of API selection. |
+| `--dependencyPackageId <id>` | Required with `--withPackageDependency`. |
+| `--dependencyVersionRange <range>` | Required reviewed dependency range; there is no SDK-derived default. |
 
 ## Generated Shape
 

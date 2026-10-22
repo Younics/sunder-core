@@ -249,7 +249,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
 
         var parseOptions = new CSharpParseOptions(
             LanguageVersion.CSharp14,
-            DocumentationMode.None,
+            DocumentationMode.Parse,
             SourceCodeKind.Regular,
             input.DefineConstants ?? []);
         var ordinarySyntaxTrees = input.Sources.Select(source => CSharpSyntaxTree.ParseText(

@@ -762,20 +762,26 @@ public sealed partial class RuntimeRpcBrokerTests
         Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
     }
 
-    [Fact]
-    public async Task AppCallerSession_IsManifestAndGenerationFencedAndCloseCancelsActiveCall()
+    [Theory]
+    [InlineData("close")]
+    [InlineData("generation")]
+    [InlineData("request")]
+    public async Task AppCallerSession_IsManifestAndGenerationFencedAndCloseCancelsActiveCall(string boundary)
     {
         await using var fixture = new RpcFixture();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var activation = await fixture.PublishAsync(new TestHandler
+        var dispatches = 0;
+        var handler = new TestHandler
         {
             Unary = async (_, cancellationToken) =>
             {
+                Interlocked.Increment(ref dispatches);
                 started.TrySetResult();
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                 return JsonSerializer.SerializeToElement(new { accepted = true });
             },
-        }, webCaller: true);
+        };
+        await fixture.PublishAsync(new TestHandler(), webCaller: true, healthyHandler: handler);
         var (session, manifestSha256, target) = await fixture.OpenAppCallerAsync();
 
         var denied = await Assert.ThrowsAsync<SunderRpcException>(async () =>
@@ -795,7 +801,8 @@ public sealed partial class RuntimeRpcBrokerTests
         var endpoint = Assert.Single((await fixture.Broker.DiscoverAppAsync(
             session.SessionId,
             "example.rpc",
-            CancellationToken.None)).Providers).Endpoint;
+            CancellationToken.None)).Providers, provider => provider.PackageId == "healthy.package").Endpoint;
+        using var cancellation = new CancellationTokenSource();
         var call = fixture.Broker.InvokeAppAsync(
             session.SessionId,
             endpoint,
@@ -803,16 +810,44 @@ public sealed partial class RuntimeRpcBrokerTests
             "send",
             JsonSerializer.SerializeToElement(new { message = "wait" }),
             options: null,
-            CancellationToken.None).AsTask();
+            cancellation.Token).AsTask();
         await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
-        fixture.AppSessions.Close(session.SessionId);
+        if (boundary == "close") fixture.AppSessions.Close(session.SessionId);
+        else if (boundary == "request") await cancellation.CancelAsync();
+        else
+        {
+            // An unrelated package fault advances the real Runtime generation while
+            // the called provider and its execution remain live. The App session's
+            // lease loses its generation; its own retirement token need not cancel.
+            PackageActivationIdentity identity;
+            using (var lease = fixture.Owner.State.AcquireLease())
+            {
+                var package = Assert.IsType<ActiveLoadedPackage>(fixture.Owner.State.GetLoadedPackage(lease, "provider.package"));
+                identity = lease.GetPackageActivationIdentity(package);
+            }
+            Assert.True(fixture.Owner.HandleRpcProviderFault("provider.package", identity,
+                new InvalidOperationException("retire unrelated package"), "rpc.provider.test"));
+        }
 
         var cancelled = await Assert.ThrowsAsync<SunderRpcException>(async () => await call);
-        Assert.Equal(SunderRpcErrorKind.Cancelled, cancelled.Error.Kind);
-        var retired = await Assert.ThrowsAsync<SunderRpcException>(async () =>
-            await fixture.Broker.DiscoverAppAsync(session.SessionId, "example.rpc", CancellationToken.None));
-        Assert.Equal(SunderRpcErrorKind.Unavailable, retired.Error.Kind);
+        Assert.Equal(boundary == "request" ? SunderRpcErrorKind.Cancelled : SunderRpcErrorKind.Unavailable, cancelled.Error.Kind);
+        Assert.Equal(boundary == "request" ? "rpc.call.cancelled" : "rpc.app-session.retired", cancelled.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, cancelled.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, cancelled.Error.RetrySafety);
+        Assert.False(SunderRpcException.HasTrustedNoDispatchEvidence(cancelled));
+        Assert.Equal(1, dispatches); // Classification is not permission to replay a mutation.
+        Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers,
+            provider => provider.PackageId == "healthy.package").State);
+        if (boundary != "request")
+        {
+            var retired = await Assert.ThrowsAsync<SunderRpcException>(async () =>
+                await fixture.Broker.DiscoverAppAsync(session.SessionId, "example.rpc", CancellationToken.None));
+            Assert.Equal(boundary == "close" ? SunderRpcErrorKind.Unavailable : SunderRpcErrorKind.StaleEndpoint, retired.Error.Kind);
+            Assert.Equal(boundary == "close" ? "rpc.app-session.retired" : "rpc.caller-retired", retired.Error.Code);
+        }
+        else Assert.Contains((await fixture.Broker.DiscoverAppAsync(session.SessionId, "example.rpc", CancellationToken.None)).Providers,
+            provider => provider.Endpoint == endpoint);
         await Assert.ThrowsAsync<RuntimeStaleGenerationException>(() => fixture.AppSessions.OpenAsync(
             new RuntimeRpcAppSessionOpenRequest(
                 "caller.package",
@@ -822,6 +857,60 @@ public sealed partial class RuntimeRpcBrokerTests
                 fixture.Owner.Generation,
                 Guid.NewGuid()),
             CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData("close")]
+    [InlineData("generation")]
+    [InlineData("request")]
+    [InlineData("scope")]
+    [InlineData("permission")]
+    public async Task CatalogWatch_AppCallerRetirementRetainsItsCauseWithoutHidingOtherCancellation(string boundary)
+    {
+        await using var fixture = new RpcFixture();
+        await fixture.PublishAsync(new TestHandler(), webCaller: true, healthyHandler: new TestHandler());
+        var app = await fixture.OpenAppCallerAsync();
+        await fixture.GrantAsync("caller.package", app.ManifestSha256, SunderRpcProtocol.DiscoverAction, SunderPackageFormat.AppHostRole);
+        var snapshot = await fixture.Broker.DiscoverAppAsync(app.Session.SessionId, "example.rpc", default);
+        using var cancellation = new CancellationTokenSource();
+        var scope = boundary == "scope" ? fixture.Broker.CreateAppCallScope(app.Session.SessionId, null, default) : null;
+        var stream = scope is null
+            ? fixture.Broker.WatchAppAsync(app.Session.SessionId, snapshot.Revision + 1, snapshot.Sequence, cancellation.Token)
+            : fixture.Broker.WatchScopeAsync(scope, snapshot.Revision + 1, snapshot.Sequence, cancellation.Token);
+        await using var watch = stream.GetAsyncEnumerator(cancellation.Token);
+        Assert.True(await watch.MoveNextAsync());
+        Assert.Equal(SunderRpcCatalogEventKind.ResetRequired, watch.Current.Kind); // Real subscription admitted.
+        var stopped = DrainAsync();
+        if (boundary == "close") fixture.AppSessions.Close(app.Session.SessionId);
+        else if (boundary == "request") await cancellation.CancelAsync();
+        else if (boundary == "scope") await fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, scope!.Id);
+        else if (boundary == "permission") await fixture.RevokeAsync(SunderRpcProtocol.DiscoverAction);
+        else
+        {
+            PackageActivationIdentity identity;
+            using (var lease = fixture.Owner.State.AcquireLease())
+            {
+                var package = Assert.IsType<ActiveLoadedPackage>(fixture.Owner.State.GetLoadedPackage(lease, "provider.package"));
+                identity = lease.GetPackageActivationIdentity(package);
+            }
+            Assert.True(fixture.Owner.HandleRpcProviderFault("provider.package", identity,
+                new InvalidOperationException("unrelated package fault"), "rpc.provider.test"));
+        }
+        if (boundary is "close" or "generation")
+        {
+            var failure = await Assert.ThrowsAsync<SunderRpcException>(() => stopped.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.Equal("rpc.app-session.retired", failure.Error.Code);
+            Assert.Equal(SunderRpcErrorKind.Unavailable, failure.Error.Kind);
+            Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers,
+                provider => provider.PackageId == "healthy.package").State);
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stopped.WaitAsync(TimeSpan.FromSeconds(3)));
+            Assert.True(failure.CancellationToken.IsCancellationRequested);
+            Assert.NotNull(fixture.AppSessions.GetRequired(app.Session.SessionId));
+        }
+        async Task DrainAsync() { while (await watch.MoveNextAsync()) { } }
     }
 
     [Fact]

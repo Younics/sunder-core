@@ -1,5 +1,10 @@
 # Single-project .NET package authoring
 
+**SDK status: UNFROZEN / UNRELEASED.** This is current-source documentation, not a
+supported-release declaration. After the first supported release, compatible fixes
+and additions remain allowed while supported source, binary and behavioral contracts
+must be preserved. See the [compatibility policy](../SUNDER-SDK-COMPATIBILITY.md).
+
 Status: the template and compiled Quickstart now use one authored project. Ordinary
 Build, development composition and direct multi-RID Pack include restored NuGet/project
 ownership, compiled XAML/resources and generated App preview routing. The workflow is
@@ -7,16 +12,32 @@ IDE-independent; native and production-release qualification remains separate.
 
 ## One authored package
 
+Start with `dotnet new sunder-package` from the coordinated template candidate; see
+[Getting Started](GETTING-STARTED.md). The default scaffold already contains ordinary
+service source. Add `--withAvalonia` for the starter view/view model rather than
+creating another project or writing an App module.
+
 A package owns one project, service implementations, optional views/view models and
 portable value/domain source. Sunder produces separate App and exact-RID Worker
 assemblies and composes one package. The author does not maintain role projects,
 generated interfaces, RPC handlers, default role entry points or duplicate dependency
 lists. Source folders are organizational and do not determine role ownership.
 
+Services and business models are the normal authoring surface. The template's
+`SampleService` produces `ISampleService`; for package ID `my.company.package`, the
+starter view model imports `Sunder.Generated.Packages.My_Company_Package_Services`
+and injects that interface. Owned roles reuse authored business values; imported
+models come from validated package projection metadata. Do not maintain mirrored
+models, request wrappers or handwritten clients.
+
+Handwritten App modules, explicit role leaves and Worker bootstrap are advanced
+integration boundaries, not an alternative normal scaffold. The generated-role
+internals below explain what tooling owns, not files authors must create.
+
 ## Intent declarations
 
-- `[SunderService]` marks an ordinary service. A concrete source service is a Worker
-  root; declared public async methods form its generated interface without method
+- `[SunderService]` marks an ordinary partial service class. A concrete source service
+  is a Worker root; declared public async methods form its generated interface without method
   annotations. Optional semantic metadata preserves stable identities, constraints,
   errors and use policies. See [ordinary services](ORDINARY-SERVICES.md) for natural
   value roots, selected package APIs and the retired declaration migration.
@@ -31,12 +52,12 @@ lists. Source folders are organizational and do not determine role ownership.
   role-exclusive declaration cannot be reachable from the other role. Shared source
   compiles independently; it does not share mutable state across processes.
 
-RPC interfaces that declare extension points retain their source-authority purpose.
+Service interfaces that declare extension points retain their source-authority purpose.
 For an implementation class `N.GreetingService` in package `example.greeting`, the
 generated typed API is `Sunder.Generated.Packages.Example_Greeting_Services.IGreetingService`,
-with the same accessibility and the declared RPC method
-signatures. Reserved-name collisions fail; generated symbols do not rename themselves
-with unstable suffixes. Concrete implementation references from UI code are rejected;
+with the same accessibility and generated service-call signatures (server invocation
+context is omitted). Reserved-name collisions fail; generated symbols do not rename
+themselves with unstable suffixes. Concrete implementation references from UI code are rejected;
 UI code depends on the generated API. Declared interfaces are not duplicated.
 
 `[SunderService]` defaults to package-private exposure. A public C# member does not make a public
@@ -52,8 +73,8 @@ it can replace the default. No convention silently changes an existing lifetime.
 
 ### Default constructor composition
 
-Default composition follows the constructors of RPC implementations, registered
-views/view models and source implementations of `ISunderWorkerLifecycleService`.
+Default composition follows the constructors of ordinary service implementations,
+registered views/view models and source implementations of `ISunderWorkerLifecycleService`.
 It does not execute constructors during analysis. Each constructed source type must
 have one accessible instance constructor, or select one with the standard
 `Microsoft.Extensions.DependencyInjection.ActivatorUtilitiesConstructorAttribute`.
@@ -86,8 +107,11 @@ is assigned to `DataContext`. Omitting `ViewModel` leaves data-context/lifetime 
 to the view's ordinary constructor graph, without generating a second model.
 `IPackageContext` and `ISunderRpcClient` are supplied by the role host/composition.
 App constructors can also request the host's `IPackageNotificationService`,
-`IBackgroundProcessQueue`, `IPackageSettingsNavigationService` and
+`IBackgroundTaskQueue`, `IPackageSettingsNavigationService` and
 `IPackageShellViewService`; Workers cannot.
+Sunder itself uses `IBackgroundTaskQueue`; packages receive activation-scoped
+adapters. The public `BackgroundTask*` types have no `Package` prefix. Queued work is
+not an OS process, durable job or Worker cleanup receipt.
 Generated App modules register package-owned services only, leaving reserved host
 capabilities to the App's constrained service-provider factory.
 
@@ -336,7 +360,10 @@ supported tooling distribution paths. The package case also covers locked restor
 Build/Pack, explicit public acceptance and Clean without tooling assemblies in the payload.
 Source-workspace compiler tooling may bootstrap independently of the package.
 
-## Initial build implementation
+## Advanced: Generated role-build internals
+
+Normal projects let `Sunder.Package.Build` own this machinery. Do not add explicit
+App/Worker leaf projects or handwritten bootstrap to reproduce it.
 
 The build package imports its authoring targets after the .NET SDK has evaluated
 its standard paths. A package library marked `SunderPackageProject=true`, without
@@ -425,6 +452,16 @@ such as `--watch` are forwarded. Launch requires current-host-RID output and the
 Host/runtime prerequisites. `--no-build` uses existing output and does not execute the
 managed Worker module directly.
 
+Host output watch is separate from a source producer such as `dotnet watch build`.
+Requested watch, producer liveness, build success and applied output are independent.
+App development-session status uses the SDK-owned `PackageDevelopmentHostState`,
+`PackageDevelopmentRuntimeReadiness` and `PackageDevelopmentAppReadiness` enums,
+all with `Unknown`. `HostState`, `RuntimeReadiness` and `AppReadiness` do not collapse
+those stages into one readiness string. `RuntimeRevision` identifies sampled validated
+Runtime source; `AppliedRevision` additionally requires the matching ready Runtime
+and applicable published App activation. Null evidence is unknown, and activation
+does not assert that lazy views have opened.
+
 Generated APIs preserve asynchronous completion, cancellation, declared errors,
 stream disposal, exact provider identity, deadlines and retirement. Business-specific
 semantics (authority, receipts, dispatch acknowledgement, content references) require
@@ -437,6 +474,6 @@ from an App compilation. No mixed authoring assembly is a payload.
 
 Ordinary builds remain offline, using reviewed locks and cache contents. Public
 Accept/Freeze, package/provider selection and publication remain explicit operations.
-Template/Quickstart/Builder and Agent migration close only after their canonical
-one-project builds and cleanup pass, including removal of authored App/Protocol
-projects and obsolete role/bootstrap/transport scaffolding.
+Canonical one-project builds own role/bootstrap/transport output; new packages do
+not need authored App/Protocol projects or a historical migration prerequisite.
+Native and production-release qualification remains separate.

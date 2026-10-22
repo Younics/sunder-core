@@ -20,7 +20,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly ShellStateService _shellStateService;
     private readonly ShellState _shellState;
     private readonly SunderUpdateService _updateService;
-    private readonly BackgroundProcessQueueService _backgroundProcessQueue;
+    private readonly BackgroundTaskQueueService _backgroundTaskQueue;
     private readonly PackageOperationService _packageOperationService;
     private readonly RegistryPackageInstallService _registryPackageInstallService;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task> _waitUntilPackagePresentationAppliedAsync;
@@ -32,7 +32,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly IUiDispatcher _uiDispatcher;
     private readonly OwnedTaskObserver _tasks = new(nameof(WindowLauncher));
     private readonly Dictionary<string, Task> _retirementReconciliations = new(StringComparer.Ordinal);
-    private readonly bool _ownsBackgroundProcessQueue;
+    private readonly bool _ownsBackgroundTaskQueue;
     private SettingsWindow? _settingsWindow;
     private PackagesWindow? _packagesWindow;
     private StacksWindow? _stacksWindow;
@@ -53,7 +53,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         IUiDispatcher? uiDispatcher = null,
         DeveloperLogService? developerLog = null,
         SunderUpdateService? updateService = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null,
         RuntimeEventSubscriptionService? runtimeEventSubscription = null,
         AppPackageDeveloperServices? developerServices = null)
     {
@@ -70,8 +70,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _packagesWindowFactory = packagesWindowFactory;
         _stacksWindowFactory = stacksWindowFactory;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
-        _ownsBackgroundProcessQueue = backgroundProcessQueue is null;
-        _backgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
+        _ownsBackgroundTaskQueue = backgroundTaskQueue is null;
+        _backgroundTaskQueue = backgroundTaskQueue ?? new BackgroundTaskQueueService();
         _runtimeStatusSource = runtimeEventSubscription;
         _waitUntilPackagePresentationAppliedAsync = runtimeEventSubscription is null
             ? WaitForUnavailablePresentationAsync
@@ -82,13 +82,13 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 : Task.FromResult(PackagePresentationResult.Unavailable(
                     "Sunder is running in the Core Shell without a live Runtime presentation."))
             : runtimeEventSubscription.WaitForPresentationAsync;
-        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageChangeAsync, _backgroundProcessQueue,
+        _registryPackageInstallService = new RegistryPackageInstallService(ConfirmPackageChangeAsync, _backgroundTaskQueue,
             error => _notificationCenter.PublishAsync("sunder.app", "Sunder",
                 new Sunder.Sdk.Notifications.PackageNotificationRequest("Installation failed", error.Message,
                     Sunder.Sdk.Notifications.PackageNotificationDisplayMode.ToastAndTray,
                     Sunder.Sdk.Notifications.PackageNotificationSeverity.Error)).AsTask());
         _packageOperationService = new PackageOperationService(
-            _backgroundProcessQueue,
+            _backgroundTaskQueue,
             _runtimeApiClientFactory,
             _waitUntilPackagePresentationAppliedAsync,
             _notificationCenter,
@@ -108,7 +108,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     public void AttachShell(MainWindowViewModel viewModel)
         => _mainWindowViewModel = viewModel;
 
-    public BackgroundProcessQueueService BackgroundProcesses => _backgroundProcessQueue;
+    public BackgroundTaskQueueService BackgroundTasks => _backgroundTaskQueue;
 
     public void DetachShell(MainWindowViewModel viewModel)
     {
@@ -282,20 +282,20 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _packageOperationService.Dispose();
         _registryPackageInstallService.Dispose();
         _tasks.Dispose();
-        if (_ownsBackgroundProcessQueue)
+        if (_ownsBackgroundTaskQueue)
         {
-            _backgroundProcessQueue.Dispose();
+            _backgroundTaskQueue.Dispose();
         }
 
         GC.SuppressFinalize(this);
     }
 
-    public async Task CancelBackgroundProcessesAsync(CancellationToken cancellationToken = default)
-        => await _backgroundProcessQueue.CancelAllAsync(cancellationToken);
+    public async Task CancelBackgroundTasksAsync(CancellationToken cancellationToken = default)
+        => await _backgroundTaskQueue.CancelAllAsync(cancellationToken);
 
     private SettingsWindow CreateSettingsWindow()
     {
-        var window = _settingsWindowFactory.Create(_packageViewHostService, PersistBackgroundProcessPopoverSize,
+        var window = _settingsWindowFactory.Create(_packageViewHostService, PersistBackgroundTaskPopoverSize,
             _waitForPackagePresentationAsync, _runtimeStatusSource);
 
         window.Closed += (_, _) =>
@@ -313,7 +313,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     {
         var window = _packagesWindowFactory.Create(
             _packageOperationService,
-            PersistBackgroundProcessPopoverSize);
+            PersistBackgroundTaskPopoverSize);
 
         window.Closed += (_, _) =>
         {
@@ -408,14 +408,14 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         }
     }
 
-    private void PersistBackgroundProcessPopoverSize(double width, double height)
+    private void PersistBackgroundTaskPopoverSize(double width, double height)
     {
-        _shellState.BackgroundProcessPopoverWidth = width;
-        _shellState.BackgroundProcessPopoverHeight = height;
+        _shellState.BackgroundTaskPopoverWidth = width;
+        _shellState.BackgroundTaskPopoverHeight = height;
         _shellStateService.Update(_shellState, state =>
         {
-            state.BackgroundProcessPopoverWidth = width;
-            state.BackgroundProcessPopoverHeight = height;
+            state.BackgroundTaskPopoverWidth = width;
+            state.BackgroundTaskPopoverHeight = height;
         });
     }
 

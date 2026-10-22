@@ -1,4 +1,4 @@
-import { authoringBindingModel, generateTypeScriptBindings } from "@sunder/sdk";
+import { authoringBindingModel, generateTypeScriptBindings } from "./generator";
 import { readContractVerificationCache } from "./rpc-contract-cache";
 import { contractError, type ArtifactContract, type ContractLock } from "./rpc-contract-lock";
 import type { ContractUseConfig, LoadedContract, PackageRole, ProviderConfig } from "./model";
@@ -119,7 +119,7 @@ export async function preparePackageImports(lock: ContractLock, cacheRoot: strin
       else modelTypes.set(identity, `import(${JSON.stringify("./" + contract.contractKey + ".js")}).${model.definitionNames.get(definition)!}`);
     }
     sources.set(`imported/${contract.contractKey}.ts`, generateTypeScriptBindings(contract.descriptor, { definitionTypes,resources:{content:true,serviceReferences:contract.modelProjection.serviceReferences,optionalServiceReferenceMembers:contract.modelProjection.optionalServiceReferenceMembers},
-      descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, moduleSpecifier: "@sunder/sdk/browser", valueModuleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core" }));
+      descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, moduleSpecifier: "@sunder/sdk/browser", valueModuleSpecifier: "@sunder/sdk/generated", coreModuleSpecifier: "@sunder/sdk/core" }));
   }
   if (dependencies.size + authoredDependencies.length > 128 || [...sources.values()].reduce((size, source) => size + Buffer.byteLength(source), 0) > 67_108_864)
     contractError("rpc-authoring.aggregate-materializability-overflow", "Imported dependency or generated-source projection exceeds its bound.");

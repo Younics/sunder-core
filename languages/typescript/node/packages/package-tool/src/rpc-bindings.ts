@@ -6,9 +6,9 @@ import {
   SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-  generateTypeScriptBindings,
   parseRpcContractDescriptor,
 } from "@sunder/sdk";
+import { generateTypeScriptBindings } from "./generator";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { assertBaselineFreeEvidence } from "./rpc-baseline-store";
 import type { RegistryOriginOptions } from "./rpc-contract-lock";

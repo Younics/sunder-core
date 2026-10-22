@@ -6,7 +6,7 @@ namespace Sunder.Package.Build.Rpc.Authoring.CSharp;
 internal static partial class SunderRpcCSharpImportPrepass
 {
     private static void EmitNaturalMarshalledClientMethod(StringBuilder output, SunderRpcCSharpImportedContract contract,
-        SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Sunder.Sdk.Rpc.SunderRpcCSharpMethodModel method,
+        SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Generation.SunderRpcCSharpMethodModel method,
         SunderRpcCSharpMarshallingPlan plan)
     {
         var shape = NaturalMethod(contract, model, service, method);

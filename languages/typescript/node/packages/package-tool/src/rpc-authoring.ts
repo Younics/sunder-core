@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, resolve as nativeResolve } from "node:path";
 import ts from "typescript";
-import { authoringBindingModel, canonicalRpcDescriptorBytes, computeRpcAbiSha256, generateTypeScriptBindings } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256 } from "@sunder/sdk";
+import { authoringBindingModel, generateTypeScriptBindings } from "./generator";
 import type { ContractUseConfig, LoadedContract, LoadedProject, ProviderConfig, PackageRole } from "./model";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { packageToolCompatibility } from "./compatibility";
@@ -44,7 +45,7 @@ function compilerOptions(sdk: string, generated: string): ts.CompilerOptions {
   return { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
     customConditions: ["node"], strict: true, exactOptionalPropertyTypes: true, noUncheckedIndexedAccess: true,
     allowJs: true, checkJs: true, noEmit: true, skipLibCheck: true, types: ["node"], typeRoots: [dirname(dirname(require.resolve("@types/node/package.json")))],
-    paths: { "@sunder/sdk": [resolve(sdk, "index.d.ts")], "@sunder/sdk/core": [resolve(sdk, "core.d.ts")], "@sunder/sdk/browser": [resolve(sdk, "browser.d.ts")], "#sunder/api": [resolve(generated, "api.ts")] } };
+    paths: { "@sunder/sdk": [resolve(sdk, "index.d.ts")], "@sunder/sdk/core": [resolve(sdk, "core.d.ts")], "@sunder/sdk/browser": [resolve(sdk, "browser.d.ts")], "@sunder/sdk/generated": [resolve(sdk, "generated.d.ts")], "#sunder/api": [resolve(generated, "api.ts")] } };
 }
 /** One captured compiler host for source analysis, generated checking and declaration emit. */
 function compilerFrame(root: string, canonical: string, sdk: string, generated: string, virtual: Map<string, string>) {
@@ -147,7 +148,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   const reviewedUses=[...imports.uses,...(project.config.app?ownedAppUses(contracts):[]),...ownedRuntimeUses(contracts),...typedUses];
   validateServiceReferenceRoleUses(allContracts, reviewedUses, providers, presentRoles(project));
   for (const contract of contracts) virtual.set(resolve(generated, `owned/${contract.contractKey}.ts`), generateTypeScriptBindings(contract.descriptor, {
-    descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, moduleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core", valueModuleSpecifier: "@sunder/sdk/browser",
+    descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, moduleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core", valueModuleSpecifier: "@sunder/sdk/generated",
     resources:{content:contract.naturalContent===true,serviceReferences:contract.modelProjection.serviceReferences,optionalServiceReferenceMembers:contract.modelProjection.optionalServiceReferenceMembers},
     definitionTypes: {...serviceReferenceTypes(contract),...Object.fromEntries(Object.entries(contract.modelProjection.models).flatMap(([key, name]) => {
       const type = services.find(service => service.key === contract.contractKey)?.sourceModels.get(name); return type ? [[key, type]] : [];
@@ -190,7 +191,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
     }
     virtual.set(resolve(generated, `owned/${contract.contractKey}.ts`), generateTypeScriptBindings(contract.descriptor, {
       descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, definitionTypes,
-      moduleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core", valueModuleSpecifier: "@sunder/sdk/browser",
+      moduleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core", valueModuleSpecifier: "@sunder/sdk/generated",
       resources:{content:contract.naturalContent===true,serviceReferences:contract.modelProjection.serviceReferences,optionalServiceReferenceMembers:contract.modelProjection.optionalServiceReferenceMembers},
     }));
   }

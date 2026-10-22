@@ -5,23 +5,23 @@ using Sunder.Sdk.Notifications;
 namespace Sunder.App.Services;
 
 public sealed class PackageUpdateStartupCheckService(
-    IBackgroundProcessQueue backgroundProcesses,
+    IBackgroundTaskQueue backgroundTasks,
     IRuntimeApiClientFactory runtimeApiClientFactory,
     IPackageNotificationService notificationService)
 {
     internal const string GroupKey = "sunder.package-update-check";
     private const string SourceMetadataKey = "sunder.packageUpdateCheck";
 
-    private readonly IBackgroundProcessQueue _backgroundProcesses = backgroundProcesses;
+    private readonly IBackgroundTaskQueue _backgroundTasks = backgroundTasks;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory = runtimeApiClientFactory;
     private readonly IPackageNotificationService _notificationService = notificationService;
 
-    public BackgroundProcessSnapshot EnqueueStartupCheck()
-        => _backgroundProcesses.Enqueue(new BackgroundProcessRequest(
+    public BackgroundTaskSnapshot EnqueueStartupCheck()
+        => _backgroundTasks.Enqueue(new BackgroundTaskRequest(
             "Check package updates",
             GroupKey,
-            BackgroundProcessIndicator.Hidden,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Hidden,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             CanCancel: false,
             CheckForPackageUpdatesAsync,
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -29,7 +29,7 @@ public sealed class PackageUpdateStartupCheckService(
                 [SourceMetadataKey] = bool.TrueString,
             }));
 
-    private async Task CheckForPackageUpdatesAsync(BackgroundProcessContext context)
+    private async Task CheckForPackageUpdatesAsync(BackgroundTaskContext context)
     {
         try
         {

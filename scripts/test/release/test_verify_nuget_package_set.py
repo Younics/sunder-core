@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from typing import Optional
 import unittest
 import zipfile
 
@@ -32,6 +33,9 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
         manifest_id: str,
         version: str,
         commit: str = "0123456789012345678901234567890123456789",
+        include_documentation: bool = True,
+        documentation_assembly: Optional[str] = None,
+        documentation: Optional[bytes] = None,
     ) -> None:
         nuspec = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
@@ -49,6 +53,12 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
             archive.writestr("LICENSE", "MIT fixture\n")
             archive.writestr("README.md", "Fixture\n")
             archive.writestr("[Content_Types].xml", "<Types />\n")
+            if file_id in MODULE.DOCUMENTED_SDK_IDS:
+                archive.writestr(f"lib/net10.0/{file_id}.dll", b"assembly fixture")
+                if include_documentation:
+                    archive.writestr(f"lib/net10.0/{file_id}.xml",
+                        documentation if documentation is not None else
+                        f'<doc><assembly><name>{documentation_assembly or file_id}</name></assembly><members><member name="T:{file_id}"><summary>API docs.</summary></member></members></doc>')
 
     def test_accepts_exact_identity_version_paths_and_contents(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -108,17 +118,42 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "repository identity"):
                 MODULE.verify_package_set(self.version, root, self.commit)
 
-    def test_rejects_xml_documentation_companion_but_allows_package_control_xml(self) -> None:
+    def test_rejects_unexpected_tooling_documentation_but_allows_sdk_and_control_xml(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.create_set(root)
-            package = root / f"Sunder.Sdk.{self.version}.nupkg"
+            package = root / f"Sunder.Package.Build.{self.version}.nupkg"
             with zipfile.ZipFile(package, "a") as archive:
-                archive.writestr("lib/net10.0/Sunder.Sdk.dll", b"assembly")
-                archive.writestr("lib/net10.0/Sunder.Sdk.xml", b"documentation")
+                archive.writestr("tasks/net10.0/Sunder.Sdk.dll", b"assembly")
+                archive.writestr("tasks/net10.0/Sunder.Sdk.xml", b"documentation")
 
             with self.assertRaisesRegex(ValueError, "XML documentation companion"):
                 MODULE.verify_package_set(self.version, root, self.commit)
+
+    def test_requires_consumer_documentation_and_matching_assembly_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.create_set(root)
+            self.create_package(root, "Sunder.Sdk", "Sunder.Sdk", self.version, include_documentation=False)
+            with self.assertRaisesRegex(ValueError, "DLL and XML API documentation"):
+                MODULE.verify_package_set(self.version, root, self.commit)
+            self.create_package(root, "Sunder.Sdk", "Sunder.Sdk", self.version, documentation_assembly="Other.Assembly")
+            with self.assertRaisesRegex(ValueError, "documentation assembly identity"):
+                MODULE.verify_package_set(self.version, root, self.commit)
+
+    def test_documentation_rejects_entities_invalid_encoding_and_empty_api_docs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.create_set(root)
+            for document, reason in [
+                (b'<!DOCTYPE doc [<!ENTITY name "Sunder.Sdk">]><doc><assembly><name>&name;</name></assembly></doc>', "must not declare entities"),
+                ('<doc><assembly><name>Sunder.Sdk</name></assembly></doc>'.encode("utf-16"), "must be UTF-8"),
+                (b'<doc><assembly><name>Sunder.Sdk</name></assembly><members /></doc>', "no documented members"),
+            ]:
+                with self.subTest(reason=reason):
+                    self.create_package(root, "Sunder.Sdk", "Sunder.Sdk", self.version, documentation=document)
+                    with self.assertRaisesRegex(ValueError, reason):
+                        MODULE.verify_package_set(self.version, root, self.commit)
 
     def test_rejects_numeric_prerelease_identifier_with_leading_zero(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

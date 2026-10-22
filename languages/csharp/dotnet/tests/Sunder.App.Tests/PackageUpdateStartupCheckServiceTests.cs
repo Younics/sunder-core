@@ -12,9 +12,9 @@ namespace Sunder.App.Tests;
 public sealed class PackageUpdateStartupCheckServiceTests
 {
     [Fact]
-    public async Task EnqueueStartupCheck_QueuesHiddenBackgroundProcess()
+    public async Task EnqueueStartupCheck_QueuesHiddenBackgroundTask()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
         var service = CreateService(
             queue,
@@ -24,16 +24,16 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         var snapshot = service.EnqueueStartupCheck();
 
-        Assert.Equal(BackgroundProcessIndicator.Hidden, snapshot.Indicator);
+        Assert.Equal(BackgroundTaskIndicator.Hidden, snapshot.Indicator);
         Assert.Equal(PackageUpdateStartupCheckService.GroupKey, snapshot.GroupKey);
         Assert.False(snapshot.CanCancel);
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
     }
 
     [Fact]
     public async Task EnqueueStartupCheck_WhenNoPackagesInstalled_DoesNotPublishNotification()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var registryClient = new FakeRegistryApiClient();
         var notificationCenter = CreateNotificationCenter();
         var service = CreateService(
@@ -44,7 +44,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         var snapshot = service.EnqueueStartupCheck();
 
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
         Assert.Equal(0, registryClient.ResolveUpdatesCallCount);
         Assert.Empty(notificationCenter.ListNotifications());
     }
@@ -52,7 +52,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
     [Fact]
     public async Task EnqueueStartupCheck_WhenNoUpdatesAreAvailable_DoesNotPublishNotification()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
         var service = CreateService(
             queue,
@@ -62,14 +62,14 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         var snapshot = service.EnqueueStartupCheck();
 
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
         Assert.Empty(notificationCenter.ListNotifications());
     }
 
     [Fact]
     public async Task EnqueueStartupCheck_WhenUpdatesAreAvailable_PublishesHistoryNotification()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
         var service = CreateService(
             queue,
@@ -88,7 +88,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         var snapshot = service.EnqueueStartupCheck();
 
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
         var notification = Assert.Single(notificationCenter.ListNotifications());
         Assert.Equal("sunder.app", notification.SourcePackageId);
         Assert.Equal("Sunder", notification.SourceDisplayName);
@@ -100,7 +100,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
     [Fact]
     public async Task EnqueueStartupCheck_GroupsRecordedOriginsTagsAndPrereleasePolicies()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var runtimeClient = new FakeRuntimeApiClient([
             CreateInstalledPackage("agent", "1.0.0", "https://alpha.example/", "beta", includePrerelease: true),
             CreateInstalledPackage("tools", "1.0.0", "https://bravo.example/", "stable"),
@@ -113,7 +113,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
             CreateNotificationCenter());
 
         var snapshot = service.EnqueueStartupCheck();
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
 
         Assert.Collection(
             runtimeClient.PlanRequests,
@@ -134,7 +134,7 @@ public sealed class PackageUpdateStartupCheckServiceTests
     [Fact]
     public async Task EnqueueStartupCheck_WhenUpdateCheckFails_CompletesWithoutNotification()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
         var service = CreateService(
             queue,
@@ -144,16 +144,16 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         var snapshot = service.EnqueueStartupCheck();
 
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
-        var completed = queue.GetProcess(snapshot.ProcessId);
-        Assert.Equal(BackgroundProcessState.Completed, completed?.State);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
+        var completed = queue.GetTask(snapshot.TaskId);
+        Assert.Equal(BackgroundTaskState.Completed, completed?.State);
         Assert.Empty(notificationCenter.ListNotifications());
     }
 
     [Fact]
     public async Task EnqueueStartupCheck_WhenPlanFails_DoesNotReportUpdates()
     {
-        var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var notificationCenter = CreateNotificationCenter();
         var service = CreateService(
             queue,
@@ -167,13 +167,13 @@ public sealed class PackageUpdateStartupCheckServiceTests
 
         var snapshot = service.EnqueueStartupCheck();
 
-        await WaitForConditionAsync(() => queue.GetProcess(snapshot.ProcessId)?.IsTerminal == true);
-        Assert.Equal(BackgroundProcessState.Completed, queue.GetProcess(snapshot.ProcessId)?.State);
+        await WaitForConditionAsync(() => queue.GetTask(snapshot.TaskId)?.IsTerminal == true);
+        Assert.Equal(BackgroundTaskState.Completed, queue.GetTask(snapshot.TaskId)?.State);
         Assert.Empty(notificationCenter.ListNotifications());
     }
 
     private static PackageUpdateStartupCheckService CreateService(
-        BackgroundProcessQueueService queue,
+        BackgroundTaskQueueService queue,
         FakeRuntimeApiClient runtimeApiClient,
         FakeRegistryApiClient registryApiClient,
         NotificationCenterService notificationCenter)

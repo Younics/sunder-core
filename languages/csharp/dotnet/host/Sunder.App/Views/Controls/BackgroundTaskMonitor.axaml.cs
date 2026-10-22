@@ -4,9 +4,9 @@ using Sunder.App.ViewModels;
 
 namespace Sunder.App.Views.Controls;
 
-public partial class BackgroundProcessMonitor : UserControl
+public partial class BackgroundTaskMonitor : UserControl
 {
-    public BackgroundProcessMonitor()
+    public BackgroundTaskMonitor()
     {
         InitializeComponent();
         ProcessesPopup.PlacementTarget = MonitorButton;
@@ -44,7 +44,7 @@ public partial class BackgroundProcessMonitor : UserControl
 
     private void ResizePopover(double deltaWidth, double deltaHeight)
     {
-        if (DataContext is BackgroundProcessMonitorViewModel viewModel)
+        if (DataContext is BackgroundTaskMonitorViewModel viewModel)
         {
             viewModel.ResizePopover(deltaWidth, deltaHeight);
         }
@@ -52,7 +52,7 @@ public partial class BackgroundProcessMonitor : UserControl
 
     private void ResizeThumb_OnDragCompleted(object? sender, VectorEventArgs e)
     {
-        if (DataContext is BackgroundProcessMonitorViewModel viewModel)
+        if (DataContext is BackgroundTaskMonitorViewModel viewModel)
         {
             viewModel.PersistPopoverSize();
         }

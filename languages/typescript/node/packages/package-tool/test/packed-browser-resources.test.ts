@@ -64,7 +64,8 @@ export function connect() {
           moduleResolution: ts.ModuleResolutionKind.Bundler,
           strict: true, allowJs: true, checkJs: true, noEmit: true, skipLibCheck: false, types: [],
           paths: {
-            "@sunder/sdk/browser": [installed.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
+             "@sunder/sdk/browser": [installed.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
+             "@sunder/sdk/generated": [installed.resolve("@sunder/sdk/generated").replace(/\.js$/u, ".d.ts")],
             "@sunder/sdk/core": [installed.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")],
           },
         });
@@ -78,7 +79,7 @@ export function connect() {
         }
         const bundled = await esbuild.build({
           entryPoints: [consumer], bundle: true, platform: "browser", format: "cjs", write: false, metafile: true,
-          alias: {"@sunder/sdk/browser": installed.resolve("@sunder/sdk/browser")},
+          alias: {"@sunder/sdk/browser": installed.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": installed.resolve("@sunder/sdk/generated")},
         });
         for (const path of Object.keys(bundled.metafile!.inputs))
           assert.doesNotMatch(path, /node:|\/(?:content-node|worker|worker-types)\.js$|\/src\/services\.[jt]s$/u, path);

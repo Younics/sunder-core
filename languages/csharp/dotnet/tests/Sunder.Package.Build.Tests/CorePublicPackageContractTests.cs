@@ -119,10 +119,21 @@ public sealed class CorePublicPackageContractTests
                         .Where(static id => id is not null)
                         .Order(StringComparer.Ordinal));
             }
+            var documentationEntry = package.PackageId is "Sunder.Sdk" or "Sunder.Sdk.Avalonia" or "Sunder.Sdk.Stacks" or "Sunder.Sdk.Worker"
+                ? $"lib/net10.0/{package.PackageId}.xml" : null;
+            if (documentationEntry is not null)
+            {
+                var documentation = archive.GetEntry(documentationEntry)!;
+                using var content = documentation.Open();
+                var document = XDocument.Load(content);
+                Assert.Equal(package.PackageId, document.Root!.Element("assembly")?.Element("name")?.Value);
+                Assert.NotEmpty(document.Root.Element("members")!.Elements("member"));
+            }
             Assert.DoesNotContain(entries, entry =>
                 entry.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase)
                 || entry.EndsWith(".xml", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(entry, "[Content_Types].xml", StringComparison.Ordinal));
+                && !string.Equals(entry, "[Content_Types].xml", StringComparison.Ordinal)
+                && !string.Equals(entry, documentationEntry, StringComparison.Ordinal));
         }
     }
 
@@ -180,6 +191,7 @@ public sealed class CorePublicPackageContractTests
 
     [Theory]
     [InlineData("Sunder.Sdk", "lib/net10.0/Sunder.Sdk.dll")]
+    [InlineData("Sunder.Sdk", "lib/net10.0/Sunder.Sdk.xml")]
     [InlineData("Sunder.Package.Build", "tasks/net10.0/Sunder.Package.Format.dll")]
     [Trait("Category", "Artifact")]
     [Trait("Size", "Small")]

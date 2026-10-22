@@ -71,23 +71,25 @@ jobs:
           node scripts/test-oracles/run-dotnet-tests-with-results.mjs --configuration Release --primary-lane dotnet-linux --results-directory artifacts/test-results/dotnet
           node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/dotnet --allow-partial --require-primary-lane dotnet-linux
           node scripts/test-oracles/run-release-fixtures-with-results.mjs
-      - name: Pack the six SDK packages once
+      - name: Pack developer artifacts once with source-bound release documentation
         env:
           SOURCE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          python3 -B scripts/release/sdk_release_documentation.py pack "$SOURCE_SHA" -- bash -euo pipefail <<'PACK'
           version="$(node -p "JSON.parse(require('fs').readFileSync('eng/test-oracles/core-public-packages.json')).coordinatedVersion")"
           mkdir -p artifacts/sdk
           while IFS= read -r project; do
             dotnet pack "$project" -c Release --no-restore --no-build -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false -o artifacts/sdk
           done < <(jq -r '.nuget[].project' eng/test-oracles/core-public-packages.json)
           python3 scripts/release/verify-nuget-package-set.py "$version" artifacts/sdk "$SOURCE_SHA"
-      - name: Pack and inspect npm artifacts
-        run: |
-          set -euo pipefail
           mkdir -p "$PWD/artifacts/npm"
           npm pack --prefix languages/typescript/node --json --pack-destination "$PWD/artifacts/npm" --workspace @sunder/sdk --workspace @sunder/package-tool --workspace create-sunder-package > artifacts/npm-pack.json
           node scripts/release/verify-node-package-artifacts.mjs "$(node -p "require('./languages/typescript/node/package.json').version")" "$(node -p "require('./languages/typescript/node/packages/package-tool/package.json').dependencies['@sunder/sdk']")" "$(node -p "require('./languages/typescript/node/package.json').devDependencies.vite")" artifacts/npm artifacts/npm-pack.json
+          PACK
+          if [[ "$GITHUB_REF" == refs/tags/sdk/* ]]; then
+            python3 -B scripts/release/sdk_release_documentation.py verify "$SOURCE_SHA" artifacts/sdk artifacts/npm
+          fi
       - name: Source catalog and generated .NET template variants
         env:
           DOTNET_CLI_HOME: ${{ runner.temp }}/template-cli-home

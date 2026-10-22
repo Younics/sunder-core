@@ -17,22 +17,22 @@ internal interface IPackageOperationStateViewModel
 
 internal static class PackageOperationStateProjector
 {
-    public static void Apply(IPackageOperationStateViewModel target, BackgroundProcessSnapshot? operation)
+    public static void Apply(IPackageOperationStateViewModel target, BackgroundTaskSnapshot? operation)
     {
         target.HasActiveOperation = operation?.IsActive == true;
-        target.OperationCanCancel = operation is { CanCancel: true, State: not BackgroundProcessState.Cancelling };
+        target.OperationCanCancel = operation is { CanCancel: true, State: not BackgroundTaskState.Cancelling };
         target.OperationIsIndeterminate = operation?.ProgressPercent is null;
         target.OperationProgressPercent = operation?.ProgressPercent ?? 0;
         target.OperationStatusText = operation is null ? string.Empty : FormatStatus(operation);
     }
 
-    public static string FormatStatus(BackgroundProcessSnapshot snapshot)
+    public static string FormatStatus(BackgroundTaskSnapshot snapshot)
         => snapshot.State switch
         {
-            BackgroundProcessState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) || snapshot.StatusText == "Queued"
+            BackgroundTaskState.Queued => string.IsNullOrWhiteSpace(snapshot.StatusText) || snapshot.StatusText == "Queued"
                 ? $"Queued: {snapshot.Title}" : snapshot.StatusText,
-            BackgroundProcessState.Running => snapshot.StatusText,
-            BackgroundProcessState.Cancelling => "Cancelling...",
+            BackgroundTaskState.Running => snapshot.StatusText,
+            BackgroundTaskState.Cancelling => "Cancelling...",
             _ => snapshot.StatusText,
         };
 }

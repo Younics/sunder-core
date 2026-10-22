@@ -240,7 +240,7 @@ public sealed partial class PackageBuildManifestTests
     [InlineData("IPackageDevelopmentService", SunderSdkCapabilities.PackageDevelopmentV1)]
     [InlineData("IPackageLogNavigationService", SunderSdkCapabilities.PackageLogNavigationV1)]
     [InlineData("IPackageAppStateUpdates", SunderSdkCapabilities.AppStateUpdatesV1)]
-    [InlineData("IBackgroundProcessQueue", SunderSdkCapabilities.BackgroundProcessesV1)]
+    [InlineData("IBackgroundTaskQueue", SunderSdkCapabilities.BackgroundProcessesV1)]
     public void SdkCapabilityCatalog_ResolvesCurrentAnnotatedServiceCapabilities(
         string typeName,
         string expectedCapability)
@@ -1794,6 +1794,33 @@ public sealed partial class PackageBuildManifestTests
         ConfigureWorkerTask(manifestTask, "win-x64", target);
         Assert.True(manifestTask.Execute(), string.Join(Environment.NewLine, manifestEngine.Errors));
 
+        var assets = Path.Combine(root, "authored-assets");
+        Directory.CreateDirectory(assets);
+        var asset = Path.Combine(assets, "icon.png");
+        var assetBytes = RandomNumberGenerator.GetBytes(8192);
+        await File.WriteAllBytesAsync(asset, assetBytes);
+        if (OperatingSystem.IsMacOS()) File.SetUnixFileMode(asset, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var references = Path.Combine(root, "nuget-cache");
+        Directory.CreateDirectory(references);
+        var reference = Path.Combine(references, "Sunder.Sdk.Worker.dll");
+        var referenceBytes = await File.ReadAllBytesAsync(typeof(SunderWorkerProviderRegistration).Assembly.Location);
+        await File.WriteAllBytesAsync(reference, referenceBytes); // A fresh file, not an already shared APFS clone.
+        var referenceTime = File.GetLastWriteTimeUtc(reference);
+        var cachedReference = new MSBuildTaskItem(reference);
+        cachedReference.SetMetadata("RelativePath", Path.GetFileName(reference));
+        var sourceChanged = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var sourceWatcher = new FileSystemWatcher(root)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
+        };
+        void ObserveInput(object sender, FileSystemEventArgs args)
+        {
+            if (args.FullPath == asset || args.FullPath == reference) sourceChanged.TrySetResult();
+        }
+        sourceWatcher.Changed += ObserveInput;
+        sourceWatcher.Created += ObserveInput;
+        sourceWatcher.EnableRaisingEvents = true;
         var emitEngine = new TestBuildEngine();
         Assert.True(new EmitSunderDevOutputTask
         {
@@ -1802,7 +1829,9 @@ public sealed partial class PackageBuildManifestTests
             DevPackagePath = devPackage,
             DiscoveryRoot = root,
             TargetDirectory = targetDirectory,
-            WorkerFiles = [.. workerFiles, new MSBuildTaskItem(winNative)],
+            WorkerFiles = [.. workerFiles, new MSBuildTaskItem(winNative), cachedReference],
+            AssetsDirectory = assets,
+            AssetFiles = [new MSBuildTaskItem(asset)],
         }.Execute(), string.Join(Environment.NewLine, emitEngine.Errors));
 
         Assert.True(File.Exists(Path.Combine(devPackage, "manifest", "sunder-package.json")));
@@ -1814,6 +1843,18 @@ public sealed partial class PackageBuildManifestTests
         Assert.False(Directory.Exists(Path.Combine(devPackage, "assets")));
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devPackage);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        var copiedAsset = Path.Combine(devPackage, "payload", "shared", "assets", "icon.png");
+        Assert.Equal(assetBytes, await File.ReadAllBytesAsync(copiedAsset));
+        var copiedReference = Path.Combine(devPackage, "payload", "runtime", "win-x64", "lib", "Sunder.Sdk.Worker.dll");
+        Assert.Equal(referenceBytes, await File.ReadAllBytesAsync(copiedReference));
+        Assert.Equal(referenceBytes, await File.ReadAllBytesAsync(reference));
+        Assert.Equal(referenceTime, File.GetLastWriteTimeUtc(reference));
+        Assert.Equal(referenceTime, File.GetLastWriteTimeUtc(copiedReference));
+        if (OperatingSystem.IsMacOS()) Assert.Equal(File.GetUnixFileMode(asset), File.GetUnixFileMode(copiedAsset));
+        await Task.Delay(500);
+        Assert.False(sourceChanged.Task.IsCompleted, "Copying assets or cached runtime references must not invalidate Watch's input revision.");
+        await File.AppendAllTextAsync(asset, "real authored edit");
+        await sourceChanged.Task.WaitAsync(TimeSpan.FromSeconds(5)); // The observer itself is live.
     }
 
     [Fact]

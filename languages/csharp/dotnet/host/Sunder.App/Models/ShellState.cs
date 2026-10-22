@@ -1,4 +1,5 @@
 using Sunder.App.Themes;
+using System.Text.Json.Serialization;
 
 namespace Sunder.App.Models;
 
@@ -14,12 +15,12 @@ public sealed class ShellState
     public const double DefaultSettingsSidebarWidth = 250;
     public const double DefaultPackagesSidebarWidth = 430;
     public const double DefaultStacksSidebarWidth = 390;
-    public const double DefaultBackgroundProcessPopoverWidth = 500;
-    public const double DefaultBackgroundProcessPopoverHeight = 360;
-    public const double MinimumBackgroundProcessPopoverWidth = 360;
-    public const double MaximumBackgroundProcessPopoverWidth = 760;
-    public const double MinimumBackgroundProcessPopoverHeight = 220;
-    public const double MaximumBackgroundProcessPopoverHeight = 640;
+    public const double DefaultBackgroundTaskPopoverWidth = 500;
+    public const double DefaultBackgroundTaskPopoverHeight = 360;
+    public const double MinimumBackgroundTaskPopoverWidth = 360;
+    public const double MaximumBackgroundTaskPopoverWidth = 760;
+    public const double MinimumBackgroundTaskPopoverHeight = 220;
+    public const double MaximumBackgroundTaskPopoverHeight = 640;
 
     public int LayoutVersion { get; set; } = CurrentLayoutVersion;
 
@@ -55,9 +56,12 @@ public sealed class ShellState
 
     public double StacksSidebarWidth { get; set; } = DefaultStacksSidebarWidth;
 
-    public double BackgroundProcessPopoverWidth { get; set; } = DefaultBackgroundProcessPopoverWidth;
+    // Source terminology may change; persisted user-setting keys must not.
+    [JsonPropertyName("BackgroundProcessPopoverWidth")]
+    public double BackgroundTaskPopoverWidth { get; set; } = DefaultBackgroundTaskPopoverWidth;
 
-    public double BackgroundProcessPopoverHeight { get; set; } = DefaultBackgroundProcessPopoverHeight;
+    [JsonPropertyName("BackgroundProcessPopoverHeight")]
+    public double BackgroundTaskPopoverHeight { get; set; } = DefaultBackgroundTaskPopoverHeight;
 
     public ShellWindowPlacement? SettingsWindowPlacement { get; set; }
 

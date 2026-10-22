@@ -46,6 +46,28 @@ acceptance-driver/coordinator and promotion dispatch framework is retired.
 Deployed policy/WORM, production installer and performance qualifications retain
 their owning requirements and are not implied by these source/native test results.
 
+## SDK artifact documentation
+
+On an SDK tag push, CI wraps its existing NuGet/npm pack commands with
+`sdk_release_documentation.py pack`. It requires a clean checkout of the exact
+`GITHUB_SHA`, reads documentation inputs and link targets from that Git commit,
+and temporarily supplies commit-pinned README links and npm homepage/`gitHead`
+metadata to the normal pack commands. Relative repository links are resolved at
+the same commit, including packaged template READMEs. The original source inputs
+are restored byte-for-byte on success or command failure; unexpected concurrent
+changes are not overwritten. Ordinary CI/local packaging and UNFROZEN/UNRELEASED
+status text are unchanged. This helper neither builds nor chooses package inputs;
+the existing public inventory and pack commands remain authoritative.
+
+CI checks the resulting archives before consuming/retaining them. The numeric
+release transport rechecks them before staging, registry publication, promotion
+and finalization: README bytes must be the exact rendered committed source, npm
+homepage/`gitHead` must match that commit, and NuGet `RepositoryCommit` must agree.
+Mutable `/main/`, another commit, missing committed targets or uncommitted source
+cannot supply release documentation provenance. Tested archives and npm pack
+reports are never rewritten. These checks do not approve a release, create a tag,
+or imply the current unreleased checkout has a published source identity.
+
 ## Stable SDK catalog receipt
 
 The tagged source-built engineering tool performs `platform-contracts check` then

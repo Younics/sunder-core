@@ -2,18 +2,18 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppPackageBackgroundProcessQueue(
-    PackageScopedBackgroundProcessQueue publishedQueue,
+internal sealed class AppPackageBackgroundTaskQueue(
+    PackageScopedBackgroundTaskQueue publishedQueue,
     AppPackageGenerationPublication publication)
-    : IBackgroundProcessQueue, IDisposable, IAsyncDisposable
+    : IBackgroundTaskQueue, IDisposable, IAsyncDisposable
 {
     private readonly object _syncRoot = new();
     private readonly Dictionary<Guid, PendingProcess> _pending = [];
     private bool _disposed;
 
-    public event EventHandler<BackgroundProcessChangedEventArgs>? ProcessChanged;
+    public event EventHandler<BackgroundTaskChangedEventArgs>? TaskChanged;
 
-    public BackgroundProcessSnapshot Enqueue(BackgroundProcessRequest request)
+    public BackgroundTaskSnapshot Enqueue(BackgroundTaskRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (publication.IsPublished)
@@ -21,7 +21,7 @@ internal sealed class AppPackageBackgroundProcessQueue(
             return publishedQueue.Enqueue(request);
         }
 
-        BackgroundProcessRequestValidator.Validate(request);
+        BackgroundTaskRequestValidator.Validate(request);
         var requestSnapshot = request with
         {
             Metadata = request.Metadata is null
@@ -43,13 +43,13 @@ internal sealed class AppPackageBackgroundProcessQueue(
         }
 
         publication.Buffer(() => Publish(processId));
-        ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(snapshot));
+        TaskChanged?.Invoke(this, new BackgroundTaskChangedEventArgs(snapshot));
         return snapshot;
     }
 
-    public IReadOnlyList<BackgroundProcessSnapshot> ListProcesses(string? groupKey = null)
+    public IReadOnlyList<BackgroundTaskSnapshot> ListTasks(string? groupKey = null)
     {
-        BackgroundProcessSnapshot[] pending;
+        BackgroundTaskSnapshot[] pending;
         lock (_syncRoot)
         {
             if (_disposed)
@@ -64,7 +64,7 @@ internal sealed class AppPackageBackgroundProcessQueue(
                 .ToArray();
         }
 
-        return pending.Concat(publishedQueue.ListProcesses(groupKey)).ToArray();
+        return pending.Concat(publishedQueue.ListTasks(groupKey)).ToArray();
     }
 
     public bool Cancel(Guid processId)
@@ -91,12 +91,12 @@ internal sealed class AppPackageBackgroundProcessQueue(
 
         var cancelled = pending.Snapshot with
         {
-            State = BackgroundProcessState.Cancelled,
+            State = BackgroundTaskState.Cancelled,
             StatusText = "Cancelled",
             CanCancel = false,
             CompletedAtUtc = DateTimeOffset.UtcNow,
         };
-        ProcessChanged?.Invoke(this, new BackgroundProcessChangedEventArgs(cancelled));
+        TaskChanged?.Invoke(this, new BackgroundTaskChangedEventArgs(cancelled));
         return true;
     }
 
@@ -112,7 +112,7 @@ internal sealed class AppPackageBackgroundProcessQueue(
             _pending.Clear();
         }
 
-        publishedQueue.ProcessChanged -= PublishedQueue_OnProcessChanged;
+        publishedQueue.TaskChanged -= PublishedQueue_OnTaskChanged;
         publishedQueue.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -129,14 +129,14 @@ internal sealed class AppPackageBackgroundProcessQueue(
             _pending.Clear();
         }
 
-        publishedQueue.ProcessChanged -= PublishedQueue_OnProcessChanged;
+        publishedQueue.TaskChanged -= PublishedQueue_OnTaskChanged;
         await publishedQueue.DisposeAsync();
         GC.SuppressFinalize(this);
     }
 
     internal void Start()
     {
-        publishedQueue.ProcessChanged += PublishedQueue_OnProcessChanged;
+        publishedQueue.TaskChanged += PublishedQueue_OnTaskChanged;
         publishedQueue.Start();
     }
 
@@ -154,20 +154,20 @@ internal sealed class AppPackageBackgroundProcessQueue(
         publishedQueue.Enqueue(pending.Request, processId);
     }
 
-    private void PublishedQueue_OnProcessChanged(object? sender, BackgroundProcessChangedEventArgs e)
-        => ProcessChanged?.Invoke(this, e);
+    private void PublishedQueue_OnTaskChanged(object? sender, BackgroundTaskChangedEventArgs e)
+        => TaskChanged?.Invoke(this, e);
 
     private void ThrowIfDisposed()
     {
         if (_disposed)
         {
-            throw new ObjectDisposedException(nameof(AppPackageBackgroundProcessQueue));
+            throw new ObjectDisposedException(nameof(AppPackageBackgroundTaskQueue));
         }
     }
 
-    private static BackgroundProcessSnapshot CreateQueuedSnapshot(
+    private static BackgroundTaskSnapshot CreateQueuedSnapshot(
         Guid processId,
-        BackgroundProcessRequest request,
+        BackgroundTaskRequest request,
         DateTimeOffset queuedAtUtc)
         => new(
             processId,
@@ -175,7 +175,7 @@ internal sealed class AppPackageBackgroundProcessQueue(
             request.GroupKey,
             request.Indicator,
             request.ConcurrencyMode,
-            BackgroundProcessState.Queued,
+            BackgroundTaskState.Queued,
             "Queued",
             ProgressPercent: null,
             request.CanCancel,
@@ -186,6 +186,6 @@ internal sealed class AppPackageBackgroundProcessQueue(
             CompletedAtUtc: null);
 
     private sealed record PendingProcess(
-        BackgroundProcessRequest Request,
-        BackgroundProcessSnapshot Snapshot);
+        BackgroundTaskRequest Request,
+        BackgroundTaskSnapshot Snapshot);
 }

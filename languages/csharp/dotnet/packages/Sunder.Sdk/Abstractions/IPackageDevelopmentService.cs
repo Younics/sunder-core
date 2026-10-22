@@ -28,14 +28,16 @@ public sealed record PackageDevelopmentStatus(
     string PackageId,
     bool IsLoaded,
     bool WatchEnabled,
-    string Readiness,
+    PackageDevelopmentRuntimeReadiness RuntimeReadiness,
     string? ErrorMessage,
     bool OverridesInstalledPackage)
 {
     /// <summary>This session's watch request; WatchEnabled is the Host's aggregate effective watch state.</summary>
     public bool RequestedWatch { get; init; }
-    /// <summary>App activation observation: Pending, Activated, Quarantined, Unavailable, or NotApplicable. Activated does not assert that every lazy view was opened.</summary>
-    public string AppReadiness { get; init; } = "Pending";
+    /// <summary>The observed Host connection/bootstrap state, independent of this package's Runtime and App readiness.</summary>
+    public PackageDevelopmentHostState HostState { get; init; }
+    /// <summary>The observed App activation state. Activated does not assert that every lazy view was opened.</summary>
+    public PackageDevelopmentAppReadiness AppReadiness { get; init; }
     /// <summary>The exact validated source sampled from the Runtime, not proof that App activation has applied it. Null on older Hosts.</summary>
     [SunderSdkCapability(SunderSdkCapabilities.PackageDevelopmentRevisionsV1)]
     public PackageDevelopmentRevision? RuntimeRevision { get; init; }

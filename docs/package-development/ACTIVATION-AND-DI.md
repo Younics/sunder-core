@@ -61,7 +61,7 @@ Do not build a nested provider in `ConfigureAppServices`. Resolve contribution i
 
 Worker V1 owns its process-local object composition. It receives Host-mediated services through `SunderWorkerContext` and supplies handlers through immutable `SunderWorkerProviderRegistration` entries rather than a managed contribution registry.
 
-App packages cannot replace reserved host capabilities. These include `IPackageContext`, logging, callback/RPC clients, shell/settings/notification services, App background processes, `IPackageDevelopmentService`, `IPackageLogNavigationService`, and `IPackageWorkerExecutionObservations`. Registering a reserved service fails activation. See [App development sessions and execution observations](APP-DEVELOPMENT-SESSIONS.md) for ownership, applied output and exact cleanup semantics.
+App packages cannot replace reserved host capabilities. These include `IPackageContext`, logging, callback/RPC clients, shell/settings/notification services, App background tasks, `IPackageDevelopmentService`, `IPackageLogNavigationService`, and `IPackageWorkerExecutionObservations`. Registering a reserved service fails activation. See [App development sessions and execution observations](APP-DEVELOPMENT-SESSIONS.md) for ownership, applied output and exact cleanup semantics.
 
 Worker code receives Host-mediated Runtime capabilities through `SunderWorkerContext`. App supplies shell-facing services and an RPC client after generation publication.
 
@@ -76,7 +76,7 @@ Before an App generation is published:
 - Notifications and App background-process enqueues are buffered and published only if the generation commits.
 - Read access may still contact Runtime, but activation should not depend on network or durable side effects.
 
-Start work from view navigation/warmup, a user action, an App background process, or a Worker V1 lifecycle callback instead. Handle RPC unavailability and check `IPackageCallbackClient.IsAvailable` where the same service can run in different contexts.
+Start work from view navigation/warmup, a user action, an App background task, or a Worker V1 lifecycle callback instead. Handle RPC unavailability and check `IPackageCallbackClient.IsAvailable` where the same service can run in different contexts.
 
 ## Worker Lifecycle
 

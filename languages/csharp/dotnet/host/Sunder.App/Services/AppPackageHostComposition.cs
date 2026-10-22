@@ -17,7 +17,7 @@ internal sealed partial class AppPackageHostComposition : IDisposable
     private readonly AppPackagePublicationServices _publicationServices;
     private readonly AppPackageGenerationPublication _publication = new();
     private readonly Action<Guid, string, string?, Assembly> _registerFaultAttribution;
-    private readonly BackgroundProcessQueueService? _ownedBackgroundProcessQueue;
+    private readonly BackgroundTaskQueueService? _ownedBackgroundTaskQueue;
     private readonly Guid _generationId;
     private readonly Guid _activationOwnerId;
     private int _cleanupUnproven;
@@ -54,7 +54,7 @@ internal sealed partial class AppPackageHostComposition : IDisposable
         IPackageShellViewService? shellViewService,
         IPackageSettingsNavigationService? settingsNavigationService,
         NotificationCenterService? notificationCenter,
-        BackgroundProcessQueueService? backgroundProcessQueue,
+        BackgroundTaskQueueService? backgroundTaskQueue,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo,
         IUiDispatcher uiDispatcher,
         IAppWebViewFactory? webViewFactory = null,
@@ -104,16 +104,16 @@ internal sealed partial class AppPackageHostComposition : IDisposable
         ViewFacade.RetainedFacades = () => _retained.Values.Distinct().Select(owner => owner.ViewFacade).ToArray();
 
         _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
-        var resolvedBackgroundProcessQueue = backgroundProcessQueue ?? new BackgroundProcessQueueService();
-        _ownedBackgroundProcessQueue = backgroundProcessQueue is null ? resolvedBackgroundProcessQueue : null;
-        var runtimeWorkStopper = _runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundProcessQueue, activationOwnerId ?? generationId,
+        var resolvedBackgroundTaskQueue = backgroundTaskQueue ?? new BackgroundTaskQueueService();
+        _ownedBackgroundTaskQueue = backgroundTaskQueue is null ? resolvedBackgroundTaskQueue : null;
+        var runtimeWorkStopper = _runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundTaskQueue, activationOwnerId ?? generationId,
             (packageId, token) => _retained.TryGetValue(packageId, out var owner) ? owner._runtimeWorkStopper.StopPackageWorkAsync(packageId, token) : null);
         _publicationServices = new AppPackagePublicationServices(shellViewService, settingsNavigationService, _publication);
         var serviceProviderFactory = new AppPackageServiceProviderFactory(
             _publicationServices,
             _publicationServices,
             notificationCenter,
-            resolvedBackgroundProcessQueue,
+            resolvedBackgroundTaskQueue,
             _publication,
             activationOwnerId ?? generationId,
             developerServices);
@@ -260,7 +260,7 @@ internal sealed partial class AppPackageHostComposition : IDisposable
 
     public void Dispose()
     {
-        _ownedBackgroundProcessQueue?.Dispose();
+        _ownedBackgroundTaskQueue?.Dispose();
     }
 
     public async Task DisablePackageAsync(

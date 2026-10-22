@@ -39,7 +39,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
         var events = new RuntimeChanges();
         var client = new RuntimeManagementTestClient();
         using var page = new SettingsPackageRuntimesViewModel(client, (_, _) => Task.FromResult(true),
-            new BackgroundProcessQueueService(), () => client, changes: events, uiDispatcher: new ImmediateUiDispatcher());
+            new BackgroundTaskQueueService(), () => client, changes: events, uiDispatcher: new ImmediateUiDispatcher());
         await page.ActivateAsync();
         var family = page.Families[0];
         var busyChanges = 0;
@@ -104,7 +104,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
     {
         var events = new RuntimeChanges();
         var client = new RuntimeManagementTestClient();
-        using var queue = new BackgroundProcessQueueService();
+        using var queue = new BackgroundTaskQueueService();
         using var page = new SettingsPackageRuntimesViewModel(client, (_, _) => Task.FromResult(true), queue, () => client,
             changes: events, uiDispatcher: new ImmediateUiDispatcher());
         await page.ActivateAsync();
@@ -134,7 +134,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
     {
         var installed = new TaskCompletionSource<RuntimeExecutionRuntimeOperationResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new RuntimeManagementTestClient { Inventory = [], InstallHandler = (_, _) => installed.Task };
-        using var queue = new BackgroundProcessQueueService();
+        using var queue = new BackgroundTaskQueueService();
         using var page = new SettingsPackageRuntimesViewModel(client, (_, _) => Task.FromResult(true), queue, () => client,
             uiDispatcher: new ImmediateUiDispatcher());
         await page.ActivateAsync();
@@ -275,7 +275,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
         var approval = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var client = new RuntimeManagementTestClient();
         using var page = new SettingsPackageRuntimesViewModel(client, (_, _) => approval.Task,
-            new BackgroundProcessQueueService(), () => client, uiDispatcher: new ImmediateUiDispatcher());
+            new BackgroundTaskQueueService(), () => client, uiDispatcher: new ImmediateUiDispatcher());
         await page.ActivateAsync();
         var install = page.InstallCommand.ExecuteAsync(Assert.Single(page.Available));
         page.Deactivate();
@@ -352,7 +352,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
     }
 
     internal static SettingsPackageRuntimesViewModel Page(RuntimeManagementTestClient client, Func<RuntimeConfirmationViewModel, bool>? confirm = null)
-        => new(client, (review, _) => Task.FromResult(confirm?.Invoke(review) ?? true), new BackgroundProcessQueueService(), () => client,
+        => new(client, (review, _) => Task.FromResult(confirm?.Invoke(review) ?? true), new BackgroundTaskQueueService(), () => client,
             uiDispatcher: new ImmediateUiDispatcher());
 
     private sealed class ImmediateUiDispatcher : IUiDispatcher

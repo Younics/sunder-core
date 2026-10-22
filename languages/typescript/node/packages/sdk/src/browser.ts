@@ -1,15 +1,14 @@
 import type { JsonPrimitive, JsonValue, RpcCallOptions, RpcInvoker } from "./core";
 import { formatUtcTimestamp } from "./timestamp";
 import { apiTokenOwner, bindApiContext, createApiContext, type ApiContext, type ApiToken } from "./api";
-export { createApiToken, createApiContext, apiTokenOwner } from "./api";
-export type { ApiToken, ApiContext, ApiBindingContext, ApiIdentity, ApiTransport, ServiceStream } from "./api";
-export { createServiceContract } from "./services";
+export { createApiContext } from "./api";
+export type { ApiToken, ApiContext, ApiTransport, ServiceStream } from "./api";
 export type { ServiceContext, ServiceContract } from "./services";
 export {SunderContent} from "./content";
 export type {SunderContentOptions,SunderContentStreamOptions} from "./content";
-export * from "./service-reference";
-export {ServiceBindingLifetime} from "./service-bindings";
-export * from "./resources";
+export { ServiceReference, ServiceProvider } from "./service-reference";
+export type { ServiceApi, ServiceToken, OptionalServiceReference, ServiceCatalogSnapshot, ServiceCatalog } from "./service-reference";
+export { ServiceDomainError } from "./resources";
 export type { RpcCallOptions, JsonValue, RpcInvoker } from "./core";
 
 export { formatUtcTimestamp } from "./timestamp";

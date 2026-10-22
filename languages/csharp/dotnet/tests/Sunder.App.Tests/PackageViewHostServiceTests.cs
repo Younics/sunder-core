@@ -198,30 +198,30 @@ public sealed partial class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task DisablePackageAsync_WaitsForPackageScopedBackgroundProcessesToStop()
+    public async Task DisablePackageAsync_WaitsForPackageScopedBackgroundTasksToStop()
     {
-        var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
+        var backgroundTasks = new BackgroundTaskQueueService(maxParallelism: 1);
         var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(),
             [],
             [],
             [],
             sessionFolder: null,
-            backgroundProcessQueue: backgroundProcesses,
+            backgroundTaskQueue: backgroundTasks,
             uiDispatcher: TestUiDispatcher);
-        var packageQueue = new PackageScopedBackgroundProcessQueue(
+        var packageQueue = new PackageScopedBackgroundTaskQueue(
             "agent",
             "Agent",
-            backgroundProcesses,
+            backgroundTasks,
             hostService.CurrentGenerationId);
         var processStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancellationObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allowCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        packageQueue.Enqueue(new BackgroundProcessRequest(
+        packageQueue.Enqueue(new BackgroundTaskRequest(
             "Agent background work",
             "work",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             CanCancel: false,
             async context =>
             {
@@ -246,14 +246,14 @@ public sealed partial class PackageViewHostServiceTests
 
             allowCleanup.SetResult();
             await disableTask.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.All(backgroundProcesses.ListProcesses(), process => Assert.Equal(BackgroundProcessState.Cancelled, process.State));
+            Assert.All(backgroundTasks.ListTasks(), process => Assert.Equal(BackgroundTaskState.Cancelled, process.State));
         }
         finally
         {
             allowCleanup.TrySetResult();
             await packageQueue.DisposeAsync();
             await hostService.DisposeAsync();
-            await backgroundProcesses.DisposeAsync();
+            await backgroundTasks.DisposeAsync();
         }
     }
 
@@ -2444,14 +2444,14 @@ public sealed partial class PackageViewHostServiceTests
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var sessionFolder = Path.Combine(rootPath, "session");
         var notificationCenter = new NotificationCenterService(Path.Combine(rootPath, "notifications.json"));
-        var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
+        var backgroundTasks = new BackgroundTaskQueueService(maxParallelism: 1);
         Directory.CreateDirectory(sessionFolder);
         var packageSourceFolder = CreateAppPackageSource(rootPath, "agent");
         var package = CreateActiveAgentPackage();
         var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             notificationCenter: notificationCenter,
-            backgroundProcessQueue: backgroundProcesses,
+            backgroundTaskQueue: backgroundTasks,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
         var sideEffectPath = Path.Combine(rootPath, "candidate-side-effect");
@@ -2475,7 +2475,7 @@ public sealed partial class PackageViewHostServiceTests
                 _ => ValueTask.FromResult(new
                 {
                     Notifications = notificationCenter.ListNotifications().Count,
-                    Processes = backgroundProcesses.ListProcesses().Count,
+                    Processes = backgroundTasks.ListTasks().Count,
                     SideEffectExists = File.Exists(sideEffectPath),
                 }),
                 state => state.Notifications == 1 && state.Processes == 0 && !state.SideEffectExists,
@@ -2483,13 +2483,13 @@ public sealed partial class PackageViewHostServiceTests
                 describe: (state, error) => $"state={state}; error={error?.Message}");
             var hostNotification = Assert.Single(notificationCenter.ListNotifications());
             Assert.Equal("Agent App UI update failed", hostNotification.Title);
-            Assert.Empty(backgroundProcesses.ListProcesses());
+            Assert.Empty(backgroundTasks.ListTasks());
             Assert.False(File.Exists(sideEffectPath));
         }
         finally
         {
             await hostService.DisposeAsync();
-            await backgroundProcesses.DisposeAsync();
+            await backgroundTasks.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);
         }
     }
@@ -2500,7 +2500,7 @@ public sealed partial class PackageViewHostServiceTests
         var rootPath = Path.Combine(Path.GetTempPath(), "sunder-app-tests", Guid.NewGuid().ToString("N"));
         var sessionFolder = Path.Combine(rootPath, "session");
         var notificationCenter = new NotificationCenterService(Path.Combine(rootPath, "notifications.json"));
-        var backgroundProcesses = new BackgroundProcessQueueService(maxParallelism: 1);
+        var backgroundTasks = new BackgroundTaskQueueService(maxParallelism: 1);
         Directory.CreateDirectory(sessionFolder);
         var agentSourceFolder = CreateAppPackageSource(Path.Combine(rootPath, "agent"), "agent");
         var toolsSourceFolder = CreateAppPackageSource(Path.Combine(rootPath, "tools"), "tools");
@@ -2526,7 +2526,7 @@ public sealed partial class PackageViewHostServiceTests
         var hostService = TestAppPackageHost.Create(
             new AppPackageViewRegistry(), [], [], [], sessionFolder,
             notificationCenter: notificationCenter,
-            backgroundProcessQueue: backgroundProcesses,
+            backgroundTaskQueue: backgroundTasks,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
         var candidateReady = new TaskCompletionSource(
@@ -2540,8 +2540,8 @@ public sealed partial class PackageViewHostServiceTests
             await hostService.ApplyPackageDeltaAsync(activePackages, sources);
             await WaitForFileAsync(agentEffectPath);
             await WaitForFileAsync(toolsEffectPath);
-            var initialProcessIds = backgroundProcesses.ListProcesses()
-                .Select(static process => process.ProcessId)
+            var initialProcessIds = backgroundTasks.ListTasks()
+                .Select(static process => process.TaskId)
                 .ToHashSet();
             notificationCenter.ClearAll();
             File.Delete(agentEffectPath);
@@ -2585,11 +2585,11 @@ public sealed partial class PackageViewHostServiceTests
             Assert.Equal("tools", Assert.Single(enabledPackages).PackageId);
             Assert.False(File.Exists(agentEffectPath));
             Assert.True(File.Exists(toolsEffectPath));
-            var newProcesses = backgroundProcesses.ListProcesses()
-                .Where(process => !initialProcessIds.Contains(process.ProcessId))
+            var newProcesses = backgroundTasks.ListTasks()
+                .Where(process => !initialProcessIds.Contains(process.TaskId))
                 .ToArray();
             var healthyProcess = Assert.Single(newProcesses);
-            Assert.True(PackageScopedBackgroundProcessMetadata.TryCreate(
+            Assert.True(PackageScopedBackgroundTaskMetadata.TryCreate(
                 healthyProcess.Metadata,
                 out var processMetadata));
             Assert.Equal("tools", processMetadata.PackageId);
@@ -2604,7 +2604,7 @@ public sealed partial class PackageViewHostServiceTests
         {
             releaseCandidate.TrySetResult();
             await hostService.DisposeAsync();
-            await backgroundProcesses.DisposeAsync();
+            await backgroundTasks.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);
         }
     }

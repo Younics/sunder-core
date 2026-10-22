@@ -937,6 +937,63 @@ internal sealed class PackageSessionPreparer
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
+    internal async Task<bool> ValidateRetainedDevelopmentSourceAsync(RuntimePackageSource source,
+        RuntimePackageExecutionRuntimeBinding? currentBinding, CancellationToken token)
+    {
+        if (source.Kind != PackageSourceKind.Dev || source.Manifest is null || source.ContentIndex is null
+            || source.SnapshotFolder is null || source.SnapshotDirectory is null
+            || !RuntimeRpcPackageMetadata.IsSha256(source.ContentIdentity)) return false;
+        try
+        {
+            // Reuse never substitutes metadata/timestamps for full payload validation.
+            // Both mutable authored output and the Host shadow must still name the
+            // original complete content. Only the shadow is used by the candidate.
+            foreach (var root in new[] { source.SourceFolder, source.SnapshotFolder })
+            {
+                var validation = await ValidateSourceAsync(root, "Retained development package", [], token, null).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                if (validation is null || validation.Manifest.Id != source.PackageId
+                    || JsonSerializer.Serialize(validation.Manifest) != JsonSerializer.Serialize(source.Manifest)
+                    || JsonSerializer.Serialize(validation.ContentIndex) != JsonSerializer.Serialize(source.ContentIndex)) return false;
+                PackageStorePathGuard.EnsureSafe(Path.Combine(root, SunderPackageFormat.ManifestPath), root);
+                PackageStorePathGuard.EnsureSafe(Path.Combine(root, SunderPackageFormat.ContentIndexPath), root);
+                if (ComputeContentIdentity(root) != source.ContentIdentity) return false;
+            }
+            if (PackageCompatibilityAuthority.NeedsEvidence(source.Manifest))
+            {
+                if (_developmentImports is null) return false;
+                var imports = await _developmentImports.ResolveAsync(source, token).ConfigureAwait(false);
+                if (JsonSerializer.Serialize(imports) != JsonSerializer.Serialize(source.DevelopmentImports)) return false;
+            }
+            // The Worker is continuing, but current runtime selection/health/policy
+            // must still be checked. A different compatible artifact is not proof of
+            // the same execution. Release the temporary validation retention; the
+            // existing process keeps its own original runtime lease.
+            if (_ephemeralRuntimeBindingResolver is null || currentBinding is null
+                || source.SelectedTargetKey is not { } key || source.SelectedTarget is null) return false;
+            await using var resolved = await _ephemeralRuntimeBindingResolver.ResolveEphemeralBindingAsync(key, source.SelectedTarget, token).ConfigureAwait(false);
+            if (ValidateEphemeralRuntimeBinding(source.PackageId, key, source.SelectedTarget, resolved.Binding, []) is null) return false;
+            var comparable = resolved.Binding with
+            {
+                ResolvedAtUtc = currentBinding.ResolvedAtUtc,
+                InstalledArtifact = resolved.Binding.InstalledArtifact with
+                {
+                    Provenance = resolved.Binding.InstalledArtifact.Provenance with
+                    { RetrievedAtUtc = currentBinding.InstalledArtifact.Provenance.RetrievedAtUtc },
+                },
+            };
+            if (JsonSerializer.Serialize(comparable) != JsonSerializer.Serialize(currentBinding)) return false;
+            token.ThrowIfCancellationRequested();
+            return true;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException or RuntimeException)
+        {
+            // The ordinary preparer owns diagnostics, fallback selection and policy
+            // rejection. Cancellation (including foreign cancellation) is not hidden.
+            return false;
+        }
+    }
+
     internal static async Task<IReadOnlyDictionary<string, SunderRpcContractDescriptor>> LoadRpcContractsAsync(
         string projectionFolder,
         SunderPackageManifest manifest,

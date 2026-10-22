@@ -11,7 +11,7 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
 {
     private readonly IRuntimeExecutionRuntimeManagementClient _client;
     private readonly Func<RuntimeConfirmationViewModel, CancellationToken, Task<bool>> _confirm;
-    private readonly BackgroundProcessQueueService _queue;
+    private readonly BackgroundTaskQueueService _queue;
     private readonly Func<IRuntimeExecutionRuntimeManagementClient> _createOperationClient;
     private readonly IRuntimeExecutionRuntimeStatusSource? _changes;
     private readonly IUiDispatcher _dispatcher;
@@ -32,7 +32,7 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
     internal SettingsPackageRuntimesViewModel(
         IRuntimeExecutionRuntimeManagementClient client,
         Func<RuntimeConfirmationViewModel, CancellationToken, Task<bool>> confirm,
-        BackgroundProcessQueueService queue,
+        BackgroundTaskQueueService queue,
         Func<IRuntimeExecutionRuntimeManagementClient> createOperationClient,
         Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>>? waitForPresentation = null,
         IRuntimeExecutionRuntimeStatusSource? changes = null,
@@ -84,7 +84,7 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
         if (_disposed || _page is not null) return;
         _page = new();
         if (_changes is not null) _changes.ExecutionRuntimesChanged += OnRuntimeStatusChanged;
-        _queue.ProcessChanged += OnQueuedProcessChanged;
+        _queue.TaskChanged += OnQueuedTaskChanged;
         RefreshQueuedOperations();
         var token = _page.Token;
         NotifyActions();
@@ -102,7 +102,7 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
         var page = _page;
         _page = null;
         if (_changes is not null) _changes.ExecutionRuntimesChanged -= OnRuntimeStatusChanged;
-        _queue.ProcessChanged -= OnQueuedProcessChanged;
+        _queue.TaskChanged -= OnQueuedTaskChanged;
         _refreshRequested = false;
         _refreshCancellation?.Cancel();
         page?.Cancel();
@@ -436,11 +436,11 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
 
     [RelayCommand] private void Cancel() => _operation?.Cancel();
 
-    private void QueueRuntimeOperation(ConfiguredOfficialSourceId source, string title, Func<IRuntimeExecutionRuntimeManagementClient, BackgroundProcessContext, Task> action)
+    private void QueueRuntimeOperation(ConfiguredOfficialSourceId source, string title, Func<IRuntimeExecutionRuntimeManagementClient, BackgroundTaskContext, Task> action)
     {
         var createClient = _createOperationClient;
-        _queue.Enqueue(new(title, PackageOperationService.PackageStoreGroupKey, BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup, true, async context =>
+        _queue.Enqueue(new(title, PackageOperationService.PackageStoreGroupKey, BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup, true, async context =>
             {
                 using var client = createClient();
                 await action(client, context).ConfigureAwait(false);

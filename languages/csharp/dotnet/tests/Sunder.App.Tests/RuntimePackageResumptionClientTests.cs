@@ -15,7 +15,7 @@ public sealed class RuntimePackageResumptionClientTests
     [Fact]
     public async Task RetainedQueuedRuntimeAndPackageStageRoundTripSameProofThroughSharedClient()
     {
-        await using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var upload = new ContentUploadDescriptor("upload", RuntimeManagementTestClient.Hash, 81, "demo.sunderpkg", "application/vnd.sunder.package");
         var handle = new RuntimePackageUploadRetentionHandle(upload.UploadId, "opaque-lease", upload.ContentHash, upload.Length);
         var available = PackageUploadRetentionTestClient.Available(handle);
@@ -51,8 +51,8 @@ public sealed class RuntimePackageResumptionClientTests
                     return Json(RuntimeManagementTestClient.Prerequisites(runtimeReady));
                 case RuntimeApiRoutes.ExecutionRuntimeInstallApply:
                     Assert.False(staged);
-                    var package = Assert.Single(queue.ListProcesses(), item => item.Metadata["sunder.installationPhase"] == "package");
-                    Assert.Equal(BackgroundProcessState.Queued, package.State);
+                    var package = Assert.Single(queue.ListTasks(), item => item.Metadata["sunder.installationPhase"] == "package");
+                    Assert.Equal(BackgroundTaskState.Queued, package.State);
                     Assert.Null(package.StartedAtUtc);
                     var confirmation = (await request.Content!.ReadFromJsonAsync<RuntimeExecutionRuntimePlanConfirmation>())!;
                     Assert.Equal("install", confirmation.PlanId);
@@ -78,7 +78,7 @@ public sealed class RuntimePackageResumptionClientTests
         RegistryPackageInstallService.ValidateRuntimePreview(reviewed);
         var approval = new PackageInstallationApproval(reviewed);
         Assert.True(approval.NeedsRuntimeInstallation);
-        Assert.Empty(queue.ListProcesses());
+        Assert.Empty(queue.ListTasks());
 
         async Task<RuntimePackageRuntimePrerequisitePlan> Refresh(CancellationToken token)
         {
@@ -103,7 +103,7 @@ public sealed class RuntimePackageResumptionClientTests
         Assert.All(previews, preview => Assert.Equal(handle, preview.Local!.Mutations[0].UploadRetention));
         Assert.Null(previews[0].ExpectedSourceFingerprint);
         Assert.All(previews.Skip(1), preview => Assert.Equal(RuntimeManagementTestClient.Hash, preview.ExpectedSourceFingerprint));
-        Assert.All(queue.ListProcesses(), item => Assert.Equal(BackgroundProcessState.Completed, item.State));
+        Assert.All(queue.ListTasks(), item => Assert.Equal(BackgroundTaskState.Completed, item.State));
     }
 
     [Theory]

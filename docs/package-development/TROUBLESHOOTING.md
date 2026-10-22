@@ -91,7 +91,7 @@ View construction, navigation, warmup, and presentation enter on the App dispatc
 
 ### App Data Or Owner RPC Is Unavailable
 
-Runtime-backed state, files, settings, secrets, owner RPC, and callbacks require an active Runtime worker for the same package. They are also unavailable for mutation before the candidate App generation is published. Move work from module composition to navigation, a user action, an App background process, or a Worker lifecycle callback. Handle RPC unavailability and check callback availability where applicable.
+Runtime-backed state, files, settings, secrets, owner RPC, and callbacks require an active Runtime worker for the same package. They are also unavailable for mutation before the candidate App generation is published. Move work from module composition to navigation, a user action, an App background task, or a Worker lifecycle callback. Handle RPC unavailability and check callback availability where applicable.
 
 ### Storage Write Is Rejected
 

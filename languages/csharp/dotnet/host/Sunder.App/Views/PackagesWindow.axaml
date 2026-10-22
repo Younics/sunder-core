@@ -310,7 +310,7 @@
                 Content="Cancel"
                 IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
       </StackPanel>
-      <controls:BackgroundProcessMonitor Grid.Column="3"
+      <controls:BackgroundTaskMonitor Grid.Column="3"
                                           HorizontalAlignment="Right"
                                           DataContext="{Binding PackageProcesses}" />
     </Grid>

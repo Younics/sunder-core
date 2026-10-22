@@ -19,7 +19,6 @@ import {
   rpcAbiV1Projection,
   validateRpcInstance,
 } from "../src/descriptor-v1";
-import { generateTypeScriptBindings } from "../src/generator";
 import type { JsonSchema, RpcContractDescriptor } from "../src/types";
 
 interface ConformanceExpectations {
@@ -747,14 +746,6 @@ test("descriptor parsing preserves mathematical-integer token semantics", () => 
     );
   }
   assert.doesNotThrow(() => parseRpcContractDescriptor(source.replace('"minimum":0', '"minimum":1e0')));
-});
-
-test("the TypeScript generator consumes validated V1 keyed descriptors", () => {
-  const generated = generateTypeScriptBindings(completeDescriptor());
-  assert.match(generated, /export const CONTRACT_ID = "example\.rpc\.v1\.conformance" as const;/u);
-  assert.match(generated, /export interface IItemsProvider/u);
-  assert.match(generated, /Submit\(request: Request, context: RpcInvocationContext\): Promise<Result>;/u);
-  assert.match(generated, /Watch\(request: Request, context: RpcInvocationContext\): AsyncIterable<Event>;/u);
 });
 
 function completeDescriptor(): RpcContractDescriptor {

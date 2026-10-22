@@ -155,7 +155,7 @@ public sealed class AppPackageRetirementReconciliationTests
     {
         private readonly TemporaryDirectoryScope _temporary = TemporaryDirectoryScope.Create("app-stage-reconciliation");
         private readonly RuntimeClientTransport _transport;
-        private readonly BackgroundProcessQueueService _queue = new();
+        private readonly BackgroundTaskQueueService _queue = new();
         internal ProbeHandler Handler { get; } = new();
         internal ProbeDispatcher Dispatcher { get; } = new();
         internal WindowLauncher Launcher { get; }
@@ -171,7 +171,7 @@ public sealed class AppPackageRetirementReconciliationTests
             Launcher = new(PackageViewHostService.Empty, clients, new CliInstallationService(),
                 new NotificationCenterService(_temporary.GetPath("notifications.json")),
                 new ShellStateService(_temporary.GetPath("shell-state.json")), new ShellState(), null!, null!, null!,
-                uiDispatcher: Dispatcher, backgroundProcessQueue: _queue, developerServices: developer);
+                uiDispatcher: Dispatcher, backgroundTaskQueue: _queue, developerServices: developer);
         }
 
         internal void Start()

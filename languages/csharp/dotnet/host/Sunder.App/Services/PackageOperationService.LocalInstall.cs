@@ -5,7 +5,7 @@ namespace Sunder.App.Services;
 
 internal sealed partial class PackageOperationService
 {
-    public async Task<BackgroundProcessSnapshot?> EnqueueLocalInstallAsync(PackageArchiveSelection selection, CancellationToken cancellationToken = default)
+    public async Task<BackgroundTaskSnapshot?> EnqueueLocalInstallAsync(PackageArchiveSelection selection, CancellationToken cancellationToken = default)
     {
         ThrowIfDisposed();
         using var preparation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
@@ -43,7 +43,7 @@ internal sealed partial class PackageOperationService
 
             var members = preview.Requirements.Select(item => item.Package.PackageId).Append(review.PackageId).Distinct(StringComparer.Ordinal).ToArray();
             var metadata = new PackageOperationMetadata(review.PackageId, PackageOperationKind.InstallLocal, review.PackageName) { PackageIds = members };
-            var installation = PackageInstallationCohort.Enqueue(_backgroundProcesses, $"Install {review.PackageName}", metadata.ToMetadata(),
+            var installation = PackageInstallationCohort.Enqueue(_backgroundTasks, $"Install {review.PackageName}", metadata.ToMetadata(),
                 approval.NeedsRuntimeInstallation ? context => approval.InstallRuntimesAsync(client, Refresh, context) : null,
                 async context =>
                 {

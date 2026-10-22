@@ -111,7 +111,7 @@ internal static partial class SunderRpcCSharpImportPrepass
     }
 
     private static (string Signature, string RequestType, string OutputType, bool Empty, bool Completion, bool Stream) NaturalMethod(
-        SunderRpcCSharpImportedContract contract, SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Sunder.Sdk.Rpc.SunderRpcCSharpMethodModel method)
+        SunderRpcCSharpImportedContract contract, SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Generation.SunderRpcCSharpMethodModel method)
     {
         var descriptor = contract.Descriptor.Services.Single(value => value.ServiceId == service.ServiceId).Methods.Single(value => value.MethodId == method.MethodId);
         var empty = IsEmptyRoot(contract.Descriptor, descriptor.RequestSchemaReference);
@@ -126,7 +126,7 @@ internal static partial class SunderRpcCSharpImportPrepass
     }
 
     private static void EmitNaturalClientMethod(StringBuilder output, SunderRpcCSharpImportedContract contract,
-        SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Sunder.Sdk.Rpc.SunderRpcCSharpMethodModel method)
+        SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Generation.SunderRpcCSharpMethodModel method)
     {
         var shape = NaturalMethod(contract, model, service, method);
         output.Append("    public ").Append(shape.Stream ? "" : "async ").Append(shape.Signature).AppendLine(" {");

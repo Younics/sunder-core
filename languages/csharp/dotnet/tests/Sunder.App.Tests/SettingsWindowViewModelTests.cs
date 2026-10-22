@@ -742,38 +742,38 @@ public sealed class SettingsWindowViewModelTests
     }
 
     [Fact]
-    public async Task BackgroundProcesses_IncludesOnlySettingsIndicatorProcessesInSettingsFooter()
+    public async Task BackgroundTasks_IncludesOnlySettingsIndicatorProcessesInSettingsFooter()
     {
         using var runtimeClient = new FakeRuntimeApiClient();
-        var queue = new BackgroundProcessQueueService(maxParallelism: 2);
+        var queue = new BackgroundTaskQueueService(maxParallelism: 2);
         using var viewModel = new SettingsWindowViewModel(
             runtimeClient,
             PackageViewHostService.Empty,
             new CliInstallationService(),
-            backgroundProcessQueue: queue);
+            backgroundTaskQueue: queue);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        queue.Enqueue(new BackgroundProcessRequest(
+        queue.Enqueue(new BackgroundTaskRequest(
             "Hidden work",
             "hidden:work",
-            BackgroundProcessIndicator.Hidden,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Hidden,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             async _ => await release.Task));
-        queue.Enqueue(new BackgroundProcessRequest(
+        queue.Enqueue(new BackgroundTaskRequest(
             "Settings package work",
             "package:test:work",
-            BackgroundProcessIndicator.Settings,
-            BackgroundProcessConcurrencyMode.SequentialWithinGroup,
+            BackgroundTaskIndicator.Settings,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup,
             true,
             async _ => await release.Task));
 
-        await WaitForConditionAsync(() => queue.ListProcesses().Count(process => process.State == BackgroundProcessState.Running) == 2);
-        viewModel.BackgroundProcesses.Refresh();
+        await WaitForConditionAsync(() => queue.ListTasks().Count(process => process.State == BackgroundTaskState.Running) == 2);
+        viewModel.BackgroundTasks.Refresh();
 
-        Assert.Equal("Settings package work", Assert.Single(viewModel.BackgroundProcesses.Processes).Title);
+        Assert.Equal("Settings package work", Assert.Single(viewModel.BackgroundTasks.Processes).Title);
         release.SetResult();
-        await WaitForConditionAsync(() => queue.ListProcesses().All(process => process.IsTerminal));
+        await WaitForConditionAsync(() => queue.ListTasks().All(process => process.IsTerminal));
     }
 
     private static SettingsWindowViewModel CreateViewModel(FakeRuntimeApiClient runtimeClient) =>

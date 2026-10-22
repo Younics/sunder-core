@@ -56,10 +56,10 @@ internal sealed class ShellLayoutStateCoordinator : IDisposable
         QueueSaveIfEnabled();
     }
 
-    public void PersistBackgroundProcessPopoverSize(double width, double height)
+    public void PersistBackgroundTaskPopoverSize(double width, double height)
     {
-        _shellState.BackgroundProcessPopoverWidth = width;
-        _shellState.BackgroundProcessPopoverHeight = height;
+        _shellState.BackgroundTaskPopoverWidth = width;
+        _shellState.BackgroundTaskPopoverHeight = height;
         QueueSaveIfEnabled();
     }
 

@@ -2,6 +2,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Platform;
 using Avalonia.VisualTree;
+using System.Runtime.InteropServices;
 
 namespace Sunder.App.Services;
 
@@ -87,6 +88,8 @@ internal sealed class AppNativeWebView : IAppWebView
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         Directory.CreateDirectory(_userDataDirectory);
         _webView.EnvironmentRequested += OnEnvironmentRequested;
+        _webView.AdapterCreated += OnAdapterCreated;
+        _webView.AdapterDestroyed += OnAdapterDestroyed;
         _webView.NavigationStarted += OnNavigationStarted;
         _webView.NavigationCompleted += OnNavigationCompleted;
         _webView.NewWindowRequested += OnNewWindowRequested;
@@ -120,17 +123,27 @@ internal sealed class AppNativeWebView : IAppWebView
             return;
         }
         _webView.EnvironmentRequested -= OnEnvironmentRequested;
+        _webView.AdapterCreated -= OnAdapterCreated;
+        _webView.AdapterDestroyed -= OnAdapterDestroyed;
         _webView.NavigationStarted -= OnNavigationStarted;
         _webView.NavigationCompleted -= OnNavigationCompleted;
         _webView.NewWindowRequested -= OnNewWindowRequested;
         _webView.WebResourceRequested -= OnWebResourceRequested;
         _webView.WebMessageReceived -= OnWebMessageReceived;
+        _viewport.Dispose();
         _webView.Stop();
     }
+
+    private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs args)
+        => _viewport.SetPlatformHandle(args.TryGetPlatformHandle());
+
+    private void OnAdapterDestroyed(object? sender, WebViewAdapterEventArgs args)
+        => _viewport.SetPlatformHandle(null);
 
     private void OnEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs args)
     {
         args.EnableDevTools = false;
+        _viewport.UsesCompositedRendering = args is LinuxWpeWebViewEnvironmentRequestedEventArgs;
         switch (args)
         {
             case WindowsWebView2EnvironmentRequestedEventArgs windows:
@@ -153,7 +166,6 @@ internal sealed class AppNativeWebView : IAppWebView
                 break;
             case LinuxWpeWebViewEnvironmentRequestedEventArgs linux:
                 // WPE is composited by Avalonia and already obeys its rounded clips.
-                _viewport.RequiresNativeInset = false;
                 linux.DataDirectory = Path.Combine(_userDataDirectory, "data");
                 linux.CacheDirectory = Path.Combine(_userDataDirectory, "cache");
                 break;
@@ -196,52 +208,97 @@ internal sealed class AppNativeWebView : IAppWebView
 }
 
 /// <summary>
-/// HWND/NSView/GTK WebViews cannot inherit the shell's Avalonia rounded clip.
-/// Give only those browsers a small graphite frame and a genuinely smaller,
-/// reflowed native viewport, rather than cropping HTML or changing every package view.
+/// Native browsers fill the content bounds; Sunder applies the shell's rounded
+/// clips to their native surface. The old contained rectangle remains a fail-safe
+/// only for an unavailable/unsupported native mask, never package-authored padding.
 /// </summary>
-internal sealed class AppNativeWebViewViewport : Decorator
+internal sealed class AppNativeWebViewViewport : Decorator, IDisposable
 {
     private const double DefaultShellRadius = 18;
-    private bool _requiresNativeInset = true;
+    private bool _usesCompositedRendering;
+    private IAppNativeWebViewClip? _nativeClip;
     private Rect _arrangedViewport;
+    private AppNativeWebViewClipRegion[] _arrangedRegions = [];
+    private double _arrangedScaling;
     private readonly List<Border> _clipBorders = [];
 
-    internal AppNativeWebViewViewport(Control browser)
+    internal AppNativeWebViewViewport(Control browser, IAppNativeWebViewClip? nativeClip = null)
     {
         Child = browser;
         ClipToBounds = true;
+        _nativeClip = nativeClip;
     }
 
-    internal bool RequiresNativeInset
+    internal bool UsesCompositedRendering
     {
-        get => _requiresNativeInset;
+        get => _usesCompositedRendering;
         set
         {
-            if (_requiresNativeInset == value) return;
-            _requiresNativeInset = value;
+            if (_usesCompositedRendering == value) return;
+            _usesCompositedRendering = value;
             InvalidateMeasure();
         }
     }
 
+    internal void SetPlatformHandle(IPlatformHandle? handle)
+    {
+        try
+        {
+            // This adapter is rendered into Avalonia's compositor, not an HWND.
+            UsesCompositedRendering = handle?.HandleDescriptor == "Windows.UI.Composition.ContainerVisual"
+                || handle is ILinuxWpePlatformHandle;
+            SetNativeClip(handle is null ? null : AppNativeWebViewClip.Create(handle));
+        }
+        catch (Exception error) when (IsNativeClipFailure(error))
+        {
+            SetNativeClip(null);
+            AppSessionLog.WriteError("Native browser clipping is unavailable; using the contained viewport.", error);
+        }
+    }
+
+    internal void SetNativeClip(IAppNativeWebViewClip? clip)
+    {
+        _nativeClip?.Dispose();
+        _nativeClip = clip;
+        _arrangedRegions = [];
+        InvalidateMeasure();
+    }
+
     protected override Size MeasureOverride(Size availableSize)
     {
-        var inset = RequiresNativeInset ? Inset(DefaultShellRadius, Scaling) : 0;
+        var inset = UsesCompositedRendering || _nativeClip is not null ? 0 : Inset(DefaultShellRadius, Scaling);
         Child?.Measure(new Size(Math.Max(0, availableSize.Width - 2 * inset), Math.Max(0, availableSize.Height - 2 * inset)));
         return Child is { } browser ? new Size(browser.DesiredSize.Width + 2 * inset, browser.DesiredSize.Height + 2 * inset) : default;
     }
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        var viewport = CalculateViewport(finalSize);
-        _arrangedViewport = viewport;
+        var regions = ClipRegions(finalSize);
+        var viewport = regions is null ? default : CalculateViewport(finalSize, regions);
         if (Child is { } browser)
         {
             // NativeControlHost clamps zero dimensions to one pixel. Visibility is
             // essential when a splitter leaves no contained rectangle to display.
             browser.IsVisible = viewport.Width >= 1 / Scaling && viewport.Height >= 1 / Scaling;
             browser.Arrange(viewport);
+            if (regions is not null && _nativeClip is { } clip)
+            {
+                var applied = false;
+                try { applied = clip.TryApply(finalSize, regions, Scaling); }
+                catch (Exception error) when (IsNativeClipFailure(error))
+                { AppSessionLog.WriteError("Native browser clip update failed; using the contained viewport.", error); }
+                if (!applied)
+                {
+                    SetNativeClip(null);
+                    viewport = CalculateViewport(finalSize, regions);
+                    browser.IsVisible = viewport.Width >= 1 / Scaling && viewport.Height >= 1 / Scaling;
+                    browser.Arrange(viewport);
+                }
+            }
         }
+        _arrangedViewport = viewport;
+        _arrangedRegions = regions ?? [];
+        _arrangedScaling = Scaling;
         return finalSize;
     }
 
@@ -259,9 +316,7 @@ internal sealed class AppNativeWebViewViewport : Decorator
 
     protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        LayoutUpdated -= OnLayoutUpdated;
-        foreach (var border in _clipBorders) border.PropertyChanged -= OnBoundaryPropertyChanged;
-        _clipBorders.Clear();
+        UnsubscribeBoundaries();
         if (Child is { } browser) browser.IsVisible = false;
         base.OnDetachedFromVisualTree(e);
     }
@@ -282,21 +337,39 @@ internal sealed class AppNativeWebViewViewport : Decorator
     private void OnLayoutUpdated(object? sender, EventArgs args)
     {
         // Includes docking, splitter movement, theme-radius and display-scale changes.
-        if (CalculateViewport(Bounds.Size) != _arrangedViewport) InvalidateArrange();
+        var regions = ClipRegions(Bounds.Size);
+        if (regions is null)
+        {
+            if (_arrangedRegions.Length != 0 || _arrangedViewport != default) InvalidateArrange();
+            return;
+        }
+        if (!regions.SequenceEqual(_arrangedRegions) || Scaling != _arrangedScaling
+            || CalculateViewport(Bounds.Size, regions) != _arrangedViewport) InvalidateArrange();
     }
 
-    private Rect CalculateViewport(Size size)
+    private AppNativeWebViewClipRegion[]? ClipRegions(Size size)
     {
-        if (!RequiresNativeInset) return new Rect(size);
-        var viewport = ContainedRectangle(new Rect(size), DefaultShellRadius, Scaling);
+        var regions = new List<AppNativeWebViewClipRegion> { AppNativeWebViewClipRegion.Create(new Rect(size), default) };
         foreach (var border in ShellClipBorders().Where(border => border.ClipToBounds))
         {
             if (border.TransformToVisual(this) is not { } transform
                 || Math.Abs(transform.M11 - 1) > 0.000001 || Math.Abs(transform.M22 - 1) > 0.000001
-                || Math.Abs(transform.M12) > 0.000001 || Math.Abs(transform.M21) > 0.000001) return default;
+                || Math.Abs(transform.M12) > 0.000001 || Math.Abs(transform.M21) > 0.000001) return null;
             var origin = transform.Transform(default(Point));
-            var radius = NormalizedMaximumRadius(border.Bounds.Size, border.CornerRadius);
-            viewport = viewport.Intersect(ContainedRectangle(new Rect(origin, border.Bounds.Size), radius, Scaling));
+            regions.Add(AppNativeWebViewClipRegion.Create(new Rect(origin, border.Bounds.Size), border.CornerRadius));
+        }
+        return regions.ToArray();
+    }
+
+    private Rect CalculateViewport(Size size, IReadOnlyList<AppNativeWebViewClipRegion> regions)
+    {
+        if (UsesCompositedRendering || _nativeClip is not null) return new Rect(size);
+        var viewport = ContainedRectangle(new Rect(size), DefaultShellRadius, Scaling);
+        foreach (var region in regions.Skip(1))
+        {
+            var r = region.Radius;
+            var radius = Math.Max(Math.Max(r.TopLeft, r.TopRight), Math.Max(r.BottomLeft, r.BottomRight));
+            viewport = viewport.Intersect(ContainedRectangle(region.Bounds, radius, Scaling));
         }
         return viewport;
     }
@@ -308,16 +381,22 @@ internal sealed class AppNativeWebViewViewport : Decorator
             ? default : boundary.Deflate(new Thickness(inset));
     }
 
-    private static double NormalizedMaximumRadius(Size size, CornerRadius radius)
+    public void Dispose()
     {
-        // Avalonia normalizes all four radii with one scale factor. Clamping the
-        // maximum to half the shortest side would leak for a single large corner.
-        var horizontal = Math.Max(radius.TopLeft + radius.TopRight, radius.BottomLeft + radius.BottomRight);
-        var vertical = Math.Max(radius.TopLeft + radius.BottomLeft, radius.TopRight + radius.BottomRight);
-        var factor = Math.Min(1, Math.Min(horizontal > 0 ? size.Width / horizontal : 1,
-            vertical > 0 ? size.Height / vertical : 1));
-        return Math.Max(Math.Max(radius.TopLeft, radius.TopRight), Math.Max(radius.BottomLeft, radius.BottomRight)) * factor;
+        UnsubscribeBoundaries();
+        SetNativeClip(null);
+        if (Child is { } browser) browser.IsVisible = false;
     }
+
+    private void UnsubscribeBoundaries()
+    {
+        LayoutUpdated -= OnLayoutUpdated;
+        foreach (var border in _clipBorders) border.PropertyChanged -= OnBoundaryPropertyChanged;
+        _clipBorders.Clear();
+    }
+
+    private static bool IsNativeClipFailure(Exception error) => error is DllNotFoundException or EntryPointNotFoundException
+        or ExternalException or InvalidOperationException or ArgumentOutOfRangeException;
 
     private static double Inset(double radius, double scaling)
         // r * (1 - 1/sqrt(2)) contains all four rectangle corners. One physical

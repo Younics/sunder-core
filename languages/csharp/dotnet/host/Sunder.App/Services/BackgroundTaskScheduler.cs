@@ -2,18 +2,18 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal static class BackgroundProcessScheduler
+internal static class BackgroundTaskScheduler
 {
-    public static BackgroundProcessWorkItem[] StartEligibleProcesses(
-        IReadOnlyList<BackgroundProcessWorkItem> processes,
+    public static BackgroundTaskWorkItem[] StartEligibleProcesses(
+        IReadOnlyList<BackgroundTaskWorkItem> processes,
         int runningProcessCount,
         int maxParallelism)
     {
-        List<BackgroundProcessWorkItem> processesToStart = [];
+        List<BackgroundTaskWorkItem> processesToStart = [];
         while (runningProcessCount + processesToStart.Count < maxParallelism)
         {
             var candidate = processes.FirstOrDefault(process =>
-                process.State == BackgroundProcessState.Queued
+                process.State == BackgroundTaskState.Queued
                 && !IsGroupBlocked(process, processes, processesToStart));
             if (candidate is null)
             {
@@ -28,16 +28,16 @@ internal static class BackgroundProcessScheduler
     }
 
     private static bool IsGroupBlocked(
-        BackgroundProcessWorkItem candidate,
-        IEnumerable<BackgroundProcessWorkItem> processes,
-        IReadOnlyList<BackgroundProcessWorkItem> processesToStart)
+        BackgroundTaskWorkItem candidate,
+        IEnumerable<BackgroundTaskWorkItem> processes,
+        IReadOnlyList<BackgroundTaskWorkItem> processesToStart)
     {
         return processes.Concat(processesToStart)
             .Any(process =>
-                process.ProcessId != candidate.ProcessId
-                && process.State is BackgroundProcessState.Running or BackgroundProcessState.Cancelling
+                process.TaskId != candidate.TaskId
+                && process.State is BackgroundTaskState.Running or BackgroundTaskState.Cancelling
                 && string.Equals(process.Request.GroupKey, candidate.Request.GroupKey, StringComparison.OrdinalIgnoreCase)
-                && (process.Request.ConcurrencyMode == BackgroundProcessConcurrencyMode.SequentialWithinGroup
-                    || candidate.Request.ConcurrencyMode == BackgroundProcessConcurrencyMode.SequentialWithinGroup));
+                && (process.Request.ConcurrencyMode == BackgroundTaskConcurrencyMode.SequentialWithinGroup
+                    || candidate.Request.ConcurrencyMode == BackgroundTaskConcurrencyMode.SequentialWithinGroup));
     }
 }

@@ -247,7 +247,7 @@ public sealed class AppPackageSnapshotCacheTests
                 "*.json",
                 SearchOption.AllDirectories));
             activationLease = Assert.IsType<PackageProjectionAcquisition>(prepared.ProjectionLease.Take());
-            await using var runtimeWork = new BackgroundProcessQueueService();
+            await using var runtimeWork = new BackgroundTaskQueueService();
             using var sharedAssemblies = new AppSharedAssemblyRegistry([]);
             var unload = new AppPackageUnloadCoordinator(
                 new AppPackageViewRegistry(),

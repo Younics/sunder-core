@@ -3,13 +3,12 @@ import {
   SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-  generateTypeScriptBindings,
   isPackageId,
   isSemanticVersion,
   parseRpcContractDescriptor,
   type RpcContractDescriptor,
-  type TypeScriptGeneratorOptions,
 } from "@sunder/sdk";
+import { generateTypeScriptBindings, type TypeScriptGeneratorOptions } from "./generator";
 
 const MAXIMUM_DESCRIPTOR_BYTES = 4 * 1024 * 1024;
 const MAXIMUM_METADATA_BYTES = 64 * 1024;

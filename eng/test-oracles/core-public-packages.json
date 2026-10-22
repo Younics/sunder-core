@@ -9,7 +9,7 @@
       "packageType": "",
       "includeBuildOutput": true,
       "maximumBytes": 2097152,
-      "requiredEntries": ["lib/net10.0/Sunder.Sdk.dll"]
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.dll", "lib/net10.0/Sunder.Sdk.xml"]
     },
     {
       "packageId": "Sunder.Sdk.Avalonia",
@@ -18,7 +18,7 @@
       "packageType": "",
       "includeBuildOutput": true,
       "maximumBytes": 2097152,
-      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Avalonia.dll"]
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Avalonia.dll", "lib/net10.0/Sunder.Sdk.Avalonia.xml"]
     },
     {
       "packageId": "Sunder.Sdk.Stacks",
@@ -29,6 +29,7 @@
       "maximumBytes": 2097152,
       "requiredEntries": [
         "lib/net10.0/Sunder.Sdk.Stacks.dll",
+        "lib/net10.0/Sunder.Sdk.Stacks.xml",
         "contracts/sunder.stack.contributor.rpc.json",
         "buildTransitive/Sunder.Sdk.Stacks.props"
       ]
@@ -40,7 +41,7 @@
       "packageType": "",
       "includeBuildOutput": true,
       "maximumBytes": 3145728,
-      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Worker.dll"]
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Worker.dll", "lib/net10.0/Sunder.Sdk.Worker.xml"]
     },
     {
       "packageId": "Sunder.Package.Build",
@@ -81,8 +82,8 @@
         "lib/net10.0/Sunder.Package.Templates.dll",
         "content/sunder-package/.template.config/template.json",
         "content/sunder-package/Sunder.Package.Template/Assets/icon.png",
-        "content/sunder-package/Sunder.Package.Template/PackageMetadata.host.cs",
-        "content/sunder-package/Sunder.Package.Template/PackageMetadata.no-host.cs",
+        "content/sunder-package/Sunder.Package.Template/PackageMetadata.dependency.cs",
+        "content/sunder-package/Sunder.Package.Template/PackageMetadata.standalone.cs",
         "content/sunder-package/Sunder.Package.Template/README.md",
         "content/sunder-package/Sunder.Package.Template/Views/Avalonia.PackageReferences.props",
         "content/sunder-package/Sunder.Package.Template/Views/DefaultPackageView.axaml",
@@ -127,12 +128,9 @@
         "dist/framing.d.ts",
         "dist/framing.js",
         "dist/framing.js.map",
-        "dist/generator-cli.d.ts",
-        "dist/generator-cli.js",
-        "dist/generator-cli.js.map",
-        "dist/generator.d.ts",
-        "dist/generator.js",
-        "dist/generator.js.map",
+        "dist/generated.d.ts",
+        "dist/generated.js",
+        "dist/generated.js.map",
         "dist/index.d.ts",
         "dist/index.js",
         "dist/index.js.map",
@@ -198,9 +196,18 @@
         "dist/descriptor-files.d.ts",
         "dist/descriptor-files.js",
         "dist/descriptor-files.js.map",
+        "dist/generator-cli.d.ts",
+        "dist/generator-cli.js",
+        "dist/generator-cli.js.map",
+        "dist/generator.d.ts",
+        "dist/generator.js",
+        "dist/generator.js.map",
         "dist/index.d.ts",
         "dist/index.js",
         "dist/index.js.map",
+        "dist/metadata-edit.d.ts",
+        "dist/metadata-edit.js",
+        "dist/metadata-edit.js.map",
         "dist/model.d.ts",
         "dist/model.js",
         "dist/model.js.map",

@@ -1,6 +1,9 @@
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -24,17 +27,53 @@ internal static class ServiceApiSyntax
     internal static void AppendInterface(StringBuilder output, string packageId, INamedTypeSymbol type, IEnumerable<IMethodSymbol> methods, bool mapSourceLocations = false, string? serviceId = null)
     {
         output.Append("namespace ").Append(GeneratedPackageNames.Services(packageId)).AppendLine(" {");
+        AppendDocumentation(output, type, null);
         if (mapSourceLocations) AppendLocation(output, type);
         output.Append(type.DeclaredAccessibility == Accessibility.Public ? "public" : "internal")
             .Append(" interface ").Append(Escape(serviceId == null ? GeneratedPackageNames.ServiceInterfaceName(type) : GeneratedPackageNames.NaturalInterfaceName(serviceId))).AppendLine(" {");
         foreach (var method in methods)
         {
+            AppendDocumentation(output, method, method.Parameters.Where(parameter => !IsContext(parameter)).Select(parameter => parameter.Name));
             if (mapSourceLocations) AppendLocation(output, method);
             output.Append("    ").Append(Signature(method)).AppendLine(";");
         }
         output.AppendLine("}");
         if (mapSourceLocations) output.AppendLine("#line default");
         output.AppendLine("}");
+    }
+
+    private static void AppendDocumentation(StringBuilder output, ISymbol symbol, IEnumerable<string>? parameters)
+    {
+        var xml = symbol.GetDocumentationCommentXml(expandIncludes: false);
+        if (string.IsNullOrWhiteSpace(xml) || xml!.Length > 65536) return;
+        try
+        {
+            using var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersInDocument = 65536,
+            });
+            var document = XElement.Load(reader);
+            var names = parameters == null ? null : new HashSet<string>(parameters, System.StringComparer.Ordinal);
+            foreach (var element in document.Elements())
+            {
+                // Include/inheritdoc directives could resolve different source in an isolated role.
+                if (!(new[] { "summary", "remarks", "example", "param", "returns", "exception", "seealso" }).Contains(element.Name.LocalName)) continue;
+                if (element.Name.LocalName == "param" && (names == null || !names.Contains((string?)element.Attribute("name") ?? ""))) continue;
+                foreach (var directive in element.Descendants().Where(value => value.Name.LocalName is "include" or "inheritdoc").ToArray())
+                    directive.Remove();
+                foreach (var reference in element.Descendants("paramref").ToArray())
+                    if (names == null || !names.Contains((string?)reference.Attribute("name") ?? ""))
+                        reference.ReplaceWith(new XText((string?)reference.Attribute("name") ?? "invocation context"));
+                foreach (var line in element.ToString(SaveOptions.DisableFormatting).Replace("\r\n", "\n").Split('\n'))
+                    output.Append("/// ").AppendLine(line);
+            }
+        }
+        catch (XmlException)
+        {
+            // The source compiler owns malformed author comments; generation must not invent XML.
+        }
     }
 
     private static void AppendLocation(StringBuilder output, ISymbol symbol)

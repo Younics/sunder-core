@@ -1,16 +1,51 @@
 # @sunder/sdk
 
-The published tarball describes its release; this repository documents current source.
-Use the matching `sdk/v*` tag when auditing an existing release.
+> **SDK status: UNFROZEN / UNRELEASED.** This README describes the current source
+> candidate, not a supported release. The supported-release ledger contains no releases.
 
 Sunder packages author ordinary services in TypeScript or checked JavaScript. The
 package tool derives their portable contracts and generates registration, Worker
 bootstrap, validated value conversion and package-local clients. The main SDK has
 no runtime dependencies. React is an optional peer used only by `@sunder/sdk/react`.
 
+After the first supported release, compatible fixes and additions remain allowed
+while supported source, runtime ABI and behavioral contracts must be preserved. See
+the [compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md).
+
+## Start with the scaffold
+
+Use coordinated candidate packages from your local tarballs or candidate feed while
+the SDK is unreleased; do not assume npm `latest` matches this source. With the
+candidate `create-sunder-package` command available:
+
+```sh
+create-sunder-package MyPackage --package-id my.company.package --package-name "My Package"
+```
+
+The default `node` preset creates `src/services.ts`, ordinary package scripts, a
+contract lock and the `#sunder/api` import mapping. Add `--preset react-node` for a
+React App, or `--language js` for independently authored checked JavaScript/JSDoc.
+After entering the generated directory:
+
+```sh
+npm install
+npm test
+npm run sunder:dev
+```
+
+Use `npm run build` for exact-RID output and `npm run package` for the universal
+archive. Normal authors maintain services and business models, not Worker bootstrap,
+provider registrations, descriptors or role leaves. See the
+[creator guide](../create-sunder-package/README.md).
+
+The source producer (`sunder:dev`) and the Host's output watcher have separate jobs.
+A requested Host watch, a running producer, a successful build and an applied output
+generation are independent observations; none proves all the others.
+
 ## Define a service
 
-Configure one `services.module` in `sunder.package.json`, then export definitions:
+The scaffold configures one `services.module` in `sunder.package.json`. Export
+ordinary `defineService` definitions from that module:
 
 ```ts
 import { defineService, type ServiceContext } from "@sunder/sdk";
@@ -29,10 +64,22 @@ export const greeting = defineService({
 JavaScript uses exactly the same definition with checked JSDoc:
 
 ```js
+// @ts-check
 import { defineService } from "@sunder/sdk";
+
 export const greeting = defineService({
-  /** @param {string} name @returns {Promise<string>} */
-  async greet(name) { return `Hello, ${name}!`; },
+  /**
+   * @param {string} name
+   * @param {import("@sunder/sdk").ServiceContext} context
+   * @returns {Promise<string>}
+   */
+  async greet(name, context) {
+    context.signal.throwIfAborted();
+    return `Hello, ${name}!`;
+  },
+}, {
+  constraints: { "greet.name": { minLength: 1, maxLength: 200 } },
+  runtimeUse: {},
 });
 ```
 
@@ -50,6 +97,10 @@ recursion, `bigint`, `Uint8Array`, explicit `JsonValue`/`JsonObject`, natural
 `"float32"` constraint when those semantics are intended. Formatted strings and exact
 decimal constraints remain explicit. Absence, null and present values stay distinct.
 Other native classes, tuples, arbitrary unions and custom codecs are not inferred.
+
+Author business types once and use them directly in method signatures. Owned bindings
+reuse those source types; imported models are generated from reviewed package
+projection metadata rather than mirrored by hand.
 
 Constraints name `method.parameter`, `method.result`, or `Type.property` paths.
 They supply facets, not a second schema. Public exposure, exceptional stable wire
@@ -120,6 +171,21 @@ Each service has a generated `Providers` catalog with `list`, `get`, `watch`, an
 list/watch can report other visible exact-contract providers. No catalog operation
 grants permissions. Advanced `Catalogs` and the raw RPC APIs remain available for
 deliberate low-level integrations.
+
+## Entry points and generation ownership
+
+- Node service authors use `@sunder/sdk`; browser authors use `@sunder/sdk/browser`.
+- Optional React integration uses `@sunder/sdk/react`.
+- Normal service calls and model imports come from the generated `#sunder/api`.
+- `@sunder/sdk/generated` is the supported, browser-safe **generated-runtime ABI**.
+  Its exported signatures and referenced types are compatibility commitments after
+  release, not unprotected implementation details. It is for generated code, not an
+  ordinary author import or a replacement for `#sunder/api`.
+
+TypeScript source/binding generation belongs to `@sunder/package-tool`, not the
+runtime SDK. Normal projects use its `sunder-package generate` workflow through the
+scaffolded scripts. Low-level descriptor generation is also owned by that tooling;
+the SDK entry points contain runtime contracts and support, not a build-time generator.
 
 ## Natural content and provider references
 
@@ -356,6 +422,14 @@ when finished; the Host also revokes it at the invocation/scope terminal boundar
 Worker stdout remains reserved for protocol framing. Use Host logging for events and
 bounded `safeStderr` diagnostics. Declare optional APIs in `workerCapabilities`;
 package code cannot raise the fixed Worker transport limits.
+
+### Advanced transport and Worker integration
+
+Direct `runWorker`, raw provider registrations, transport adapters and manual role
+leaves are advanced integration boundaries, not the scaffold workflow. Ordinary
+packages keep the generated Worker bootstrap and use `configure` only for actual
+lifecycle behavior.
+
 ## Explicit optional service-reference occurrences
 
 References are strict by default, including nullable references. To preserve
@@ -418,3 +492,9 @@ item. The four accepted kind/code pairs are `unavailable/rpc.content.authority-r
 `deadline-exceeded/rpc.call.deadline-exceeded`, `stale-endpoint/rpc.endpoint.stale`, and
 `cancelled/rpc.call.cancelled`, all with safe, not-dispatched metadata. Caller cancellation,
 provider-body errors, source open/read errors, and forged or reused errors still fail.
+
+## Documentation channel
+
+Repository links in this README follow current source. Before publishing a package
+README, provide documentation bound to its actual release; no release tag is implied
+here.

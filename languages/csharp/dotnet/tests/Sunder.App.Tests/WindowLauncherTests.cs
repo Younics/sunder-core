@@ -13,7 +13,7 @@ public sealed class WindowLauncherTests
     public void CloseForShutdown_WhenQueueIsOwned_DisposesQueue()
     {
         using var harness = CreateHarness();
-        var queue = harness.Launcher.BackgroundProcesses;
+        var queue = harness.Launcher.BackgroundTasks;
 
         harness.Launcher.CloseForShutdown();
 
@@ -23,13 +23,13 @@ public sealed class WindowLauncherTests
     [Fact]
     public void Dispose_WhenQueueIsInjected_DoesNotDisposeQueue()
     {
-        using var queue = new BackgroundProcessQueueService(maxParallelism: 1);
+        using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         using var harness = CreateHarness(queue);
 
         harness.Launcher.Dispose();
 
         var probe = EnqueueProbe(queue);
-        Assert.NotEqual(Guid.Empty, probe.ProcessId);
+        Assert.NotEqual(Guid.Empty, probe.TaskId);
     }
 
     [Fact]
@@ -80,7 +80,7 @@ public sealed class WindowLauncherTests
     public async Task ClosingPresentationKeepsAcknowledgedOwnerReleaseAvailableAndDoesNotDisposeOnStageFailure()
     {
         using var transport = new RuntimeClientTransport(() => null);
-        await using var queue = new BackgroundProcessQueueService();
+        await using var queue = new BackgroundTaskQueueService();
         var developer = new AppPackageDeveloperServices(transport, new ThrowingRuntimeApiClientFactory(), queue, new TrackingUiDispatcher());
         using var harness = CreateHarness(queue, developerServices: developer);
         harness.Launcher.CloseForShutdown();
@@ -115,7 +115,7 @@ public sealed class WindowLauncherTests
     }
 
     private static WindowLauncherHarness CreateHarness(
-        BackgroundProcessQueueService? queue = null,
+        BackgroundTaskQueueService? queue = null,
         IUiDispatcher? uiDispatcher = null,
         AppPackageDeveloperServices? developerServices = null)
     {
@@ -133,7 +133,7 @@ public sealed class WindowLauncherTests
             packagesWindowFactory: null!,
             stacksWindowFactory: null!,
             uiDispatcher: uiDispatcher,
-            backgroundProcessQueue: queue,
+            backgroundTaskQueue: queue,
             developerServices: developerServices);
 
         return new WindowLauncherHarness(launcher, rootPath);
@@ -150,12 +150,12 @@ public sealed class WindowLauncherTests
             [],
             []);
 
-    private static BackgroundProcessSnapshot EnqueueProbe(BackgroundProcessQueueService queue)
-        => queue.Enqueue(new BackgroundProcessRequest(
+    private static BackgroundTaskSnapshot EnqueueProbe(BackgroundTaskQueueService queue)
+        => queue.Enqueue(new BackgroundTaskRequest(
             "Probe",
             "test",
-            BackgroundProcessIndicator.Main,
-            BackgroundProcessConcurrencyMode.ParallelWithinGroup,
+            BackgroundTaskIndicator.Main,
+            BackgroundTaskConcurrencyMode.ParallelWithinGroup,
             CanCancel: false,
             _ => Task.CompletedTask));
 

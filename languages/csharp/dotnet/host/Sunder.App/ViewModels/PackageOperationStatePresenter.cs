@@ -30,7 +30,7 @@ internal sealed class PackageOperationStatePresenter(IPackageOperationExecutor o
     public SelectedPackageOperationState GetSelectedPackageState(string? packageId)
         => SelectedPackageOperationState.FromSnapshot(GetActiveOperationForPackage(packageId));
 
-    private BackgroundProcessSnapshot? GetActiveOperationForPackage(IPackageOperationStateViewModel package)
+    private BackgroundTaskSnapshot? GetActiveOperationForPackage(IPackageOperationStateViewModel package)
         => package switch
         {
             RegistryPackageSearchItemViewModel marketplacePackage => GetActiveOperationForPackage(marketplacePackage.PackageId),
@@ -38,7 +38,7 @@ internal sealed class PackageOperationStatePresenter(IPackageOperationExecutor o
             _ => null,
         };
 
-    private BackgroundProcessSnapshot? GetActiveOperationForPackage(string? packageId)
+    private BackgroundTaskSnapshot? GetActiveOperationForPackage(string? packageId)
         => string.IsNullOrWhiteSpace(packageId)
             ? null
             : operationExecutor.GetActiveOperationForPackage(packageId);

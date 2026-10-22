@@ -144,13 +144,15 @@ export function createApiContext(packageId: string, transport: ApiTransport | ((
         throw new Error("Natural content requires the transport's existing content scope, retirement signal and Host-clamped deadline.");
       const snapshot = identity.boundBinding?{resetRequired:false,providers:[identity.boundBinding.snapshot]}:await context.serviceBindings().discover(identity.contractId, linked);
       controller.signal.throwIfAborted();
-      if (snapshot.resetRequired) throw new Error("Service catalog requires a fresh snapshot.");
+      if (snapshot.resetRequired) throw new RpcError({ kind: "unavailable", code: "rpc.catalog.reset", message: "Service catalog requires a fresh snapshot." });
       const matches = snapshot.providers.filter(provider => provider.state === "active" && provider.packageId === (identity.provider?.packageId??identity.packageId)
         && provider.contractId === identity.contractId && provider.contractVersion === identity.contractVersion
         && provider.descriptorSha256 === identity.descriptorSha256 && provider.abiSha256 === identity.abiSha256
         && (identity.provider ? sameServiceLocator(identity.provider,locatorFromProvider(provider)) : identity.packageRange === undefined || isVersionInRange(provider.packageVersion, identity.packageRange)
           && (identity.includePrerelease || !provider.packageVersion.split("+", 1)[0]!.includes("-"))));
-      if (matches.length !== 1) throw new Error(matches.length ? "Service provider selection is ambiguous." : "No active provider matches the exact selected service.");
+      if (matches.length !== 1) throw new RpcError({ kind: "not-found",
+        code: matches.length ? "rpc.provider-ambiguous" : "rpc.provider-not-found",
+        message: matches.length ? "Service provider selection is ambiguous." : "No active provider matches the exact selected service." });
       const target = matches[0]!.providerHandle ?? matches[0]!.endpointReference;
       if (!target) throw new Error("Service provider has no authenticated endpoint.");
       const binding=identity.boundBinding??context.serviceBindings().track(matches[0]!);await binding.ensureCurrent(controller.signal);

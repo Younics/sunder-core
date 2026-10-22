@@ -10,6 +10,7 @@
     <Version>$(SunderDeveloperPackageVersion)</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk.Worker</Title>
     <Description>Standalone .NET worker authoring support for the Sunder Worker V1 process protocol.</Description>

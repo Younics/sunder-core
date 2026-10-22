@@ -131,10 +131,10 @@ internal sealed record SelectedPackageOperationState(
     double ProgressPercent,
     string StatusText)
 {
-    public static SelectedPackageOperationState FromSnapshot(BackgroundProcessSnapshot? operation)
+    public static SelectedPackageOperationState FromSnapshot(BackgroundTaskSnapshot? operation)
         => new(
             operation?.IsActive == true,
-            operation is { CanCancel: true, State: not BackgroundProcessState.Cancelling },
+            operation is { CanCancel: true, State: not BackgroundTaskState.Cancelling },
             operation?.ProgressPercent is null,
             operation?.ProgressPercent ?? 0,
             operation is null ? string.Empty : PackageOperationStateProjector.FormatStatus(operation));

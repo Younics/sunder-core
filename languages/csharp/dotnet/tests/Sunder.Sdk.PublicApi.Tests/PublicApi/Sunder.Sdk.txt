@@ -1,59 +1,59 @@
 # sunder-public-api-v2
 assembly Sunder.Sdk, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public sealed class Sunder.Sdk.Abstractions.BackgroundProcessChangedEventArgs : System.EventArgs
-  method public .ctor(Sunder.Sdk.Abstractions.BackgroundProcessSnapshot snapshot)
-  property Sunder.Sdk.Abstractions.BackgroundProcessSnapshot Snapshot { public get; }
+type public sealed class Sunder.Sdk.Abstractions.BackgroundTaskChangedEventArgs : System.EventArgs
+  method public .ctor(Sunder.Sdk.Abstractions.BackgroundTaskSnapshot snapshot)
+  property Sunder.Sdk.Abstractions.BackgroundTaskSnapshot Snapshot { public get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public enum Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ParallelWithinGroup = 0
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode SequentialWithinGroup = 1
+type public enum Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ParallelWithinGroup = 0
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode SequentialWithinGroup = 1
   field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public sealed class Sunder.Sdk.Abstractions.BackgroundProcessContext
+type public sealed class Sunder.Sdk.Abstractions.BackgroundTaskContext
   method public .ctor(System.Threading.CancellationToken cancellationToken, System.Action<System.String> reportStatus, System.Action<System.Double, System.String?> reportProgress, System.Action<System.String> reportIndeterminate)
   property System.Threading.CancellationToken CancellationToken { public get; }
   method public System.Void ReportIndeterminate(System.String statusText)
   method public System.Void ReportProgress(System.Double progressPercent, System.String? statusText = null)
   method public System.Void ReportStatus(System.String statusText)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public enum Sunder.Sdk.Abstractions.BackgroundProcessIndicator : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessIndicator Hidden = 0
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessIndicator Main = 1
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessIndicator Packages = 2
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessIndicator Settings = 3
+type public enum Sunder.Sdk.Abstractions.BackgroundTaskIndicator : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskIndicator Hidden = 0
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskIndicator Main = 1
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskIndicator Packages = 2
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskIndicator Settings = 3
   field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public sealed class Sunder.Sdk.Abstractions.BackgroundProcessRequest : System.IEquatable<Sunder.Sdk.Abstractions.BackgroundProcessRequest>
-  method public .ctor(System.String Title, System.String GroupKey, Sunder.Sdk.Abstractions.BackgroundProcessIndicator Indicator, Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ConcurrencyMode, System.Boolean CanCancel, System.Func<Sunder.Sdk.Abstractions.BackgroundProcessContext, System.Threading.Tasks.Task> ExecuteAsync, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? Metadata = null)
+type public sealed class Sunder.Sdk.Abstractions.BackgroundTaskRequest : System.IEquatable<Sunder.Sdk.Abstractions.BackgroundTaskRequest>
+  method public .ctor(System.String Title, System.String GroupKey, Sunder.Sdk.Abstractions.BackgroundTaskIndicator Indicator, Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ConcurrencyMode, System.Boolean CanCancel, System.Func<Sunder.Sdk.Abstractions.BackgroundTaskContext, System.Threading.Tasks.Task> ExecuteAsync, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? Metadata = null)
   property System.Boolean CanCancel { public get; public init; }
-  property Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ConcurrencyMode { public get; public init; }
-  property Sunder.Sdk.Abstractions.BackgroundProcessIndicator Indicator { public get; public init; }
+  property Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ConcurrencyMode { public get; public init; }
+  property Sunder.Sdk.Abstractions.BackgroundTaskIndicator Indicator { public get; public init; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? Metadata { public get; public init; }
-  property System.Func<Sunder.Sdk.Abstractions.BackgroundProcessContext, System.Threading.Tasks.Task> ExecuteAsync { public get; public init; }
+  property System.Func<Sunder.Sdk.Abstractions.BackgroundTaskContext, System.Threading.Tasks.Task> ExecuteAsync { public get; public init; }
   property System.String GroupKey { public get; public init; }
   property System.String Title { public get; public init; }
-  method public Sunder.Sdk.Abstractions.BackgroundProcessRequest <Clone>$()
-  method public System.Void Deconstruct(out System.String Title, out System.String GroupKey, out Sunder.Sdk.Abstractions.BackgroundProcessIndicator Indicator, out Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ConcurrencyMode, out System.Boolean CanCancel, out System.Func<Sunder.Sdk.Abstractions.BackgroundProcessContext, System.Threading.Tasks.Task> ExecuteAsync, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? Metadata)
-  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.BackgroundProcessRequest? other)
+  method public Sunder.Sdk.Abstractions.BackgroundTaskRequest <Clone>$()
+  method public System.Void Deconstruct(out System.String Title, out System.String GroupKey, out Sunder.Sdk.Abstractions.BackgroundTaskIndicator Indicator, out Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ConcurrencyMode, out System.Boolean CanCancel, out System.Func<Sunder.Sdk.Abstractions.BackgroundTaskContext, System.Threading.Tasks.Task> ExecuteAsync, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String>? Metadata)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.BackgroundTaskRequest? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
   method public override System.String ToString()
-  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.BackgroundProcessRequest? left, Sunder.Sdk.Abstractions.BackgroundProcessRequest? right)
-  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.BackgroundProcessRequest? left, Sunder.Sdk.Abstractions.BackgroundProcessRequest? right)
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.BackgroundTaskRequest? left, Sunder.Sdk.Abstractions.BackgroundTaskRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.BackgroundTaskRequest? left, Sunder.Sdk.Abstractions.BackgroundTaskRequest? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public sealed class Sunder.Sdk.Abstractions.BackgroundProcessSnapshot : System.IEquatable<Sunder.Sdk.Abstractions.BackgroundProcessSnapshot>
-  method public .ctor(System.Guid ProcessId, System.String Title, System.String GroupKey, Sunder.Sdk.Abstractions.BackgroundProcessIndicator Indicator, Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ConcurrencyMode, Sunder.Sdk.Abstractions.BackgroundProcessState State, System.String StatusText, System.Double? ProgressPercent, System.Boolean CanCancel, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Metadata, System.String? ErrorMessage, System.DateTimeOffset QueuedAtUtc, System.DateTimeOffset? StartedAtUtc, System.DateTimeOffset? CompletedAtUtc)
+type public sealed class Sunder.Sdk.Abstractions.BackgroundTaskSnapshot : System.IEquatable<Sunder.Sdk.Abstractions.BackgroundTaskSnapshot>
+  method public .ctor(System.Guid TaskId, System.String Title, System.String GroupKey, Sunder.Sdk.Abstractions.BackgroundTaskIndicator Indicator, Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ConcurrencyMode, Sunder.Sdk.Abstractions.BackgroundTaskState State, System.String StatusText, System.Double? ProgressPercent, System.Boolean CanCancel, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Metadata, System.String? ErrorMessage, System.DateTimeOffset QueuedAtUtc, System.DateTimeOffset? StartedAtUtc, System.DateTimeOffset? CompletedAtUtc)
   property System.Boolean CanCancel { public get; public init; }
   property System.Boolean IsActive { public get; }
   property System.Boolean IsIndeterminate { public get; }
   property System.Boolean IsTerminal { public get; }
-  property Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ConcurrencyMode { public get; public init; }
-  property Sunder.Sdk.Abstractions.BackgroundProcessIndicator Indicator { public get; public init; }
-  property Sunder.Sdk.Abstractions.BackgroundProcessState State { public get; public init; }
+  property Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ConcurrencyMode { public get; public init; }
+  property Sunder.Sdk.Abstractions.BackgroundTaskIndicator Indicator { public get; public init; }
+  property Sunder.Sdk.Abstractions.BackgroundTaskState State { public get; public init; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Metadata { public get; public init; }
   property System.DateTimeOffset QueuedAtUtc { public get; public init; }
-  property System.Guid ProcessId { public get; public init; }
+  property System.Guid TaskId { public get; public init; }
   property System.DateTimeOffset? CompletedAtUtc { public get; public init; }
   property System.DateTimeOffset? StartedAtUtc { public get; public init; }
   property System.Double? ProgressPercent { public get; public init; }
@@ -61,29 +61,29 @@ type public sealed class Sunder.Sdk.Abstractions.BackgroundProcessSnapshot : Sys
   property System.String GroupKey { public get; public init; }
   property System.String StatusText { public get; public init; }
   property System.String Title { public get; public init; }
-  method public Sunder.Sdk.Abstractions.BackgroundProcessSnapshot <Clone>$()
-  method public System.Void Deconstruct(out System.Guid ProcessId, out System.String Title, out System.String GroupKey, out Sunder.Sdk.Abstractions.BackgroundProcessIndicator Indicator, out Sunder.Sdk.Abstractions.BackgroundProcessConcurrencyMode ConcurrencyMode, out Sunder.Sdk.Abstractions.BackgroundProcessState State, out System.String StatusText, out System.Double? ProgressPercent, out System.Boolean CanCancel, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Metadata, out System.String? ErrorMessage, out System.DateTimeOffset QueuedAtUtc, out System.DateTimeOffset? StartedAtUtc, out System.DateTimeOffset? CompletedAtUtc)
-  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.BackgroundProcessSnapshot? other)
+  method public Sunder.Sdk.Abstractions.BackgroundTaskSnapshot <Clone>$()
+  method public System.Void Deconstruct(out System.Guid TaskId, out System.String Title, out System.String GroupKey, out Sunder.Sdk.Abstractions.BackgroundTaskIndicator Indicator, out Sunder.Sdk.Abstractions.BackgroundTaskConcurrencyMode ConcurrencyMode, out Sunder.Sdk.Abstractions.BackgroundTaskState State, out System.String StatusText, out System.Double? ProgressPercent, out System.Boolean CanCancel, out System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Metadata, out System.String? ErrorMessage, out System.DateTimeOffset QueuedAtUtc, out System.DateTimeOffset? StartedAtUtc, out System.DateTimeOffset? CompletedAtUtc)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.BackgroundTaskSnapshot? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
   method public override System.String ToString()
-  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.BackgroundProcessSnapshot? left, Sunder.Sdk.Abstractions.BackgroundProcessSnapshot? right)
-  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.BackgroundProcessSnapshot? left, Sunder.Sdk.Abstractions.BackgroundProcessSnapshot? right)
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.BackgroundTaskSnapshot? left, Sunder.Sdk.Abstractions.BackgroundTaskSnapshot? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.BackgroundTaskSnapshot? left, Sunder.Sdk.Abstractions.BackgroundTaskSnapshot? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public enum Sunder.Sdk.Abstractions.BackgroundProcessState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessState Cancelled = 5
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessState Cancelling = 2
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessState Completed = 3
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessState Failed = 4
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessState Queued = 0
-  field public const Sunder.Sdk.Abstractions.BackgroundProcessState Running = 1
+type public enum Sunder.Sdk.Abstractions.BackgroundTaskState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskState Cancelled = 5
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskState Cancelling = 2
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskState Completed = 3
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskState Failed = 4
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskState Queued = 0
+  field public const Sunder.Sdk.Abstractions.BackgroundTaskState Running = 1
   field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
-type public interface Sunder.Sdk.Abstractions.IBackgroundProcessQueue
-  event System.EventHandler<Sunder.Sdk.Abstractions.BackgroundProcessChangedEventArgs>? ProcessChanged { public abstract virtual add; public abstract virtual remove; }
-  method public abstract virtual Sunder.Sdk.Abstractions.BackgroundProcessSnapshot Enqueue(Sunder.Sdk.Abstractions.BackgroundProcessRequest request)
-  method public abstract virtual System.Boolean Cancel(System.Guid processId)
-  method public abstract virtual System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.BackgroundProcessSnapshot> ListProcesses(System.String? groupKey = null)
+type public interface Sunder.Sdk.Abstractions.IBackgroundTaskQueue
+  event System.EventHandler<Sunder.Sdk.Abstractions.BackgroundTaskChangedEventArgs>? TaskChanged { public abstract virtual add; public abstract virtual remove; }
+  method public abstract virtual Sunder.Sdk.Abstractions.BackgroundTaskSnapshot Enqueue(Sunder.Sdk.Abstractions.BackgroundTaskRequest request)
+  method public abstract virtual System.Boolean Cancel(System.Guid taskId)
+  method public abstract virtual System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.BackgroundTaskSnapshot> ListTasks(System.String? groupKey = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("app-state-updates.v1")
 type public interface Sunder.Sdk.Abstractions.IPackageAppStateUpdates
   method public abstract virtual System.Threading.Tasks.Task RunAsync(System.String key, System.Func<Sunder.Sdk.Abstractions.PackageAppStateUpdateContext, System.Threading.Tasks.Task> update, System.Threading.CancellationToken cancellationToken = null)
@@ -229,6 +229,24 @@ type public sealed class Sunder.Sdk.Abstractions.PackageAppStateUpdateContext : 
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageAppStateUpdateContext? left, Sunder.Sdk.Abstractions.PackageAppStateUpdateContext? right)
   method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageAppStateUpdateContext? left, Sunder.Sdk.Abstractions.PackageAppStateUpdateContext? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development.v1")
+type public enum Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness Activated = 2
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness NotApplicable = 5
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness Pending = 1
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness Quarantined = 3
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness Unavailable = 4
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness Unknown = 0
+  field public System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development.v1")
+type public enum Sunder.Sdk.Abstractions.PackageDevelopmentHostState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Failed = 4
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Ready = 3
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Reconnecting = 1
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState ShuttingDown = 5
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Starting = 2
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Unknown = 0
+  field public System.Int32 value__
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-revisions.v1")
 type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentRevision : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentRevision>
   method public .ctor(System.Guid RuntimeInstanceId, System.Int64 SessionGeneration, System.String SourceContentIdentity)
@@ -244,22 +262,33 @@ type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentRevision : Sy
   method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentRevision? left, Sunder.Sdk.Abstractions.PackageDevelopmentRevision? right)
   method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentRevision? left, Sunder.Sdk.Abstractions.PackageDevelopmentRevision? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development.v1")
+type public enum Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness Degraded = 4
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness Disabled = 6
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness Failed = 5
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness NeedsConfiguration = 3
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness NotLoaded = 1
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness Ready = 2
+  field public const Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness Unknown = 0
+  field public System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development.v1")
 type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentStatus : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentStatus>
-  method public .ctor(System.String PackageId, System.Boolean IsLoaded, System.Boolean WatchEnabled, System.String Readiness, System.String? ErrorMessage, System.Boolean OverridesInstalledPackage)
+  method public .ctor(System.String PackageId, System.Boolean IsLoaded, System.Boolean WatchEnabled, Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness RuntimeReadiness, System.String? ErrorMessage, System.Boolean OverridesInstalledPackage)
   property System.Boolean IsLoaded { public get; public init; }
   property System.Boolean OverridesInstalledPackage { public get; public init; }
   property System.Boolean RequestedWatch { public get; public init; }
   property System.Boolean WatchEnabled { public get; public init; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentAppReadiness AppReadiness { public get; public init; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentHostState HostState { public get; public init; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-revisions.v1")
   property Sunder.Sdk.Abstractions.PackageDevelopmentRevision? AppliedRevision { public get; public init; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-revisions.v1")
   property Sunder.Sdk.Abstractions.PackageDevelopmentRevision? RuntimeRevision { public get; public init; }
-  property System.String AppReadiness { public get; public init; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness RuntimeReadiness { public get; public init; }
   property System.String? ErrorMessage { public get; public init; }
   property System.String PackageId { public get; public init; }
-  property System.String Readiness { public get; public init; }
   method public Sunder.Sdk.Abstractions.PackageDevelopmentStatus <Clone>$()
-  method public System.Void Deconstruct(out System.String PackageId, out System.Boolean IsLoaded, out System.Boolean WatchEnabled, out System.String Readiness, out System.String? ErrorMessage, out System.Boolean OverridesInstalledPackage)
+  method public System.Void Deconstruct(out System.String PackageId, out System.Boolean IsLoaded, out System.Boolean WatchEnabled, out Sunder.Sdk.Abstractions.PackageDevelopmentRuntimeReadiness RuntimeReadiness, out System.String? ErrorMessage, out System.Boolean OverridesInstalledPackage)
   method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentStatus? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -746,15 +775,6 @@ attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type public interface Sunder.Sdk.Rpc.ISunderRpcServiceHandler
   method public abstract virtual System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> InvokeServerStreamAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
   method public abstract virtual System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> InvokeUnaryAsync(Sunder.Sdk.Rpc.SunderRpcInvocationContext context, System.String serviceId, System.String methodId, System.Text.Json.JsonElement request, System.Threading.CancellationToken cancellationToken = null)
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-type public enum Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
-  field public const Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility Internal = 1
-  field public const Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility Public = 0
-  field public System.Int32 value__
-attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
-type public static class Sunder.Sdk.Rpc.SunderRpcCSharpGenerator
-  method public static System.String Generate(Sunder.Sdk.Rpc.SunderRpcContractDescriptor descriptor, System.String namespaceName)
-  method public static System.String Generate(Sunder.Sdk.Rpc.SunderRpcContractDescriptor descriptor, System.String namespaceName, Sunder.Sdk.Rpc.SunderRpcCSharpAccessibility accessibility)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type public sealed class Sunder.Sdk.Rpc.SunderRpcCallOptions : System.IEquatable<Sunder.Sdk.Rpc.SunderRpcCallOptions>
   method public .ctor(System.DateTimeOffset? DeadlineUtc = null)

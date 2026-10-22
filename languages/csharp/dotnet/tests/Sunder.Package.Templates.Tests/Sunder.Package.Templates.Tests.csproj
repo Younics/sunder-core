@@ -3,7 +3,7 @@
     <ProjectReference Include="..\..\packages\Sunder.Package.Templates\Sunder.Package.Templates.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj"
-                      ReferenceOutputAssembly="false" />
+                      PrivateAssets="all" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj"
                       ReferenceOutputAssembly="false" />

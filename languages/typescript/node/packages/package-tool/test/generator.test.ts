@@ -14,12 +14,22 @@ import {
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { canonicalizeDescriptor, generateTypeScriptBindings } from "../src/generator";
-import { parseRpcContractDescriptor } from "../src/descriptor";
+import { parseRpcContractDescriptor } from "@sunder/sdk";
 import {
   SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-} from "../src/descriptor-v1";
+} from "@sunder/sdk";
+
+test("the tooling generator consumes validated V1 keyed descriptors", () => {
+  const path = resolve(__dirname, "../../../../../../../specs/rpc/v1/conformance/valid/complete.rpc.json");
+  const value = parseRpcContractDescriptor(readFileSync(path, "utf8"));
+  const generated = generateTypeScriptBindings(value);
+  assert.match(generated, /export const CONTRACT_ID = "example\.rpc\.v1\.conformance" as const;/u);
+  assert.match(generated, /export interface IItemsProvider/u);
+  assert.match(generated, /Submit\(request: Request, context: RpcInvocationContext\): Promise<Result>;/u);
+  assert.match(generated, /Watch\(request: Request, context: RpcInvocationContext\): AsyncIterable<Event>;/u);
+});
 import type {
   JsonValue,
   RpcContractDescriptor,
@@ -28,7 +38,7 @@ import type {
   RpcInvoker,
   RpcProviderHandler,
   RpcProviderRegistration,
-} from "../src/types";
+} from "@sunder/sdk";
 
 interface GeneratedBindingsModule {
   readonly CONTRACT_ID: string;
@@ -384,7 +394,7 @@ test("generated bindings compile for worker and browser clients and execute prov
 
   assert.equal(first, second);
   assert.match(first, /from "@sunder\/sdk\/core";/u);
-  assert.match(first, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/browser";/mu);
+  assert.match(first, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/generated";/mu);
   assert.doesNotMatch(first, /from "node:/u);
   assert.match(first, /export const CONTRACT_ID = "example\.generator" as const;/u);
   assert.match(first, /export const CONTRACT_VERSION = "1\.0\.0" as const;/u);
@@ -570,7 +580,7 @@ test("V1 bindings compile and execute with canonical worker identity, logical wi
   assert.match(source, /export type Instant = string;/u);
   assert.match(source, /export type NullableText = null \| Text;/u);
   assert.match(source, /readonly optionalNote\?: NullableText;/u);
-  assert.match(source, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/browser";/mu);
+  assert.match(source, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/generated";/mu);
   assert.doesNotMatch(source, /from "node:/u);
 
   const generated = compileGeneratedModule(source, `
@@ -738,7 +748,7 @@ test("value-profile bindings deterministically compile and convert exact domain 
   assert.match(first, /\$toWireBase64/u);
   assert.match(first, /\$fromWireBigInteger/u);
   assert.match(first, /readonly optionalNullable\?: NullableText;/u);
-  assert.match(first, /import \{ RpcDomainError, validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/browser";/u);
+  assert.match(first, /import \{ RpcDomainError, validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/generated";/u);
   assert.match(first, /export function createExampleDetailsRpcError\(details: Decimal/u);
   assert.match(first, /export function tryGetExampleDetailsRpcErrorDetails\(error: unknown\): Decimal \| undefined/u);
 
@@ -1172,8 +1182,8 @@ test("descriptor parser enforces strict JSON, identity, references, and schema b
   const parsed = parseRpcContractDescriptor(new TextEncoder().encode(source));
   assert.equal(parsed.contractId, descriptor.contractId);
   assert.equal(
-    canonicalizeDescriptor(parsed as unknown as import("../src/types").JsonValue),
-    canonicalizeDescriptor(descriptor as unknown as import("../src/types").JsonValue),
+    canonicalizeDescriptor(parsed as unknown as JsonValue),
+    canonicalizeDescriptor(descriptor as unknown as JsonValue),
   );
 
   const duplicate = source.replace(
@@ -1317,12 +1327,12 @@ function mismatchedHash(value: string): string {
 }
 
 function runGeneratorCli(inputPath: string, outputPath: string, cwd: string) {
-  return spawnSync(process.execPath, [join(sdkPackageRoot(), "dist/generator-cli.js"), inputPath, outputPath], {
+  return spawnSync(process.execPath, [join(resolve(__dirname, "../.."), "dist/generator-cli.js"), inputPath, outputPath], {
     cwd,
     encoding: "utf8",
   });
 }
 
 function sdkPackageRoot(): string {
-  return resolve(__dirname, "../..");
+  return resolve(__dirname, "../../../sdk");
 }

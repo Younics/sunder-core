@@ -31,7 +31,7 @@ public static class SunderSdkCapabilities
     public const string BackgroundServicesV1 = "background-services.v1";
     /// <summary>Staged worker generation lifecycle contracts.</summary>
     public const string RuntimeGenerationsV1 = "runtime-generations.v1";
-    /// <summary>Background process contracts.</summary>
+    /// <summary>Background-task contracts. The existing capability identifier is retained independently of source terminology.</summary>
     public const string BackgroundProcessesV1 = "background-processes.v1";
     /// <summary>Host-rendered settings schema contracts.</summary>
     public const string SettingsSchemaV1 = "settings.schema.v1";

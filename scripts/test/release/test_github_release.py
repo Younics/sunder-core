@@ -156,6 +156,26 @@ class GitHubReleaseTests(unittest.TestCase):
                         release.core_stage(store, Path(directory), "sdk", "stable", finalize=finalize)
                 self.assertEqual([], store.requests)
 
+    def test_sdk_unbound_documentation_blocks_stage_finalize_and_publication_verification(self):
+        for action in ("stage", "finalize", "verify"):
+            with self.subTest(action=action), tempfile.TemporaryDirectory() as directory:
+                store = MemoryRelease(); store.tag = "sdk/v1.1.0"
+                with patch.dict(os.environ, dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
+                     GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/sdk/v1.1.0",
+                     GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/tags/sdk/v1.1.0")), \
+                     patch.object(release.subprocess, "run"), patch.object(release, "verify_sdk_compatibility"), \
+                     patch.object(release, "verify_sdk_documentation", side_effect=ValueError("mutable /main/ documentation")) as docs:
+                    with self.assertRaisesRegex(ValueError, "mutable /main/"):
+                        if action == "verify":
+                            with patch.object(sys, "argv", ["github_release.py", "verify", store.tag, "--directory", directory, "--release-id", "12"]), \
+                                 patch.object(release, "local_files", return_value={name: Path(directory) / name for name in
+                                     release.core_names("sdk", "1.1.0") | release.EVIDENCE}):
+                                release.main()
+                        else:
+                            release.core_stage(store, Path(directory), "sdk", "stable", finalize=action == "finalize")
+                    docs.assert_called_once_with(Path(directory), "a" * 40)
+                self.assertEqual([], store.requests)
+
     def test_stream_download_is_bounded_and_does_not_replace_local_bytes(self):
         class Process:
             def __init__(self, *_, **__): self.stdout = io.BytesIO(b"artifact"); self.returncode = 0

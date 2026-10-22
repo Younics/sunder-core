@@ -12,7 +12,7 @@ internal sealed class AppPackageServiceProviderFactory(
     IPackageShellViewService? shellViewService,
     IPackageSettingsNavigationService? settingsNavigationService,
     NotificationCenterService? notificationCenter,
-    BackgroundProcessQueueService backgroundProcessQueue,
+    BackgroundTaskQueueService backgroundTaskQueue,
     AppPackageGenerationPublication publication,
     Guid? ownerId = null,
     IAppPackageDevelopmentBackend? developerServices = null)
@@ -30,7 +30,7 @@ internal sealed class AppPackageServiceProviderFactory(
         typeof(IPackageLogNavigationService),
         typeof(IPackageAppStateUpdates),
         typeof(IPackageWorkerExecutionObservations),
-        typeof(IBackgroundProcessQueue),
+        typeof(IBackgroundTaskQueue),
         typeof(IPackageNotificationService),
     ];
 
@@ -59,17 +59,17 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<IPackageLogNavigationService>(provider => provider.GetRequiredService<AppPackageDevelopmentService>());
         services.AddSingleton<IPackageAppStateUpdates>(new AppPackageStateUpdates(publication));
         services.AddSingleton<IPackageWorkerExecutionObservations>(new AppPackageWorkerExecutionObservations(rpcClient, publication));
-        services.AddSingleton<IBackgroundProcessQueue>(_ =>
+        services.AddSingleton<IBackgroundTaskQueue>(_ =>
         {
-            var packageBackgroundProcessQueue = new AppPackageBackgroundProcessQueue(
-                new PackageScopedBackgroundProcessQueue(
+            var packageBackgroundTaskQueue = new AppPackageBackgroundTaskQueue(
+                new PackageScopedBackgroundTaskQueue(
                     package.PackageId,
                     package.DisplayName,
-                    backgroundProcessQueue,
+                    backgroundTaskQueue,
                     ownerId),
                 publication);
-            packageBackgroundProcessQueue.Start();
-            return packageBackgroundProcessQueue;
+            packageBackgroundTaskQueue.Start();
+            return packageBackgroundTaskQueue;
         });
         services.AddSingleton<IPackageNotificationService>(notificationCenter is null
             ? NullPackageNotificationService.Instance

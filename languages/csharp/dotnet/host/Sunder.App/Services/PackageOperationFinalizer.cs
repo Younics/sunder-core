@@ -12,7 +12,7 @@ internal sealed class PackageOperationFinalizer(
 {
     public Task ReportFailureAsync(string message) => PublishFailureAsync(message);
     public async Task FinishRegistryOperationAsync(
-        BackgroundProcessContext context,
+        BackgroundTaskContext context,
         RegistryPackageInstallExecutionResult result,
         string successTitle,
         string successFallbackMessage)
@@ -36,7 +36,7 @@ internal sealed class PackageOperationFinalizer(
     }
 
     public async Task FinishLocalOperationAsync(
-        BackgroundProcessContext context,
+        BackgroundTaskContext context,
         PackageOperationResult result,
         string successTitle,
         string successFallbackMessage)
@@ -60,7 +60,7 @@ internal sealed class PackageOperationFinalizer(
     }
 
     private async Task FinishSuccessfulOperationAsync(
-        BackgroundProcessContext context,
+        BackgroundTaskContext context,
         IReadOnlyList<string> impactedPackageIds,
         bool runtimeSessionApplied,
         RuntimePackageStamp? committedStamp,

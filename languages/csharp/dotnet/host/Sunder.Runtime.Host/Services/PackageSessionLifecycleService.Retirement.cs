@@ -35,7 +35,11 @@ internal sealed partial class PackageSessionLifecycleService
         var generation = _sessions.Generation;
         if (ActiveOverlaySetsEqual(before, sources.ActiveDevOverlays))
             return RegisterPreparedStage(new(ActivePackageSession.CreateEmpty(), sources, [], [], generation, stageId, false), [], ownerId, sourcesOnly: true);
-        var loaded = await _reconciler.LoadMergedSessionAsync(sources.ActiveDevOverlays, generation, operation.CancellationToken);
+        using var current = _sessions.State.AcquireLease();
+        var snapshot = _sessions.GetSnapshot();
+        var loaded = await _reconciler.LoadOwnerWithdrawalAsync(
+            current.Generation == generation && snapshot.Warnings.Count == 0 && snapshot.Errors.Count == 0 ? current.Session : null,
+            sources.ActiveDevOverlays, generation, operation.CancellationToken);
         if (loaded.Session is null) throw new RuntimePackageValidationException(loaded.Errors.FirstOrDefault() ?? "Owner removal could not be prepared.");
         try
         {

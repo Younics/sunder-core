@@ -311,30 +311,30 @@ public sealed class ShellSession : IAsyncDisposable
                     .ConfigureAwait(false)
             )
             {
-                DeferRemainingCleanup(subscription, DisposeBackgroundProcessesAsync);
+                DeferRemainingCleanup(subscription, DisposeBackgroundTasksAsync);
                 return;
             }
         }
 
-        await DisposeBackgroundProcessesAsync().ConfigureAwait(false);
+        await DisposeBackgroundTasksAsync().ConfigureAwait(false);
     }
 
-    private async Task DisposeBackgroundProcessesAsync()
+    private async Task DisposeBackgroundTasksAsync()
     {
-        var backgroundProcesses = StartCleanup(() =>
-            WindowLauncher.CancelBackgroundProcessesAsync()
+        var backgroundTasks = StartCleanup(() =>
+            WindowLauncher.CancelBackgroundTasksAsync()
         );
         if (
             !await BoundedCleanup
                 .RunAsync(
-                    "cancelling shell background processes",
-                    () => backgroundProcesses,
-                    AppShutdownBudgets.BackgroundProcesses
+                    "cancelling shell background tasks",
+                    () => backgroundTasks,
+                    AppShutdownBudgets.BackgroundTasks
                 )
                 .ConfigureAwait(false)
         )
         {
-            DeferRemainingCleanup(backgroundProcesses, DisposePresentationAsync);
+            DeferRemainingCleanup(backgroundTasks, DisposePresentationAsync);
             return;
         }
 

@@ -68,7 +68,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         AppPackageShellViewService? shellViewService = null,
         SunderUpdateService? updateService = null,
         bool deferInitialHostedViews = false,
-        BackgroundProcessQueueService? backgroundProcessQueue = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null,
         AppPackageLifecycleCoordinator? packageLifecycleCoordinator = null,
         IShellCompositionService? shellCompositionService = null,
         DeveloperLogService? developerLog = null,
@@ -131,15 +131,15 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             _layoutStateCoordinator.PersistPreferredRuntimeUrl
         );
         _notificationTray = new NotificationTrayViewModel(notificationCenter, _uiDispatcher);
-        BackgroundProcesses = backgroundProcessQueue is null
-            ? BackgroundProcessMonitorViewModel.Empty
-            : new BackgroundProcessMonitorViewModel(
-                backgroundProcessQueue,
-                BackgroundProcessIndicator.Main,
-                "No visible processes.",
-                _shellState.BackgroundProcessPopoverWidth,
-                _shellState.BackgroundProcessPopoverHeight,
-                _layoutStateCoordinator.PersistBackgroundProcessPopoverSize,
+        BackgroundTasks = backgroundTaskQueue is null
+            ? BackgroundTaskMonitorViewModel.Empty
+            : new BackgroundTaskMonitorViewModel(
+                backgroundTaskQueue,
+                BackgroundTaskIndicator.Main,
+                "No visible tasks.",
+                _shellState.BackgroundTaskPopoverWidth,
+                _shellState.BackgroundTaskPopoverHeight,
+                _layoutStateCoordinator.PersistBackgroundTaskPopoverSize,
                 _uiDispatcher
             );
 
@@ -231,7 +231,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             packageViewHostService,
             notificationCenter,
             shellViewService,
-            BackgroundProcesses,
+            BackgroundTasks,
             _layoutStateCoordinator,
             RuntimeStatus_OnPropertyChanged,
             NotificationTray_OnPropertyChanged,
@@ -263,7 +263,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
 
     public PackageIconBarViewModel RightBottomBar => _shellLayout.RightBottomBar;
 
-    public BackgroundProcessMonitorViewModel BackgroundProcesses { get; }
+    public BackgroundTaskMonitorViewModel BackgroundTasks { get; }
 
     public bool IsDeveloperMode { get; }
 

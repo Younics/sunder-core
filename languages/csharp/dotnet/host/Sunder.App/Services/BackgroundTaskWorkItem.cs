@@ -2,17 +2,30 @@ using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Services;
 
-internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProcessRequest request, DateTimeOffset queuedAtUtc, string? queuedStatus = null)
+internal sealed class BackgroundTaskWorkItem(Guid taskId, BackgroundTaskRequest request, DateTimeOffset queuedAtUtc, string? queuedStatus = null)
 {
-    public Guid ProcessId { get; } = processId;
+    private ExecutionContext? _submissionContext = ExecutionContext.Capture();
 
-    public BackgroundProcessRequest Request { get; } = request;
+    public Guid TaskId { get; } = taskId;
+
+    public BackgroundTaskRequest Request { get; } = request;
+
+    internal Task ExecuteAsync(BackgroundTaskContext context)
+    {
+        // The scheduler may be running under a different task's completion context.
+        // Only this submission's accepted authority may reach its delegate.
+        var submission = Interlocked.Exchange(ref _submissionContext, null);
+        if (submission is null) return Request.ExecuteAsync(context);
+        Task? work = null;
+        ExecutionContext.Run(submission, _ => work = Request.ExecuteAsync(context), null);
+        return work!;
+    }
 
     public CancellationTokenSource CancellationTokenSource { get; } = new();
 
     private bool CancellationTokenSourceDisposed { get; set; }
 
-    public BackgroundProcessState State { get; private set; } = BackgroundProcessState.Queued;
+    public BackgroundTaskState State { get; private set; } = BackgroundTaskState.Queued;
 
     public string StatusText { get; private set; } = string.IsNullOrWhiteSpace(queuedStatus) ? "Queued" : queuedStatus;
 
@@ -28,20 +41,20 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
 
     public void MarkStarting(DateTimeOffset startedAtUtc)
     {
-        State = BackgroundProcessState.Running;
+        State = BackgroundTaskState.Running;
         StatusText = "Starting...";
         StartedAtUtc = startedAtUtc;
     }
 
     public void MarkCancelling()
     {
-        State = BackgroundProcessState.Cancelling;
+        State = BackgroundTaskState.Cancelling;
         StatusText = "Cancelling...";
     }
 
     public void MarkQueuedCancelled(DateTimeOffset completedAtUtc, string? statusText = null)
     {
-        State = BackgroundProcessState.Cancelled;
+        State = BackgroundTaskState.Cancelled;
         StatusText = string.IsNullOrWhiteSpace(statusText) ? "Cancelled" : statusText;
         CompletedAtUtc = completedAtUtc;
         DisposeCancellationTokenSource();
@@ -62,14 +75,14 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
 
     public void CompleteAfterSuccessfulExecution(DateTimeOffset completedAtUtc)
     {
-        if (State == BackgroundProcessState.Cancelling || CancellationTokenSource.IsCancellationRequested)
+        if (State == BackgroundTaskState.Cancelling || CancellationTokenSource.IsCancellationRequested)
         {
-            State = BackgroundProcessState.Cancelled;
+            State = BackgroundTaskState.Cancelled;
             StatusText = "Cancelled";
         }
         else
         {
-            State = BackgroundProcessState.Completed;
+            State = BackgroundTaskState.Completed;
             if (StatusText is "Queued" or "Starting..." || string.IsNullOrWhiteSpace(StatusText))
             {
                 StatusText = "Completed";
@@ -83,22 +96,22 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
 
     public void CompleteAfterCancellation(DateTimeOffset completedAtUtc)
     {
-        State = BackgroundProcessState.Cancelled;
+        State = BackgroundTaskState.Cancelled;
         StatusText = "Cancelled";
         CompletedAtUtc = completedAtUtc;
     }
 
     public void CompleteAfterFailure(Exception exception, DateTimeOffset completedAtUtc)
     {
-        State = BackgroundProcessState.Failed;
+        State = BackgroundTaskState.Failed;
         StatusText = "Failed";
         ErrorMessage = exception.Message;
         CompletedAtUtc = completedAtUtc;
     }
 
-    public BackgroundProcessSnapshot ToSnapshot()
+    public BackgroundTaskSnapshot ToSnapshot()
         => new(
-            ProcessId,
+            TaskId,
             Request.Title,
             Request.GroupKey,
             Request.Indicator,
@@ -106,7 +119,7 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
             State,
             StatusText,
             ProgressPercent,
-            Request.CanCancel && State is BackgroundProcessState.Queued or BackgroundProcessState.Running,
+            Request.CanCancel && State is BackgroundTaskState.Queued or BackgroundTaskState.Running,
             Request.Metadata!,
             ErrorMessage,
             QueuedAtUtc,
@@ -115,6 +128,7 @@ internal sealed class BackgroundProcessWorkItem(Guid processId, BackgroundProces
 
     public void DisposeCancellationTokenSource()
     {
+        _submissionContext = null; // Queued cancellation must not retain a package activation.
         if (CancellationTokenSourceDisposed)
         {
             return;

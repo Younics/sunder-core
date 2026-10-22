@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Sunder.Sdk.Rpc;
+namespace Sunder.Package.Build.Rpc.Generation;
 
 internal static partial class SunderRpcCSharpEmitter
 {

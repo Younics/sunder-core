@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { createHash } from "node:crypto";
-import { authoringBindingModel, isPackageId, parseRpcContractDescriptor, type RpcContractDescriptor } from "@sunder/sdk";
+import { isPackageId, parseRpcContractDescriptor, type RpcContractDescriptor } from "@sunder/sdk";
+import { authoringBindingModel } from "./generator";
 import type { LoadedContract } from "./model";
 import type { OwnedBaseline } from "./rpc-baseline";
 import { hasPublicEvidence } from "./rpc-baseline";

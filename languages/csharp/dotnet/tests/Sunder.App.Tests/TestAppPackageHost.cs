@@ -18,7 +18,7 @@ internal static class TestAppPackageHost
         IReadOnlyList<object> ownedDisposables, IReadOnlyList<AppPackageLoadContext> loadContexts, string? sessionFolder,
         AppSharedAssemblyRegistry? sharedAssemblyRegistry = null, IPackageShellViewService? shellViewService = null,
         IPackageSettingsNavigationService? settingsNavigationService = null, NotificationCenterService? notificationCenter = null,
-        BackgroundProcessQueueService? backgroundProcessQueue = null, AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null,
+        BackgroundTaskQueueService? backgroundTaskQueue = null, AppPackageResourceAssemblyRegistry? resourceAssemblyRegistry = null,
         Func<RuntimeConnectionInfo?>? getRuntimeConnectionInfo = null,
         Func<PackageUiSnapshotDescriptor, Stream, CancellationToken, Task>? downloadPackageUiSnapshotAsync = null,
         Func<string, CancellationToken, Task<PackageIconImageLoadResult>>? loadPackageIconImageAsync = null,
@@ -26,7 +26,7 @@ internal static class TestAppPackageHost
         TimeSpan? retirementBudget = null, TimeSpan? retirementDrainBudget = null, string? packageContentCacheRoot = null,
         Action<Exception>? fatalCleanupFaultHandler = null)
         => new(viewRegistry, disabledPackageIds, ownedDisposables, loadContexts, sessionFolder, sharedAssemblyRegistry, shellViewService,
-            settingsNavigationService, notificationCenter, backgroundProcessQueue, resourceAssemblyRegistry, getRuntimeConnectionInfo,
+            settingsNavigationService, notificationCenter, backgroundTaskQueue, resourceAssemblyRegistry, getRuntimeConnectionInfo,
             downloadPackageUiSnapshotAsync, loadPackageIconImageAsync, uiDispatcher, retireGenerationAsync, retirementBudget, retirementDrainBudget,
             packageContentCacheRoot, fatalCleanupFaultHandler, TestAppPackagePolicy.Instance);
 }

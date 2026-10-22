@@ -214,7 +214,7 @@ internal static class SunderPackageCompositionPlanner
         var name = type.WithNullableAnnotation(NullableAnnotation.NotAnnotated).ToDisplayString();
         return (name is "Sunder.Sdk.Abstractions.IPackageContext" or "Sunder.Sdk.Rpc.ISunderRpcClient"
                 || role == SunderPackageRoleMembership.App && name is "Sunder.Sdk.Notifications.IPackageNotificationService"
-                    or "Sunder.Sdk.Abstractions.IBackgroundProcessQueue" or "Sunder.Sdk.Abstractions.IPackageSettingsNavigationService"
+                    or "Sunder.Sdk.Abstractions.IBackgroundTaskQueue" or "Sunder.Sdk.Abstractions.IPackageSettingsNavigationService"
                     or "Sunder.Sdk.Abstractions.IPackageShellViewService"
                     or "Sunder.Sdk.Abstractions.IPackageDevelopmentService" or "Sunder.Sdk.Abstractions.IPackageLogNavigationService"
                     or "Sunder.Sdk.Abstractions.IPackageAppStateUpdates" or "Sunder.Sdk.Abstractions.IPackageWorkerExecutionObservations")
