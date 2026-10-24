@@ -5,13 +5,13 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed partial class PackageSessionLifecycleService
 {
     private PackageLifecycleStageResult RegisterPreparedStage(PreparedPackageSession candidate,
-        IReadOnlyList<string> impacted, string? releaseOwnerId = null, bool sourcesOnly = false)
+        IReadOnlyList<string> impacted, string? releaseOwnerId = null, bool sourcesOnly = false, string? reloadOwnerId = null)
     {
         var stageId = candidate.StageId!;
         var now = _timeProvider.GetUtcNow();
         var expires = now + _lifecyclePolicy.PendingStageLifetime;
         _stages.Add(stageId, new(candidate, impacted, candidate.BaseGeneration, now, expires)
-            { ReleaseOwnerId = releaseOwnerId, SourcesOnly = sourcesOnly });
+            { ReleaseOwnerId = releaseOwnerId, ReloadOwnerId = reloadOwnerId, SourcesOnly = sourcesOnly });
         _sessions.RegisterStage(stageId, candidate.BaseGeneration + (sourcesOnly ? 0 : 1), candidate.BaseGeneration,
             RuntimePackageStageKind.PackageSession, now, expires);
         if (!sourcesOnly) _appPolicies?.RegisterRetirementStage(stageId, candidate.Session, candidate.AppSourceWithdrawal);
@@ -55,7 +55,7 @@ internal sealed partial class PackageSessionLifecycleService
     private async Task WaitForAppRetirementAsync(string stageId, CancellationToken token)
     {
         if (_appPolicies is null) return;
-        while (_stages.Get(stageId) is { } stage && !stage.SourcesOnly && stage.ReleaseOwnerId is null)
+        while (_stages.Get(stageId) is { } stage && !stage.SourcesOnly && stage.ReleaseOwnerId is null && stage.ReloadOwnerId is null)
         {
             if (stage.ExpiresAtUtc <= _timeProvider.GetUtcNow() || stage.BaseGeneration != _sessions.Generation
                 || !_sessions.Sources.IsCurrent(stage.Candidate.Sources)) return;

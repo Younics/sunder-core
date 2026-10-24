@@ -944,6 +944,13 @@ public sealed class RuntimeEventSubscriptionService(
             {
                 break;
             }
+            catch (AppPackageActivationRetiredException)
+            {
+                // This candidate lost its exact owner. It is superseded, not a
+                // fault in the selected view. Re-read without reviving that owner.
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken).ConfigureAwait(false);
+                RequeuePresentationRetry(request);
+            }
             catch (Exception ex)
             {
                 developerLog.Warning(

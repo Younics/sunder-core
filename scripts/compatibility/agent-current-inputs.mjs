@@ -37,7 +37,7 @@ export function validateCurrentInventory(expected) {
     exactSet(contract.methods, [...new Set(contract.methods)], "current methods");
     exactSet(contract.streams, contract.methods.filter((m) => contract.streams.includes(m)), "current streams");
   }
-  requireCurrent(packages.reduce((count, p) => count + Object.keys(p.providers).length, 0) === 62, "Expected 62 current providers");
+  requireCurrent(packages.reduce((count, p) => count + Object.keys(p.providers).length, 0) === 64, "Expected 64 current providers");
   for (const p of packages) {
     const parts = p.projectPath.split("/");
     requireCurrent(safePath(p.projectPath) && parts.length === 3 && parts[0] === "src" && parts[2] === parts[1] + ".csproj", "Expected canonical root project topology");
@@ -54,7 +54,7 @@ export function validateCurrentRecords(records, expected, inventorySha256) {
     const contract = expected.contracts.find((c) => c.contractId === record.contractId);
     const descriptor = JSON.parse(record.canonicalDescriptor);
     requireCurrent(record.packageId === contract.packageId && record.exposure === contract.exposure
-      && descriptor.contractId === contract.contractId && descriptor.version === (contract.exposure === "public" ? expected.publicVersion : expected.packageVersion)
+      && descriptor.contractId === contract.contractId && descriptor.version === (contract.contractVersion ?? (contract.exposure === "public" ? expected.publicVersion : expected.packageVersion))
       && descriptor.descriptorVersion === 1 && descriptor.schemaProfile === "sunder.rpc.values.v1"
       && sha256(Buffer.from(record.canonicalDescriptor, "utf8")) === record.descriptorSha256
       && /^[0-9a-f]{64}$/u.test(record.abiSha256), `Current descriptor tuple differs: ${record.contractId}`);

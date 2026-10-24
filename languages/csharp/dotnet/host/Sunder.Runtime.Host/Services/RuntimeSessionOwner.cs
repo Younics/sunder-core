@@ -64,12 +64,17 @@ internal sealed class RuntimeSessionOwner
             () => callbacks?.Clear(),
             packageId => callbacks?.RemovePackageSessions(packageId),
             _lifecyclePolicy.SessionDrainTimeout,
-            _timeProvider);
+            _timeProvider,
+            reconcileAuthSessions: session => callbacks?.Reconcile(session),
+            retireRpcActivations: generation => _rpcCatalog?.RetireReplacedActivationsAsync(
+                ActivePackageSession.CreateEmpty(), generation) ?? Task.CompletedTask,
+            recoveryProvidersAvailable: rpcReadiness is null ? null : rpcReadiness.AreRecoveryProvidersAvailable);
         Callbacks = callbacks = new PackageCallbackSessionCoordinator(
             State,
             authPolicy,
             timeProvider,
-            hostLifetime?.ApplicationStopping ?? CancellationToken.None);
+            hostLifetime?.ApplicationStopping ?? CancellationToken.None,
+            rpcCatalog);
         Auth = new PackageAuthSessionCoordinator(
             State,
             Callbacks,
@@ -115,7 +120,7 @@ internal sealed class RuntimeSessionOwner
         long expectedGeneration,
         CancellationToken cancellationToken = default)
     {
-        var prepared = await State.PreparePublicationAsync(session, expectedGeneration, cancellationToken);
+        var prepared = await PreparePublicationAsync(session, expectedGeneration, cancellationToken);
         try
         {
             return (await CommitPublicationAsync(prepared, sources, warnings, errors)).Warnings;
@@ -133,6 +138,15 @@ internal sealed class RuntimeSessionOwner
         CancellationToken cancellationToken)
         => State.PreparePublicationAsync(session, expectedGeneration, cancellationToken);
 
+    internal Task RetireReplacedRpcActivationsAsync(PackageSessionState.SessionPublication publication)
+    {
+        State.ValidateRpcRetirementPublication(publication);
+        if (_rpcCatalog is null) return Task.CompletedTask;
+        var retirement = _rpcCatalog.RetireReplacedActivationsAsync(publication.Session, publication.CandidateGeneration - 1);
+        State.TrackPreviousRpcRetirement(publication, retirement);
+        return retirement.WaitAsync(_lifecyclePolicy.SessionDrainTimeout);
+    }
+
     internal async Task<(RuntimePackageStamp Stamp, IReadOnlyList<string> Warnings)> CommitPublicationAsync(
         PackageSessionState.SessionPublication publication,
         PackageSessionSourceSnapshot sources,
@@ -140,6 +154,7 @@ internal sealed class RuntimeSessionOwner
         IReadOnlyList<string> errors,
         Action<long>? publishing = null)
     {
+        await RetireReplacedRpcActivationsAsync(publication).ConfigureAwait(false);
         var result = await State.CommitPublicationAsync(publication, publicationSnapshot =>
         {
             void Publish()
@@ -460,7 +475,7 @@ internal sealed class RuntimeSessionOwner
         // process providers additionally persist the same safe context in package events.
         _logger.LogError(
             new EventId(2401, "RuntimeRpcProviderFault"),
-            "Runtime RPC provider fault diagnostic: callerPackageId={CallerPackageId} callerPackageVersion={CallerPackageVersion} callerActivationId={CallerActivationId} providerPackageId={ProviderPackageId} providerPackageVersion={ProviderPackageVersion} providerId={ProviderId} providerActivationId={ProviderActivationId} contractId={ContractId} serviceId={ServiceId} methodId={MethodId} callKind={CallKind} errorKind={ErrorKind} errorCode={ErrorCode} validationCode={ValidationCode} validationPath={ValidationPath} valueUtf8Bytes={ValueUtf8Bytes} valueMaximumDepth={ValueMaximumDepth} valueTotalNodes={ValueTotalNodes} valueMaximumObjectMembers={ValueMaximumObjectMembers} valueInlineDecodedBytes={ValueInlineDecodedBytes} exceptionType={ExceptionType} exceptionFingerprint={ExceptionFingerprint}",
+            "Runtime RPC provider fault diagnostic: callerPackageId={CallerPackageId} callerPackageVersion={CallerPackageVersion} callerActivationId={CallerActivationId} providerPackageId={ProviderPackageId} providerPackageVersion={ProviderPackageVersion} providerId={ProviderId} providerActivationId={ProviderActivationId} contractId={ContractId} serviceId={ServiceId} methodId={MethodId} callKind={CallKind} errorKind={ErrorKind} errorCode={ErrorCode} validationCode={ValidationCode} validationPath={ValidationPath} valueUtf8Bytes={ValueUtf8Bytes} valueMaximumDepth={ValueMaximumDepth} valueTotalNodes={ValueTotalNodes} valueMaximumObjectMembers={ValueMaximumObjectMembers} valueInlineDecodedBytes={ValueInlineDecodedBytes} exceptionType={ExceptionType} exceptionFingerprint={ExceptionFingerprint} transportFailureKind={TransportFailureKind} transportObserved={TransportObserved} transportLimit={TransportLimit}",
             context.CallerPackageId,
             context.CallerPackageVersion,
             context.CallerActivationId,
@@ -482,7 +497,10 @@ internal sealed class RuntimeSessionOwner
             context.ValueMaximumObjectMembers,
             context.ValueInlineDecodedBytes,
             context.ExceptionType,
-            context.ExceptionFingerprint);
+            context.ExceptionFingerprint,
+            context.TransportFailureKind,
+            context.TransportObserved,
+            context.TransportLimit);
     }
 
     internal bool HandleRpcProviderFault(

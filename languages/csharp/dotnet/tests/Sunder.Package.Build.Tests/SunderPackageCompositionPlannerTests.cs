@@ -9,6 +9,27 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed class SunderPackageCompositionPlannerTests
 {
+    [Fact]
+    public void Analyze_AppActivationServiceIsAnEagerAppRootWithoutAViewAndCannotBeInjectedIntoWorker()
+    {
+        const string activation = """
+            public sealed class Startup : Sunder.Sdk.Abstractions.IPackageAppActivationService, System.IAsyncDisposable
+            {
+                public void Start(System.Threading.CancellationToken token) { }
+                public System.Threading.Tasks.ValueTask DisposeAsync() => default;
+            }
+            """;
+        var analysis = Analyze(Service + activation);
+        Assert.True(analysis.Success, Errors(analysis));
+        Assert.Empty(analysis.RolePlan.Views);
+        Assert.Contains(analysis.Composition!.App, entry => entry.Type.Name == "Startup");
+        Assert.DoesNotContain(analysis.Composition.Worker, entry => entry.Type.Name == "Startup");
+        Assert.Contains("StartAppServices", SunderPackageCompositionEmitter.EmitApp(analysis).Text);
+        Assert.Contains("()).Start(token)", SunderPackageCompositionEmitter.EmitApp(analysis).Text);
+        var invalid = Analyze(Service.Replace("CounterService()", "CounterService(Startup startup)", StringComparison.Ordinal) + activation);
+        Assert.False(invalid.Success);
+        Assert.Contains(invalid.RolePlan.Diagnostics, error => error.Id is "package-authoring.role-conflict" or "package-authoring.di-role-conflict");
+    }
     [Theory]
     [InlineData("IStore store", "public interface IStore { }", "di-unresolved")]
     [InlineData("IStore store", "public interface IStore { } public class One : IStore { } public class Two : IStore { }", "di-ambiguous")]

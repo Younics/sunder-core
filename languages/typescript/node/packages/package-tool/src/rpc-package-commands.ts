@@ -23,7 +23,7 @@ export interface PackageApiRequest extends RegistryOriginOptions {
   readonly consumerRoles?: readonly ConsumerRole[];
 }
 type Draft = { lockVersion: number; packageArtifacts: Record<string, OuterObject>; packageImports: Record<string, { localName: string; presence: string; requiredContracts: string[]; consumerRoles: readonly ConsumerRole[] }>;
-  providerImports: Record<string, { packageId: string; contractId: string }>; platformImports: Record<string, OuterObject> };
+  providerImports: Record<string, { packageId: string; contractId: string; presence?: "required" | "optional" }>; platformImports: Record<string, OuterObject> };
 export interface PackageApiResult { readonly changed: boolean; readonly lock: ContractLock }
 export async function packageApiCommand(project: string, request: PackageApiRequest): Promise<PackageApiResult> {
   try { return await execute(project, request); }
@@ -103,11 +103,15 @@ async function execute(project: string, request: PackageApiRequest): Promise<Pac
       providerKey = request.localName ?? current?.key ?? request.contractId!.split(".").at(-1)! + "Provider";
       if (current) {
         if (current.key !== providerKey) contractError("package-api.local-name-collision", "Provider tuple already has a different local key.");
-        await verify(); return { changed: false, lock: before };
+        if (request.presence === undefined || request.presence === current.presence) { await verify(); return { changed: false, lock: before }; }
+        // Parsed outer objects retain an explicit schema-order list. Replace the
+        // record so a newly supplied optional member is included in serialization.
+        draft.providerImports[providerKey] = { packageId: id, contractId: request.contractId!, presence: request.presence };
+      } else {
+        if ([...before.providerImports.keys(), ...before.platformImports.keys()].some(key => key.toLowerCase() === providerKey!.toLowerCase()))
+          contractError("package-api.local-name-collision", "The requested local provider key is already in use.");
+        draft.providerImports[providerKey] = { packageId: id, contractId: request.contractId!, ...(request.presence === undefined ? {} : { presence: request.presence }) };
       }
-      if ([...before.providerImports.keys(), ...before.platformImports.keys()].some(key => key.toLowerCase() === providerKey!.toLowerCase()))
-        contractError("package-api.local-name-collision", "The requested local provider key is already in use.");
-      draft.providerImports[providerKey] = { packageId: id, contractId: request.contractId! };
     }
     hydrate = true;
   } else if (request.operation === "update") {
@@ -235,7 +239,7 @@ function validateRequest(value: PackageApiRequest): void {
   if (["require", "unrequire", "implement", "unimplement"].includes(value.operation) !== (value.contractId !== undefined)) missing();
   if (value.presence !== undefined && value.presence !== "required" && value.presence !== "optional" || value.includePrerelease !== undefined && typeof value.includePrerelease !== "boolean") missing();
   if (!["add", "update", "implement"].includes(value.operation) && [value.versionRange, value.includePrerelease, value.registryOrigin, value.candidate, value.platformCatalog].some(value => value !== undefined)) missing();
-  if (!["add", "update"].includes(value.operation) && value.presence !== undefined) missing();
+   if (!["add", "update", "implement"].includes(value.operation) && value.presence !== undefined) missing();
   if (value.operation === "update" && value.packageId === undefined && value.registryOrigin !== undefined)
     contractError("package-api.registry-origin-invalid", "Binding a local selection to a Registry requires a specific package.");
   if (value.operation !== "add" && value.operation !== "implement" && value.localName !== undefined) missing();

@@ -2,8 +2,10 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
@@ -13,6 +15,73 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class RuntimeProtocolHttpIntegrationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevOwnerEndpoint_RejectsAnInvalidCompatibilityGraphWithoutLosingThePreviousLease(bool incompatibleAuthority)
+    {
+        // App-only inert fixtures exercise the actual prepare/graph/HTTP boundary;
+        // no package Worker or external Registry/provider is started.
+        using var fixture = new DevelopmentImportAuthorityTests.Fixture { Offline = true };
+        await fixture.Preparation.PrepareAsync(await fixture.LocalInputs(), default);
+        var folders = new List<DevPackageOwnerFolder> { new(fixture.Folder, false) };
+        if (incompatibleAuthority)
+        {
+            var authority = fixture.Temp.GetPath("local-authority");
+            var manifestPath = Path.Combine(authority, SunderPackageFormat.ManifestPath);
+            var manifest = JsonNode.Parse(await File.ReadAllBytesAsync(manifestPath))!;
+            manifest["version"] = "2.0.0";
+            await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+            var projectionPath = Path.Combine(authority, SunderPackageFormat.RpcModelProjectionPath);
+            var projection = JsonNode.Parse(await File.ReadAllBytesAsync(projectionPath))!.AsObject();
+            projection["packageVersion"] = "2.0.0";
+            await File.WriteAllBytesAsync(projectionPath, SunderRpcModelProjectionJson.Write(projection));
+            CanonicalPackageTestBuilder.WriteContentIndex(authority);
+            var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(authority);
+            Assert.True(validation.Success, string.Join(" | ", validation.Errors));
+            folders.Add(new(authority, false));
+        }
+        var logs = new RecordingLogSink();
+        await using var server = await StartDevelopmentImportsServerAsync(fixture, logs);
+        using var client = AuthenticatedDevelopmentImportsClient(server);
+        var owner = server.Services.GetRequiredService<RuntimeSessionOwner>();
+        owner.MarkReady();
+        var instance = server.Services.GetRequiredService<RuntimeProtocolDescriptor>().RuntimeInstanceId;
+        const string token = "owner-token-aaaaaaaaaaaaaaaaaaaa";
+        var initial = new DevPackageOwnerMutationRequest(instance, token, "initial", 1, []);
+        using var accepted = await client.PutAsJsonAsync("api/v1/dev-package-owners/graph-owner", initial);
+        Assert.Equal(HttpStatusCode.OK, accepted.StatusCode);
+        var prior = await accepted.Content.ReadFromJsonAsync<DevPackageOwnerLeaseResponse>();
+        Assert.NotNull(prior);
+
+        using var response = await client.PutAsJsonAsync("api/v1/dev-package-owners/graph-owner",
+            new DevPackageOwnerMutationRequest(instance, token, "rejected", 2, folders));
+        var body = await response.Content.ReadAsStringAsync();
+
+        Assert.True(response.StatusCode == HttpStatusCode.UnprocessableEntity,
+            $"Expected 422; received {(int)response.StatusCode}: {body}\n"
+            + string.Join("\n", logs.Entries.Where(entry => entry.Exception is not null).Select(entry => entry.Exception)));
+        using var problem = JsonDocument.Parse(body);
+        Assert.Equal(RuntimeErrorCodes.PackageValidation, problem.RootElement.GetProperty("code").GetString());
+        Assert.Contains("compatibility graph", problem.RootElement.GetProperty("detail").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(problem.RootElement.GetProperty("correlationId").GetString(),
+            Assert.Single(response.Headers.GetValues(RuntimeProblemDetailsMiddleware.CorrelationHeader)));
+        Assert.DoesNotContain(fixture.Folder, body, StringComparison.Ordinal);
+        Assert.Empty(owner.State.GetActivePackages());
+        Assert.Equal(prior.SessionGeneration, owner.Generation);
+        using var heartbeat = await client.PostAsJsonAsync("api/v1/dev-package-owners/graph-owner/heartbeat",
+            new DevPackageOwnerHeartbeatRequest(instance, token));
+        Assert.Equal(HttpStatusCode.OK, heartbeat.StatusCode);
+        var retained = await heartbeat.Content.ReadFromJsonAsync<DevPackageOwnerLeaseResponse>();
+        Assert.NotNull(retained);
+        Assert.Equal(prior.Revision, retained.Revision);
+        Assert.Equal(prior.MutationId, retained.MutationId);
+        Assert.Empty(retained.Packages);
+        Assert.Equal(0, fixture.Requests);
+        Assert.Contains(logs.Entries, entry => entry.Exception is InvalidDataException
+            && entry.Message.Contains("compatibility graph", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData("missing-candidate")]
     [InlineData("corrupt-candidate")]
@@ -94,11 +163,18 @@ public sealed partial class RuntimeProtocolHttpIntegrationTests
         Assert.Equal(modified, File.GetLastWriteTimeUtc(receiptPath));
     }
 
-    private static Task<RuntimeHttpServer> StartDevelopmentImportsServerAsync(DevelopmentImportAuthorityTests.Fixture fixture)
+    private static Task<RuntimeHttpServer> StartDevelopmentImportsServerAsync(
+        DevelopmentImportAuthorityTests.Fixture fixture,
+        RecordingLogSink? logs = null)
         => RuntimeHttpServer.StartAsync(app => app.MapGroup("/api/v1").MapDevPackageOwnerEndpoints(), services =>
         {
             services.AddRuntimeHostServices(fixture.Policy.Paths, new RuntimeBearerTokenValidator(RuntimeHttpServer.Token));
             services.AddSingleton(fixture.Preparation);
+            if (logs is not null)
+            {
+                services.AddSingleton(logs.CreateLogger<RuntimeProblemDetailsMiddleware>());
+                services.AddSingleton(logs.CreateLogger<PackageSessionLoadService>());
+            }
         });
 
     private static HttpClient AuthenticatedDevelopmentImportsClient(RuntimeHttpServer server)

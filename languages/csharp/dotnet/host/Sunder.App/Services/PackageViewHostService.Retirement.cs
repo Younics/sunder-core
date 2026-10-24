@@ -7,13 +7,20 @@ public sealed partial class PackageViewHostService
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, string> _cooperativelyRetired = new();
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, ActivationRegistration> _activations = new();
 
-    private sealed record ActivationRegistration(WeakReference<AppPackageGeneration> Group, Task Ready);
+    // Retirement authority must outlive presentation replacement and GC. Keep
+    // the actual owner until its exact local drain and Host ack are proven.
+    private sealed record ActivationRegistration(AppPackageGeneration Group, Task Ready);
 
     private void RegisterActivation(AppPackageGeneration group, Task ready)
     {
         foreach (var prior in _activations)
-            if (prior.Value.Ready.IsCompleted && !prior.Value.Group.TryGetTarget(out _)) _activations.TryRemove(prior);
-        if (!_activations.TryAdd(group.Composition.ActivationOwnerId, new(new(group), ready)))
+            if (prior.Value.Ready.IsCompletedSuccessfully && prior.Value.Group.ActivePackages is [var package]
+                && prior.Value.Group.Composition.HasAcknowledgedRetirement(package.PackageId))
+            {
+                _cooperativelyRetired.TryAdd(prior.Key, package.PackageId);
+                _activations.TryRemove(prior);
+            }
+        if (!_activations.TryAdd(group.Composition.ActivationOwnerId, new(group, ready)))
             throw new InvalidOperationException("An App activation owner was reused.");
     }
 
@@ -36,8 +43,8 @@ public sealed partial class PackageViewHostService
                 throw new InvalidOperationException("The requested App activation has no local retirement proof.");
             await registration.Ready.WaitAsync(token).ConfigureAwait(false);
             if (_packagePolicy.HasRetiredActivation(requirement)) continue;
-            if (!registration.Group.TryGetTarget(out var group)
-                || group.ActivePackages.Count != 1 || group.ActivePackages[0].PackageId != requirement.Package.PackageId)
+            var group = registration.Group;
+            if (group.ActivePackages.Count != 1 || group.ActivePackages[0].PackageId != requirement.Package.PackageId)
                 throw new InvalidOperationException("The requested App activation has no matching local owner.");
 
             using var stateHandoff = group.Composition.BeginDataHandoff();

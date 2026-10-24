@@ -74,12 +74,12 @@ internal sealed class PackageCallbackSessionStore
         }
     }
 
-    public PackageCallbackSessionResponse? GetStatus(string packageId, string sessionId, long generation)
+    public PackageCallbackSessionResponse? GetStatus(string packageId, string sessionId, Guid activationId)
     {
         lock (_syncRoot)
         {
             return _sessions.TryGetValue(sessionId, out var session)
-                   && session.Generation == generation
+                   && session.ActivationId == activationId
                    && string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase)
                 ? session.Status
                 : null;
@@ -89,13 +89,13 @@ internal sealed class PackageCallbackSessionStore
     public PackageCallbackCancellationWork? TryCancel(
         string packageId,
         string sessionId,
-        long generation,
+        Guid activationId,
         DateTimeOffset removeAtUtc)
     {
         lock (_syncRoot)
         {
             if (!_sessions.TryGetValue(sessionId, out var session)
-                || session.Generation != generation
+                || session.ActivationId != activationId
                 || !string.Equals(session.PackageId, packageId, StringComparison.OrdinalIgnoreCase))
             {
                 return null;
@@ -135,12 +135,17 @@ internal sealed class PackageCallbackSessionStore
         }
     }
 
-    public ActivePackageCallbackSession? TryClaimCompletion(string sessionId, long generation)
+    public string? GetPackageId(string sessionId)
+    {
+        lock (_syncRoot) return _sessions.GetValueOrDefault(sessionId)?.PackageId;
+    }
+
+    public ActivePackageCallbackSession? TryClaimCompletion(string sessionId, Guid activationId)
     {
         lock (_syncRoot)
         {
             if (!_sessions.TryGetValue(sessionId, out var session)
-                || session.Generation != generation
+                || session.ActivationId != activationId
                 || session.State != PackageCallbackLifecycleState.Pending)
             {
                 return null;
@@ -242,6 +247,10 @@ internal sealed class PackageCallbackSessionStore
             PackageCallbackCancellationReason.PackageUnloaded,
             beginShutdown: false);
 
+    internal IReadOnlyList<PackageCallbackCancellationWork> Reconcile(IReadOnlyDictionary<string, Guid> activations)
+        => CancelWhere(session => !activations.TryGetValue(session.PackageId, out var activationId)
+            || activationId != session.ActivationId, PackageCallbackCancellationReason.PackageUnloaded, beginShutdown: false);
+
     public PackageCallbackShutdownWork BeginShutdown()
     {
         var cancellations = CancelWhere(
@@ -322,7 +331,7 @@ internal enum PackageCallbackLifecycleState
 
 internal readonly record struct PackageCallbackStartKey(
     string PackageId,
-    long Generation,
+    Guid ActivationId,
     string CallbackHandlerId,
     string ParametersKey);
 
@@ -341,7 +350,7 @@ internal readonly record struct PackageCallbackShutdownWork(
 
 internal sealed class ActivePackageCallbackSession(
     string packageId,
-    long generation,
+    Guid activationId,
     PackageCallbackStartKey startKey,
     string sessionId,
     IPackageCallbackHandler handler,
@@ -351,7 +360,7 @@ internal sealed class ActivePackageCallbackSession(
     Func<IReadOnlyDictionary<string, string?>, CancellationToken, Task<bool>> completeAsync)
 {
     public string PackageId { get; } = packageId;
-    public long Generation { get; } = generation;
+    public Guid ActivationId { get; } = activationId;
     public PackageCallbackStartKey StartKey { get; } = startKey;
     public string SessionId { get; } = sessionId;
     public IPackageCallbackHandler Handler { get; } = handler;

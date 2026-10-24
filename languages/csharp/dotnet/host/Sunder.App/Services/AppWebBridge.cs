@@ -80,6 +80,25 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
+    internal string CaptureDevelopmentDocument()
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || !_trustedNavigation || _currentUri is null)
+                throw new InvalidOperationException("The owned package browser has no current trusted document.");
+            return _nonce;
+        }
+    }
+
+    internal void RequireDevelopmentDocument(string identity)
+    {
+        lock (_gate)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || !_trustedNavigation || _currentUri is null || _nonce != identity)
+                throw new InvalidOperationException("The original package browser document retired. Inspect again; never replay an old input against a new document.");
+        }
+    }
+
     public Task NavigationStartingAsync()
     {
         AppWebPendingRequest[] requests;

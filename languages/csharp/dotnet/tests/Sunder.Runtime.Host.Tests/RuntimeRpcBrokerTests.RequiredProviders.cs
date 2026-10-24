@@ -1,5 +1,7 @@
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Runtime.Host.Infrastructure.Storage;
+using Sunder.Sdk.Settings;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
@@ -165,6 +167,76 @@ public sealed partial class RuntimeRpcBrokerTests
             Assert.Equal(RpcReadinessErrorCodes.RequiredProviderUnsatisfied, owner.State.GetSessionPackage("consumer.package")!.LastError);
         }
         finally { await owner.State.ClearActiveSessionAsync(); }
+    }
+
+    [Fact]
+    public async Task RejectedPublicationDefersOnlyConsumersWhoseLastRequiredProviderWasLost()
+    {
+        using var permissions = new RuntimeRpcPermissionStore(new(CreateRoot()));
+        var readiness = new RuntimeRpcReadinessEvaluator(permissions);
+        using var catalog = new RuntimeRpcCatalog();
+        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService(), rpcCatalog: catalog, rpcReadiness: readiness);
+        var publisher = new PackageSessionPublisher(owner, NullLogger<PackageSessionPublisher>.Instance, rpcCatalog: catalog, rpcReadiness: readiness);
+        var provider = CreatePackage("provider.package", Contract(), new TestHandler(), false);
+        var consumer = CreatePackage("consumer.package", Contract(), null, true, PackageSourceKind.Dev);
+        var healthy = CreatePackage("healthy.package", Contract(), null, false);
+        var previous = Unstarted(provider, consumer, healthy);
+        var blocked = new RejectedProviderCandidateWorker();
+        try
+        {
+            await publisher.PublishAsync(previous, owner.Sources.Snapshot(), [], [], 0, default);
+            var rejected = publisher.PublishAsync(Unstarted(CreatePackage("candidate.package", Contract(), null, false) with { Worker = blocked }),
+                owner.Sources.Snapshot(), [], [], owner.Generation, default);
+            await blocked.Entered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            owner.HandleRuntimeGenerationFault(provider.Descriptor.PackageId, new(provider.RuntimeActivationId, 1), new IOException("transport drain failed"));
+            blocked.Release.TrySetResult();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => rejected);
+            Assert.Same(previous, owner.State.ActiveSession);
+            Assert.Equal(PackageReadinessState.Failed, owner.State.GetSessionPackage("consumer.package")!.Readiness);
+            Assert.Equal(PackageReadinessState.Ready, owner.State.GetSessionPackage("healthy.package")!.Readiness);
+            using var lease = owner.State.AcquireLease();
+            Assert.Same(previous, lease.Session);
+            var retry = new RuntimePackageRecoveryRequest(lease.Identity, previous, "consumer.package", consumer.RuntimeActivationId,
+                owner.Generation, consumer.Source, consumer, Task.CompletedTask, PackageFailureOrigin.RuntimeActivation,
+                new InvalidOperationException("Required provider unavailable."), DateTimeOffset.UtcNow);
+            Assert.Equal(RuntimePackageRecoveryValidation.DependencyUnavailable, owner.State.ValidatePackageRecovery(retry));
+        }
+        finally { blocked.Release.TrySetResult(); await owner.State.ClearActiveSessionAsync(); }
+
+        static ActivePackageSession Unstarted(params ActiveLoadedPackage[] packages)
+        {
+            var prepared = CreateSession(packages.Select(package => package with
+                { Settings = new PackageSettings(new JsonPackageKeyValueStore(Path.Combine(package.Source.SourceFolder, "settings.json"))) }).ToArray());
+            return new(null, prepared.LoadedPackageMap.ToDictionary(pair => pair.Key, pair => pair.Value),
+                prepared.GetSessionPackages().ToDictionary(package => package.PackageId), workersStarted: false,
+                readySources: prepared.GetActivePackageSources());
+        }
+    }
+
+    private sealed class RejectedProviderCandidateWorker : TestRuntimePackageWorker
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override async Task CommitGenerationAsync(RuntimePackageGeneration generation, CancellationToken cancellationToken = default)
+        {
+            Entered.TrySetResult(); await Release.Task.WaitAsync(cancellationToken);
+            throw new InvalidOperationException("candidate rejected");
+        }
+    }
+
+    [Fact]
+    public async Task RecoveryProviderReadinessAllowsOwnAdvertisementButWaitsForMissingForeignProviders()
+    {
+        using var permissions = new RuntimeRpcPermissionStore(new(CreateRoot()));
+        var readiness = new RuntimeRpcReadinessEvaluator(permissions);
+        var self = CreatePackage("self.package", Contract(), new TestHandler(), true, PackageSourceKind.Dev, providerAudience: "owner");
+        await using var ownSession = CreateSession(self);
+        Assert.True(ownSession.MarkPackageFailed("self.package", PackageFailureOrigin.RuntimeProcess, "failed", out _));
+        Assert.True(readiness.AreRecoveryProvidersAvailable(ownSession, self));
+        var foreign = CreatePackage("foreign.consumer", Contract(), null, true, PackageSourceKind.Dev);
+        await using var missingSession = CreateSession(foreign);
+        Assert.True(missingSession.MarkPackageFailed("foreign.consumer", PackageFailureOrigin.RuntimeProcess, "failed", out _));
+        Assert.False(readiness.AreRecoveryProvidersAvailable(missingSession, foreign));
     }
 
     [Fact]

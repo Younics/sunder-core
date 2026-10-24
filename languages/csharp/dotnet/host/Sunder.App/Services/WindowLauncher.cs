@@ -222,6 +222,21 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         ShowWindow(_developerLogWindow);
     }
 
+    internal async Task OpenDevelopmentViewAsync(string packageId, string viewId, Sunder.Sdk.Abstractions.PackageDevelopmentRevision revision, CancellationToken token)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        token.ThrowIfCancellationRequested();
+        if (!_packageViewHostService.GetDevelopmentViews(packageId, revision).Any(view => view.ViewId == viewId))
+            throw new InvalidOperationException("The view is not registered by this development package.");
+        if (_mainWindowViewModel is not { } model)
+            throw new InvalidOperationException("The App shell is unavailable.");
+        ActivateMainWindow();
+        if (!await model.OpenPackageViewPanelAsync(viewId))
+            throw new InvalidOperationException("The package view could not be opened.");
+        token.ThrowIfCancellationRequested();
+        _ = _packageViewHostService.OpenDevelopmentView(packageId, viewId, revision);
+    }
+
     internal string GetPackageAppReadiness(string packageId, RuntimePackageStamp stamp, string activationFingerprint,
         string? sourceContentIdentity = null)
         => _packageViewHostService.GetAppReadiness(packageId, stamp, activationFingerprint, sourceContentIdentity);

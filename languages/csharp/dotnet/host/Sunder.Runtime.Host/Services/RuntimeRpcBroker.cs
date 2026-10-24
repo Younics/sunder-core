@@ -107,6 +107,21 @@ internal sealed partial class RuntimeRpcBroker
         catch (PackagePolicyDeniedException error) { throw RuntimeRpcPolicyDenials.ToException(error); }
     }
 
+    internal RuntimeRpcActivationLease? AcquirePublishedPackageDataLease(
+        RuntimeRpcCallerStamp stamp, long activationGeneration, IRuntimePackageWorker worker)
+    {
+        if (!_catalog.TryGetPackage(stamp.PackageId, stamp.ActivationId, out var caller)
+            || caller is null || caller.AllowsPrePublicationLease) return null;
+        using var admission = _sessions.AcquireRpcLease(caller);
+        if (!caller.IsCurrent(admission) || caller.ActivationGeneration != activationGeneration
+            || !ReferenceEquals(caller.Package.Worker, worker))
+            throw new RuntimeUnavailableException("The package data operation does not own the exact Worker birth.");
+        RequirePackagePolicy(caller.Package.Source);
+        if (!caller.TryAcquireCallee(out var lease) || lease is null)
+            throw new RuntimeUnavailableException("The package data activation is retired.");
+        return lease;
+    }
+
     private void RequireCallerPolicy(IRuntimeRpcCallerActivation caller)
     {
         if (caller is RuntimeRpcPackageActivation package) RequirePackagePolicy(package.Package.Source);
@@ -153,8 +168,7 @@ internal sealed partial class RuntimeRpcBroker
         string appSessionId,
         string callScopeId)
     {
-        var caller = GetAppCaller(appSessionId);
-        var outcome = await _callScopeRegistry.CloseAsync(caller, callScopeId).ConfigureAwait(false);
+        var outcome = await _callScopeRegistry.CloseAppAsync(appSessionId, callScopeId).ConfigureAwait(false);
         if (outcome == RuntimeRpcCallScopeRegistry.Outcome.CallerMismatch)
         {
             throw Unavailable("rpc.scope.unavailable", "The RPC call scope is stale or unavailable.");
@@ -180,8 +194,8 @@ internal sealed partial class RuntimeRpcBroker
         if (deadline <= now) throw DeadlineExceeded();
         var outcome = _callScopeRegistry.Register(
             caller,
-            sessionLease.Generation,
-            sessionLease.GenerationIdentity,
+            ScopeGeneration(caller, sessionLease),
+            ScopeIdentity(caller, sessionLease),
             deadline,
             parent,
             requirePermission,
@@ -318,7 +332,7 @@ internal sealed partial class RuntimeRpcBroker
         if (!TryGetEndpoint(caller, endpoint, out var provider, out _)
             || provider is null
             || provider.Snapshot.State != SunderRpcProviderState.Active
-            || provider.Snapshot.SessionGeneration != sessionLease.Generation
+            || provider.Snapshot.SessionGeneration != provider.Owner.BindingGeneration
             || _sessions.GetLoadedPackage(sessionLease, provider.Snapshot.PackageId) is not { } activePackage
             || activePackage.RuntimeActivationId != provider.Snapshot.ActivationId
             || !OwnsReportedContract(caller, provider)
@@ -462,15 +476,18 @@ internal sealed partial class RuntimeRpcBroker
                 "rpc.catalog.position",
                 "RPC catalog revisions and sequences cannot be negative.");
         }
-        using var sessionLease = AcquireSessionLease(caller);
-        EnsureCurrent(caller, sessionLease);
-        EnsureScope(scope, caller, sessionLease);
-        if (caller is RuntimeRpcPackageActivation packageCaller
-            && _catalog.IsCandidateCaller(packageCaller))
+        CancellationToken sessionRetirement;
+        CancellationToken generationRetirement;
+        // Observation owns the caller activation, not an obsolete whole-session
+        // object graph. Release the admission snapshot before the first await.
+        using (var sessionLease = AcquireSessionLease(caller))
         {
-            throw Unavailable(
-                "rpc.catalog.activating",
-                "RPC catalog watches are unavailable until the candidate Runtime generation is published.");
+            EnsureCurrent(caller, sessionLease);
+            EnsureScope(scope, caller, sessionLease);
+            if (caller is RuntimeRpcPackageActivation packageCaller && _catalog.IsCandidateCaller(packageCaller))
+                throw Unavailable("rpc.catalog.activating", "RPC catalog watches are unavailable until the candidate Runtime generation is published.");
+            sessionRetirement = sessionLease.RetirementToken;
+            generationRetirement = sessionLease.GenerationRetirementToken;
         }
         using var callerLease = AcquireCallerLease(caller);
         var discoverUses = caller.RpcContractUses.Where(use =>
@@ -486,6 +503,14 @@ internal sealed partial class RuntimeRpcBroker
         var ownerOnlyContracts = new HashSet<string>(StringComparer.Ordinal);
         try
         {
+            // Observe before permission reads so a concurrent grant/revocation
+            // cannot leave an obsolete visibility set. Only this caller's exact
+            // discovery keys matter; dispose all observers when the watch ends.
+            if (caller.SourceKind != PackageSourceKind.Dev)
+                foreach (var use in discoverUses)
+                    permissionLeases.Add(_permissions.ObserveChanges(new RuntimeRpcPermissionKey(
+                        caller.PackageId, caller.PackageVersion, caller.ManifestSha256, caller.Role,
+                        use.ContractId!, use.ContractVersion!, use.AbiSha256!, SunderRpcProtocol.DiscoverAction)));
             foreach (var use in discoverUses)
             {
                 if (TryAcquirePermission(
@@ -515,17 +540,13 @@ internal sealed partial class RuntimeRpcBroker
                 throw PermissionDenied("*", SunderRpcProtocol.DiscoverAction);
             }
             await using var subscription = _catalog.Subscribe(afterRevision, afterSequence);
-            var permissionChanges = caller.SourceKind == PackageSourceKind.Dev
-                ? CancellationToken.None
-                : _permissions.ChangeToken;
             var cancellationTokens = new List<CancellationToken>
             {
                 cancellationToken,
                 _hostStopping,
-                sessionLease.RetirementToken,
-                sessionLease.GenerationRetirementToken,
+                sessionRetirement,
+                generationRetirement,
                 callerLease.RetirementToken,
-                permissionChanges,
             };
             if (scope is not null) cancellationTokens.Add(scope.RevocationToken);
             cancellationTokens.AddRange(permissionLeases.Select(static lease => lease.RevocationToken));
@@ -546,7 +567,7 @@ internal sealed partial class RuntimeRpcBroker
                 catch (OperationCanceledException) when (caller is RuntimeRpcAppCallerSession
                     && !cancellationToken.IsCancellationRequested && !_hostStopping.IsCancellationRequested
                     && (scope is null || _timeProvider.GetUtcNow() < scope.DeadlineUtc)
-                    && (callerLease.RetirementToken.IsCancellationRequested || sessionLease.GenerationRetirementToken.IsCancellationRequested))
+                    && (callerLease.RetirementToken.IsCancellationRequested || generationRetirement.IsCancellationRequested))
                 {
                     // Catalog observation has no provider invocation to classify
                     // this linked cancellation. Preserve only proved App retirement;
@@ -1049,9 +1070,9 @@ internal sealed partial class RuntimeRpcBroker
             var providerSnapshot = acquiredProvider.Snapshot;
             var calleePackage = _sessions.GetLoadedPackage(sessionLease, providerSnapshot.PackageId);
             var providerGeneration = RuntimeRpcCallAcquisitionPolicy.ValidateProviderGeneration(
-                calleePackage?.RuntimeActivationId,
+                ReferenceEquals(calleePackage?.Worker, acquiredProvider.Owner.Package.Worker) ? calleePackage?.RuntimeActivationId : null,
                 providerSnapshot,
-                sessionLease.Generation);
+                acquiredProvider.Owner.BindingGeneration);
             ThrowAcquisitionFailure(providerGeneration.Failure);
             var callerAction = RuntimeRpcCallAcquisitionPolicy.EvaluateCallerAction(
                 caller,
@@ -1130,7 +1151,7 @@ internal sealed partial class RuntimeRpcBroker
                     _transportPolicy,
                     caller.PackageId,
                     acquiredProvider.Snapshot.PackageId,
-                    sessionLease.Generation,
+                    scope?.SessionGeneration ?? acquiredProvider.Owner.BindingGeneration,
                     new RuntimeRpcContentEndpoint(
                         acquiredProvider.Snapshot.Endpoint.Value,
                         acquiredProvider.Snapshot.ActivationId),
@@ -1144,8 +1165,18 @@ internal sealed partial class RuntimeRpcBroker
                     _timeProvider,
                     (caller as RuntimeRpcAppCallerSession)?.Authority);
             }
+            IDisposable? sessionLifetime = sessionLease;
+            var generationRetirement = sessionLease.GenerationRetirementToken;
+            if (caller is RuntimeRpcPackageActivation { AllowsPrePublicationLease: false } or RuntimeRpcAppCallerSession)
+            {
+                // Exact activation leases now own execution. Do not root the old
+                // session's unrelated packages/ALCs for a long-running call.
+                sessionLease.Dispose();
+                sessionLifetime = null;
+            }
             return new RuntimeRpcCallLease(
-                sessionLease,
+                sessionLifetime,
+                generationRetirement,
                 caller,
                 acquiredCallerLease,
                 acquiredCalleeLease,
@@ -1193,17 +1224,23 @@ internal sealed partial class RuntimeRpcBroker
                         "rpc.content.host-unavailable",
                         "Host-mediated RPC content transfer is unavailable.");
         RuntimeRpcInvocationAuthority.ValidateOptions(options);
-        using var sessionLease = AcquireSessionLease(scope.Caller);
-        EnsureCurrent(scope.Caller, sessionLease);
-        EnsureScope(scope, scope.Caller, sessionLease);
-        var provider = GetContentTarget(scope, endpoint, sessionLease);
+        RuntimeRpcProviderActivation provider;
+        using (var admission = AcquireSessionLease(scope.Caller))
+        {
+            EnsureCurrent(scope.Caller, admission);
+            EnsureScope(scope, scope.Caller, admission);
+            provider = GetContentTarget(scope, endpoint, admission);
+        }
+        using var callerLease = AcquireCallerLease(scope.Caller);
+        if (!provider.TryAcquireCallee(_policy.MaxConcurrentObservationsPerCallee, out var providerLease, observation: true)
+            || providerLease is null)
+            throw ResourceExhausted("rpc.provider.observation-limit", "The provider observation limit was reached or its activation retired.");
+        using var registrationLease = providerLease;
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             scope.RevocationToken,
-            sessionLease.RetirementToken,
-            sessionLease.GenerationRetirementToken,
-            scope.Caller.RetirementToken,
-            provider.Owner.RetirementToken);
+            callerLease.RetirementToken,
+            providerLease.RetirementToken);
         var now = _timeProvider.GetUtcNow();
         var expiresAt = RuntimeRpcInvocationAuthority.Min(
             options.ExpiresAtUtc ?? now + _transportPolicy.ContentTransferLifetime,
@@ -1218,7 +1255,7 @@ internal sealed partial class RuntimeRpcBroker
                 options.FileName,
                 scope.Caller.PackageId,
                 provider.Snapshot.PackageId,
-                sessionLease.Generation,
+                scope.SessionGeneration,
                 new RuntimeRpcContentEndpoint(
                     provider.Snapshot.Endpoint.Value,
                     provider.Snapshot.ActivationId),
@@ -1277,7 +1314,7 @@ internal sealed partial class RuntimeRpcBroker
         if (!store.TryGetRpcContentEndpoint(
                 reference,
                 scope.Caller.PackageId,
-                sessionLease.Generation,
+                scope.SessionGeneration,
                 scope.ContentAuthority,
                 out var providerEndpoint))
         {
@@ -1289,7 +1326,7 @@ internal sealed partial class RuntimeRpcBroker
         var lease = store.AcquireRpcContentForAudience(
             reference,
             scope.Caller.PackageId,
-            sessionLease.Generation,
+            scope.SessionGeneration,
             providerEndpoint,
             scope.ContentAuthority)
             ?? throw NotFound(
@@ -1342,7 +1379,9 @@ internal sealed partial class RuntimeRpcBroker
         }
         if (_sessions.GetLoadedPackage(sessionLease, provider.Snapshot.PackageId) is not { } calleePackage
             || calleePackage.RuntimeActivationId != provider.Snapshot.ActivationId
-            || sessionLease.Generation != provider.Snapshot.SessionGeneration)
+            || !ReferenceEquals(calleePackage.Worker, provider.Owner.Package.Worker)
+            || provider.Snapshot.SessionGeneration != provider.Owner.BindingGeneration
+            || provider.Owner.RetirementToken.IsCancellationRequested)
         {
             throw Unavailable(
                 "rpc.provider-retired",
@@ -1374,7 +1413,8 @@ internal sealed partial class RuntimeRpcBroker
                 out _)
             || provider is null
             || provider.Snapshot.ActivationId != endpoint.ActivationId
-            || provider.Snapshot.SessionGeneration != sessionLease.Generation
+            || provider.Snapshot.SessionGeneration != provider.Owner.BindingGeneration
+            || provider.Owner.RetirementToken.IsCancellationRequested
             || _sessions.GetLoadedPackage(sessionLease, provider.Snapshot.PackageId)?.RuntimeActivationId
             != endpoint.ActivationId)
         {
@@ -1414,16 +1454,23 @@ internal sealed partial class RuntimeRpcBroker
 
     private PackageSessionLease AcquireSessionLease(IRuntimeRpcCallerActivation caller)
     {
-        if (caller is RuntimeRpcAppCallerSession { Authority: { } authority })
+        if (caller is RuntimeRpcAppCallerSession app)
         {
-            var operation = authority.Acquire();
+            var operation = app.Authority?.Acquire();
             try
             {
-                var appLease = _sessions.AcquireLease();
-                appLease.Own(operation);
+                if (app.IsRetired) throw RetiredAppCaller();
+                var appLease = _sessions.AcquireAppRpcLease(app);
+                if (operation is not null) appLease.Own(operation);
                 return appLease;
             }
-            catch { operation.Dispose(); throw; }
+            catch (RuntimeUnavailableException)
+            {
+                operation?.Dispose();
+                throw app.IsRetired ? RetiredAppCaller()
+                    : Unavailable("rpc.app-session.unavailable", "The App RPC activation is no longer current.");
+            }
+            catch { operation?.Dispose(); throw; }
         }
         if (caller is RuntimeRpcPackageActivation { AllowsPrePublicationLease: true } candidate)
         {
@@ -1436,7 +1483,6 @@ internal sealed partial class RuntimeRpcBroker
 
         var lease = caller is RuntimeRpcPackageActivation runtime
             ? _sessions.AcquireRpcLease(runtime)
-              ?? throw Unavailable("rpc.session.transitioning", "The continuing package Runtime session is being published.")
             : _sessions.AcquireLease();
         if (caller is RuntimeRpcPackageActivation package)
         {
@@ -1506,11 +1552,18 @@ internal sealed partial class RuntimeRpcBroker
         var outcome = _callScopeRegistry.Validate(
             scope,
             caller,
-            sessionLease.Generation,
-            sessionLease.GenerationIdentity);
+            ScopeGeneration(caller, sessionLease),
+            ScopeIdentity(caller, sessionLease));
         var result = RuntimeRpcCallAcquisitionPolicy.ValidateScope(outcome);
         ThrowAcquisitionFailure(result.Failure);
     }
+
+    private static long ScopeGeneration(IRuntimeRpcCallerActivation caller, PackageSessionLease lease)
+        => caller switch { RuntimeRpcPackageActivation package => package.BindingGeneration,
+            RuntimeRpcAppCallerSession app => app.SessionGeneration, _ => lease.Generation };
+
+    private static object ScopeIdentity(IRuntimeRpcCallerActivation caller, PackageSessionLease lease)
+        => caller is RuntimeRpcPackageActivation or RuntimeRpcAppCallerSession ? caller : lease.GenerationIdentity;
 
     private static bool TargetSupportsExtendedDeadline(RuntimeRpcProviderActivation provider)
         => provider.Owner.Package.Source.SelectedTarget?.RequiredHostCapabilities?.Contains(
@@ -1720,6 +1773,16 @@ internal sealed partial class RuntimeRpcBroker
                     "rpc.call.cancelled",
                     "The RPC call was cancelled.");
         }
+        if (exception is WorkerTransportResourceException { Kind: WorkerTransportFailureKind.WriteQueueAdmission or WorkerTransportFailureKind.WriteQueueClosed } transport)
+        {
+            // The process monitor owns a terminal transport fault. Do not also
+            // accuse every in-flight provider handler (and its consumers) of an
+            // invariant violation when a Host writer rejects/withdraws a frame.
+            return SunderRpcException.Infrastructure(
+                transport.Kind == WorkerTransportFailureKind.WriteQueueClosed ? SunderRpcErrorKind.Unavailable : SunderRpcErrorKind.ResourceExhausted,
+                transport.Kind == WorkerTransportFailureKind.WriteQueueClosed ? "rpc.worker.transport-closed" : "rpc.worker.write-queue-limit",
+                "The process worker transport could not complete the RPC operation.");
+        }
         if (exception is SunderRpcException rpcException
             && IsSafeDomainCode(rpcException.Error.Code))
         {
@@ -1895,12 +1958,17 @@ internal sealed partial class RuntimeRpcBroker
         {
             await processWorker.WriteHostProviderFaultDiagnosticAsync(diagnostic).ConfigureAwait(false);
         }
-        var identity = call.SessionLease.GetPackageActivationIdentity(call.Provider.Owner.Package);
-        _sessionOwner.HandleRpcProviderFault(
-            provider.PackageId,
-            identity,
-            exception,
-            code);
+        try
+        {
+            using var current = AcquireSessionLease(call.Provider.Owner);
+            if (call.Provider.Owner.IsCurrent(current))
+                _sessionOwner.HandleRpcProviderFault(provider.PackageId,
+                    current.GetPackageActivationIdentity(call.Provider.Owner.Package), exception, code);
+        }
+        catch (RuntimeUnavailableException)
+        {
+            // A withdrawn activation cannot fault its replacement during publication.
+        }
         return failure;
     }
 
@@ -2156,6 +2224,8 @@ internal sealed class RuntimeRpcCallScope(
 
 internal sealed class RuntimeRpcCallLease : IDisposable
 {
+    private readonly IDisposable? _sessionLifetime;
+    private readonly CancellationToken _generationRetirement;
     private readonly RuntimeRpcActivationLease _callerLease;
     private readonly RuntimeRpcActivationLease _calleeLease;
     private readonly RuntimeRpcPermissionLease? _permission;
@@ -2163,7 +2233,8 @@ internal sealed class RuntimeRpcCallLease : IDisposable
     private readonly CancellationTokenSource _deadline;
 
     public RuntimeRpcCallLease(
-        PackageSessionLease sessionLease,
+        IDisposable? sessionLifetime,
+        CancellationToken generationRetirement,
         IRuntimeRpcCallerActivation caller,
         RuntimeRpcActivationLease callerLease,
         RuntimeRpcActivationLease calleeLease,
@@ -2177,7 +2248,8 @@ internal sealed class RuntimeRpcCallLease : IDisposable
         RuntimeRpcCallFrame frame,
         SunderRpcInvocationContext context)
     {
-        SessionLease = sessionLease;
+        _sessionLifetime = sessionLifetime;
+        _generationRetirement = generationRetirement;
         Caller = caller;
         _callerLease = callerLease;
         _calleeLease = calleeLease;
@@ -2192,7 +2264,6 @@ internal sealed class RuntimeRpcCallLease : IDisposable
         Context = context;
     }
 
-    public PackageSessionLease SessionLease { get; }
     public IRuntimeRpcCallerActivation Caller { get; }
     public RuntimeRpcProviderActivation Provider { get; }
     public string ServiceId { get; }
@@ -2206,7 +2277,7 @@ internal sealed class RuntimeRpcCallLease : IDisposable
     // its caller session/generation. Preserve that exact boundary without turning
     // unrelated request, scope, permission or provider cancellation into a handoff.
     public bool AppCallerRetirementRequested => Caller is RuntimeRpcAppCallerSession
-        && (_callerLease.RetirementToken.IsCancellationRequested || SessionLease.GenerationRetirementToken.IsCancellationRequested);
+        && (_callerLease.RetirementToken.IsCancellationRequested || _generationRetirement.IsCancellationRequested);
     public bool ProviderRetirementRequested =>
         Provider.Snapshot.State != SunderRpcProviderState.Active
         || _calleeLease.RetirementToken.IsCancellationRequested;
@@ -2219,6 +2290,6 @@ internal sealed class RuntimeRpcCallLease : IDisposable
         _permission?.Dispose();
         _calleeLease.Dispose();
         _callerLease.Dispose();
-        SessionLease.Dispose();
+        _sessionLifetime?.Dispose();
     }
 }

@@ -79,15 +79,29 @@ public sealed class WorkerExecutionObservationContractTests
     }
 
     [Fact]
-    public void NewContractsDeclareOnlyTheirOwnCapabilityAndDoNotExtendDevelopmentInterfaces()
+    public void ObservationContractsDeclareTheirOwnCapabilityAndReloadIsSeparatelyGated()
     {
         foreach (var type in new[] { typeof(IPackageWorkerExecutionObservations), typeof(PackageWorkerExecutionReference),
                      typeof(PackageWorkerExecutionObservation), typeof(PackageWorkerExecutionState) })
             Assert.Equal(SunderSdkCapabilities.WorkerExecutionObservationsV1,
                 Assert.Single(type.GetCustomAttributes<SunderSdkCapabilityAttribute>()).Capability);
-        Assert.Equal(["LoadAsync"], typeof(IPackageDevelopmentService).GetMethods().Select(method => method.Name));
-        Assert.Equal(["GetStatusAsync", "SetWatchAsync", "get_PackageId"],
+        Assert.Equal(["GetLogsAsync", "LoadAsync"], typeof(IPackageDevelopmentService).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(["CaptureViewAsync", "GetLogsAsync", "GetLogsAsync", "GetStatusAsync", "GetViewsAsync", "InspectViewAsync", "InteractViewAsync", "OpenViewAsync", "QueryViewAsync", "ReloadAsync", "SetWatchAsync", "get_PackageId"],
             typeof(IPackageDevelopmentSession).GetMethods().Select(method => method.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1,
+            Assert.Single(typeof(PackageDevelopmentLogQuery).GetCustomAttributes<SunderSdkCapabilityAttribute>()).Capability);
+        foreach (var method in typeof(IPackageDevelopmentService).GetMethods().Concat(typeof(IPackageDevelopmentSession).GetMethods())
+                     .Where(method => method.GetParameters().Any(parameter => parameter.ParameterType == typeof(PackageDevelopmentLogQuery))))
+            Assert.Equal(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1,
+                Assert.Single(method.GetCustomAttributes<SunderSdkCapabilityAttribute>()).Capability);
+        Assert.Equal(SunderSdkCapabilities.PackageDevelopmentReloadV1,
+            Assert.Single(typeof(IPackageDevelopmentSession).GetMethod("ReloadAsync")!.GetCustomAttributes<SunderSdkCapabilityAttribute>()).Capability);
         Assert.Equal("package-development-revisions.v1", SunderSdkCapabilities.PackageDevelopmentRevisionsV1);
+        foreach (var name in new[] { "CaptureViewAsync", "GetViewsAsync", "OpenViewAsync", "QueryViewAsync" })
+            Assert.Equal(SunderSdkCapabilities.PackageDevelopmentFeedbackV1,
+                Assert.Single(typeof(IPackageDevelopmentSession).GetMethod(name)!.GetCustomAttributes<SunderSdkCapabilityAttribute>()).Capability);
+        foreach (var type in new[] { typeof(PackageDevelopmentView), typeof(PackageDevelopmentViewQuery), typeof(PackageDevelopmentViewPage) })
+            Assert.Equal(SunderSdkCapabilities.PackageDevelopmentFeedbackV1,
+                Assert.Single(type.GetCustomAttributes<SunderSdkCapabilityAttribute>()).Capability);
     }
 }

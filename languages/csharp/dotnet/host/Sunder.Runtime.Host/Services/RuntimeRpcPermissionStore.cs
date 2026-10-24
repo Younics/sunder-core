@@ -21,7 +21,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly Dictionary<RuntimeRpcPermissionKey, RuntimeRpcPermissionRecord> _records = [];
     private readonly Dictionary<RuntimeRpcPermissionKey, CancellationTokenSource> _effectiveLifetimes = [];
-    private CancellationTokenSource _changes = new();
+    private readonly Dictionary<RuntimeRpcPermissionKey, List<CancellationTokenSource>> _changes = [];
     private long _revision;
     private bool _disposed;
 
@@ -40,16 +40,32 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         }
     }
 
-    public CancellationToken ChangeToken
+    internal RuntimeRpcPermissionLease ObserveChanges(RuntimeRpcPermissionKey key)
     {
-        get
+        lock (_gate)
         {
-            lock (_gate)
+            ThrowIfDisposed();
+            if (!_changes.TryGetValue(key, out var changes))
             {
-                ThrowIfDisposed();
-                return _changes.Token;
+                changes = [];
+                _changes.Add(key, changes);
             }
+            var change = new CancellationTokenSource();
+            changes.Add(change);
+            return new RuntimeRpcPermissionLease(change.Token, () => ReleaseChangeObserver(key, change));
         }
+    }
+
+    private void ReleaseChangeObserver(RuntimeRpcPermissionKey key, CancellationTokenSource change)
+    {
+        lock (_gate)
+        {
+            if (!_changes.TryGetValue(key, out var observers) || !observers.Remove(change)) return;
+            if (observers.Count == 0) _changes.Remove(key);
+        }
+        // A publisher takes ownership before signalling outside the lock. Only
+        // the owner that removed this observer may dispose its source.
+        change.Dispose();
     }
 
     public bool TryAcquire(RuntimeRpcPermissionKey key, out RuntimeRpcPermissionLease? lease)
@@ -98,7 +114,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
             throw new ArgumentException("The RPC permission identity or fence is invalid.");
         }
         CancellationTokenSource? revoked = null;
-        CancellationTokenSource? changed = null;
+        CancellationTokenSource[] changed = [];
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -137,7 +153,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                 {
                     _effectiveLifetimes.Remove(key, out revoked);
                 }
-                changed = PublishChangeLocked();
+                changed = PublishChangeLocked([key]);
             }
         }
         finally
@@ -145,7 +161,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
             _writeGate.Release();
         }
         CancelAndDispose(revoked);
-        CancelAndDispose(changed);
+        foreach (var change in changed) CancelAndDispose(change);
     }
 
     public async Task GrantDeclaredInstalledActionsAsync(
@@ -197,7 +213,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         }
 
         var revoked = new List<CancellationTokenSource>();
-        CancellationTokenSource? changed = null;
+        CancellationTokenSource[] changed = [];
         await _writeGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -268,7 +284,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                     _effectiveLifetimes[key] = new CancellationTokenSource();
                 }
                 _revision = next.Revision;
-                changed = PublishChangeLocked();
+                changed = PublishChangeLocked(addedKeys.Concat(removedKeys));
             }
         }
         finally
@@ -279,7 +295,7 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         {
             CancelAndDispose(lifetime);
         }
-        CancelAndDispose(changed);
+        foreach (var change in changed) CancelAndDispose(change);
     }
 
     public RuntimeRpcPermissionSnapshot GetSnapshot(IEnumerable<RuntimeRpcPermissionSubject> packages)
@@ -348,20 +364,21 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
     public void Dispose()
     {
         CancellationTokenSource[] lifetimes;
-        CancellationTokenSource changes;
+        CancellationTokenSource[] changes;
         lock (_gate)
         {
             if (_disposed) return;
             _disposed = true;
             lifetimes = _effectiveLifetimes.Values.ToArray();
             _effectiveLifetimes.Clear();
-            changes = _changes;
+            changes = _changes.Values.SelectMany(observers => observers).ToArray();
+            _changes.Clear();
         }
         foreach (var lifetime in lifetimes)
         {
             CancelAndDispose(lifetime);
         }
-        CancelAndDispose(changes);
+        foreach (var change in changes) CancelAndDispose(change);
         _writeGate.Dispose();
     }
 
@@ -463,22 +480,22 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                 .ThenBy(static item => item.Key.Action, StringComparer.Ordinal)
                 .ToArray());
 
-    private CancellationTokenSource PublishChangeLocked()
+    private CancellationTokenSource[] PublishChangeLocked(IEnumerable<RuntimeRpcPermissionKey> keys)
     {
-        var previous = _changes;
-        _changes = new CancellationTokenSource();
-        return previous;
+        var changed = new List<CancellationTokenSource>();
+        foreach (var key in keys)
+            if (_changes.Remove(key, out var previous)) changed.AddRange(previous);
+        return changed.ToArray();
     }
 
 }
 
-internal sealed class RuntimeRpcPermissionLease(CancellationToken revocationToken) : IDisposable
+internal sealed class RuntimeRpcPermissionLease(CancellationToken revocationToken, Action? release = null) : IDisposable
 {
+    private Action? _release = release;
     public CancellationToken RevocationToken { get; } = revocationToken;
 
-    public void Dispose()
-    {
-    }
+    public void Dispose() => Interlocked.Exchange(ref _release, null)?.Invoke();
 }
 
 internal sealed record RuntimeRpcPermissionRecord(

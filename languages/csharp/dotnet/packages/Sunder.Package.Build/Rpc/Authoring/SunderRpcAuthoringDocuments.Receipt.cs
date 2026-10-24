@@ -248,7 +248,7 @@ internal static partial class SunderRpcAuthoringDocuments
             }
             var refs = compilation.ImportedProviders.Where(provider => provider.Surface.Contract.ContractKey == import.ContractId)
                 .OrderBy(static provider => provider.Provider.ProviderId, StringComparer.Ordinal).ToArray();
-            return new JsonObject
+            var record = new JsonObject
             {
                 ["key"] = import.Key,
                 ["packageId"] = import.PackageId,
@@ -263,6 +263,8 @@ internal static partial class SunderRpcAuthoringDocuments
                     ["contractVersion"] = contract.Descriptor.Version,
                 })),
             };
+            if (import.Presence == "optional") record["presence"] = "optional";
+            return record;
         }));
         root["platformImports"] = ReceiptArray(platformImports.OrderBy(import => import.Key, StringComparer.Ordinal).Select(import =>
         {

@@ -23,6 +23,8 @@ internal static class SunderPackageDependencyDiscovery
 
     internal static bool IsActivation(INamedTypeSymbol type)
         => IsWorkerContract(type, "Sunder.Sdk.Worker.ISunderWorkerActivationService");
+    internal static bool IsAppActivation(INamedTypeSymbol type)
+        => IsSdkContract(type, "Sunder.Sdk.Abstractions.IPackageAppActivationService");
 
     internal static bool IsSettingsSchemaProvider(INamedTypeSymbol type)
         => IsWorkerContract(type, "Sunder.Sdk.Worker.ISunderWorkerSettingsSchemaProvider");

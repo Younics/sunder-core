@@ -43,7 +43,8 @@ internal sealed record SunderRpcLockedPackageImport(
 internal sealed record SunderRpcLockedProviderImport(
     string Key,
     string PackageId,
-    string ContractId);
+    string ContractId,
+    string Presence = "required");
 
 internal sealed record SunderRpcLockedPlatformImport(
     string Key,
@@ -384,11 +385,12 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             RequireLocalName(property.Name, "contract lock provider import key");
             var label = $"contract lock provider import '{property.Name}'";
-            RequireObject(property.Value, label, ["packageId", "contractId"], ["packageId", "contractId"], []);
+            RequireObject(property.Value, label, ["packageId", "contractId", "presence"], ["packageId", "contractId"], ["presence"]);
             result.Add(property.Name, new(
                 property.Name,
                 RequirePackageId(property.Value, "packageId", label),
-                RequirePackageId(property.Value, "contractId", label)));
+                RequirePackageId(property.Value, "contractId", label),
+                property.Value.TryGetProperty("presence", out _) ? RequireOneOf(property.Value, "presence", label, "required", "optional") : "required"));
         }
         return result;
     }

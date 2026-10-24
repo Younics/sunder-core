@@ -225,6 +225,17 @@ because each sequences lifecycle work.
 
 ## Deterministic harnesses
 
+The source-channel standalone Maker probe is a separate explicit artifact scope:
+select `SUNDER_REQUIRE_MAKER_STANDALONE=1`, `SUNDER_MAKER_DEV_PACKAGE` (current-RID
+canonical development directory), `SUNDER_MAKER_IMPORT_CANDIDATE` (its exact local
+Agent API archive selection), and `SUNDER_MAKER_PLATFORM_CATALOG` (the selected Core
+catalog). Run `AgentPackageReleaseSmokeTests.MakerStandalone_CurrentDevelopmentOutputActivatesAndRejectsInvalidArgumentsWithoutAgent`.
+Only Maker is loaded into the disposable Host. The Agent archive supplies metadata,
+not an installed/running Agent. The probe retains import/permission guards, launches
+the actual Worker and checks its provider-side argument rejection and clean exit.
+It does not qualify the native App, a released execution-runtime binding, screenshots,
+or the complete fifteen-family release matrix.
+
 `Sunder.Core.TestSupport` supplies manual time, bounded eventual assertions,
 observable gates and files, loopback streaming HTTP, captured child-process
 diagnostics with tree cleanup, temporary-directory cleanup diagnostics,

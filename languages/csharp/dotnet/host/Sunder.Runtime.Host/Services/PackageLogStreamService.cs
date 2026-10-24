@@ -414,6 +414,10 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         var rawMessage = ReadField(line, "msg") ?? line;
         var message = SanitizeText(rawMessage, MaxMessageCharacters, out var messageTruncated);
         var timestamp = ParseTimestamp(line);
+        var properties = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var name in DiagnosticFields)
+            if (ReadField(line, name) is { } value && value != "null")
+                properties[name] = SanitizeText(value, 256, out _);
         _feed.Publish(sequenceId => new PackageLogEntryDescriptor(
             sequenceId,
             NormalizePackageId(packageId),
@@ -424,8 +428,19 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             oversized || categoryTruncated || messageTruncated)
         {
             RuntimeInstanceId = _runtimeInstanceId,
+            Properties = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(properties),
         });
     }
+
+    // Never turn arbitrary package log fields into model context. Retain only
+    // bounded failure identities needed to diagnose a specific call/activation.
+    private static readonly string[] DiagnosticFields =
+    [
+        "event", "rpc_error_code", "rpc_error_kind", "rpc_exception_type", "rpc_exception_fingerprint",
+        "rpc_provider_id", "rpc_provider_activation_id", "rpc_contract_id", "rpc_service_id", "rpc_method_id",
+        "rpc_invocation_id", "rpc_transport_failure_kind", "rpc_transport_observed", "rpc_transport_limit",
+        "rpc_validation_code", "rpc_validation_path",
+    ];
 
     private bool IsLogPath(string filePath)
     {

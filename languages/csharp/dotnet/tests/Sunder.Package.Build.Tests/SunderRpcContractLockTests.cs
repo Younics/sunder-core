@@ -42,6 +42,27 @@ public sealed class SunderRpcContractLockTests
             SunderRpcAuthoringDocuments.ReadContractLock(Fixture("invalid", fileName)));
 
     [Theory]
+    [InlineData("null")]
+    [InlineData("true")]
+    [InlineData("1")]
+    [InlineData("\"\"")]
+    [InlineData("\"Optional\"")]
+    [InlineData("\"suggested\"")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    public void ReadContractLock_ProviderPresenceDefaultsOnlyWhenAbsentAndRejectsMalformedSuppliedValues(string presence)
+    {
+        var document = JsonNode.Parse(File.ReadAllText(Fixture("valid", "package-api-contract-lock.json")))!.AsObject();
+        var provider = new JsonObject { ["packageId"] = "example.dependency", ["contractId"] = "example.rpc.v1.minimal" };
+        document["providerImports"]!["minimalProvider"] = provider;
+        var valid = SunderRpcAuthoringDocuments.ParseContractLock(System.Text.Encoding.UTF8.GetBytes(SerializeLock(document)));
+        Assert.Equal("required", Assert.Single(valid.ProviderImports).Value.Presence);
+        provider["presence"] = JsonNode.Parse(presence);
+        Assert.Throws<InvalidDataException>(() => SunderRpcAuthoringDocuments.ParseContractLock(
+            System.Text.Encoding.UTF8.GetBytes(SerializeLock(document))));
+    }
+
+    [Theory]
     [InlineData("lock-count-mismatch.json", "rpc-authoring.count-mismatch")]
     [InlineData("lock-package-api-no-package-authority.json", "package-api.consumer-api-empty")]
     [InlineData("lock-unreferenced-artifact.json", "rpc-authoring.unreferenced-artifact")]

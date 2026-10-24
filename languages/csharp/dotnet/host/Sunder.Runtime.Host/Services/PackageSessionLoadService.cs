@@ -258,8 +258,23 @@ internal sealed partial class PackageSessionLoadService
             }
 
             ThrowIfCancellationRequested(cancellationToken, sessionFolder);
-            preparedCandidates = PackageCompatibilityAuthority.ResolveDevelopmentGraph(preparedCandidates);
-            PackageCompatibilityAuthority.ValidateGraph(preparedCandidates.Select(package => package.Source).ToArray());
+            try
+            {
+                preparedCandidates = PackageCompatibilityAuthority.ResolveDevelopmentGraph(preparedCandidates);
+                PackageCompatibilityAuthority.ValidateGraph(preparedCandidates.Select(package => package.Source).ToArray());
+            }
+            catch (InvalidDataException exception)
+            {
+                // This pure admission boundary runs before any package activation or
+                // publication. A rejected graph is a definite validation failure,
+                // not an ambiguous mutation failure. Keep detailed evidence in the
+                // server log; do not expose inventory/parser diagnostics to clients.
+                _logger.LogWarning(exception, "Rejected package compatibility graph before activating any package.");
+                throw new RuntimePackageValidationException(
+                    "The Runtime rejected the package compatibility graph. "
+                    + "Ensure all required packages are present and their reviewed imports are compatible; "
+                    + "rebuild the selected development packages together before retrying.");
+            }
             var loadWaves = new PackageLoadPlanner().ResolveLoadWaves(preparedCandidates, errors);
             startupTrace?.RecordGraphPlan(
                 loadWaves,

@@ -52,6 +52,10 @@ public sealed partial class DevPackageOwnerLeaseTests
             var counters = Path.Combine(original.Worker.WorkspaceRootPath!, "activation-counters.txt");
             var activations = File.ReadAllText(counters);
             var originalProvider = Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers);
+            var rpc = new RuntimeRpcClient(fixture.Host.RpcBroker, new(packageId, birth.ActivationId));
+            await using var bindings = new SunderRpcServiceBindingLifetime(rpc);
+            await bindings.DiscoverAsync(originalProvider.ContractId);
+            var issued = bindings.CreateProvider(originalProvider, static (_, _, _) => new object());
             var previous = Assert.Single(fixture.Host.GetActivePackageUiSnapshots());
             var previousSource = original.Source;
             await AssertRoleActivationStateAsync(fixture.Host, birth);
@@ -90,6 +94,10 @@ public sealed partial class DevPackageOwnerLeaseTests
                 var provider = Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers);
                 Assert.Equal(originalProvider.ActivationId, provider.ActivationId);
                 Assert.Equal(originalProvider.ActivationEpoch, provider.ActivationEpoch);
+                Assert.Equal(originalProvider.Endpoint, provider.Endpoint);
+                Assert.Equal(originalProvider.SessionGeneration, provider.SessionGeneration);
+                Assert.False(issued.RetirementToken.IsCancellationRequested);
+                await issued.EnsureCurrentAsync();
                 await AssertRoleRpcAsync(fixture.Host);
                 await AssertRoleCallbackAsync(fixture.Host, birth);
                 previous = snapshot;

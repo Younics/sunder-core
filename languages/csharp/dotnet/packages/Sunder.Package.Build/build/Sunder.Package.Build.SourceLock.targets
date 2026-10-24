@@ -250,35 +250,20 @@
     <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerBuild" />
   </Target>
 
-  <!-- Preserve the SDK Rebuild chain in the OUTER project state: its public Clean
-       and Build results must be cached for later reference consumers. Forking the
-       entire Rebuild leaves outer Clean unexecuted and able to delete fresh refs.
-       Standalone Clean leaves dependencies alone, so Rebuild first cleans those
-       dependencies under a lease, before the ordinary scoped Clean and Build. -->
-  <Target Name="_CleanSunderPackageBuildTaskReferencesForRebuild"
-          AfterTargets="BeforeRebuild"
+   <!-- Preserve the SDK Rebuild chain and reference cleanup in the OUTER project
+        state. The SDK owns dependency scheduling and honors BuildProjectReferences:
+        solution/IDE schedulers clean shared references themselves. A private nested
+        Clean with BuildProjectReferences=true can delete their already rebuilt refs
+        while unrelated consumers compile; the owner-output lease cannot protect
+        those consumers. Only this owner's output cleanup runs under that lease. -->
+   <Target Name="_CleanSunderPackageBuildTaskReferencesForRebuild"
+           AfterTargets="BeforeRebuild"
+           DependsOnTargets="CleanReferencedProjects"
            Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
-    <PropertyGroup>
-      <_SunderPackageBuildTaskRebuildAfterCachedBuild>$(_SunderPackageBuildTaskOwnerBuildCompleted)</_SunderPackageBuildTaskRebuildAfterCachedBuild>
-    </PropertyGroup>
-    <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
-                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
-                                             Context="owner-rebuild-references $(MSBuildProjectFullPath)"
-                                             AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
-      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
-    </_SunderManagePackageBuildTaskSourceLock>
-    <MSBuild Projects="$(MSBuildProjectFullPath)"
-             Targets="CleanReferencedProjects"
-             BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=$(_SunderPackageBuildTaskGeneratePackageOnBuild);BuildProjectReferences=true" />
-    <_SunderManagePackageBuildTaskSourceLock Action="Release"
-                                             LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
-                                             Context="owner-rebuild-references $(MSBuildProjectFullPath)"
-                                             LeaseId="$(_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId)">
-      <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskOwnerRebuildSourceLockLeaseId" />
-    </_SunderManagePackageBuildTaskSourceLock>
-    <OnError ExecuteTargets="_ReleaseSunderPackageBuildTaskSourceLockForOwnerRebuild" />
-  </Target>
+     <PropertyGroup>
+       <_SunderPackageBuildTaskRebuildAfterCachedBuild>$(_SunderPackageBuildTaskOwnerBuildCompleted)</_SunderPackageBuildTaskRebuildAfterCachedBuild>
+     </PropertyGroup>
+   </Target>
 
   <!-- An earlier reference consumer can request Build before the solution requests
        Rebuild. MSBuild then runs the first Clean but skips its cached Build result.

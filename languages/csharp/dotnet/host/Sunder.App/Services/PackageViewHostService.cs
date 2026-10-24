@@ -165,7 +165,8 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
             _uiDispatcher,
             packagePolicy,
             developerServices,
-            RegisterActivation);
+            RegisterActivation,
+            () => _activations.Values.Select(registration => registration.Group).ToArray());
         var initialGeneration = _generationBuilder.CreateInitialGeneration(
             viewRegistry,
             disabledPackageIds,
@@ -884,6 +885,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         Action<Control> stageView,
         CancellationToken cancellationToken)
     {
+        generation.Composition.RequireCurrentActivations();
         var packageId = generation.ViewRegistry.GetPackageId(viewId)
             ?? generation.ActivePackages
                 .FirstOrDefault(package => package.Views.Any(view => string.Equals(
@@ -941,6 +943,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
                     parameters,
                     cancellationToken);
             }
+            catch (AppPackageActivationRetiredException) { throw; }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;

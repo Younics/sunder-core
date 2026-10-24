@@ -55,6 +55,19 @@ public sealed record DevPackageOwnerReleaseCommitRequest(
 public sealed record DevPackageOwnerReleaseResult(
     Guid RuntimeInstanceId, string OwnerId, string StageId, RuntimePackageSnapshot Snapshot);
 
+/// <summary>A finite reload of one package already held by this exact development owner.</summary>
+public sealed record DevPackageOwnerReloadStageRequest(
+    Guid RuntimeInstanceId, string OwnerToken, long Revision, string MutationId, string PackageId, string SourceContentIdentity);
+
+public sealed record DevPackageOwnerReloadStageResult(
+    string PackageId, string SourceContentIdentity, PackageLifecycleStageResult Stage);
+
+public sealed record DevPackageOwnerReloadCommitRequest(
+    Guid RuntimeInstanceId, string OwnerToken, string StageId);
+
+public sealed record DevPackageOwnerReloadResult(
+    Guid RuntimeInstanceId, string OwnerId, string StageId, string PackageId, string SourceContentIdentity, RuntimePackageSnapshot Snapshot);
+
 public sealed record DevPackageOwnerPackage(
     string PackageId,
     bool Watch)

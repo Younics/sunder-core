@@ -6,7 +6,7 @@ using Sunder.Sdk.Abstractions;
 namespace Sunder.App.Services;
 
 /// <summary>App composition bridge. SDK services themselves are created per package activation.</summary>
-public sealed class AppPackageDeveloperServices(RuntimeClientTransport transport, IRuntimeApiClientFactory clients,
+public sealed partial class AppPackageDeveloperServices(RuntimeClientTransport transport, IRuntimeApiClientFactory clients,
     BackgroundTaskQueueService queue, IUiDispatcher dispatcher) : IAppPackageDevelopmentBackend
 {
     private WindowLauncher? _launcher;

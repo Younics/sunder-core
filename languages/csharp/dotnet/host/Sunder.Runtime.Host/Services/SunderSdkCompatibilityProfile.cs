@@ -18,9 +18,15 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.SettingsNavigationV1,
         SunderSdkCapabilities.PackageDevelopmentV1,
         SunderSdkCapabilities.PackageDevelopmentRevisionsV1,
+        SunderSdkCapabilities.PackageDevelopmentReloadV1,
+        SunderSdkCapabilities.PackageDevelopmentLogsV1,
+        SunderSdkCapabilities.PackageDevelopmentLogQueriesV1,
+        SunderSdkCapabilities.PackageDevelopmentViewsV1,
+        SunderSdkCapabilities.PackageDevelopmentFeedbackV1,
         SunderSdkCapabilities.WorkerExecutionObservationsV1,
         SunderSdkCapabilities.PackageLogNavigationV1,
         SunderSdkCapabilities.AppStateUpdatesV1,
+        SunderSdkCapabilities.AppActivationServicesV1,
         SunderSdkCapabilities.BackgroundServicesV1,
         SunderSdkCapabilities.RuntimeGenerationsV1,
         SunderSdkCapabilities.BackgroundProcessesV1,
@@ -36,6 +42,7 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ShellViewV1,
         SunderSdkCapabilities.ViewNavigationPreparationV1,
         SunderSdkCapabilities.RpcV1,
+        SunderSdkCapabilities.RpcCallOwnershipV1,
         SunderSdkCapabilities.RpcExtendedDeadlineV1,
         SunderSdkCapabilities.StacksV1,
         SunderSdkCapabilities.StacksRpcV1,
@@ -57,9 +64,15 @@ internal static class SunderSdkCompatibilityProfile
             [SunderSdkCapabilities.SettingsNavigationV1] = false,
             [SunderSdkCapabilities.PackageDevelopmentV1] = false,
             [SunderSdkCapabilities.PackageDevelopmentRevisionsV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentReloadV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentLogsV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentLogQueriesV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentViewsV1] = false,
+            [SunderSdkCapabilities.PackageDevelopmentFeedbackV1] = false,
             [SunderSdkCapabilities.WorkerExecutionObservationsV1] = false,
             [SunderSdkCapabilities.PackageLogNavigationV1] = false,
             [SunderSdkCapabilities.AppStateUpdatesV1] = false,
+            [SunderSdkCapabilities.AppActivationServicesV1] = false,
             [SunderSdkCapabilities.BackgroundServicesV1] = true,
             [SunderSdkCapabilities.RuntimeGenerationsV1] = true,
             [SunderSdkCapabilities.BackgroundProcessesV1] = false,
@@ -75,6 +88,7 @@ internal static class SunderSdkCompatibilityProfile
             [SunderSdkCapabilities.ShellViewV1] = false,
             [SunderSdkCapabilities.ViewNavigationPreparationV1] = false,
             [SunderSdkCapabilities.RpcV1] = true,
+            [SunderSdkCapabilities.RpcCallOwnershipV1] = true,
             [SunderSdkCapabilities.RpcExtendedDeadlineV1] = true,
             [SunderSdkCapabilities.StacksV1] = true,
             [SunderSdkCapabilities.StacksRpcV1] = true,
@@ -131,7 +145,7 @@ internal static class SunderSdkCompatibilityProfile
             {
                 errors.Add($"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but this Host does not support it.");
             }
-            else if ((capability is SunderSdkCapabilities.WorkerExecutionObservationsV1 or SunderSdkCapabilities.PackageDevelopmentRevisionsV1)
+            else if ((capability is SunderSdkCapabilities.WorkerExecutionObservationsV1 or SunderSdkCapabilities.PackageDevelopmentRevisionsV1 or SunderSdkCapabilities.PackageDevelopmentReloadV1 or SunderSdkCapabilities.PackageDevelopmentLogsV1 or SunderSdkCapabilities.PackageDevelopmentLogQueriesV1 or SunderSdkCapabilities.PackageDevelopmentViewsV1 or SunderSdkCapabilities.PackageDevelopmentFeedbackV1 or SunderSdkCapabilities.AppActivationServicesV1)
                 && (targetKey.Role != SunderPackageFormat.AppHostRole || targetKind != SunderPackageFormat.AvaloniaTargetKind)
                 && !(targetKey.Role == SunderPackageFormat.RuntimeHostRole && targetKind == SunderPackageFormat.WorkerTargetKind
                     && requiredHostCapabilities?.Contains(SunderWorkerProtocol.V1Capability, StringComparer.Ordinal) == true))

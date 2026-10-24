@@ -30,7 +30,8 @@ internal sealed class AppPackageGenerationBuilder(
     IUiDispatcher uiDispatcher,
     IAppPackagePolicy? packagePolicy = null,
     IAppPackageDevelopmentBackend? developerServices = null,
-    Action<AppPackageGeneration, Task>? registerActivation = null)
+    Action<AppPackageGeneration, Task>? registerActivation = null,
+    Func<IReadOnlyList<AppPackageGeneration>>? getActivationOwners = null)
 {
     public AppPackageGeneration CreateInitialGeneration(
         AppPackageViewRegistry viewRegistry,
@@ -76,11 +77,8 @@ internal sealed class AppPackageGenerationBuilder(
         disabledPackageIds.IntersectWith(activePackages.Select(package => package.PackageId));
         disabledPackageIds.RemoveWhere(packageId =>
             sourcesByPackageId.TryGetValue(packageId, out var source)
-            && currentGeneration.State.GetPackageContentHash(packageId) is { } currentContentHash
-            && !string.Equals(
-                source.ContentHash,
-                currentContentHash,
-                StringComparison.OrdinalIgnoreCase));
+            && (currentGeneration.State.GetPackageContentHash(packageId) is not { } currentContentHash
+                || !string.Equals(source.ContentHash, currentContentHash, StringComparison.OrdinalIgnoreCase)));
         disabledPackageIds.ExceptWith(retryPackageIds);
         if (forceDisabledPackageIds is not null)
         {
@@ -120,19 +118,22 @@ internal sealed class AppPackageGenerationBuilder(
                 foreach (var id in ownedIds)
                 {
                     var source = sourcesByPackageId[id];
-                    var handle = group.State.GetLoadedPackage(id)
+                    var handle = currentGeneration.State.GetLoadedPackage(id)
                         ?? throw new InvalidOperationException($"Retained App activation '{id}' retired during preparation.");
-                    if (handle.TargetLifetime is AppPackageManagedRpcClient rpc)
+                    if (handle.TargetLifetime is AppPackageManagedRpcClient rpc
+                        && (handle.Source.PolicySubject is null || handle.Source.PolicySubject != source.PolicySubject))
                         candidate.AddRpcReplacement(await rpc.PrepareAsync(source, cancellationToken).ConfigureAwait(false));
+                    else if (handle.LoadAdmission is { } admission)
+                        await (packagePolicy ?? UnavailableAppPackagePolicy.Instance).RequireRetainedLoadAsync(source, admission, cancellationToken).ConfigureAwait(false);
                     else
                         await (packagePolicy ?? UnavailableAppPackagePolicy.Instance).RequireLoadAsync(source, cancellationToken).ConfigureAwait(false);
                     candidate.State.StageRetainedSource(activeByPackageId[id], source);
                 }
-                // Every exact new source has a permit and a prepared caller session.
+                // Unchanged exact App sources keep their existing RPC session and
+                // subscriptions; only a changed source authority needs a replacement.
                 // Retain the original publication/owner, never a reconstructed provider.
                 candidate.RetainGroup(group);
             }
-            await candidate.PrepareDataHandoffsAsync(currentGeneration, cancellationToken).ConfigureAwait(false);
             var materializations = packageSources
                 .Where(source => activeByPackageId.ContainsKey(source.PackageId) && !candidate.Composition.IsRetainedPackage(source.PackageId))
                 .Select(async source =>
@@ -206,9 +207,18 @@ internal sealed class AppPackageGenerationBuilder(
                     package.PackageId,
                     "Runtime did not provide a loadable app-side package source.",
                     exception: null,
-                    hasCommittedGeneration);
+                    // No current source means no authority to reuse this UI. Isolate
+                    // it, not the entire presentation; unrelated packages must still
+                    // publish. A later source can be admitted normally, even with
+                    // unchanged bytes, because this state has no source hash.
+                    hasCommittedGeneration: false);
             }
 
+            var replacements = preparedPackages.Where(package => (package.Package.HostRoles & PackageHostRoles.App) != 0
+                    && !state.IsPackageDisabled(package.Package.PackageId))
+                .Select(package => package.Package.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await candidate.PrepareDataHandoffsAsync(currentGeneration.ActivationGroups.Concat(getActivationOwners?.Invoke() ?? []),
+                replacements, cancellationToken).ConfigureAwait(false);
             candidate.Composition.AddSharedAssemblyProbeDirectories(
                 preparedPackages.Select(package => package.LibraryFolder));
             var preparedByPackageId = preparedPackages.ToDictionary(
@@ -329,11 +339,11 @@ internal sealed class AppPackageGenerationBuilder(
                     && handle.Source.PolicySubject is { } previous && source.PolicySubject is { } next
                     && previous.PackageId == next.PackageId && next.PackageId == active.PackageId
                     && previous.Version == next.Version && next.Version == active.Version)
-            && handle.Source.Target.Kind == Sunder.Package.Format.SunderPackageFormat.AvaloniaTargetKind
+            && handle.Source.Target.Kind is Sunder.Package.Format.SunderPackageFormat.AvaloniaTargetKind or Sunder.Package.Format.SunderPackageFormat.WebTargetKind
             && SameTarget(handle.Source.Target, source.Target)
             && handle.Package.Version == active.Version && handle.Package.HostRoles == active.HostRoles
             && handle.Package.IsEnabled == active.IsEnabled && handle.Package.Readiness == active.Readiness
-            && (handle.TargetLifetime is AppPackageManagedRpcClient
+            && (handle.TargetLifetime is AppPackageManagedRpcClient or AppWebPackageLifetime
                 || handle.TargetLifetime is null && AppProcessPolicySupervisor.GetImplementedObservationCapabilities(source.Target) is null);
 
     private static bool SameTarget(PackageTargetDescriptor left, PackageTargetDescriptor right)

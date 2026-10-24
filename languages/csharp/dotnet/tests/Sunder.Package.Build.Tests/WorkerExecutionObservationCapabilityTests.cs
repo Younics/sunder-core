@@ -34,18 +34,19 @@ public sealed class WorkerExecutionObservationCapabilityTests
     }
 
     [Theory]
-    [InlineData("get_RuntimeRevision")]
-    [InlineData("get_AppliedRevision")]
-    public void RevisionAccessorAnnotationsAreReadAtMemberScope(string member)
+    [InlineData(nameof(PackageDevelopmentStatus), "get_RuntimeRevision", SunderSdkCapabilities.PackageDevelopmentRevisionsV1)]
+    [InlineData(nameof(PackageDevelopmentStatus), "get_AppliedRevision", SunderSdkCapabilities.PackageDevelopmentRevisionsV1)]
+    [InlineData(nameof(IPackageDevelopmentSession), "ReloadAsync", SunderSdkCapabilities.PackageDevelopmentReloadV1)]
+    public void DevelopmentAnnotationsAreReadAtMemberScope(string type, string member, string capability)
     {
         // The coordinating draft owns these additive members. This test deliberately
         // checks their metadata instead of adding or redefining the revision DTO here.
         var diagnostics = new List<string>();
         var catalog = SdkCapabilityCatalog.Create([typeof(IPackageContext).Assembly.Location], diagnostics);
-        var result = catalog.ResolveMember("Sunder.Sdk", "Sunder.Sdk.Abstractions", nameof(PackageDevelopmentStatus), member);
+        var result = catalog.ResolveMember("Sunder.Sdk", "Sunder.Sdk.Abstractions", type, member);
         Assert.Empty(diagnostics);
         Assert.True(result.IsResolved);
-        Assert.Contains(SunderSdkCapabilities.PackageDevelopmentRevisionsV1, result.DeclaredCapabilities);
+        Assert.Contains(capability, result.DeclaredCapabilities);
         Assert.DoesNotContain(SunderSdkCapabilities.WorkerExecutionObservationsV1, result.DeclaredCapabilities);
     }
 

@@ -22,6 +22,7 @@ public sealed record PackageLogEntryDescriptor(
     bool Truncated)
 {
     public Guid RuntimeInstanceId { get; init; }
+    public IReadOnlyDictionary<string, string> Properties { get; init; } = new Dictionary<string, string>();
 }
 
 public sealed record PackageLogSnapshot(

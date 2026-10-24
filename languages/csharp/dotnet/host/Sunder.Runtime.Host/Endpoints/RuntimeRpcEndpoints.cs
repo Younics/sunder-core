@@ -126,9 +126,16 @@ internal static class RuntimeRpcEndpoints
         RuntimeRpcAppCallScopeCloseRequest request,
         HttpContext context)
     {
-        await context.RequestServices.GetRequiredService<RuntimeRpcBroker>()
-            .CloseAppCallScopeAsync(request.SessionId, request.CallScopeId).ConfigureAwait(false);
-        return Results.NoContent();
+        try
+        {
+            await context.RequestServices.GetRequiredService<RuntimeRpcBroker>()
+                .CloseAppCallScopeAsync(request.SessionId, request.CallScopeId).ConfigureAwait(false);
+            return Results.NoContent();
+        }
+        catch (SunderRpcException exception)
+        {
+            return Results.Json(ToProtocol(exception.Error), statusCode: StatusCodes.Status409Conflict);
+        }
     }
 
     private static async Task<IResult> DiscoverAppAsync(

@@ -45,9 +45,11 @@ internal static class RegistryAuthCallbackProtocol
 
     public static async Task WriteResponseAsync(Stream stream, bool success, CancellationToken cancellationToken)
     {
-        var body = $"<!doctype html><html><body><h1>Sunder Registry {(success ? "authorized" : "authorization failed")}</h1><p>You can close this window.</p></body></html>";
+        var body = AuthorizationResultPage.Build(success, "You can close this window and return to Sunder.",
+            $"Sunder Registry {(success ? "authorized" : "authorization failed")}");
         var bodyBytes = Encoding.UTF8.GetBytes(body);
-        var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {bodyBytes.Length}\r\nConnection: close\r\n\r\n");
+        var securityHeaders = string.Concat(AuthorizationResultPage.Headers.Select(header => $"{header.Name}: {header.Value}\r\n"));
+        var headers = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {bodyBytes.Length}\r\n{securityHeaders}Connection: close\r\n\r\n");
         await stream.WriteAsync(headers, cancellationToken);
         await stream.WriteAsync(bodyBytes, cancellationToken);
     }

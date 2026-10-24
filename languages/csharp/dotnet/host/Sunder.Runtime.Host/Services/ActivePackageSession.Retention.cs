@@ -67,7 +67,7 @@ internal sealed partial class ActivePackageSession
         bool changed;
         do
         {
-            changed = retained.RemoveWhere(id => AppActivationFingerprint.DependencyClosure(id, sources)
+            changed = retained.RemoveWhere(id => AppActivationFingerprint.DependencyClosure(id, sources, Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole)
                 .Any(dependency => dependency != id && previous._loadedPackageMap.ContainsKey(dependency)
                     && (!retained.Contains(dependency) || !_loadedPackageMap.ContainsKey(dependency)))) != 0;
         } while (changed);
@@ -140,8 +140,9 @@ internal sealed partial class ActivePackageSession
 
     private static string Fingerprint(string id, IReadOnlyList<RuntimePackageSource> sources, ActivePackageSession session, bool developmentWorkerContinuation)
     {
-        var source = AppActivationFingerprint.Create(Guid.Empty, id, sources, session.GetSessionPackages(), developmentWorkerContinuation);
-        var runtime = AppActivationFingerprint.DependencyClosure(id, sources).Order(StringComparer.Ordinal).Select(packageId =>
+        var source = AppActivationFingerprint.Create(Guid.Empty, id, sources, session.GetSessionPackages(), developmentWorkerContinuation,
+            role: Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole);
+        var runtime = AppActivationFingerprint.DependencyClosure(id, sources, Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole).Order(StringComparer.Ordinal).Select(packageId =>
         {
             var package = session._loadedPackageMap.GetValueOrDefault(packageId);
             var binding = package?.ExecutionRuntimeBinding;

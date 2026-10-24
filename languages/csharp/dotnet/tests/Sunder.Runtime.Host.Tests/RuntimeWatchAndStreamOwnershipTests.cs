@@ -73,6 +73,26 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     }
 
     [Fact]
+    public async Task PackageLogsRetainOnlyBoundedSafeStructuredFaultIdentity()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var folder = Path.Combine(root, "test.package", "logs"); Directory.CreateDirectory(folder);
+            await File.WriteAllTextAsync(Path.Combine(folder, "events.log"),
+                "Jul 11 12:00:00 host test.package[1]: level=error event=runtime.rpc.provider-fault msg=failed rpc_method_id=get rpc_transport_failure_kind=WriteQueueAdmission rpc_exception_type=RpcInstanceError secret=do-not-expose\n");
+            await using var service = new PackageLogStreamService(root); service.Start();
+            var entry = Assert.Single(service.GetSnapshot().Entries);
+            Assert.Equal("get", entry.Properties["rpc_method_id"]);
+            Assert.Equal("WriteQueueAdmission", entry.Properties["rpc_transport_failure_kind"]);
+            Assert.Equal("RpcInstanceError", entry.Properties["rpc_exception_type"]);
+            Assert.False(entry.Properties.ContainsKey("secret"));
+            Assert.DoesNotContain("do-not-expose", System.Text.Json.JsonSerializer.Serialize(entry));
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    [Fact]
     public async Task PackageLogs_MalformedOversizedAndSensitiveLinesAreSafelyBounded()
     {
         var root = CreateTempDirectory();

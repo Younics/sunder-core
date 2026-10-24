@@ -144,6 +144,7 @@ internal sealed class AppPackageActivator(
                 viewRegistry,
                 package.PackageId);
             module.RegisterAppContributions(registry, serviceProvider);
+            serviceProviderFactory.Publication.Buffer(() => module.StartAppServices(serviceProvider, serviceProviderFactory.Publication.RevocationToken));
         }
     }
 

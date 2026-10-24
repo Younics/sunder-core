@@ -218,6 +218,9 @@ internal sealed class RuntimePackageSessionTestHost
     public Task ReleaseDevPackageOwnerAsync(string ownerId, DevPackageOwnerReleaseRequest request, CancellationToken token = default) => _devOwners.ReleaseAsync(ownerId, request, token);
     internal Task<PackageLifecycleStageResult> StageOwnerReleaseAsync(string ownerId, DevPackageOwnerReleaseStageRequest request, CancellationToken token = default) => _devOwners.StageReleaseAsync(ownerId, request, token);
     internal Task<DevPackageOwnerReleaseResult> CommitOwnerReleaseAsync(string ownerId, DevPackageOwnerReleaseCommitRequest request, CancellationToken token = default) => _devOwners.CommitReleaseAsync(ownerId, request, token);
+    internal Task<DevPackageOwnerReloadStageResult> StageOwnerReloadAsync(string ownerId, DevPackageOwnerReloadStageRequest request, CancellationToken token = default) => _devOwners.StageReloadAsync(ownerId, request, token);
+    internal Task<DevPackageOwnerReloadResult> CommitOwnerReloadAsync(string ownerId, DevPackageOwnerReloadCommitRequest request, CancellationToken token = default) => _devOwners.CommitReloadAsync(ownerId, request, token);
+    internal Task DiscardOwnerReloadAsync(string ownerId, DevPackageOwnerReloadCommitRequest request, CancellationToken token = default) => _devOwners.DiscardReloadAsync(ownerId, request, token);
     public Task ReapDevPackageOwnersAsync(CancellationToken token = default) => _devOwners.ReapExpiredAsync(token);
     public bool ContainsDevPackageOwner(string ownerId) => _devOwners.ContainsOwner(ownerId);
     public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken token = default) => _installed.GetInstalledAsync(token);

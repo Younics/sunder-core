@@ -23,12 +23,12 @@ const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
 const source = (providers = 'export const extension=defineService({examplePing(request, context){context.signal.throwIfAborted(); return request;}},{implements:imported.extension});') =>
   `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";\n${providers}`;
-async function fixture(extension = "ts", consumer = false, stream = false, additionalService = false) {
+async function fixture(extension = "ts", consumer = false, stream = false, additionalService = false, providerPresence: "required" | "optional" = "required") {
   const root = await mkdtemp(join(tmpdir(), "sunder-imported-providers-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
   const value = JSON.parse(await readFile(join(ROOT, "authoring/conformance/valid/package-api-contract-lock.json"), "utf8"));
   if (consumer) { value.packageImports["example.dependency"].presence = "optional"; value.packageImports["example.dependency"].requiredContracts = []; }
   else value.packageImports = {};
-  value.providerImports = { extension: { packageId: "example.dependency", contractId: "example.rpc.v1.minimal" } };
+  value.providerImports = { extension: { packageId: "example.dependency", contractId: "example.rpc.v1.minimal", ...(providerPresence === "optional" ? { presence: "optional" } : {}) } };
   const descriptorValue = JSON.parse(await readFile(join(ROOT, "conformance/valid/minimal.rpc.json"), "utf8"));
   if (stream) descriptorValue.services.example.methods.watch = { kind: "server-stream", idempotency: "none", errors: [], requestSchema: { $ref: "#/$defs/Empty" }, eventSchema: { $ref: "#/$defs/Empty" } };
   if (additionalService) descriptorValue.services.other = structuredClone(descriptorValue.services.example);
@@ -78,6 +78,54 @@ for (const extension of ["ts", "js"]) test(`imported ${extension} providers comp
     await assert.rejects(async () => registration.handler.invokeUnary(context, "example", "ping", { unknown: true }));
     const values = []; for await (const value of registration.handler.invokeServerStream(context, "example", "watch", {})) values.push(value);
     assert.deepEqual(values, [{}]); assert.deepEqual(await readFile(c.lockPath), c.original);
+  } finally { await c.dispose(); }
+});
+
+test("optional provider presence survives reference closure, receipt and packaged dependency projection", { timeout: 180_000 }, async () => {
+  const c = await fixture("ts", false, false, false, "optional");
+  try {
+    const loaded = await c.load();
+    assert.deepEqual(loaded.config.usesContracts, []);
+    assert.equal(loaded.ownedRpc!.imports.dependencies[0]!.presence, "optional");
+    await generateRpcBindingsForLoadedProject(loaded);
+    const receipt = JSON.parse(loaded.ownedRpc!.files.get("authoring-receipt.v1.json")!);
+    assert.equal(receipt.providerImports[0].presence, "optional");
+    await c.run("build");
+    const manifest = JSON.parse(await readFile(join(c.root, "dist/targets", currentRid(), "manifest/sunder-package.json"), "utf8"));
+    assert.equal(manifest.dependsOn[0].presence, "optional");
+    assert.equal(manifest.providerImports[0].presence, "optional");
+    assert.deepEqual(await readFile(c.lockPath), c.original);
+  } finally { await c.dispose(); }
+});
+
+test("required consumer presence wins over optional provider intent without making provider readiness required", async () => {
+  const c = await fixture("ts", true, false, false, "optional");
+  try {
+    const lock = JSON.parse(c.original.toString());
+    lock.packageImports["example.dependency"].presence = "required";
+    await writeFile(c.lockPath, JSON.stringify(lock, null, 2) + "\n");
+    const loaded = await c.load();
+    assert.equal(loaded.ownedRpc!.imports.dependencies[0]!.presence, "required");
+    assert.equal(loaded.config.usesContracts![0]!.required, false);
+    await generateRpcBindingsForLoadedProject(loaded);
+    const receipt = JSON.parse(loaded.ownedRpc!.files.get("authoring-receipt.v1.json")!);
+    assert.equal(receipt.providerImports[0].presence, "optional");
+    assert.equal(receipt.packageApiImports[0].presence, "required");
+  } finally { await c.dispose(); }
+});
+
+test("provider presence defaults only when absent and malformed supplied values fail before output changes", async () => {
+  const c = await fixture();
+  try {
+    assert.equal(c.locked.providerImports.get("extension")!.presence, "required");
+    for (const presence of [null, true, 1, "", "Optional", "suggested", [], {}]) {
+      const lock = JSON.parse(c.original.toString());
+      lock.providerImports.extension.presence = presence;
+      assert.throws(() => parseContractLock(Buffer.from(JSON.stringify(lock, null, 2) + "\n")),
+        presence === null ? /null is forbidden/u : /Provider presence must be required or optional/u);
+    }
+    assert.deepEqual(await readFile(c.lockPath), c.original);
+    await assert.rejects(stat(join(c.root, ".sunder/generated/rpc")), { code: "ENOENT" });
   } finally { await c.dispose(); }
 });
 
@@ -210,7 +258,7 @@ test("provider commands reject inapplicable intent and changed tuple naming befo
   try {
     let calls = 0;
     for (const input of [
-      { operation: "implement", packageId: "example.dependency", contractId: c.descriptor.contractId, presence: "optional" },
+      { operation: "implement", packageId: "example.dependency", contractId: c.descriptor.contractId, presence: "suggested" as "optional" },
       { operation: "implement", packageId: "example.dependency", contractId: c.descriptor.contractId, localName: "different" },
       { operation: "unimplement", packageId: "example.dependency", contractId: c.descriptor.contractId, candidate: "archive.sunderpkg" },
       { operation: "implement", packageId: "example.dependency", contractId: "example.absent" },
@@ -219,6 +267,10 @@ test("provider commands reject inapplicable intent and changed tuple naming befo
       assert.equal(calls, 0);
       assert.deepEqual(await readFile(c.lockPath), c.original);
     }
+    const optional = await c.command({ operation: "implement", packageId: "example.dependency", contractId: c.descriptor.contractId, presence: "optional" });
+    assert.equal(optional.changed, true);
+    assert.equal(optional.lock.providerImports.get("extension")!.presence, "optional");
+    assert.equal((await c.command({ operation: "implement", packageId: "example.dependency", contractId: c.descriptor.contractId })).changed, false);
   } finally { await c.dispose(); }
 });
 

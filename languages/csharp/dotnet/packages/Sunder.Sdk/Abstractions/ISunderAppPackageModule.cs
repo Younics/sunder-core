@@ -13,4 +13,7 @@ public interface ISunderAppPackageModule
 
     /// <summary>Registers App contributions after the package service provider has been built.</summary>
     void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services);
+    /// <summary>Starts generated App activation services after publication. Existing modules require no startup hook.</summary>
+    [SunderSdkCapability(SunderSdkCapabilities.AppActivationServicesV1)]
+    void StartAppServices(IServiceProvider services, CancellationToken activationCancellationToken) { }
 }

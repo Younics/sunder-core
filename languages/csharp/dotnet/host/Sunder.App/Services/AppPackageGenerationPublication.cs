@@ -1,5 +1,8 @@
 namespace Sunder.App.Services;
 
+internal sealed class AppPackageActivationRetiredException(CancellationToken token)
+    : OperationCanceledException("The App package candidate was superseded by activation retirement.", token);
+
 internal sealed partial class AppPackageGenerationPublication
 {
     private readonly object _syncRoot = new();
@@ -176,6 +179,8 @@ internal sealed partial class AppPackageGenerationPublication
     {
         lock (_syncRoot)
         {
+            if (_state == PublicationState.Revoked)
+                throw new AppPackageActivationRetiredException(_revocation.Token);
             if (_state != PublicationState.Pending)
             {
                 throw new InvalidOperationException(

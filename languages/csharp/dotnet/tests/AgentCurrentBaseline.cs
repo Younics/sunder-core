@@ -74,7 +74,7 @@ internal sealed class AgentCurrentBaseline
             var dependency = Assert.Single(dependencies);
             Assert.Equal(AgentId, dependency.PackageId);
             Assert.Equal(">=2.0.0 <3.0.0", dependency.VersionRange);
-            Assert.Equal("required", dependency.Presence);
+            Assert.Equal(package.PackageId == "younics.sunder.package.maker" ? "optional" : "required", dependency.Presence);
         }
         Assert.DoesNotContain(archive.Entries, entry => entry.FullName.Contains("Sunder.Package.Agent.Protocol", StringComparison.OrdinalIgnoreCase)
             || entry.FullName.Contains("Sunder.Package.Agent.Contracts", StringComparison.OrdinalIgnoreCase));

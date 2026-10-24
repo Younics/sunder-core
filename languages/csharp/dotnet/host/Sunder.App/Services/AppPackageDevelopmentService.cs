@@ -17,6 +17,19 @@ internal interface IAppPackageDevelopmentBackend
     Task OpenLogsAsync(string packageId, AppPackageGenerationPublication publication, CancellationToken token);
     Task ReleaseOwnerAsync(IDevPackageOwnerSession owner, CancellationToken token)
         => owner.DisposeAsync().AsTask();
+    Task<DevPackageOwnerReloadResult> ReloadOwnerAsync(IDevPackageOwnerSession owner, string operationId,
+        string packageId, string sourceContentIdentity, CancellationToken token)
+        => throw new NotSupportedException("The App backend does not support explicit development reload.");
+    Task<PackageDevelopmentLogs> GetLogsAsync(string packageId, int maximumEntries, CancellationToken token)
+        => throw new NotSupportedException("The App backend does not support scoped development logs.");
+    Task<PackageDevelopmentLogs> GetLogsAsync(string packageId, PackageDevelopmentLogQuery query, CancellationToken token)
+        => throw new NotSupportedException("The App backend does not support filtered development logs.");
+    Task<AppDevelopmentViewBinding> OpenDevelopmentViewAsync(string packageId, string viewId, PackageDevelopmentRevision revision, CancellationToken token)
+        => throw new NotSupportedException("The App backend does not support scoped development views.");
+    Task<IReadOnlyList<PackageDevelopmentView>> GetDevelopmentViewsAsync(string packageId, PackageDevelopmentRevision revision, CancellationToken token)
+        => throw new NotSupportedException("The App backend does not support development view discovery.");
+    Task ShowDevelopmentViewAsync(string packageId, string viewId, PackageDevelopmentRevision revision, CancellationToken token)
+        => throw new NotSupportedException("The App backend does not support development view opening.");
     void QueueRetirementReconciliation(string stageId) { }
     void QueueAvailabilityReconciliation(Guid activationId) { }
 }
@@ -25,7 +38,7 @@ internal sealed record AppDevelopmentApplicationObservation(PackageDevelopmentAp
 
 // One instance per package activation, never a root SDK service. The shared Client owns
 // lease tokens, heartbeat/reconnection and ambiguous-mutation recovery.
-internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService, IPackageLogNavigationService, IAsyncDisposable
+internal sealed partial class AppPackageDevelopmentService : IPackageDevelopmentService, IPackageLogNavigationService, IAsyncDisposable
 {
     // A boundary mapping, never a cast between SDK and Host DTO enum identities.
     internal static PackageDevelopmentAppReadiness ParseAppReadiness(string? value) => value switch
@@ -64,6 +77,7 @@ internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService,
     private readonly CancellationTokenSource _lifetime = new();
     private readonly CancellationTokenRegistration _revocation;
     private readonly Dictionary<string, Session> _sessions = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly HashSet<string> _logPackages = new(StringComparer.Ordinal);
     private readonly object _disposeGate = new();
     private Task? _disposal;
 
@@ -101,12 +115,15 @@ internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService,
             }
             var packageId = await Backend.PrepareAsync(folder, operation.Token).ConfigureAwait(false);
             operation.Token.ThrowIfCancellationRequested();
+            if (!_logPackages.Contains(packageId) && _logPackages.Count >= 128)
+                throw new InvalidOperationException("This App activation has reached its development diagnostic scope limit.");
             var session = new Session(this, Backend.CreateOwner(_ownerPrefix), folder, packageId, watch);
             _sessions[folder] = session;
             try
             {
                 await session.SetWatchAsync(watch, operation.Token).ConfigureAwait(false);
                 operation.Token.ThrowIfCancellationRequested();
+                _logPackages.Add(packageId);
                 return session;
             }
             catch
@@ -174,7 +191,7 @@ internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService,
         }
     }
 
-    private sealed class Session(AppPackageDevelopmentService service, IDevPackageOwnerSession owner,
+    private sealed partial class Session(AppPackageDevelopmentService service, IDevPackageOwnerSession owner,
         string folder, string packageId, bool watch) : IPackageDevelopmentSession
     {
         private readonly SemaphoreSlim _gate = new(1, 1);
@@ -268,8 +285,8 @@ internal sealed class AppPackageDevelopmentService : IPackageDevelopmentService,
                 throw new InvalidDataException("The development package identity changed. Dispose this session and load the rebuilt folder again.");
         }
 
-        private static bool IsSourceIdentity(string value)
-            => value.Length == 64 && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+        private static bool IsSourceIdentity(string? value)
+            => value is { Length: 64 } && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
         private CancellationTokenSource BeginOperation(CancellationToken token)
         {

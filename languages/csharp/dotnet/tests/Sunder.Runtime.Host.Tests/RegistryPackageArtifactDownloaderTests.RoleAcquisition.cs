@@ -179,7 +179,7 @@ public sealed partial class RegistryPackageArtifactDownloaderTests
         if (kind == "provider")
         {
             manifest["providerImports"] = JsonSerializer.SerializeToNode(new[] { new SunderPackageProviderImportManifest
-            { Key = "provider", PackageId = "other.package", ContractId = contract.ContractId, ContractVersion = contract.Version, BundleRef = reference, ProviderRefs = providers } });
+            { Key = "provider", PackageId = "other.package", Presence = "required", ContractId = contract.ContractId, ContractVersion = contract.Version, BundleRef = reference, ProviderRefs = providers } });
             return;
         }
         manifest["dependsOn"] = new JsonArray();

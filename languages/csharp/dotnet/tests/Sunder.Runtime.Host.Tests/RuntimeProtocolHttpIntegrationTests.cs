@@ -632,6 +632,21 @@ public sealed partial class RuntimeProtocolHttpIntegrationTests
         TryDeleteDirectory(root);
     }
 
+    [Fact]
+    public async Task AppCallScopeCloseEndpoint_IsIdempotentAfterTheSessionAndScopeAreGone()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-runtime-app-rpc-close-tests", Guid.NewGuid().ToString("N"));
+        await using var server = await RuntimeHttpServer.StartAsync(
+            app => app.MapGroup("/api/v1").MapRuntimeRpcEndpoints(),
+            services => services.AddRuntimeHostServices(new RuntimePackagePaths(root), new RuntimeBearerTokenValidator(RuntimeHttpServer.Token)));
+        using var client = new HttpClient { BaseAddress = server.BaseUri };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", RuntimeHttpServer.Token);
+        using var response = await client.PostAsJsonAsync("api/v1/rpc/app/call-scopes/close",
+            new RuntimeRpcAppCallScopeCloseRequest("retired-session", "rpc-scope-" + Guid.NewGuid().ToString("N")));
+        Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        TryDeleteDirectory(root);
+    }
+
     private static RuntimeHandshakeResponse CreateHandshake(
         int protocolRevision,
         int minimumSupportedRevision,

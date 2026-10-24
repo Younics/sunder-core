@@ -35,7 +35,7 @@
           <controls:ShellPanelHost DataContext="{Binding LeftTopPanel}" />
         </Border>
 
-        <GridSplitter x:Name="LeftColumnGridSplitter"
+        <controls:ShellGridSplitter x:Name="LeftColumnGridSplitter"
                       Grid.Column="1"
                       Width="4"
                       ResizeDirection="Columns"
@@ -76,7 +76,7 @@
           </Border>
         </Border>
 
-        <GridSplitter x:Name="RightColumnGridSplitter"
+        <controls:ShellGridSplitter x:Name="RightColumnGridSplitter"
                       Grid.Column="3"
                       Width="4"
                       ResizeDirection="Columns"
@@ -91,7 +91,7 @@
         </Border>
       </Grid>
 
-      <GridSplitter x:Name="BottomRowGridSplitter"
+      <controls:ShellGridSplitter x:Name="BottomRowGridSplitter"
                     Grid.Row="1"
                     Height="4"
                     ResizeDirection="Rows"
@@ -108,7 +108,7 @@
           <controls:ShellPanelHost DataContext="{Binding LeftBottomPanel}" />
         </Border>
 
-        <GridSplitter x:Name="BottomColumnGridSplitter"
+        <controls:ShellGridSplitter x:Name="BottomColumnGridSplitter"
                       Grid.Column="1"
                       Width="4"
                       ResizeDirection="Columns"

@@ -61,6 +61,7 @@ internal sealed class RuntimeRpcAppSessionManager(
     private readonly object _gate = new();
     private readonly Dictionary<string, RuntimeRpcAppCallerSession> _active = new(StringComparer.Ordinal);
     private bool _disposed;
+    private bool _observing;
     internal Func<RuntimePackageSource, CancellationToken, Task<IReadOnlyDictionary<string, SunderRpcContractDescriptor>>> LoadContracts { get; init; }
         = RuntimeRpcPackageMetadata.LoadContractsAsync;
 
@@ -70,6 +71,11 @@ internal sealed class RuntimeRpcAppSessionManager(
         AppPolicyPeer? peer = null)
     {
         ArgumentNullException.ThrowIfNull(request);
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_observing) { sessions.RpcSessionChanging += OnSessionChanging; _observing = true; }
+        }
         cancellationToken.ThrowIfCancellationRequested();
         var targetDescriptor = request.Target;
         if (targetDescriptor is null
@@ -147,6 +153,7 @@ internal sealed class RuntimeRpcAppSessionManager(
             },
         };
         caller.BindAuthority(authority);
+        caller.BindSession(lease.Session);
         var sessionId = CreateSessionId();
         RuntimeRpcAppCallerSession[] retired = [];
         var capacityExceeded = false;
@@ -160,7 +167,7 @@ internal sealed class RuntimeRpcAppSessionManager(
                     ObjectDisposedException.ThrowIf(_disposed, this);
                     if (authority is not null && !authority.IsActive) throw new RuntimeStaleGenerationException("The App activation retired while its caller was opening.");
                     retired = _active
-                        .Where(pair => !pair.Value.IsGenerationCurrent(request.SessionGeneration))
+                        .Where(pair => !pair.Value.MatchesSession(lease.Session))
                         .Select(static pair => pair.Value)
                         .ToArray();
                     foreach (var stale in retired)
@@ -249,6 +256,17 @@ internal sealed class RuntimeRpcAppSessionManager(
             "rpc.app-session.retired",
             "The App RPC caller session is unavailable or retired."));
 
+    private void OnSessionChanging(ActivePackageSession successor)
+    {
+        RuntimeRpcAppCallerSession[] retired;
+        lock (_gate)
+        {
+            retired = _active.Values.Where(caller => !caller.MatchesSession(successor)).ToArray();
+            foreach (var caller in retired) _active.Remove(caller.SessionId);
+        }
+        foreach (var caller in retired) caller.Retire();
+    }
+
     public void Dispose()
     {
         RuntimeRpcAppCallerSession[] active;
@@ -256,6 +274,7 @@ internal sealed class RuntimeRpcAppSessionManager(
         {
             if (_disposed) return;
             _disposed = true;
+            if (_observing) sessions.RpcSessionChanging -= OnSessionChanging;
             active = _active.Values.ToArray();
             _active.Clear();
         }
@@ -279,6 +298,7 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
     private bool _retired;
     private IDisposable? _authorityLease;
     private CancellationTokenRegistration _authorityRetirement;
+    private string? _fingerprint;
 
     public RuntimeRpcAppCallerSession(
         RuntimePackageSource source,
@@ -328,19 +348,21 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
     public bool IsGenerationCurrent(long generation)
         => !_retirement.IsCancellationRequested && SessionGeneration == generation;
 
+    internal void BindSession(ActivePackageSession session)
+        => _fingerprint = AppActivationFingerprint.Create(Guid.Empty, PackageId, session.GetActivePackageSources(), session.GetSessionPackages());
+
+    internal bool MatchesSession(ActivePackageSession session)
+        => !IsRetired && _fingerprint is not null
+           && session.TryGetSessionPackage(PackageId, out var package) && package?.IsEnabled == true
+           && package.Version == PackageVersion
+           && session.TryGetPackageSource(PackageId, out var source) && source is not null
+           && source.Kind == _source.Kind && PackageUiSnapshotStore.PolicySubject(source) == PackageUiSnapshotStore.PolicySubject(_source)
+           && _fingerprint == AppActivationFingerprint.Create(Guid.Empty, PackageId, session.GetActivePackageSources(), session.GetSessionPackages());
+
     public bool IsCurrent(PackageSessionLease sessionLease)
     {
         EnsureProcessPolicy?.Invoke();
-        lock (_gate)
-        {
-            return !_retired
-                   && sessionLease.Generation == SessionGeneration
-                   && sessionLease.Session.TryGetSessionPackage(PackageId, out var package)
-                   && package?.IsEnabled == true
-                   && string.Equals(package.Version, PackageVersion, StringComparison.Ordinal)
-                   && sessionLease.Session.TryGetPackageSource(PackageId, out var source)
-                   && ReferenceEquals(source, _source);
-        }
+        return MatchesSession(sessionLease.Session);
     }
 
     public bool TryAcquireCaller(int maximumCalls, out RuntimeRpcActivationLease? lease, bool observation = false)
@@ -353,8 +375,13 @@ internal sealed class RuntimeRpcAppCallerSession : IRuntimeRpcCallerActivation
                 lease = null;
                 return false;
             }
+            var operation = Authority?.Acquire();
             active++;
-            lease = new RuntimeRpcActivationLease(_retirement.Token, () => ReleaseCaller(observation));
+            lease = new RuntimeRpcActivationLease(_retirement.Token, () =>
+            {
+                try { ReleaseCaller(observation); }
+                finally { operation?.Dispose(); }
+            });
             return true;
         }
     }

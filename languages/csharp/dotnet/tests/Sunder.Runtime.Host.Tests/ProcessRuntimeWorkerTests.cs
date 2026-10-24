@@ -19,7 +19,7 @@ using SdkPackageAuthStatusKind = Sunder.Sdk.Authentication.PackageAuthStatusKind
 namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
-public sealed class ProcessRuntimeWorkerTests
+public sealed partial class ProcessRuntimeWorkerTests
 {
     [Fact]
     public void WorkerGenerationActivation_DefaultDeadlineIsLifecycleOwned()
@@ -125,11 +125,11 @@ public sealed class ProcessRuntimeWorkerTests
 
         await AssertWorkerFrameRejectedAsync(excessiveNodes, limits);
         await AssertWorkerFrameRejectedAsync(excessiveMembers, limits);
-        Assert.Throws<WorkerTransportResourceException>(() =>
+        var nodes = Assert.Throws<WorkerTransportResourceException>(() =>
             SunderWorkerProtocol.SerializeFrameBody(
                 new { type = "host.result", value = Enumerable.Repeat<object?>(null, 16_384).ToArray() },
                 limits));
-        Assert.Throws<WorkerTransportResourceException>(() =>
+        var members = Assert.Throws<WorkerTransportResourceException>(() =>
             SunderWorkerProtocol.SerializeFrameBody(
                 new
                 {
@@ -137,6 +137,10 @@ public sealed class ProcessRuntimeWorkerTests
                     value = Enumerable.Range(0, 257).ToDictionary(static index => $"p{index}", static _ => (object?)null),
                 },
                 limits));
+        Assert.Equal(WorkerTransportFailureKind.ValueNodes, nodes.Kind);
+        Assert.Equal(WorkerTransportFailureKind.ObjectMembers, members.Kind);
+        Assert.True(nodes.Observed > nodes.Limit);
+        Assert.True(members.Observed > members.Limit);
     }
 
     private static async Task AssertWorkerFrameRejectedAsync(string json, WorkerTransportLimits limits)
@@ -661,12 +665,15 @@ public sealed class ProcessRuntimeWorkerTests
     }
 
     [Theory]
-    [InlineData("nested-call-missing-parent")]
-    [InlineData("nested-call-forged-parent")]
-    [InlineData("nested-call-completed-parent")]
-    public async Task Worker_OptedInLineageRejectsUnknownOrCompletedParentId(string mode)
+    [InlineData("nested-call-missing-parent", false)]
+    [InlineData("nested-call-forged-parent", false)]
+    [InlineData("nested-call-completed-parent", false)]
+    [InlineData("nested-call-missing-parent", true)]
+    [InlineData("nested-call-forged-parent", true)]
+    [InlineData("nested-call-completed-parent", true)]
+    public async Task Worker_OptedInLineageRejectsUnknownOrCompletedParentId(string mode, bool callOwnership)
     {
-        await using var fixture = await WorkerFixture.CreateAsync(mode);
+        await using var fixture = await WorkerFixture.CreateAsync(mode, callOwnership: callOwnership);
         var activation = await fixture.PublishBrokerSessionAsync();
 
         try
@@ -2495,7 +2502,11 @@ public sealed class ProcessRuntimeWorkerTests
         var failure = await Assert.ThrowsAsync<SunderRpcException>(async () => await call);
         await retirement;
 
-        Assert.Equal(SunderRpcErrorKind.Cancelled, failure.Error.Kind);
+        Assert.Equal(SunderRpcErrorKind.StaleEndpoint, failure.Error.Kind);
+        Assert.Equal("rpc.endpoint.stale", failure.Error.Code);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, failure.Error.RetrySafety);
+        Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
@@ -2617,7 +2628,9 @@ public sealed class ProcessRuntimeWorkerTests
             bool enforcePackageSessionLease = false,
             string packageVersion = "1.0.0",
             string? packageDataRoot = null,
-            IExecutionRuntimeProcessLease? executionRuntimeLease = null)
+            IExecutionRuntimeProcessLease? executionRuntimeLease = null,
+            bool callOwnership = false,
+            bool? declareExtendedDeadline = null)
         {
             var root = Path.Combine(Path.GetTempPath(), "sunder-worker-tests", Guid.NewGuid().ToString("N"));
             var shadow = Path.Combine(root, "projection");
@@ -2625,7 +2638,7 @@ public sealed class ProcessRuntimeWorkerTests
             await File.WriteAllTextAsync(Path.Combine(shadow, "mode.txt"), mode);
             var entryPoint = Path.Combine(shadow, "Sunder.Runtime.Host.TestWorker.dll");
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-            var extendedDeadline = mode.StartsWith("nested-call-", StringComparison.Ordinal);
+            var extendedDeadline = declareExtendedDeadline ?? mode.StartsWith("nested-call-", StringComparison.Ordinal);
             var target = new SunderPackageTargetManifest
             {
                 Role = SunderPackageFormat.RuntimeHostRole,
@@ -2634,17 +2647,12 @@ public sealed class ProcessRuntimeWorkerTests
                 EntryPoint = Path.GetFileName(entryPoint),
                 TargetFramework = "net10.0",
                 SdkVersion = "1.1.0",
-                RequiredHostCapabilities = extendedDeadline
-                    ?
-                    [
-                        "core.v1",
-                        "execution-runtime.v1",
-                        "rpc.extended-deadline.v1",
-                        "rpc.v1",
-                        "sdk-baseline-1-1.v1",
-                        "worker-protocol.v1",
-                    ]
-                    : ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+                RequiredHostCapabilities =
+                [
+                    "core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1",
+                    .. extendedDeadline ? new[] { "rpc.extended-deadline.v1" } : [],
+                    .. callOwnership ? new[] { SunderSdkCapabilities.RpcCallOwnershipV1 } : [],
+                ],
                 ExecutionRuntime = new SunderPackageExecutionRuntimeManifest
                 {
                     Id = SunderPackageFormat.DotNetExecutionRuntimeId,

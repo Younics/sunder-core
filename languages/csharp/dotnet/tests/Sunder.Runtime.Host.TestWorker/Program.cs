@@ -48,6 +48,7 @@ if (args is ["--sunder-test-hold-file-lock", var lockMode, var lockPath])
 
 var modePath = Path.Combine(Environment.CurrentDirectory, "mode.txt");
 var mode = File.Exists(modePath) ? File.ReadAllText(modePath).Trim() : "normal";
+var callOwnershipProbe = new CallOwnershipProbe();
 var input = Console.OpenStandardInput();
 var output = Console.OpenStandardOutput();
 var error = Console.Error;
@@ -666,6 +667,12 @@ while (true)
         var id = root.GetProperty("id").GetString();
         var kind = root.GetProperty("kind").GetString();
         var method = root.GetProperty("methodId").GetString();
+        if (mode == "nested-call-ownership")
+        {
+            await callOwnershipProbe.HandleAsync(root,
+                () => ReadFrameAsync(input), value => WriteFrameAsync(output, value), WriteStatusAsync);
+            continue;
+        }
         if (mode == "nonopt-lineage-field"
             && root.GetProperty("context").GetProperty("callDepth").GetInt32() == 1)
         {
@@ -867,6 +874,16 @@ while (true)
             using var response = await ReadFrameAsync(input);
             await WriteStatusAsync("publication-discovery-" + root.GetProperty("request").GetProperty("message").GetString() + ".json",
                 response.RootElement);
+            await WriteFrameAsync(output, new
+            {
+                type = "worker.state-set",
+                id = "publicationData" + id,
+                key = "publication.probe",
+                value = new { kind = "inline", value = root.GetProperty("request").GetProperty("message").GetString() },
+            });
+            using var data = await ReadFrameAsync(input);
+            await WriteStatusAsync("publication-data-" + root.GetProperty("request").GetProperty("message").GetString() + ".json",
+                data.RootElement);
         }
         if (method == "wait")
         {

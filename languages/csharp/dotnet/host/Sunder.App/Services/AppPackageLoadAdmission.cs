@@ -10,6 +10,7 @@ internal sealed class AppPackageLoadAdmission(Guid activationId, string? permitI
     private bool _retired;
     internal Guid ActivationId { get; } = activationId;
     internal string? PermitId { get; } = permitId;
+    internal bool IsRetired => Volatile.Read(ref _retired);
     internal string? PolicySessionId { get; init; }
     internal static bool IsCleaningActivation
     {

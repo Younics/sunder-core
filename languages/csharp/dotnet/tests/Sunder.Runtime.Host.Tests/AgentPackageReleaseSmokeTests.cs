@@ -13,7 +13,7 @@ using Xunit;
 namespace Sunder.Runtime.Host.Tests;
 
 [Collection(RuntimeProcessIntegrationCollection.Name)]
-public sealed class AgentPackageReleaseSmokeTests
+public sealed partial class AgentPackageReleaseSmokeTests
 {
     private const string AgentPackageId = "younics.ai.agent";
     private const string SemanticMemoryPackageId = "younics.ai.agent.memory.semantic";

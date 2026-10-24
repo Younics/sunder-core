@@ -142,7 +142,7 @@ internal static class SunderWorkerProtocol
             if (buffer.WrittenCount == 0)
             {
                 throw new WorkerTransportResourceException(
-                    "Host worker protocol envelope serialized to an empty frame.");
+                    WorkerTransportFailureKind.FrameEncoding, "Host worker protocol envelope serialized to an empty frame.");
             }
             var body = buffer.WrittenSpan.ToArray();
             using var document = JsonDocument.Parse(body, new JsonDocumentOptions
@@ -227,8 +227,8 @@ internal static class SunderWorkerProtocol
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or ArgumentException)
         {
             throw new WorkerTransportResourceException(
-                "RPC value exceeds the negotiated worker transport limits.",
-                exception);
+                WorkerTransportFailureKind.ValueEncoding, "RPC value exceeds the negotiated worker transport limits.",
+                innerException: exception);
         }
     }
 
@@ -406,12 +406,12 @@ internal static class SunderWorkerProtocol
         if (valueBytes > limits.MaximumRpcValueBytes)
         {
             throw new WorkerTransportResourceException(
-                "Worker RPC value exceeded the negotiated byte limit.");
+                WorkerTransportFailureKind.ValueBytes, "Worker RPC value exceeded the negotiated byte limit.", valueBytes, limits.MaximumRpcValueBytes);
         }
         if (bodyBytes - valueBytes > EnvelopeReserveBytes)
         {
             throw new WorkerTransportResourceException(
-                "Worker protocol envelope metadata exceeded its reserved byte limit.");
+                WorkerTransportFailureKind.EnvelopeBytes, "Worker protocol envelope metadata exceeded its reserved byte limit.", bodyBytes - valueBytes, EnvelopeReserveBytes);
         }
         if (hasRpcValue) ValidateValueBounds(rpcValue, limits);
     }
@@ -440,12 +440,12 @@ internal static class SunderWorkerProtocol
             if (maximum > limits.MaximumValueDepth)
             {
                 throw new WorkerTransportResourceException(
-                    "Worker RPC value exceeded the negotiated depth limit.");
+                    WorkerTransportFailureKind.ValueDepth, "Worker RPC value exceeded the negotiated depth limit.", maximum, limits.MaximumValueDepth);
             }
             if (++nodes > limits.MaximumValueNodes)
             {
                 throw new WorkerTransportResourceException(
-                    "Worker RPC value exceeded the negotiated node-count limit.");
+                    WorkerTransportFailureKind.ValueNodes, "Worker RPC value exceeded the negotiated node-count limit.", nodes, limits.MaximumValueNodes);
             }
             if (item.Value.ValueKind == JsonValueKind.Array)
             {
@@ -462,7 +462,7 @@ internal static class SunderWorkerProtocol
                     if (++members > limits.MaximumObjectMembers)
                     {
                         throw new WorkerTransportResourceException(
-                            "Worker RPC value exceeded the negotiated object-member limit.");
+                            WorkerTransportFailureKind.ObjectMembers, "Worker RPC value exceeded the negotiated object-member limit.", members, limits.MaximumObjectMembers);
                     }
                     pending.Push((property.Value, item.Depth + 1));
                 }
@@ -521,7 +521,7 @@ internal static class SunderWorkerProtocol
             if (count < 0 || count > _capacity - WrittenCount)
             {
                 throw new WorkerTransportResourceException(
-                    "Worker protocol frame exceeded the negotiated byte limit.");
+                    WorkerTransportFailureKind.FrameBytes, "Worker protocol frame exceeded the negotiated byte limit.", (long)WrittenCount + count, _capacity);
             }
             WrittenCount += count;
         }
@@ -552,7 +552,7 @@ internal static class SunderWorkerProtocol
             if (_buffer is null || sizeHint > _buffer.Length - WrittenCount)
             {
                 throw new WorkerTransportResourceException(
-                    "Worker protocol frame exceeded the negotiated byte limit.");
+                    WorkerTransportFailureKind.FrameBytes, "Worker protocol frame exceeded the negotiated byte limit.", (long)WrittenCount + sizeHint, _capacity);
             }
         }
     }
@@ -630,8 +630,23 @@ internal sealed class SunderWorkerProtocolException : ProcessRuntimeWorkerExcept
     }
 }
 
+internal enum WorkerTransportFailureKind
+{
+    Unknown, FrameEncoding, FrameBytes, EnvelopeBytes, ValueEncoding, ValueBytes,
+    ValueDepth, ValueNodes, ObjectMembers, WriteQueueAdmission, WriteQueueClosed,
+}
+
 internal sealed class WorkerTransportResourceException : ProcessRuntimeWorkerException
 {
+    internal WorkerTransportFailureKind Kind { get; }
+    internal long? Observed { get; }
+    internal long? Limit { get; }
+
+    internal WorkerTransportResourceException(WorkerTransportFailureKind kind, string message,
+        long? observed = null, long? limit = null, Exception? innerException = null)
+        : base(message, innerException!)
+    { Kind = kind; Observed = observed; Limit = limit; }
+
     public WorkerTransportResourceException(string message)
         : base(message)
     {

@@ -2,7 +2,7 @@ using Avalonia.Controls;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppWebPackageViewControl : ContentControl, IDisposable
+internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IAppDevelopmentDocumentOwner
 {
     private readonly IAppWebView _webView;
     private readonly AppWebBridge _bridge;
@@ -28,6 +28,7 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable
             contracts,
             externalBrowser,
             Navigate);
+        DevelopmentDocument = new AppWebDevelopmentDocument(_webView, _bridge, this);
         Content = _webView.Control;
         _webView.NavigationStarting += OnNavigationStarting;
         _webView.NavigationCompleted += OnNavigationCompleted;
@@ -38,6 +39,7 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable
     }
 
     internal AppWebBridge Bridge => _bridge;
+    public IAppDevelopmentDocument DevelopmentDocument { get; }
 
     public void Dispose()
     {

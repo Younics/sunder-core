@@ -371,7 +371,12 @@ public sealed class DevelopmentImportAuthorityTests
         {
             if (!optional || required)
             {
-                if (!optional) await Assert.ThrowsAsync<InvalidDataException>(() => host.LoadDevPackageFromRuntimeInputAsync(fixture.Folder, watch: false));
+                if (!optional)
+                {
+                    var rejection = await Assert.ThrowsAsync<RuntimePackageValidationException>(() =>
+                        host.LoadDevPackageFromRuntimeInputAsync(fixture.Folder, watch: false));
+                    Assert.Contains("compatibility graph", rejection.Message, StringComparison.OrdinalIgnoreCase);
+                }
                 else await Assert.ThrowsAsync<RuntimeRequiredProviderException>(() => host.LoadDevPackageFromRuntimeInputAsync(fixture.Folder, watch: false));
                 Assert.Empty(host.GetActiveRuntimePackageSources()); return;
             }

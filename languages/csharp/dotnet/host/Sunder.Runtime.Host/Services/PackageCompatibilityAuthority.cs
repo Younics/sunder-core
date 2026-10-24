@@ -101,7 +101,7 @@ internal static class PackageCompatibilityAuthority
                 foreach (var reference in api.BundleRefs ?? []) VerifyTuple(api.PackageId!, reference!, api.Presence == "optional" && Omitted(source, api.PackageId!));
             }
             foreach (var provider in (manifest.ProviderImports ?? []).OfType<SunderPackageProviderImportManifest>())
-                VerifyTuple(provider.PackageId!, provider.BundleRef!, omitted: false);
+                VerifyTuple(provider.PackageId!, provider.BundleRef!, provider.Presence == "optional" && Omitted(source, provider.PackageId!));
             foreach (var artifact in artifacts.Values)
             {
                 var dependency = (manifest.DependsOn ?? []).Single(value => value.PackageId == artifact.PackageId);

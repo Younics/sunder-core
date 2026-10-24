@@ -11,6 +11,9 @@ namespace Sunder.App.Services;
 internal interface IAppPackagePolicy
 {
     Task RequireLoadAsync(PackageUiSnapshotDescriptor snapshot, CancellationToken token);
+    Task RequireRetainedLoadAsync(PackageUiSnapshotDescriptor snapshot, AppPackageLoadAdmission admission, CancellationToken token)
+        => admission.PermitId is null ? RequireLoadAsync(snapshot, token)
+            : Task.FromException(new InvalidOperationException("Tracked App activation revalidation is unavailable."));
     bool OwnsRetirement(RuntimeAppActivationRetirementRequirement requirement) => false;
     bool HasRetiredActivation(RuntimeAppActivationRetirementRequirement requirement) => false;
     void SetRetirementHandler(Func<IReadOnlyList<RuntimeAppActivationRetirementRequirement>, CancellationToken, Task> handler) { }
@@ -97,6 +100,20 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
     public async Task RequireLoadAsync(PackageUiSnapshotDescriptor snapshot, CancellationToken token)
         => _ = await GetPermitAsync(snapshot, null, token).ConfigureAwait(false);
 
+    public async Task RequireRetainedLoadAsync(PackageUiSnapshotDescriptor snapshot, AppPackageLoadAdmission admission, CancellationToken token)
+    {
+        // Revalidate the exact existing activation. An untracked permit loses the
+        // selected target/capability proof and can downgrade its retirement authority.
+        if (admission.ActivationId == Guid.Empty || string.IsNullOrWhiteSpace(admission.PermitId))
+            throw new InvalidOperationException("A tracked App activation admission is required for revalidation.");
+        var permit = await GetPermitAsync(snapshot, admission.ActivationId, token).ConfigureAwait(false);
+        // Worker-only edits can add a new source permit to this same activation.
+        // Its birth permit remains retirement authority, not the current source ID.
+        // GetPermitAsync/Host validate the exact current source, target and activation.
+        if (permit.Session.SessionId != admission.PolicySessionId)
+            throw new InvalidOperationException("The retained App activation permit no longer matches its load admission.");
+    }
+
     public async Task<AppPackageLoadAdmission> AcquireLoadAsync(PackageUiSnapshotDescriptor snapshot, Guid activationId, CancellationToken token)
     {
         if (activationId == Guid.Empty) throw new ArgumentException("An actual activation identity is required.", nameof(activationId));
@@ -173,7 +190,7 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
         // in its SDK or a declaration supplied by the package. Older targets send
         // no new JSON member to older strict Hosts.
         var required = target.RequiredHostCapabilities.Where(capability => capability is
-            SunderSdkCapabilities.WorkerExecutionObservationsV1 or SunderSdkCapabilities.PackageDevelopmentRevisionsV1)
+            SunderSdkCapabilities.WorkerExecutionObservationsV1 or SunderSdkCapabilities.PackageDevelopmentRevisionsV1 or SunderSdkCapabilities.PackageDevelopmentReloadV1 or SunderSdkCapabilities.PackageDevelopmentLogsV1 or SunderSdkCapabilities.PackageDevelopmentLogQueriesV1 or SunderSdkCapabilities.PackageDevelopmentViewsV1 or SunderSdkCapabilities.PackageDevelopmentFeedbackV1 or SunderSdkCapabilities.AppActivationServicesV1)
             .Distinct(StringComparer.Ordinal).ToArray();
         if (required.Length == 0) return null;
         if (target.Role != "app" || target.Kind != "avalonia")

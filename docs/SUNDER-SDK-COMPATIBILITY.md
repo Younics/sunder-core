@@ -386,6 +386,11 @@ Current SDK capabilities are:
 | `settings-views.v1` | settings view registration |
 | `settings-navigation.v1` | package settings navigation service |
 | `package-development-revisions.v1` | managed .NET App-only `RuntimeRevision` / `AppliedRevision` status members and validated full-source revision values |
+| `package-development-reload.v1` | managed .NET App-only exact-owner, source-pinned finite development reload and recovery |
+| `package-development-logs.v1` | managed .NET App-only bounded package-scoped Runtime/App log reads |
+| `package-development-log-queries.v1` | managed .NET App-only filtered, byte-bounded paging and activation-retained diagnostics after target unload; requires explicit App implementation proof, not the legacy logs capability |
+| `package-development-views.v1` | managed .NET App-only bounded inspection and opaque-element input for an exact owned development view |
+| `app-activation-services.v1` | publication-triggered, activation-owned managed App service roots without page navigation |
 | `worker-execution-observations.v1` | managed .NET App-only exact Worker execution capture, owner-authorized cleanup evidence and member-gated `SunderRpcException.HasTrustedNoDispatchEvidence` |
 | `background-processes.v1` | queued background task API, progress reporting, cancellation, and indicator placement; existing capability identity retained |
 | `background-services.v1` | package-owned `ISunderWorkerLifecycleService` composition and monitored active work |
@@ -412,12 +417,12 @@ Current SDK capabilities are:
 
 `Sunder.Package.Build` infers target requirements from type/member/property/event `SunderSdkCapability` metadata annotations in the actual resolved `Sunder.Sdk*` assemblies. It scans the target assembly and authored project-reference outputs, including compiler-generated async/iterator/lambda bodies, but does not classify arbitrary copy-local dependencies as package-authored code. It resolves constant assembly-qualified reflection declarations, detects Sunder resources in source/compiled Avalonia XAML, and closes capability dependencies such as `auth.v1` requiring `callbacks.v1`. Stack provider registration and client-only use of `StackContributorRpcClient` both infer `stacks.rpc.v1`. Inference is fail-closed: unreadable metadata, unresolved IL tokens, or unclassified dynamic SDK access produce diagnostics rather than an incomplete requirement set.
 
-The two observation capabilities require both the Host and the managed App which
+The observation and App-service capabilities above require both the Host and the managed App which
 implements them. A Host advertising an SDK capability does not substitute for the
 App implementation: its exact load-permit admission checks the authenticated App's
 implemented observation capabilities before package code loads. Older App requests
 omit this additive metadata and are refused for targets requiring the additions;
-ordinary older targets retain their original request shape. Neither capability is
+ordinary older targets retain their original request shape. These capabilities are not
 implemented by Worker V1 or Node/web targets. Reading only the original development
 status members does not infer the member-gated revision capability. See
 [App observations](package-development/APP-DEVELOPMENT-SESSIONS.md).

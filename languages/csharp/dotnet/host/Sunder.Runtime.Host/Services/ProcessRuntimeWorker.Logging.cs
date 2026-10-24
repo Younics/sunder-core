@@ -257,6 +257,9 @@ internal sealed partial class ProcessRuntimeWorker
                     ["rpc.value_inline_decoded_bytes"] = context.ValueInlineDecodedBytes,
                     ["rpc.exception_type"] = context.ExceptionType,
                     ["rpc.exception_fingerprint"] = context.ExceptionFingerprint,
+                    ["rpc.transport_failure_kind"] = context.TransportFailureKind,
+                    ["rpc.transport_observed"] = context.TransportObserved,
+                    ["rpc.transport_limit"] = context.TransportLimit,
                 }).ConfigureAwait(false);
         }
         catch (Exception exception)

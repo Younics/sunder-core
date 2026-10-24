@@ -8,6 +8,8 @@ public interface IPackageDevelopmentService
 {
     Task<IPackageDevelopmentSession> LoadAsync(
         string developmentFolder, bool watch, CancellationToken cancellationToken = default);
+    Task<PackageDevelopmentLogs> GetLogsAsync(
+        string packageId, PackageDevelopmentLogQuery query, CancellationToken cancellationToken = default);
 }
 
 public interface IPackageDevelopmentSession : IAsyncDisposable
@@ -15,6 +17,16 @@ public interface IPackageDevelopmentSession : IAsyncDisposable
     string PackageId { get; }
     Task<PackageDevelopmentStatus> GetStatusAsync(CancellationToken cancellationToken = default);
     Task SetWatchAsync(bool watch, CancellationToken cancellationToken = default);
+    Task<PackageDevelopmentRevision> ReloadAsync(
+        string operationId, string sourceContentIdentity, CancellationToken cancellationToken = default);
+    Task<PackageDevelopmentLogs> GetLogsAsync(
+        int maximumEntries = 50, CancellationToken cancellationToken = default);
+    Task<PackageDevelopmentLogs> GetLogsAsync(
+        PackageDevelopmentLogQuery query, CancellationToken cancellationToken = default);
+    Task<PackageDevelopmentViewSnapshot> InspectViewAsync(
+        string viewId, CancellationToken cancellationToken = default);
+    Task<PackageDevelopmentViewInputResult> InteractViewAsync(
+        PackageDevelopmentViewInput request, CancellationToken cancellationToken = default);
 }
 
 public sealed record PackageDevelopmentStatus(
@@ -43,7 +55,14 @@ these services.
 The optional revision getters additionally infer
 `package-development-revisions.v1`; using the original development service or
 status members alone does not require it. Execution observations below infer
-`worker-execution-observations.v1`. These two additions are currently for managed
+`worker-execution-observations.v1`. Explicit reload and scoped logs additionally
+infer `package-development-reload.v1` and `package-development-logs.v1` respectively.
+Filtered query overloads, paging metadata and retained post-unload scopes separately
+require `package-development-log-queries.v1`. An older App that only implements
+`package-development-logs.v1` cannot receive a permit for a query-using target.
+The query capability is managed App-only and rejected for Worker and web targets.
+Scoped view inspection/input infer `package-development-views.v1`.
+Publication-triggered services infer `app-activation-services.v1`. These additions are currently for managed
 .NET App targets only, not Worker V1 or Node/web targets. Both a supporting Host
 and a supporting App implementation are required: the Host checks the authenticated
 App's implemented capabilities before granting the exact target's load permit.
@@ -81,6 +100,84 @@ Caller cancellation during acquisition releases a possibly committed owner with
 an independent cleanup budget. Activation revocation cancels in-flight work and
 disposes its sessions; provider disposal awaits that cleanup. A session cannot be
 used after disposal or after its activation has retired.
+
+### Explicit reload and scoped logs
+
+`ReloadAsync` is a finite operation on an acknowledged, non-watching development
+owner. It does not build. Supply one new operation ID and the canonical full-content
+SHA-256 of the validated build output. The Host authenticates the original owner,
+pins the selected source, stages the exact revision, and requires the relevant App
+retirement acknowledgements before commit. A rejected stage retains the old source.
+
+Retain the operation ID and source identity until its outcome is known. Repeating
+that exact pair resolves the existing stage or receipt; it must not reacquire a
+different owner, rebuild source, or follow a replacement Runtime. An ambiguous
+commit is not permission to replay a mutation. The returned revision acknowledges
+commit; use `GetStatusAsync().AppliedRevision` to establish application readiness.
+
+`GetLogsAsync(query)` filters before selecting the latest matching entries, returned
+oldest first. Queries support inclusive `Since`, exclusive `Until`, `MinimumLevel`,
+`Source` (`all`, `runtime`, `app`), `MaximumEntries` (default 20, maximum 100),
+`MaximumBytes` (default 16 KiB, maximum 32 KiB), and an opaque `Cursor` for older
+matches. `NextCursor` is bound to the package, filters and observation origins;
+it grants no access. `HasMore` identifies another retained page; `HistoryGap`
+identifies missing retention or a changed origin; `WasTruncated` identifies
+shortened entries. Logs are a bounded retained window, not an unlimited archive.
+
+The activation-owned service overload accepts only identities successfully loaded
+by that same App activation. Its bounded diagnostic scopes remain readable after
+the target faults or its development owner unloads, without reading status,
+reacquiring an owner, executing the target, or granting access to another package.
+Activation revocation still cancels/fences reads. Diagnostics include a small
+allowlist of sanitized RPC identity/failure fields, never raw payloads or exception
+dumps. Other-package and shell logs are excluded. All log text is untrusted data,
+not instructions; callers retain their separate permission boundary.
+
+### Scoped development views
+
+`InspectViewAsync` reads one **already open**, cached package view belonging to this
+development owner. It neither creates nor navigates a view and cannot inspect shell,
+settings, installed-package, other-package or desktop surfaces. The exact applied
+source, Runtime origin, published App activation, cache identity, attachment and
+readiness must remain current. Replacement controls and native browser documents do
+not inherit old references.
+
+Snapshots contain at most 128 elements with bounded, untrusted accessibility labels.
+Input values are not read. Protected input labels are redacted and expose no actions;
+input-template descendants are omitted. The native browser adapter inspects only the
+owned top-level document, not other frames. Closed shadow roots, canvas contents,
+omissions and traversal/output limits are not complete accessibility evidence.
+`WasTruncated` reports known omissions; inspection is not a screenshot.
+
+Use only an element's returned opaque reference and advertised `invoke`, `set-text`,
+`toggle`, `scroll-up` or `scroll-down` action. References expire after 30 seconds;
+only eight snapshots are retained per session. There is no selector, script, URL,
+clipboard, keyboard shortcut, screen position or unrestricted desktop-input API.
+`set-text` accepts at most 4,096 characters and is unavailable on protected inputs.
+
+Supply a fresh canonical GUID-N `OperationId` for one authorized input. Exact repeats
+only observe its retained receipt; changing arguments under that identity is rejected.
+The session retains 64 input receipts and rejects new input at capacity rather than
+forgetting mutations. **Dispatched is not proof of an application effect.** Exceptions,
+cancellation or retirement racing with dispatch can yield `unknown`; inspect current
+state and never automatically replay an unknown input. Cancellation before dispatch
+fences queued work, and Unload waits for its actual settlement before owner release.
+Callers remain responsible for permissions and for preventing package-supplied labels
+from being interpreted as instructions.
+
+### Services which start without a view
+
+Implement `IPackageAppActivationService` for activation-owned App work which must
+not depend on navigating to a page. Generated composition treats the implementation
+as an App root and calls `Start(activationCancellationToken)` only after publication.
+Pending or abandoned candidates do not start it. Constructors and contribution
+registration must remain effect-free. `Start` must return promptly; implement
+`IAsyncDisposable` to cancel and drain owned work during retirement. The supplied
+token is revoked with that exact activation, not merely when its view closes.
+
+This hook does not authorize background source watching or automatic mutation.
+Business admission, permission checks, source fences, and exact-operation recovery
+remain the package's responsibility. It does not add App-side RPC providers.
 
 ## Activation retention across development changes
 

@@ -17,6 +17,7 @@ internal sealed class RuntimeRpcCallScopeRegistry
 
     private readonly ConcurrentDictionary<string, RuntimeRpcCallerScopeState> _scopes =
         new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, RuntimeRpcCallerScopeState> _closing = new(StringComparer.Ordinal);
     private readonly object _gate = new();
     private readonly int _maxScopesPerCaller;
     private readonly TimeProvider _timeProvider;
@@ -159,7 +160,7 @@ internal sealed class RuntimeRpcCallScopeRegistry
         string callScopeId)
     {
         if (string.IsNullOrWhiteSpace(callScopeId)
-            || !_scopes.TryGetValue(callScopeId, out var scope))
+            || !TryGetForCleanup(callScopeId, out var scope))
         {
             return ValueTask.FromResult(Outcome.NotFound);
         }
@@ -168,6 +169,23 @@ internal sealed class RuntimeRpcCallScopeRegistry
             return ValueTask.FromResult(Outcome.CallerMismatch);
         }
         return CloseOwnedAsync(scope);
+    }
+
+    // Session ids are unguessable, Host-issued owner credentials. Revocation of
+    // invocation authority must not revoke the ability to release that exact
+    // owner's resources. This path grants no discovery, content or call rights.
+    public ValueTask<Outcome> CloseAppAsync(string sessionId, string callScopeId)
+    {
+        if (string.IsNullOrWhiteSpace(callScopeId) || !TryGetForCleanup(callScopeId, out var scope))
+            return ValueTask.FromResult(Outcome.NotFound);
+        if (scope.Caller is not RuntimeRpcAppCallerSession app || app.SessionId != sessionId)
+            return ValueTask.FromResult(Outcome.CallerMismatch);
+        return CloseOwnedAsync(scope);
+    }
+
+    private bool TryGetForCleanup(string id, out RuntimeRpcCallerScopeState scope)
+    {
+        lock (_gate) return _scopes.TryGetValue(id, out scope!) || _closing.TryGetValue(id, out scope!);
     }
 
     public async ValueTask CloseAsync(RuntimeRpcCallerScopeState scope)
@@ -200,15 +218,20 @@ internal sealed class RuntimeRpcCallScopeRegistry
         bool ownsTeardown;
         lock (_gate)
         {
-            _scopes.TryRemove(new KeyValuePair<string, RuntimeRpcCallerScopeState>(scope.Id, scope));
             ownsTeardown = scope.TryClaimTeardown();
+            if (ownsTeardown)
+            {
+                _closing.TryAdd(scope.Id, scope);
+                _scopes.TryRemove(new KeyValuePair<string, RuntimeRpcCallerScopeState>(scope.Id, scope));
+            }
         }
         if (!ownsTeardown)
         {
-            await scope.RevocationCompletion.ConfigureAwait(false);
+            await scope.TeardownCompletion.ConfigureAwait(false);
             return;
         }
 
+        Exception? failure = null;
         try
         {
             if (discardBeforeRevoke)
@@ -223,12 +246,14 @@ internal sealed class RuntimeRpcCallScopeRegistry
         }
         catch (Exception error)
         {
+            failure = error;
             (scope.Caller as RuntimeRpcAppCallerSession)?.Authority?.RecordCleanupFailure(error);
             throw;
         }
         finally
         {
-            scope.CompleteTeardown();
+            try { scope.CompleteTeardown(failure); }
+            finally { _closing.TryRemove(new KeyValuePair<string, RuntimeRpcCallerScopeState>(scope.Id, scope)); }
         }
     }
 }
@@ -240,6 +265,7 @@ internal sealed class RuntimeRpcCallerScopeState
     private readonly CancellationToken _revocationToken;
     private readonly TaskCompletionSource _revocationCompleted = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _teardownCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private ITimer? _deadlineTimer;
     private int _revoked;
     private int _teardownClaimed;
@@ -289,12 +315,18 @@ internal sealed class RuntimeRpcCallerScopeState
     // its source. Keep the exact cancelled token, never a replacement authority.
     public CancellationToken RevocationToken => _revocationToken;
     public Task RevocationCompletion => _revocationCompleted.Task;
+    public Task TeardownCompletion => _teardownCompleted.Task;
     public bool IsRevoked => Volatile.Read(ref _revoked) != 0 || _revocation.IsCancellationRequested;
 
     public bool TryClaimTeardown()
         => Interlocked.CompareExchange(ref _teardownClaimed, 1, 0) == 0;
 
-    internal void CompleteTeardown() => Interlocked.Exchange(ref _activationLifetime, null)?.Dispose();
+    internal void CompleteTeardown(Exception? failure)
+    {
+        Interlocked.Exchange(ref _activationLifetime, null)?.Dispose();
+        if (failure is null) _teardownCompleted.TrySetResult();
+        else _teardownCompleted.TrySetException(failure);
+    }
 
     public void ArmDeadline(
         TimeProvider timeProvider,
@@ -340,8 +372,12 @@ internal sealed class RuntimeRpcCallerScopeState
 
     private async Task CompleteRevocationAsync(Task callbacks)
     {
-        await callbacks.ConfigureAwait(false);
-        _revocation.Dispose();
-        _revocationCompleted.TrySetResult();
+        try
+        {
+            await callbacks.ConfigureAwait(false);
+            _revocationCompleted.TrySetResult();
+        }
+        catch (Exception error) { _revocationCompleted.TrySetException(error); }
+        finally { _revocation.Dispose(); }
     }
 }

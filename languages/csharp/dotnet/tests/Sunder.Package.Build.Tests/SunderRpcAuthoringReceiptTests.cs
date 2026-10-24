@@ -269,6 +269,31 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     }
 
     [Theory]
+    [InlineData(null, null, "required")]
+    [InlineData("optional", null, "optional")]
+    [InlineData("optional", "required", "required")]
+    [InlineData("required", "optional", "required")]
+    public void ProviderPresenceCoalescesWithConsumerIntentAndCannotBeTamperedInARoleReceipt(string? providerPresence, string? consumerPresence, string expected)
+    {
+        var document = ProviderLock(consumer: consumerPresence is not null);
+        if (providerPresence is not null) document["providerImports"]!["minimalProvider"]!["presence"] = providerPresence;
+        if (consumerPresence is not null) document["packageImports"]!["example.dependency"]!["presence"] = consumerPresence;
+        var contractLock = ReadLock(document);
+        var imports = Prepare(contractLock);
+        var bytes = Write(contractLock, Compile(imports, ProviderSource("LocalProvider")), imports);
+        _ = AssertReceipt(bytes);
+        var projection = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(bytes, contractLock.Sha256, PackageId, PackageVersion);
+        Assert.Equal(expected, Assert.Single(projection.Manifest.DependsOn!).Presence);
+        SunderRpcAuthoringDocuments.ValidateReceiptConsumerRoles(contractLock, projection.Manifest, "runtime", new HashSet<string>(StringComparer.Ordinal) { "runtime" });
+
+        var changed = JsonNode.Parse(bytes)!.AsObject();
+        changed["providerImports"]![0]!["presence"] = providerPresence == "optional" ? "required" : "optional";
+        var tampered = SunderRpcAuthoringDocuments.ParseAuthoringReceiptProjection(Serialize(changed), contractLock.Sha256, PackageId, PackageVersion);
+        AssertRejected(() => SunderRpcAuthoringDocuments.ValidateReceiptConsumerRoles(contractLock, tampered.Manifest, "runtime",
+            new HashSet<string>(StringComparer.Ordinal) { "runtime" }), "rpc-authoring.evidence-mismatch");
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]

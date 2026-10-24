@@ -322,8 +322,8 @@ test("worker enforces exact package and caller SemVer length boundaries", async 
   }
 });
 
-test("activation callback can await discovery and invocation before acknowledgement", async () => {
-  const worker = startWorker("activation-await-rpc");
+for (const lineage of [false, true]) test(`activation callback can await discovery and invocation before acknowledgement (lineage=${lineage})`, async () => {
+  const worker = startWorker("activation-await-rpc", lineage);
   try {
     await prepareActivation(worker);
     send(worker, { type: "host.activate", sessionGeneration: 1, workspaceRootPath: worker.workspaceRoot });
@@ -337,6 +337,8 @@ test("activation callback can await discovery and invocation before acknowledgem
     });
     const invoke = await worker.messages.next();
     assert.equal(invoke.type, "worker.invoke");
+    if (lineage) assert.equal(invoke.parentInvocationId, null);
+    else assert.equal(Object.hasOwn(invoke, "parentInvocationId"), false);
     send(worker, { type: "host.result", id: invoke.id!, value: { accepted: true } });
 
     assert.deepEqual(await worker.messages.next(), { type: "worker.activated", sessionGeneration: 1 });

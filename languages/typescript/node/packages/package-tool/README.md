@@ -318,6 +318,13 @@ Core platform contract. Published selections use an explicit Registry. Implement
 types. Multiple implementations need distinct `providerId` values. Provider intent
 never creates consumer permission. Platform APIs remain provider-only.
 
+Provider installation presence defaults to required. Use
+`api implement <package> <contract> --presence optional` for an integration that
+must not install its contract owner. Repeating Implement with explicit presence
+updates that reviewed tuple; omitting it preserves existing intent. Required
+consumer/provider selections win over optional ones. This changes dependency
+installation only, not consumer grants, readiness, or exact contract validation.
+
 The corresponding update/unimplement/list commands retain exact selected provenance.
 Remove source bindings before unimplementing. Platform versions follow the coordinated
 SDK line, not caller-authored catalog ranges. `Catalogs` retains explicit typed

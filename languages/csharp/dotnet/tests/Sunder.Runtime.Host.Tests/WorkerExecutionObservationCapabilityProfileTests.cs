@@ -10,6 +10,12 @@ public sealed class WorkerExecutionObservationCapabilityProfileTests
     [Theory]
     [InlineData(SunderSdkCapabilities.WorkerExecutionObservationsV1)]
     [InlineData(SunderSdkCapabilities.PackageDevelopmentRevisionsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentReloadV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentViewsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentFeedbackV1)]
+    [InlineData(SunderSdkCapabilities.AppActivationServicesV1)]
     public void ObservationCapabilitiesAreAppOnlyAndRejectedBeforeWorkerLaunch(string capability)
     {
         var app = new SunderPackageTargetManifest
@@ -32,6 +38,12 @@ public sealed class WorkerExecutionObservationCapabilityProfileTests
     [Theory]
     [InlineData(SunderSdkCapabilities.WorkerExecutionObservationsV1)]
     [InlineData(SunderSdkCapabilities.PackageDevelopmentRevisionsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentReloadV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentViewsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentFeedbackV1)]
+    [InlineData(SunderSdkCapabilities.AppActivationServicesV1)]
     public void DotnetAppObservationCapabilitiesCannotBeAdvertisedForWebTargets(string capability)
     {
         var web = new SunderPackageTargetManifest

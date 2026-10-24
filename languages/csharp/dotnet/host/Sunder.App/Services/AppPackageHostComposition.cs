@@ -38,6 +38,12 @@ internal sealed partial class AppPackageHostComposition : IDisposable
     internal bool ServicesPublished => _publication.IsPublished;
     internal Guid ActivationOwnerId => _activationOwnerId;
     internal bool CanRetainActivations => _publication.IsPublished && CleanupOutcome == AppPackageUiCleanupOutcome.Proven;
+    internal void RequireCurrentActivations()
+    {
+        if (_publication.IsRevoked)
+            throw new AppPackageActivationRetiredException(_publication.RevocationToken);
+        foreach (var owner in _retained.Values.Distinct()) owner.RequireCurrentActivations();
+    }
     internal IReadOnlySet<string> RetainedPackageIds => _retainedActivationIds;
 
     public AppPackageHostComposition(

@@ -38,7 +38,7 @@ internal sealed partial class RuntimeRpcBroker
                     throw PermissionDenied(actual.ContractId, "observe-own-execution");
                 var loaded = _sessions.GetLoadedPackage(sessionLease, actual.PackageId);
                 ThrowAcquisitionFailure(RuntimeRpcCallAcquisitionPolicy.ValidateProviderGeneration(
-                    loaded?.RuntimeActivationId, actual, sessionLease.Generation).Failure);
+                    loaded?.RuntimeActivationId, actual, provider.Owner.BindingGeneration).Failure);
                 if (provider.Registration.Manifest?.Role != SunderPackageFormat.RuntimeHostRole
                     || loaded?.Worker is not ProcessRuntimeWorker worker
                     || !ReferenceEquals(worker, provider.Owner.Package.Worker))

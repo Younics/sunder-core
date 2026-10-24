@@ -65,6 +65,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
 
         RuntimeRpcPackageActivation[] retired;
         RuntimeRpcPackageActivation[] displacedCandidate = [];
+        HashSet<string> retainedEndpoints;
         RuntimeRpcPackageActivation? displacedRecoveryCandidate = null;
         lock (_gate)
         {
@@ -87,25 +88,11 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                     _candidatePackages,
                     _candidateProviders,
                     _candidateEndpoints);
-                foreach (var owner in next.Packages.Values)
-                {
-                    owner.PublishSessionGeneration(sessionGeneration);
-                }
-                foreach (var provider in next.Providers.Values)
-                {
-                    provider.UpdateSnapshot(provider.Snapshot with
-                    {
-                        CatalogRevision = nextRevision,
-                        SessionGeneration = sessionGeneration,
-                        State = SunderRpcProviderState.Active,
-                        FaultCode = null,
-                    });
-                }
                 ClearCandidateUnderLock();
             }
             else
             {
-                displacedCandidate = _candidatePackages?.Values.ToArray() ?? [];
+                displacedCandidate = _candidatePackages?.Values.Except(_packages.Values).ToArray() ?? [];
                 ClearCandidateUnderLock();
                 next = BuildSessionActivationUnderLock(
                     packages,
@@ -114,11 +101,18 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                     allowsPrePublicationLease: false);
             }
 
-            retired = _packages.Values.ToArray();
+            foreach (var package in packages) next.Packages[package.Descriptor.PackageId].PublishPackage(package, sessionGeneration);
+            foreach (var provider in next.Providers.Values)
+                provider.UpdateSnapshot(provider.Snapshot with { CatalogRevision = nextRevision, State = SunderRpcProviderState.Active, FaultCode = null });
+
+            retainedEndpoints = _endpoints.Keys.Intersect(next.Endpoints.Keys).ToHashSet(StringComparer.Ordinal);
+            retired = _packages.Values.Except(next.Packages.Values).ToArray();
             foreach (var provider in _providers.Values.OrderBy(
                          static provider => provider.Snapshot.ProviderId,
                          StringComparer.Ordinal))
             {
+                if (next.Endpoints.TryGetValue(provider.Snapshot.Endpoint.Value, out var continuing)
+                    && ReferenceEquals(continuing, provider)) continue;
                 var inactive = provider.Snapshot with
                 {
                     CatalogRevision = nextRevision,
@@ -146,6 +140,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                          static provider => provider.Snapshot.ProviderId,
                          StringComparer.Ordinal))
             {
+                if (retainedEndpoints.Contains(provider.Snapshot.Endpoint.Value)) continue;
                 Publish(nextRevision, SunderRpcCatalogEventKind.Added, provider.Snapshot);
                 Publish(nextRevision, SunderRpcCatalogEventKind.Activated, provider.Snapshot);
             }
@@ -176,7 +171,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                 throw new InvalidOperationException(
                     "An RPC candidate session cannot precede the active catalog generation.");
             }
-            displaced = _candidatePackages?.Values.ToArray() ?? [];
+            displaced = _candidatePackages?.Values.Except(_packages.Values).ToArray() ?? [];
             var candidate = BuildSessionActivationUnderLock(
                 packages,
                 sessionGeneration,
@@ -229,7 +224,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         lock (_gate)
         {
             if (_disposed || !ReferenceEquals(_candidateSession, session)) return;
-            retired = _candidatePackages?.Values.ToArray() ?? [];
+            retired = _candidatePackages?.Values.Except(_packages.Values).ToArray() ?? [];
             ClearCandidateUnderLock();
         }
         foreach (var package in retired) _ = package.Retire();
@@ -332,6 +327,17 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         var nextEndpoints = new Dictionary<string, RuntimeRpcProviderActivation>(StringComparer.Ordinal);
         foreach (var package in packages)
         {
+            if (_packages.TryGetValue(package.Descriptor.PackageId, out var retained)
+                && retained.ContinuesAs(package))
+            {
+                nextPackages.Add(package.Descriptor.PackageId, retained);
+                foreach (var provider in _providers.Values.Where(provider => ReferenceEquals(provider.Owner, retained)))
+                {
+                    nextProviders.Add(provider.Snapshot.ProviderId, provider);
+                    nextEndpoints.Add(provider.Snapshot.Endpoint.Value, provider);
+                }
+                continue;
+            }
             AddPackageActivationUnderLock(
                 package,
                 sessionGeneration,
@@ -414,6 +420,8 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         RuntimeRpcPackageActivation caller,
         out IReadOnlyDictionary<string, RuntimeRpcProviderActivation> providers)
     {
+        if (_packages.TryGetValue(caller.PackageId, out var active) && ReferenceEquals(active, caller))
+        { providers = null!; return false; }
         if (_candidatePackages is not null
             && _candidateProviders is not null
             && _candidatePackages.TryGetValue(caller.PackageId, out var candidate)
@@ -445,6 +453,8 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         RuntimeRpcPackageActivation caller,
         out IReadOnlyDictionary<string, RuntimeRpcProviderActivation> endpoints)
     {
+        if (_packages.TryGetValue(caller.PackageId, out var active) && ReferenceEquals(active, caller))
+        { endpoints = null!; return false; }
         if (_candidatePackages is not null
             && _candidateEndpoints is not null
             && _candidatePackages.TryGetValue(caller.PackageId, out var candidate)
@@ -551,7 +561,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             commit?.Invoke();
             foreach (var owner in _packages.Values)
             {
-                owner.AdvanceSessionGeneration(sessionGeneration);
+                owner.PublishPackage(expected[owner.PackageId], sessionGeneration);
             }
             foreach (var provider in _providers.Values.OrderBy(
                          static provider => provider.Snapshot.ProviderId,
@@ -560,7 +570,6 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                 var snapshot = provider.Snapshot with
                 {
                     CatalogRevision = nextRevision,
-                    SessionGeneration = sessionGeneration,
                 };
                 provider.UpdateSnapshot(snapshot);
                 Publish(nextRevision, SunderRpcCatalogEventKind.Activated, snapshot);
@@ -574,7 +583,6 @@ internal sealed class RuntimeRpcCatalog : IDisposable
                     provider.UpdateSnapshot(provider.Snapshot with
                     {
                         CatalogRevision = nextRevision,
-                        SessionGeneration = sessionGeneration,
                         State = SunderRpcProviderState.Active,
                         FaultCode = null,
                     });
@@ -659,7 +667,7 @@ internal sealed class RuntimeRpcCatalog : IDisposable
             ThrowIfDisposed();
             if (_sessionGeneration != sessionGeneration
                 || _packages.Values.Any(package => package.SessionGeneration != sessionGeneration)
-                || _providers.Values.Any(provider => provider.Snapshot.SessionGeneration != sessionGeneration))
+                || _providers.Values.Any(provider => provider.Snapshot.SessionGeneration != provider.Owner.BindingGeneration))
             {
                 throw new InvalidOperationException(
                     $"RPC catalog generation {_sessionGeneration} does not match Runtime session generation {sessionGeneration}.");
@@ -818,6 +826,24 @@ internal sealed class RuntimeRpcCatalog : IDisposable
         }
     }
 
+    internal Task RetireReplacedActivationsAsync(ActivePackageSession successor, long expectedGeneration)
+    {
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            if (_sessionGeneration > expectedGeneration || _sessionGeneration < expectedGeneration && _packages.Count != 0)
+                throw new RuntimeStaleGenerationException("The RPC catalog changed before publication retirement.");
+            var retirements = new List<Task>();
+            foreach (var owner in _packages.Values.ToArray())
+            {
+                if (successor.IsPackageEnabled(owner.PackageId)
+                    && successor.TryGetLoadedPackage(owner.PackageId, out var next) && next is not null && owner.ContinuesAs(next)) continue;
+                retirements.Add(DeactivatePackageWithRetirement(owner.PackageId, owner.Package.RuntimeActivationId, faulted: false));
+            }
+            return Task.WhenAll(retirements);
+        }
+    }
+
     public void Dispose()
     {
         RuntimeRpcPackageActivation[] packages;
@@ -942,12 +968,14 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
             ? Array.AsReadOnly(package.RpcContractUses.Where(use => PackageCompatibilityAuthority.DevelopmentUseEnabled(package.Source, use.Role!, use.ContractId!, use.ContractVersion!)).ToArray())
             : package.RpcContractUses;
         _sessionGeneration = sessionGeneration;
+        BindingGeneration = sessionGeneration;
         _activationGeneration = activationGeneration ?? sessionGeneration;
         _allowsPrePublicationLease = allowsPrePublicationLease ? 1 : 0;
     }
 
-    public ActiveLoadedPackage Package { get; }
+    public ActiveLoadedPackage Package { get; private set; }
     public long SessionGeneration => Interlocked.Read(ref _sessionGeneration);
+    internal long BindingGeneration { get; }
     public long ActivationGeneration => _activationGeneration;
     public bool AllowsPrePublicationLease => Volatile.Read(ref _allowsPrePublicationLease) != 0;
     public string PackageId => Package.Descriptor.PackageId;
@@ -962,10 +990,26 @@ internal sealed class RuntimeRpcPackageActivation : IRuntimeRpcCallerActivation
     public Task Drained => _drained.Task;
 
     public bool IsCurrent(PackageSessionLease sessionLease)
-        => sessionLease.Generation == SessionGeneration
-           && (AllowsPrePublicationLease
-               || sessionLease.Session.TryGetLoadedPackage(PackageId, out var package)
-               && package?.RuntimeActivationId == Package.RuntimeActivationId);
+        => !RetirementToken.IsCancellationRequested
+           && (AllowsPrePublicationLease && sessionLease.Generation == SessionGeneration
+                || sessionLease.Session.TryGetLoadedPackage(PackageId, out var package)
+                && package is not null && ContinuesAs(package));
+
+    internal bool ContinuesAs(ActiveLoadedPackage package)
+        => !RetirementToken.IsCancellationRequested
+           && package.RuntimeActivationId == Package.RuntimeActivationId
+           && (package.ActivationSessionGeneration ?? ActivationGeneration) == ActivationGeneration
+           && package.RpcManifestSha256 == Package.RpcManifestSha256
+           && package.Source.Kind == Package.Source.Kind
+           && package.ApprovedSensitiveCapabilities.Order(StringComparer.Ordinal).SequenceEqual(Package.ApprovedSensitiveCapabilities.Order(StringComparer.Ordinal))
+           && ReferenceEquals(package.Worker, Package.Worker);
+
+    internal void PublishPackage(ActiveLoadedPackage package, long generation)
+    {
+        if (!ContinuesAs(package)) throw new RuntimeStaleGenerationException("RPC publication does not own the exact continuing Worker.");
+        Package = package;
+        PublishSessionGeneration(generation);
+    }
 
     internal void AdvanceSessionGeneration(long sessionGeneration)
     {

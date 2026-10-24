@@ -3188,6 +3188,9 @@ public sealed partial class PackageBuildManifestTests
             ExpectedPackageVersion = "1.2.3",
         }.Execute(), string.Join(Environment.NewLine, firstEngine.Errors));
         var priorIndex = await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json"));
+        var priorFiles = Directory.EnumerateFiles(output, "*", SearchOption.AllDirectories)
+            .Append(marker).Append(output + SunderPackageFormat.DevelopmentImportsSuffix)
+            .ToDictionary(path => path, File.ReadAllBytes);
 
         var token = Guid.NewGuid().ToString("D");
         var outputStage = output + ".stage-" + Guid.NewGuid().ToString("N");
@@ -3224,6 +3227,7 @@ public sealed partial class PackageBuildManifestTests
         }.Execute());
 
         Assert.Equal(priorIndex, await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json")));
+        Assert.All(priorFiles, entry => Assert.Equal(entry.Value, File.ReadAllBytes(entry.Key)));
         Assert.True(File.Exists(marker));
         Assert.False(Directory.Exists(outputStage));
         Assert.False(Directory.Exists(outputBackup));

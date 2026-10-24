@@ -5,8 +5,9 @@ namespace Sunder.App.Services;
 public sealed partial class PackageViewHostService
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _availabilityNotices = new();
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, byte> _unprovenRetirements = new();
 
-    private async Task RetireRequestedActivationsAsync(
+    internal async Task RetireRequestedActivationsAsync(
         IReadOnlyList<RuntimeAppActivationRetirementRequirement> requirements,
         IAppPackageDevelopmentBackend? developerServices, CancellationToken token)
     {
@@ -32,7 +33,23 @@ public sealed partial class PackageViewHostService
                         if (notice.ShouldPublishImmediately) notice.Incident.Publish();
                     }
                 }, token).ConfigureAwait(false);
-            await RetireActivationsAsync(stage.ToArray(), token).ConfigureAwait(false);
+            var acknowledged = true;
+            foreach (var requirement in stage.DistinctBy(item => item.AppActivationId))
+            {
+                if (_unprovenRetirements.ContainsKey(requirement.AppActivationId)) { acknowledged = false; continue; }
+                try { await RetireActivationsAsync([requirement], token).ConfigureAwait(false); }
+                catch (AppPackageActivationCleanupUnprovenException error)
+                {
+                    acknowledged = false;
+                    // The memoized local drain is terminal, not another retryable
+                    // Host acknowledgement. Keep it fenced without replaying
+                    // package disposal or superseding unrelated candidates forever.
+                    if (_unprovenRetirements.TryAdd(requirement.AppActivationId, 0))
+                        AppSessionLog.WriteError($"App activation '{requirement.AppActivationId}' remains quarantined without a retirement acknowledgement.", error,
+                            developerLogScope: DeveloperLogEntryScope.Package, developerLogSource: requirement.Package.PackageId);
+                }
+            }
+            if (!acknowledged) continue;
             // Other Apps may still owe this stage an acknowledgement. The shell owns
             // its terminal-status wait; it must not block later retirement requests.
             if (!string.IsNullOrWhiteSpace(stage.Key)) developerServices?.QueueRetirementReconciliation(stage.Key);

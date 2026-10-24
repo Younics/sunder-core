@@ -202,6 +202,18 @@ test("lane entry retains the renamed process suspension regression and fails clo
   assert.match(gate.stderr, /SUNDER_REQUIRE_NODE_MODULE_INTEROP must equal '1' exactly/u);
   assert.match(gate.stderr, /SUNDER_NODE_MODULE_PACKAGE_PATH/u);
   assert.doesNotMatch(gate.stdout, /^READY/mu);
+  const maker = model.declarations.find((item) => item.externalEnvironment === "SUNDER_REQUIRE_MAKER_STANDALONE");
+  assert.equal(maker?.primaryLane, "release-artifact");
+  assert.deepEqual(maker.externalPrerequisites.filter((item) => item.kind === "environmentPath").map((item) => [item.name, item.pathKind]),
+    [["SUNDER_MAKER_DEV_PACKAGE", "directory"], ["SUNDER_MAKER_IMPORT_CANDIDATE", "file"], ["SUNDER_MAKER_PLATFORM_CATALOG", "file"]]);
+  for (const input of maker.externalPrerequisites.filter((item) => item.kind.startsWith("environment"))) delete env[input.name];
+  const makerGate = spawnSync(process.execPath, [runner, "--test", maker.id, "--list"], { cwd: repositoryRoot, env, encoding: "utf8" });
+  assert.equal(makerGate.status, 2, makerGate.stderr);
+  assert.match(makerGate.stderr, /SUNDER_REQUIRE_MAKER_STANDALONE must equal '1' exactly/u);
+  assert.match(makerGate.stderr, /SUNDER_MAKER_DEV_PACKAGE/u);
+  assert.match(makerGate.stderr, /SUNDER_MAKER_IMPORT_CANDIDATE/u);
+  assert.match(makerGate.stderr, /SUNDER_MAKER_PLATFORM_CATALOG/u);
+  assert.doesNotMatch(makerGate.stdout, /^READY/mu);
 });
 
 test("compact Core policy deterministically partitions every test project into owned lanes", async () => {

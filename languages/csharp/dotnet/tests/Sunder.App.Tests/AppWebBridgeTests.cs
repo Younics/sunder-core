@@ -14,7 +14,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class AppWebBridgeTests
+public sealed partial class AppWebBridgeTests
 {
     [Fact]
     public async Task Invoke_UsesCallerDescriptorForAbiCompatibleAnnotationDifferentProvider()

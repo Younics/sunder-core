@@ -1118,8 +1118,10 @@ public sealed class WorkerV1RuntimeTests
         Assert.Equal(0, Volatile.Read(ref handlerEntryCount));
     }
 
-    [Fact]
-    public async Task WorkerV1_ActivationCanCallHostBeforeAcknowledgingReadiness()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task WorkerV1_ActivationCanCallHostBeforeAcknowledgingReadiness(bool rpcExtendedDeadlineV1)
     {
         SunderRpcCatalogSnapshot? discovered = null;
         await using var worker = new WorkerHarness(context => new SunderWorkerOptions(
@@ -1128,8 +1130,11 @@ public sealed class WorkerV1RuntimeTests
             OnActivated = async (_, cancellationToken) =>
             {
                 discovered = await context.Rpc.DiscoverAsync(WorkerHarness.ContractId, cancellationToken);
+                await context.Rpc.InvokeAsync(new SunderRpcEndpointReference("rpc1_example"),
+                    "messages", "send", JsonSerializer.SerializeToElement(new { message = "activation" }),
+                    cancellationToken: cancellationToken);
             },
-        });
+        }, rpcExtendedDeadlineV1: rpcExtendedDeadlineV1);
         await worker.HandshakeAsync();
         await worker.StartCandidateAndCommitAsync();
         await worker.PrepareStorageMigrationsAsync();
@@ -1150,6 +1155,15 @@ public sealed class WorkerV1RuntimeTests
                     resetRequired = false,
                 },
             });
+        }
+        using (var invocation = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.invoke", invocation.RootElement.GetProperty("type").GetString());
+            if (rpcExtendedDeadlineV1)
+                Assert.Equal(JsonValueKind.Null, invocation.RootElement.GetProperty("parentInvocationId").ValueKind);
+            else
+                Assert.False(invocation.RootElement.TryGetProperty("parentInvocationId", out _));
+            await worker.SendAsync(new { type = "host.result", id = invocation.RootElement.GetProperty("id").GetString(), value = new { accepted = true } });
         }
         using (var activated = await worker.ReadAsync())
         {

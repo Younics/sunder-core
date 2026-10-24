@@ -427,9 +427,8 @@ internal sealed partial class ProcessRuntimeWorker
         using var lease = IsPackageDataCall(type)
             ? await AcquirePackageDataLeaseForCallAsync(type, root, call).ConfigureAwait(false)
             : null;
-        using var leaseCancellation = lease?.CreateLinkedCancellation(
-            call.Cancellation.Token,
-            _hostStopping);
+        using var leaseCancellation = lease is null ? null : CancellationTokenSource.CreateLinkedTokenSource(
+            call.Cancellation.Token, _hostStopping, lease.RetirementToken);
         var operationCancellation = leaseCancellation?.Token ?? call.Cancellation.Token;
         switch (type)
         {
@@ -1465,10 +1464,9 @@ internal sealed partial class ProcessRuntimeWorker
            || type.StartsWith("worker.files-", StringComparison.Ordinal)
            || type.StartsWith("worker.migration-", StringComparison.Ordinal);
 
-    private PackageSessionLease? AcquirePackageDataLease()
+    private RuntimeRpcActivationLease? AcquirePackageDataLease()
     {
         if (_packageSessionState is null) return null;
-        PackageSessionLease lease;
         try
         {
             long sessionGeneration;
@@ -1481,9 +1479,21 @@ internal sealed partial class ProcessRuntimeWorker
                 }
                 sessionGeneration = _sessionGeneration.Value;
             }
-            lease = _packageSessionState.AcquirePackageActivationLease(
+            var published = _broker.AcquirePublishedPackageDataLease(_callerStamp, sessionGeneration, this);
+            if (published is not null) return published;
+
+            // Startup/recovery candidates retain their counted, generation-fenced
+            // authority. Published operations drain with the exact activation,
+            // without retaining or cancelling an unrelated whole-session graph.
+            var lease = _packageSessionState.AcquirePackageActivationLease(
                 _package.PackageId,
                 new RuntimePackageGeneration(_activationId, sessionGeneration));
+            var cancellation = lease.CreateLinkedCancellation(CancellationToken.None);
+            return new RuntimeRpcActivationLease(cancellation.Token, () =>
+            {
+                try { cancellation.Dispose(); }
+                finally { lease.Dispose(); }
+            });
         }
         catch (RuntimeUnavailableException)
         {
@@ -1492,10 +1502,9 @@ internal sealed partial class ProcessRuntimeWorker
                 "worker.activation.unavailable",
                 "The process worker activation is stale or unavailable."));
         }
-        return lease;
     }
 
-    private async ValueTask<PackageSessionLease?> AcquirePackageDataLeaseForCallAsync(
+    private async ValueTask<RuntimeRpcActivationLease?> AcquirePackageDataLeaseForCallAsync(
         string type,
         JsonElement root,
         WorkerCall call)

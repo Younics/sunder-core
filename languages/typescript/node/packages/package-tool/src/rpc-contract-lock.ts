@@ -27,7 +27,7 @@ export function consumerRoles(value: unknown, selection = "package import"): rea
     contractError("package-api.consumer-roles-invalid", `${selection}: consumerRoles must be exactly ["app"], ["runtime"], or ["app","runtime"].`);
   return Object.freeze([...value]) as readonly ConsumerRole[];
 }
-export interface ProviderImport { readonly key: string; readonly packageId: string; readonly contractId: string }
+export interface ProviderImport { readonly key: string; readonly packageId: string; readonly contractId: string; readonly presence: "required" | "optional" }
 export interface ContractLock {
   readonly exactBytes: Buffer; readonly sha256: string;
   readonly packageArtifacts: ReadonlyMap<string, PackageArtifact>; readonly packageImports: ReadonlyMap<string, PackageImport>;
@@ -144,12 +144,14 @@ export function parseContractLock(bytes: Buffer, allowDevelopment = false): Cont
   }
   for (const [key, raw] of map(root, "providerImports")) {
     name(key); unique(providerNames, key.toLowerCase(), "rpc-authoring.duplicate-projected-key");
-    const value = fields(raw, ["packageId", "contractId"]); const packageId = id(value.packageId); const contractId = id(value.contractId);
+    const value = fields(raw, ["packageId", "contractId"], ["presence"]); const packageId = id(value.packageId); const contractId = id(value.contractId);
+    const presence = Object.hasOwn(value, "presence") ? value.presence : "required";
+    if (presence !== "required" && presence !== "optional") invalid("Provider presence must be required or optional when supplied.");
     unique(providerTuples, `${packageId}/${contractId}`, "rpc-authoring.duplicate-projected-key");
     const contract = artifacts.get(packageId)?.contracts.get(contractId);
     if (!contract || contract.authorityKind !== "package") contractError("package-api.provider-contract-not-public", "Provider intent must select a public package-authority contract.");
     require(contract); referenced.add(packageId); dependencies.add(packageId); dependencies.add(contract.authorityId);
-    providers.set(key, { key, packageId, contractId });
+    providers.set(key, { key, packageId, contractId, presence });
   }
   for (const [key, raw] of map(root, "platformImports")) {
     name(key); unique(providerNames, key.toLowerCase(), "rpc-authoring.duplicate-projected-key");

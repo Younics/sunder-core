@@ -85,7 +85,6 @@ internal sealed partial class InstalledPackageLifecycleService
                 "retire the active package session",
                 async token =>
                 {
-                    _rpcCatalog?.DeactivateAll(_sessions.Generation);
                     await _sessions.State.ClearActiveSessionAsync(token);
                 },
                 shutdownToken);

@@ -187,7 +187,21 @@ causes the official SDKs to add nullable `parentInvocationId` to `worker.invoke`
 the field exactly for opted-in targets, accepts a non-null value only when it identifies a live Host-owned call, and
 derives deadline/depth from Host state, never from worker-supplied values. It also conservatively inherits the earliest
 deadline and greatest depth across all live calls for that process, so omission by a legacy worker or a null value from
-an opted-in worker cannot escape an inbound invocation. The implemented capabilities are:
+an opted-in worker cannot escape an inbound invocation.
+
+`rpc.call-ownership.v1` explicitly permits a Worker to run activation-owned work independently
+of inbound requests. It uses the same required nullable `parentInvocationId` field in both
+official SDKs. A live named parent caps the child's deadline; null starts a root bounded by
+the normal Host deadline policy and activation retirement. Other inbound calls, including
+watches, do not cap that deadline. The Host still derives identity and parent validity from
+its own state and retains the greatest active process call depth as a recursion floor.
+This capability deliberately authorizes independent roots; it is not proof that arbitrary
+worker code retained its request ancestry. Without the capability, conservative V1 inheritance
+is unchanged. Ordinary request-owned work must retain its SDK parent and cancellation token;
+activation-owned work must suppress request execution-context flow and use its owning
+service's cancellation token. No scope or content authority is extended by starting a root.
+
+The implemented capabilities are:
 
 | Capability | Methods |
 | --- | --- |

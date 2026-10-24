@@ -51,6 +51,7 @@ public sealed partial class DevPackageOwnerLeaseTests
             var original = fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"];
             Assert.IsType<ProcessRuntimeWorker>(original.Worker);
             var birth = new RuntimePackageGeneration(original.RuntimeActivationId, original.ActivationSessionGeneration!.Value);
+            var trigger = Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers);
             var snapshotFolder = original.Source.EffectiveSnapshotFolder;
             var counters = Path.Combine(original.Worker.WorkspaceRootPath!, "activation-counters.txt");
             var before = File.ReadAllText(counters);
@@ -61,7 +62,7 @@ public sealed partial class DevPackageOwnerLeaseTests
             Assert.True(Directory.Exists(snapshotFolder));
             using (var lease = fixture.Host.SessionOwner.State.AcquirePackageActivationLease("startup.counted.package", birth))
                 Assert.True(lease.Generation > birth.SessionGeneration);
-            await ReleaseWithDiscoveryProbeAsync("target", targetToken, "continuing", "unavailable", "rpc.session.transitioning");
+            await ReleaseWithDiscoveryProbeAsync("target", targetToken, "continuing");
             Assert.Same(original.Worker, fixture.Host.ActiveSession.LoadedPackageMap["startup.counted.package"].Worker);
             Assert.Equal(before, File.ReadAllText(counters));
             await AssertWorkerDiscoveryAsync("continued");
@@ -70,7 +71,7 @@ public sealed partial class DevPackageOwnerLeaseTests
             Assert.False(Directory.Exists(snapshotFolder));
             Assert.Throws<RuntimeUnavailableException>(() => fixture.Host.SessionOwner.State.AcquirePackageActivationLease("startup.counted.package", birth));
 
-            async Task ReleaseWithDiscoveryProbeAsync(string owner, string ownerToken, string probe, string kind, string code)
+            async Task ReleaseWithDiscoveryProbeAsync(string owner, string ownerToken, string probe, string? kind = null, string? code = null)
             {
                 // Hold an actual lease so the previous generation remains in its
                 // drain boundary before the candidate catalog is installed.
@@ -94,7 +95,7 @@ public sealed partial class DevPackageOwnerLeaseTests
 
             async Task AssertWorkerDiscoveryAsync(string probe, string? kind = null, string? code = null)
             {
-                var provider = Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers);
+                var provider = trigger;
                 using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 // The direct host-side invocation only triggers autonomous Worker
                 // discovery while ordinary session lease acquisition is fenced.
@@ -103,10 +104,13 @@ public sealed partial class DevPackageOwnerLeaseTests
                     "messages", "send", JsonSerializer.SerializeToElement(new { message = probe }), deadline.Token);
                 var path = Path.Combine(((ProcessRuntimeWorker)original.Worker).WorkerTemporaryPath, "publication-discovery-" + probe + ".json");
                 using var response = JsonDocument.Parse(await File.ReadAllBytesAsync(path, deadline.Token));
+                var dataPath = Path.Combine(((ProcessRuntimeWorker)original.Worker).WorkerTemporaryPath, "publication-data-" + probe + ".json");
+                using var data = JsonDocument.Parse(await File.ReadAllBytesAsync(dataPath, deadline.Token));
                 if (kind is null)
                 {
                     Assert.Equal("host.result", response.RootElement.GetProperty("type").GetString());
                     Assert.Single(response.RootElement.GetProperty("value").GetProperty("providers").EnumerateArray());
+                    Assert.Equal("host.result", data.RootElement.GetProperty("type").GetString());
                 }
                 else
                 {
@@ -116,6 +120,8 @@ public sealed partial class DevPackageOwnerLeaseTests
                     Assert.Equal(code, error.GetProperty("code").GetString());
                     Assert.Equal("not-dispatched", error.GetProperty("dispatchState").GetString());
                     Assert.Equal("safe", error.GetProperty("retrySafety").GetString());
+                    Assert.Equal("host.error", data.RootElement.GetProperty("type").GetString());
+                    Assert.Equal("worker.activation.unavailable", data.RootElement.GetProperty("error").GetProperty("code").GetString());
                 }
             }
         }

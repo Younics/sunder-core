@@ -2523,6 +2523,8 @@ public sealed class ActivePackageSessionTests
             var pending = await publisher.BeginPublishAsync(candidate, CancellationToken.None);
             var publication = await publisher.CommitAsync(pending);
 
+            var survivorBefore = Assert.Single(rpcCatalog.GetSnapshot().Providers,
+                provider => provider.PackageId == "survivor.package");
             firstService.Fail(new InvalidOperationException("First generation failed."));
             secondService.Fail(new InvalidOperationException("Second generation failed concurrently."));
             var firstTask = WaitForPackageAsync(
@@ -2548,7 +2550,9 @@ public sealed class ActivePackageSessionTests
             Assert.Equal(owner.Generation, rpcCatalog.SessionGeneration);
             var survivor = Assert.Single(rpcCatalog.GetSnapshot().Providers);
             Assert.Equal("survivor.provider", survivor.ProviderId);
-            Assert.Equal(owner.Generation, survivor.SessionGeneration);
+            Assert.Equal(survivorBefore.Endpoint, survivor.Endpoint);
+            Assert.Equal(survivorBefore.ActivationEpoch, survivor.ActivationEpoch);
+            Assert.Equal(survivorBefore.SessionGeneration, survivor.SessionGeneration);
         }
         finally
         {

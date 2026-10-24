@@ -330,7 +330,7 @@
     "providerImport": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 2,
+      "maxProperties": 3,
       "required": [
         "packageId",
         "contractId"
@@ -341,6 +341,12 @@
         },
         "contractId": {
           "$ref": "#/$defs/packageId"
+        },
+        "presence": {
+          "enum": [
+            "required",
+            "optional"
+          ]
         }
       }
     },

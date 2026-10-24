@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Avalonia.Headless" />
+  </ItemGroup>
+  <ItemGroup>
     <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
     <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_SunderAppTargetPath" />

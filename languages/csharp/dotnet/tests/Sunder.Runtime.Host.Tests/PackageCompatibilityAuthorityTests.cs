@@ -67,6 +67,56 @@ public sealed class PackageCompatibilityAuthorityTests
         Assert.Throws<InvalidDataException>(() => PackageCompatibilityAuthority.ValidateGraph([Consumer(optional: true)]));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ProviderOnlyImportsHonorReviewedOptionalOmissionWithoutWeakeningRequiredImports(bool optional, bool omitted)
+    {
+        var extension = Consumer(optional: optional, omitted: omitted, provider: true);
+        if (optional && omitted)
+        {
+            PackageCompatibilityAuthority.ValidateGraph([extension]);
+            Assert.Empty(PackageCompatibilityAuthority.EffectiveDependencies(extension));
+        }
+        else Assert.Throws<InvalidDataException>(() => PackageCompatibilityAuthority.ValidateGraph([extension]));
+        PackageCompatibilityAuthority.ValidateGraph([extension, Authority()]);
+        Assert.Empty(extension.Manifest!.UsesContracts!); // Provider intent never creates a consumer grant or readiness requirement.
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("compatible")]
+    [InlineData("incompatible")]
+    public void LocalOptionalProviderRequiresNoOwnerAndIncludesOnlyAnExactCompatibleIntegration(string ownerState)
+    {
+        var installed = Consumer(optional: true, provider: true);
+        var manifestBytes = JsonSerializer.SerializeToUtf8Bytes(installed.Manifest);
+        var manifestHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(manifestBytes));
+        var source = installed with
+        {
+            Kind = PackageSourceKind.Dev,
+            Compatibility = null,
+            ContentIndex = new(1, [new(SunderPackageFormat.ManifestPath, manifestHash, manifestBytes.Length)]),
+            DevelopmentImports = new(1, "local", installed.PackageId, installed.Manifest!.Version!, manifestHash, null,
+                installed.Compatibility!.Resolution.RestoreProvenance.Select(DevelopmentPackageImport.FromRegistry).ToArray(), []),
+        };
+        var sources = ownerState == "missing" ? new[] { source }
+            : new[] { source, Authority(descriptor: ownerState == "incompatible" ? new('f', 64) : Descriptor) };
+        var prepared = sources.Select(item => new PreparedRuntimePackage(item.SourceFolder, item, item.SourceFolder,
+            item.PackageId, item.Manifest!.Version!, PackageHostRoles.Runtime,
+            new(item.PackageId, item.PackageId, item.Manifest.Version!, PackageHostRoles.Runtime, null), null, null, null, [])).ToArray();
+        var resolved = PackageCompatibilityAuthority.ResolveDevelopmentGraph(prepared);
+        PackageCompatibilityAuthority.ValidateGraph(resolved.Select(item => item.Source).ToArray());
+        var extension = Assert.Single(resolved, item => item.PackageId == source.PackageId);
+        Assert.Equal(ownerState == "compatible" ? 1 : 0, extension.Source.Dependencies!.Count);
+        Assert.Empty(extension.Dependencies); // Included optional evidence is not mandatory startup/recovery liveness.
+        Assert.Equal(ownerState != "compatible", extension.Source.DevelopmentOmittedPackages.Contains(Api));
+        Assert.Empty(extension.Source.Manifest!.UsesContracts!);
+        Assert.True(extension.Source.DevelopmentImports!.IsLocal);
+        Assert.Null(extension.Source.Compatibility);
+    }
+
     [Fact]
     public void MissingRetainedProofFailsClosedForADevImport()
     {
@@ -85,7 +135,7 @@ public sealed class PackageCompatibilityAuthorityTests
             UsesContracts = [], Provides = [],
         });
 
-    private static RuntimePackageSource Consumer(string id = "example.consumer", string? restoredContent = null, bool optional = false, bool omitted = false)
+    private static RuntimePackageSource Consumer(string id = "example.consumer", string? restoredContent = null, bool optional = false, bool omitted = false, bool provider = false)
     {
         restoredContent ??= new('e', 64);
         var inventory = new RegistryPackagePublicApiInventoryV1(1, Api, "1.0.0", restoredContent, 1,
@@ -101,14 +151,16 @@ public sealed class PackageCompatibilityAuthorityTests
             DependsOn = [new() { PackageId = Api, VersionRange = ">=1.0.0 <2.0.0", Presence = optional ? "optional" : "required" }],
             ContractBundles = [new() { Source = "imported", AuthorityKind = "package", AuthorityId = Api, ContractId = "example.rpc", Version = "1.0.0",
                 DescriptorPath = "contracts/example.json", DescriptorSha256 = Descriptor, AbiSha256 = Abi, Exposure = "public", SelectedAuthorityRelease = "1.0.0", SelectedAuthorityContentIdentity = restoredContent }],
-            UsesContracts = [new() { Role = "runtime", ContractId = "example.rpc", ContractVersion = "1.0.0", AbiSha256 = Abi, Required = true, Actions = ["discover", "invoke"] }],
-            Provides = [],
+            UsesContracts = provider ? [] : [new() { Role = "runtime", ContractId = "example.rpc", ContractVersion = "1.0.0", AbiSha256 = Abi, Required = true, Actions = ["discover", "invoke"] }],
+            Provides = provider ? [new() { Role = "runtime", ProviderId = "extension", ContractId = "example.rpc", ContractVersion = "1.0.0", DescriptorSha256 = Descriptor, AbiSha256 = Abi, Audience = "public" }] : [],
             PackageArtifactImports = [new() { PackageId = Api, RequestedVersionRange = ">=1.0.0 <2.0.0", IncludePrerelease = false,
                 SelectedPackageVersion = "1.0.0", SelectedPackageContentIdentity = restoredContent, PublicContractCount = 1, PublicInventorySha256 = hash,
                 AuthorityConstraints = [new() { AuthorityKind = "package", AuthorityId = Api, SelectedAuthorityRelease = "1.0.0", SelectedAuthorityContentIdentity = restoredContent }] }],
-            PackageApiImports = [new() { PackageId = Api, Presence = optional ? "optional" : "required", BundleRefs = [new() { ContractId = "example.rpc", ContractVersion = "1.0.0" }],
+            PackageApiImports = provider ? [] : [new() { PackageId = Api, Presence = optional ? "optional" : "required", BundleRefs = [new() { ContractId = "example.rpc", ContractVersion = "1.0.0" }],
                 UseRefs = [new() { Role = "runtime", ContractId = "example.rpc", ContractVersion = "1.0.0" }] }],
-            ProviderImports = [], PlatformImports = [],
+            ProviderImports = provider ? [new() { Key = "extension", PackageId = Api, Presence = optional ? "optional" : null, ContractId = "example.rpc", ContractVersion = "1.0.0",
+                BundleRef = new() { ContractId = "example.rpc", ContractVersion = "1.0.0" }, ProviderRefs = [new() { Role = "runtime", ProviderId = "extension", ContractId = "example.rpc", ContractVersion = "1.0.0" }] }] : [],
+            PlatformImports = [],
         }) { Compatibility = new(new(id, "1.0.0", ConsumerContent), "https://registry.example", resolution) };
     }
 

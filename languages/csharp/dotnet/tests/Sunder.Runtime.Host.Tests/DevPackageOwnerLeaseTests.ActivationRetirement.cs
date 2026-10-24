@@ -204,7 +204,7 @@ public sealed partial class DevPackageOwnerLeaseTests
             await Assert.ThrowsAsync<RuntimeAuthenticationException>(() => fixture.Host.CommitOwnerReleaseAsync("second", new(fixture.Host.RuntimeInstanceId, token, stage.StageId!)));
             var unavailable = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Host.RpcBroker.DiscoverAppAsync(caller.SessionId, "example.rpc", default).AsTask());
             Assert.Equal(SunderRpcErrorKind.Unavailable, unavailable.Error.Kind);
-            Assert.Equal("rpc.app-session.unavailable", unavailable.Error.Code);
+            Assert.Equal("rpc.app-session.retired", unavailable.Error.Code);
         }
         finally { await fixture.DisposeAsync(); }
     }
@@ -403,7 +403,26 @@ public sealed partial class DevPackageOwnerLeaseTests
         finally { await fixture.DisposeAsync(); }
     }
 
-    private static string CreateRetirementRolePackage(string root, string id, bool consumes = false)
+    [Fact]
+    public async Task OptionalProviderWithdrawalKeepsTheHealthyWorkerAndItsIssuedRpcEndpoint()
+    {
+        await using var fixture = CreateFixture();
+        const string token = "optional-provider-release-token-aaaaaaaa";
+        var leaf = CreateRetirementRolePackage(fixture.Paths.RootPath, "leaf.package");
+        var keep = CreateRetirementRolePackage(fixture.Paths.RootPath, "keep.package", consumes: true, requiredProvider: false);
+        await fixture.Host.LoadInstalledPackagesAsync();
+        await fixture.Host.ReplaceDevPackageOwnerAsync("leaf", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, leaf, false));
+        await fixture.Host.ReplaceDevPackageOwnerAsync("keep", Mutation(fixture.Host.RuntimeInstanceId, token, "load", 1, keep, false));
+        var active = fixture.Host.ActiveSession.LoadedPackageMap["keep.package"];
+        var endpoint = Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers, provider => provider.PackageId == "keep.package").Endpoint;
+        var stage = await fixture.Host.StageOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, 1, "release"));
+        await fixture.Host.CommitOwnerReleaseAsync("leaf", new(fixture.Host.RuntimeInstanceId, token, stage.StageId!));
+        Assert.Same(active.Worker, fixture.Host.ActiveSession.LoadedPackageMap["keep.package"].Worker);
+        Assert.False(active.Worker.GenerationCompletion.IsCompleted);
+        Assert.Equal(endpoint, Assert.Single(fixture.Host.RpcCatalog.GetSnapshot().Providers).Endpoint);
+    }
+
+    private static string CreateRetirementRolePackage(string root, string id, bool consumes = false, bool requiredProvider = true)
     {
         // Healthy provider-bearing fixtures produce no missing-provider warnings.
         // A true leaf removal cannot change a survivor's observed provider closure;
@@ -413,6 +432,7 @@ public sealed partial class DevPackageOwnerLeaseTests
         var manifest = JsonNode.Parse(File.ReadAllText(path))!;
         manifest["provides"]![0]!["providerId"] = id + ".provider";
         if (!consumes) manifest["usesContracts"] = new JsonArray();
+        else foreach (var use in manifest["usesContracts"]!.AsArray()) use!["required"] = requiredProvider;
         File.WriteAllText(path, manifest.ToJsonString());
         CanonicalPackageTestBuilder.WriteContentIndex(folder);
         return folder;

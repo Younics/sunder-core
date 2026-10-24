@@ -370,6 +370,7 @@ type public sealed class Sunder.Package.Format.SunderPackageProviderImportManife
   property System.String? ContractVersion { public get; public init; }
   property System.String? Key { public get; public init; }
   property System.String? PackageId { public get; public init; }
+  property System.String? Presence { public get; public init; }
 type public sealed class Sunder.Package.Format.SunderPackageProviderManifest
   method public .ctor()
   property System.String? AbiSha256 { public get; public init; }

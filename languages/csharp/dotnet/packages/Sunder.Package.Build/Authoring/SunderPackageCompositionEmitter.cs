@@ -54,7 +54,18 @@ internal static class SunderPackageCompositionEmitter
                 .Append(Literal(view.ViewId!)).Append(", ").Append(Literal(view.DisplayName!)).Append(", ").Append(view.IconPath is null ? "null" : Literal(view.IconPath))
                 .Append(", (global::Sunder.Sdk.Abstractions.PackageViewPlacement)").Append(view.DefaultPlacement).AppendLine("));");
         }
-        output.AppendLine("    }").AppendLine("}");
+        output.AppendLine("    }");
+        var activationServices = analysis.Composition!.App.Where(entry => SunderPackageDependencyDiscovery.IsAppActivation(entry.Type)).ToArray();
+        if (activationServices.Length != 0)
+        {
+            output.AppendLine("    public void StartAppServices(global::System.IServiceProvider services, global::System.Threading.CancellationToken token)")
+                .AppendLine("    {");
+            foreach (var entry in activationServices)
+                output.Append("        token.ThrowIfCancellationRequested(); ((global::Sunder.Sdk.Abstractions.IPackageAppActivationService)services.GetRequiredService<")
+                    .Append(Type(entry.Type)).AppendLine(">()).Start(token);");
+            output.AppendLine("    }");
+        }
+        output.AppendLine("}");
         return new("app-module.g.cs", output.ToString());
     }
 

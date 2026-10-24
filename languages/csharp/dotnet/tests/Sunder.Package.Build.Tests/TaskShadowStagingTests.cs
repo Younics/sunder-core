@@ -12,7 +12,7 @@ namespace Sunder.Package.Build.Tests;
 public sealed class TaskShadowStagingTestCollection;
 
 [Collection(nameof(TaskShadowStagingTests))]
-public sealed class TaskShadowStagingTests
+public sealed partial class TaskShadowStagingTests
 {
     private const string MarkerFileName = ".sunder-task-set";
 
@@ -657,7 +657,7 @@ public sealed class TaskShadowStagingTests
     [Theory]
     [InlineData("Build;Pack", 2)]
     [InlineData("Pack;Build", 2)]
-    [InlineData("Rebuild;Pack", 4)]
+    [InlineData("Rebuild;Pack", 3)] // Owner Clean, Build, Pack; the shared graph is not owner-leased.
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
     [Trait("Capability", "Filesystem")]
@@ -796,13 +796,11 @@ public sealed class TaskShadowStagingTests
         Assert.False(File.Exists(taskAssembly));
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
+    [Fact]
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
     [Trait("Capability", "Filesystem")]
-    public async Task OwnerRebuild_CleansSharedReferencesBeforeBuildingThem(bool buildProjectReferences)
+    public async Task OwnerRebuild_WithInternallyScheduledReferences_CleansBeforeBuildingThem()
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-task-shadow-rebuild-reference-order");
         var repositoryRoot = FindRepositoryRoot();
@@ -814,13 +812,14 @@ public sealed class TaskShadowStagingTests
         var dependency = Path.Combine(fixture, "Sunder.Package.Format", "Sunder.Package.Format.csproj");
         var reference = Path.Combine(fixture, "Sunder.Package.Format", "obj", "Debug", "net10.0", "ref", "Sunder.Package.Format.dll");
         var sourceLockTargets = Path.Combine(repositoryRoot, "languages", "csharp", "dotnet", "packages", "Sunder.Package.Build", "build", "Sunder.Package.Build.SourceLock.targets");
-        // Force the unfavorable solution ordering in one graph. A late first Clean
-        // must not delete a reference whose Build result is already cached.
+        // Direct project Rebuild owns reference scheduling. Externally scheduled
+        // references (BuildProjectReferences=false) are covered by the concurrent
+        // dependency-first regression, not by scheduling an owner before its refs.
         var driver = scope.WriteAllText("RebuildReferenceOrder.proj", $$"""
             <Project>
               <Target Name="Run">
                 <MSBuild Projects="{{owner}}" Targets="Rebuild"
-                         Properties="Configuration=Debug;GeneratePackageOnBuild=false;BuildProjectReferences={{buildProjectReferences}};SunderPackageBuildSourceLockTargetsPath={{sourceLockTargets}}" />
+                         Properties="Configuration=Debug;GeneratePackageOnBuild=false;BuildProjectReferences=true;SunderPackageBuildSourceLockTargetsPath={{sourceLockTargets}}" />
                 <Error Condition="!Exists('{{reference}}')" Text="The owner did not produce its shared reference." />
                 <MSBuild Projects="{{dependency}}" Targets="Rebuild" Properties="Configuration=Debug" />
                 <Error Condition="!Exists('{{reference}}')" Text="A late Clean deleted the shared reference after its Build result was cached." />

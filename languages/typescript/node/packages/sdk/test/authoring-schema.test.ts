@@ -2018,7 +2018,8 @@ async function receiptDiagnostic(receipt: JsonObject, world: SemanticWorld): Pro
   for (const [key, value] of Object.entries(lockProviderImports)) {
     const intent = objectValue(value, `lock provider import '${key}'`);
     const group = providerGroups.get(key);
-    if (group === undefined || group.packageId !== intent.packageId || group.contractId !== intent.contractId) {
+    if (group === undefined || group.packageId !== intent.packageId || group.contractId !== intent.contractId
+      || (group.presence ?? "required") !== (intent.presence ?? "required")) {
       return "rpc-authoring.evidence-mismatch";
     }
     const artifact = objectValue(objectValue(lock.packageArtifacts, "lock packageArtifacts")[stringValue(intent.packageId, "provider package id")], "provider artifact");

@@ -171,13 +171,10 @@ internal sealed class RuntimeRpcInvocationAuthority(
     private void ValidateActivation()
     {
         using var lease = providerActivation.AllowsPrePublicationLease
-            ? sessions.AcquirePackageActivationLease(
-                providerPackageId,
-                new RuntimePackageGeneration(
-                    providerEndpoint.ActivationId,
-                    sessionGeneration))
-            : sessions.AcquireLease();
-        if (lease.Generation != sessionGeneration
+            ? sessions.AcquirePackageActivationLease(providerPackageId,
+                new RuntimePackageGeneration(providerEndpoint.ActivationId, providerActivation.ActivationGeneration))
+            : sessions.AcquireRpcLease(providerActivation);
+        if (!providerActivation.IsCurrent(lease)
             || sessions.GetLoadedPackage(lease, providerPackageId)?.RuntimeActivationId != providerEndpoint.ActivationId
             || !catalog.TryGetEndpoint(
                 providerActivation,

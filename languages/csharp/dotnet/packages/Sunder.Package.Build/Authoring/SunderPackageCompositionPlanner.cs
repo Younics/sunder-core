@@ -59,7 +59,7 @@ internal static class SunderPackageCompositionPlanner
                         || SunderPackageDependencyDiscovery.IsStorageMigrationProvider(type)
                         || SunderPackageDependencyDiscovery.IsStorageMigrationPreparation(type)
                         || SunderPackageDependencyDiscovery.IsSettingsSchemaProvider(type))))
-                : sourceTypes.Where(type => transient.Contains(Name(type)));
+                : sourceTypes.Where(type => transient.Contains(Name(type)) || !type.IsAbstract && SunderPackageDependencyDiscovery.IsAppActivation(type));
             // All exposed default Worker APIs must be resolvable, even when only
             // package-local code obtains them after activation.
             if (role == SunderPackageRoleMembership.Worker)

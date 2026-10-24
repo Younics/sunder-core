@@ -11,6 +11,8 @@ internal static class AppSessionLog
     private static readonly string LogRootPath = AppLocalState.GetPath("logs");
     private static readonly object RecentEntriesGate = new();
     private static readonly List<AppSessionLogSnapshotEntry> RecentEntries = [];
+    internal static Guid InstanceId { get; } = Guid.NewGuid();
+    private static long _sequence;
 
     private static readonly string SessionLogPath = Path.Combine(
         LogRootPath,
@@ -90,6 +92,7 @@ internal static class AppSessionLog
             exception);
         lock (RecentEntriesGate)
         {
+            snapshotEntry = snapshotEntry with { SequenceId = ++_sequence };
             RecentEntries.Add(snapshotEntry);
             if (RecentEntries.Count > MaxRecentEntries)
             {
@@ -155,4 +158,7 @@ internal sealed record AppSessionLogSnapshotEntry(
     DeveloperLogEntryScope Scope,
     string Source,
     string Message,
-    Exception? Exception);
+    Exception? Exception)
+{
+    internal long SequenceId { get; init; }
+}

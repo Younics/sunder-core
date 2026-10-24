@@ -438,6 +438,31 @@ public sealed class AppProcessPolicySupervisorTests
         finally { AppSessionLog.EntryWritten -= Observe; }
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("session")]
+    public async Task RetainedObservationPermitRechecksExactActivationTargetAndCapabilities(string? mismatch)
+    {
+        await using var fixture = new Fixture();
+        var snapshot = Snapshot();
+        var target = snapshot.Target;
+        snapshot = snapshot with { Target = new(target.Role, target.Rid, target.Kind, target.EntryPoint,
+            target.TargetFramework, target.SdkVersion, [SunderSdkCapabilities.PackageDevelopmentRevisionsV1,
+                SunderSdkCapabilities.WorkerExecutionObservationsV1], target.Views) };
+        var admission = await fixture.Supervisor.AcquireLoadAsync(snapshot, Guid.NewGuid(), default);
+        var retained = mismatch is null ? admission : new AppPackageLoadAdmission(admission.ActivationId, admission.PermitId)
+        { PolicySessionId = mismatch == "session" ? "foreign-session" : admission.PolicySessionId };
+        var fresh = snapshot with { SessionGeneration = 2, SnapshotId = new('b', 32) };
+        if (mismatch is null) await fixture.Supervisor.RequireRetainedLoadAsync(fresh, retained, default);
+        else await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Supervisor.RequireRetainedLoadAsync(fresh, retained, default));
+        var request = Assert.IsType<RuntimeAppPackageLoadPermitRequest>(fixture.Connection.LastPermit);
+        Assert.Equal(admission.ActivationId, request.AppActivationId);
+        Assert.Same(fresh.Target, request.AppTarget);
+        Assert.Equal(fresh.SnapshotId, request.SnapshotId);
+        Assert.Equal(fresh.Target.RequiredHostCapabilities, request.AppImplementedCapabilities);
+        Assert.Empty(fixture.Connection.Retirements);
+    }
+
     private static PackageUiSnapshotDescriptor Snapshot() => new("example.app", PackageSourceKind.Installed, 1, RuntimeContractTestData.AppTarget(), new('a', 64), new('a', 32), "")
     { PolicySubject = new("example.app", "1.0.0", new('a', 64)) };
 

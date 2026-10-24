@@ -477,6 +477,7 @@ internal sealed class PackageSessionPublisher(
         }
 
         sessions.MarkPreviousWorkersQuiesced(publication);
+        await sessions.RetireReplacedRpcActivationsAsync(publication).ConfigureAwait(false);
         await sessions.WaitForPreviousRetirementCallbacksAsync(publication)
             .ConfigureAwait(false);
         await publication.PreviousSession.QuiesceWorkersAsync(
@@ -866,6 +867,12 @@ internal sealed class PackageSessionPublisher(
                 faults,
                 logger,
                 _lifecyclePolicy.PackageWorkerCleanupTimeout).ConfigureAwait(false);
+            // A failed provider/dependency is not authority to abandon unrelated
+            // packages. Suspend its actual consumers before planning the restored
+            // graph; keep their exact source/recovery evidence for the ordinary
+            // dependency-aware recovery queue. Candidate admission stays strict.
+            var deferred = await DeferUnavailableRecoveryPackagesAsync(previousSession).ConfigureAwait(false);
+            drainingRecoveries = drainingRecoveries.Concat(deferred).ToArray();
             if (publication.PreviousWorkersQuiesced)
             {
                 await previousSession.RebuildQuiescedWorkersAsync(
@@ -921,7 +928,8 @@ internal sealed class PackageSessionPublisher(
                     publication,
                     sources,
                     snapshot.Warnings,
-                    snapshot.Errors.Concat(diagnostics).ToArray(),
+                    snapshot.Errors.Concat(diagnostics).Concat(deferred.Select(candidate =>
+                        $"Package '{candidate.Fault.PackageId}' is awaiting dependency recovery: {candidate.Fault.Exception.Message}")).ToArray(),
                     generation =>
                     {
                         rpcCatalog?.ActivateSession(previousSession, generation);
@@ -999,6 +1007,32 @@ internal sealed class PackageSessionPublisher(
             return unavailableFailure is null
                 ? recoveryFailure
                 : new AggregateException(recoveryFailure, unavailableFailure);
+        }
+    }
+
+    private async Task<IReadOnlyList<DrainingPackageRecoveryCandidate>> DeferUnavailableRecoveryPackagesAsync(ActivePackageSession session)
+    {
+        List<DrainingPackageRecoveryCandidate> deferred = [];
+        while (true)
+        {
+            var unavailable = session.LoadedPackageMap.Keys.Where(id => !session.AreRecoveryDependenciesAvailable(id))
+                .Concat(rpcReadiness?.UnsatisfiedConsumers(session, Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole) ?? [])
+                .Concat(rpcReadiness?.UnsatisfiedConsumers(session, Sunder.Package.Format.SunderPackageFormat.AppHostRole) ?? [])
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            if (unavailable.Length == 0) return deferred;
+            var faults = unavailable.Select(id =>
+            {
+                var package = session.LoadedPackageMap[id];
+                return new DrainingPackageFault(id,
+                    new(package.RuntimeActivationId, package.ActivationSessionGeneration!.Value),
+                    PackageFailureOrigin.RuntimeActivation,
+                    new InvalidOperationException("A required package or RPC provider is unavailable during session recovery."),
+                    _timeProvider.GetUtcNow());
+            }).ToArray();
+            // ApplyDrainingFaultsAsync proves stop/disposal before releasing any
+            // source for recovery. Unproven cleanup still fails closed.
+            deferred.AddRange(await session.ApplyDrainingFaultsAsync(faults, logger,
+                _lifecyclePolicy.PackageWorkerCleanupTimeout).ConfigureAwait(false));
         }
     }
 

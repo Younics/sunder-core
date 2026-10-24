@@ -54,5 +54,6 @@ internal sealed record PendingPackageLifecycleStage(
     DateTimeOffset ExpiresAtUtc)
 {
     internal string? ReleaseOwnerId { get; init; }
+    internal string? ReloadOwnerId { get; init; }
     internal bool SourcesOnly { get; init; }
 }

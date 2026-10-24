@@ -190,7 +190,7 @@ The current first-party Agent package line is `2.0.0`. Its 18 public
 follow package version `2.0.0` (13 current private APIs). Package Maker is
 `younics.sunder.package.maker`. Agent's independently reviewed
 `compatibility/agent-current-inventory.json` defines the current 15 project/package
-pairs and 62 providers; the workspace-path migrator API is absent. Current byte
+pairs and 64 providers; the workspace-path migrator API is absent. Current byte
 expectations are separately reviewed in `compatibility/agent-current-contracts.json`,
 after qualification of fresh artifacts. Archived identity maps and predecessor
 descriptors do not define these expectations.

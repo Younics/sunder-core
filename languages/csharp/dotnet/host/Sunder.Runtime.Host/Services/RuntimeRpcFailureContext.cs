@@ -28,7 +28,10 @@ internal sealed record RuntimeRpcFailureContext(
     int? ValueMaximumObjectMembers,
     long? ValueInlineDecodedBytes,
     string ExceptionType,
-    string ExceptionFingerprint);
+    string ExceptionFingerprint,
+    WorkerTransportFailureKind? TransportFailureKind = null,
+    long? TransportObserved = null,
+    long? TransportLimit = null);
 
 internal static class RuntimeRpcFailureContextStore
 {
@@ -64,6 +67,7 @@ internal static class RuntimeRpcFailureContextStore
         exceptionType = NormalizeExceptionType(exceptionType);
         var semanticValidation = providerException as RuntimeRpcSemanticValidationException;
         var measurement = semanticValidation?.Measurement;
+        var transport = providerException as WorkerTransportResourceException;
         Contexts.Add(exception, new RuntimeRpcFailureContext(
             callerPackageId,
             callerPackageVersion,
@@ -86,7 +90,7 @@ internal static class RuntimeRpcFailureContextStore
             measurement?.MaximumObjectMembers,
             measurement?.InlineDecodedBytes,
             exceptionType,
-            CreateExceptionFingerprint(exceptionType)));
+            CreateExceptionFingerprint(exceptionType), transport?.Kind, transport?.Observed, transport?.Limit));
         return exception;
     }
 

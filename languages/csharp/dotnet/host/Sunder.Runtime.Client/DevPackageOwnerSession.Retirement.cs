@@ -22,6 +22,8 @@ public sealed partial class DevPackageOwnerSession
         {
             await _mutationGate.WaitAsync(cleanup.Token).ConfigureAwait(false);
             entered = true;
+            if (_reload?.Retirement is { IsCompleted: false })
+                throw new InvalidOperationException("The exact development reload retirement callback has not drained.");
             using var client = _clients();
             DevPackageOwnerLeaseResponse? lease;
             lock (_syncRoot) lease = _lease;
@@ -78,6 +80,7 @@ public sealed partial class DevPackageOwnerSession
             _pendingRelease = null;
             _retiredReleaseStage = null;
             _releaseCommitPending = false;
+            _reload = null;
             // Heartbeat remains live throughout shell cleanup; stop only after the
             // server has acknowledged withdrawal. Do not await a heartbeat trying
             // to enter this same mutation gate.

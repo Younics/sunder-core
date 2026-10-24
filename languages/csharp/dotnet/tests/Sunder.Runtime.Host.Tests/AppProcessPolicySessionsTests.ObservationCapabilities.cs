@@ -14,6 +14,18 @@ public sealed partial class AppProcessPolicySessionsTests
     [InlineData(SunderSdkCapabilities.WorkerExecutionObservationsV1, true)]
     [InlineData(SunderSdkCapabilities.PackageDevelopmentRevisionsV1, false)]
     [InlineData(SunderSdkCapabilities.PackageDevelopmentRevisionsV1, true)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentReloadV1, false)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentReloadV1, true)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogsV1, false)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogsV1, true)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1, false)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1, true)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentViewsV1, false)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentViewsV1, true)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentFeedbackV1, false)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentFeedbackV1, true)]
+    [InlineData(SunderSdkCapabilities.AppActivationServicesV1, false)]
+    [InlineData(SunderSdkCapabilities.AppActivationServicesV1, true)]
     public async Task OlderAppCannotObtainAnObservationTargetPermitWithoutItsImplementedCapability(string capability, bool tracked)
     {
         using var fixture = new Fixture();
@@ -30,6 +42,13 @@ public sealed partial class AppProcessPolicySessionsTests
         var denied = await Assert.ThrowsAsync<RuntimeValidationException>(
             () => fixture.Sessions.PermitAsync(request, fixture.Peer, default));
         Assert.Contains(capability, denied.Message, StringComparison.Ordinal);
+        if (capability is SunderSdkCapabilities.PackageDevelopmentLogQueriesV1 or SunderSdkCapabilities.PackageDevelopmentFeedbackV1)
+        {
+            var legacyOnly = request with { AppImplementedCapabilities = [SunderSdkCapabilities.PackageDevelopmentLogsV1, SunderSdkCapabilities.PackageDevelopmentViewsV1] };
+            var legacyDenied = await Assert.ThrowsAsync<RuntimeValidationException>(
+                () => fixture.Sessions.PermitAsync(legacyOnly, fixture.Peer, default));
+            Assert.Contains(capability, legacyDenied.Message, StringComparison.Ordinal);
+        }
         Assert.Empty((await fixture.Sessions.HeartbeatAsync(request.Session, fixture.Peer, default)).LoadedPackages);
         Assert.Equal(0, fixture.Process.Terminations);
     }
@@ -37,6 +56,12 @@ public sealed partial class AppProcessPolicySessionsTests
     [Theory]
     [InlineData(SunderSdkCapabilities.WorkerExecutionObservationsV1)]
     [InlineData(SunderSdkCapabilities.PackageDevelopmentRevisionsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentReloadV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentLogQueriesV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentViewsV1)]
+    [InlineData(SunderSdkCapabilities.PackageDevelopmentFeedbackV1)]
+    [InlineData(SunderSdkCapabilities.AppActivationServicesV1)]
     [InlineData("both")]
     public async Task CurrentAppCanObtainExactTrackedPermitWithItsImplementedCapabilities(string selection)
     {

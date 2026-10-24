@@ -44,6 +44,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private readonly string _workerTemporaryPath;
     private readonly IReadOnlyList<ProviderIdentity> _expectedProviders;
     private readonly bool _rpcExtendedDeadlineV1;
+    private readonly bool _rpcCallOwnershipV1;
     private readonly object _stateGate = new();
     private readonly object _callGate = new();
     private readonly object _writeQueueGate = new();
@@ -125,7 +126,10 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
             Path.GetTempPath(),
             "sunder-runtime-worker",
             activationId.ToString("N"));
-        _rpcExtendedDeadlineV1 = package.SelectedTarget?.RequiredHostCapabilities?.Contains(
+        _rpcCallOwnershipV1 = package.SelectedTarget?.RequiredHostCapabilities?.Contains(
+            SunderSdkCapabilities.RpcCallOwnershipV1,
+            StringComparer.Ordinal) == true;
+        _rpcExtendedDeadlineV1 = _rpcCallOwnershipV1 || package.SelectedTarget?.RequiredHostCapabilities?.Contains(
             SunderSdkCapabilities.RpcExtendedDeadlineV1,
             StringComparer.Ordinal) == true;
         _expectedProviders = (package.Source.Manifest?.Provides ?? [])
@@ -507,8 +511,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 if (!TryQueueFrameBody(body))
                 {
                     Volatile.Write(ref _activationFrameBody, null);
-                    queueFailure = new WorkerTransportResourceException(
-                        "Process worker protocol write queue exceeded its bound.");
+                    queueFailure = WriteQueueFailure(body.Length);
                 }
                 else
                 {
@@ -3038,6 +3041,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 ? "Worker RPC request omitted parentInvocationId required by rpc.extended-deadline.v1."
                 : "Worker RPC request used parentInvocationId without declaring rpc.extended-deadline.v1.");
         }
+        RuntimeRpcCallFrame? declaredParent = null;
         if (hasParentProperty && parentValue.ValueKind != JsonValueKind.Null)
         {
             if (parentValue.ValueKind != JsonValueKind.String)
@@ -3046,11 +3050,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                     "Worker RPC parentInvocationId must be a live Host invocation id or null.");
             }
             var parentId = ReadSafeId(root, "parentInvocationId");
-            if (!_hostCalls.ContainsKey(parentId))
+            if (!_hostCalls.TryGetValue(parentId, out var parentCall))
             {
                 throw new SunderWorkerProtocolException(
                     $"Process worker used unknown or completed parent invocation id '{parentId}'.");
             }
+            declaredParent = new(parentCall.Context.CallDepth, parentCall.Context.DeadlineUtc);
         }
 
         RuntimeRpcCallFrame? frame = null;
@@ -3065,7 +3070,12 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                         ? frame.DeadlineUtc
                         : context.DeadlineUtc);
         }
-        return frame;
+        if (!_rpcCallOwnershipV1 || frame is null) return frame;
+        // This manifest capability permits independently bounded root work. A named
+        // parent still caps its children; unrelated calls do not supply a deadline.
+        // Retain the process-wide depth floor so concurrent/reentrant roots cannot
+        // evade the Host's recursion limit by selecting a shallower or null parent.
+        return new RuntimeRpcCallFrame(frame.Depth, declaredParent?.DeadlineUtc ?? DateTimeOffset.MaxValue);
     }
 
     private void HandleWorkerCancellation(JsonElement root)
@@ -3248,9 +3258,23 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         var body = SunderWorkerProtocol.SerializeFrameBody(envelope, _transportLimits);
         if (!TryQueueFrameBody(body))
         {
-            throw new WorkerTransportResourceException(
-                "Process worker protocol write queue exceeded its count or byte bound.");
+            throw WriteQueueFailure(body.Length);
         }
+    }
+
+    private WorkerTransportResourceException WriteQueueFailure(int incomingBytes)
+    {
+        var writes = _writes;
+        if (writes is null || writes.Reader.Completion.IsCompleted || IsStopping())
+            return new(WorkerTransportFailureKind.WriteQueueClosed, "Process worker protocol writer is unavailable or retiring.");
+        lock (_writeQueueGate)
+        {
+            if (incomingBytes > _transportLimits.MaximumWriteQueueBytes - _queuedWriteBytes)
+                return new(WorkerTransportFailureKind.WriteQueueAdmission, "Process worker protocol write queue exceeded its byte bound.",
+                    _queuedWriteBytes + incomingBytes, _transportLimits.MaximumWriteQueueBytes);
+        }
+        return new(WorkerTransportFailureKind.WriteQueueAdmission, "Process worker protocol write queue rejected a frame at its message bound.",
+            writes.Reader.Count + 1L, _policy.MaxWriteQueueMessages);
     }
 
     private void QueueHostCallBody(byte[] body)

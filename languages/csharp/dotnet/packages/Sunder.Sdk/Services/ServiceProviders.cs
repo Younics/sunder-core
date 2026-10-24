@@ -129,7 +129,7 @@ public sealed class ServiceProvider<TService> where TService : class
     public Guid ActivationId => _snapshot.ActivationId;
     /// <summary>Gets the exact activation epoch.</summary>
     public long ActivationEpoch => _snapshot.ActivationEpoch;
-    /// <summary>Gets the exact package-session generation.</summary>
+    /// <summary>Gets the generation that established this exact RPC activation; unrelated catalog publications do not change it.</summary>
     public long SessionGeneration => _snapshot.SessionGeneration;
     /// <summary>Gets the catalog revision that supplied this entry.</summary>
     public long CatalogRevision => _snapshot.CatalogRevision;

@@ -314,7 +314,9 @@ public sealed partial class PackageViewHostServiceTests
         await Assert.ThrowsAsync<IOException>(() => state.SetValueAsync("bookmark", "uncertain"));
         handler.DataRequest = (_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NoContent));
         await state.SetValueAsync("bookmark", "retry-succeeded");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ApplyPackageDeltaAsync([], []));
+        var replacement = source with { SnapshotId = Guid.NewGuid().ToString("N"), ActivationFingerprint = new('c', 64) };
+        policy.Expected = replacement;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ApplyPackageDeltaAsync([package], [replacement]));
         await host.DisposeAsync();
         Assert.True(GetIsDisposed(view!));
         Assert.Single(handler.ClosedSessions);

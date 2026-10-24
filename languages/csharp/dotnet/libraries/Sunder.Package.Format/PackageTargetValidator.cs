@@ -234,7 +234,8 @@ internal static class PackageTargetValidator
         foreach (var capability in seen.Where(static capability =>
                      capability.StartsWith("rpc.", StringComparison.Ordinal)
                      && capability != SunderPackageFormat.RpcV1Capability
-                     && capability != SunderPackageFormat.RpcExtendedDeadlineV1Capability))
+                      && capability != SunderPackageFormat.RpcExtendedDeadlineV1Capability
+                      && capability != SunderPackageFormat.RpcCallOwnershipV1Capability))
         {
             errors.Add(
                 $"{prefix} Runtime target '{DisplayKey(target)}' cannot require unsupported RPC capability '{capability}'.");

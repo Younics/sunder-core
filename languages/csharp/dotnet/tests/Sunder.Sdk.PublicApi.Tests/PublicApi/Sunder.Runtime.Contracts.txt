@@ -177,6 +177,64 @@ type public sealed class Sunder.Runtime.Contracts.DevPackageOwnerReleaseStageReq
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.DevPackageOwnerReleaseStageRequest? left, Sunder.Runtime.Contracts.DevPackageOwnerReleaseStageRequest? right)
   method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.DevPackageOwnerReleaseStageRequest? left, Sunder.Runtime.Contracts.DevPackageOwnerReleaseStageRequest? right)
+type public sealed class Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest : System.IEquatable<Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest>
+  method public .ctor(System.Guid RuntimeInstanceId, System.String OwnerToken, System.String StageId)
+  property System.Guid RuntimeInstanceId { public get; public init; }
+  property System.String OwnerToken { public get; public init; }
+  property System.String StageId { public get; public init; }
+  method public Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Guid RuntimeInstanceId, out System.String OwnerToken, out System.String StageId)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadCommitRequest? right)
+type public sealed class Sunder.Runtime.Contracts.DevPackageOwnerReloadResult : System.IEquatable<Sunder.Runtime.Contracts.DevPackageOwnerReloadResult>
+  method public .ctor(System.Guid RuntimeInstanceId, System.String OwnerId, System.String StageId, System.String PackageId, System.String SourceContentIdentity, Sunder.Runtime.Contracts.RuntimePackageSnapshot Snapshot)
+  property Sunder.Runtime.Contracts.RuntimePackageSnapshot Snapshot { public get; public init; }
+  property System.Guid RuntimeInstanceId { public get; public init; }
+  property System.String OwnerId { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String SourceContentIdentity { public get; public init; }
+  property System.String StageId { public get; public init; }
+  method public Sunder.Runtime.Contracts.DevPackageOwnerReloadResult <Clone>$()
+  method public System.Void Deconstruct(out System.Guid RuntimeInstanceId, out System.String OwnerId, out System.String StageId, out System.String PackageId, out System.String SourceContentIdentity, out Sunder.Runtime.Contracts.RuntimePackageSnapshot Snapshot)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.DevPackageOwnerReloadResult? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.DevPackageOwnerReloadResult? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadResult? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.DevPackageOwnerReloadResult? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadResult? right)
+type public sealed class Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest : System.IEquatable<Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest>
+  method public .ctor(System.Guid RuntimeInstanceId, System.String OwnerToken, System.Int64 Revision, System.String MutationId, System.String PackageId, System.String SourceContentIdentity)
+  property System.Int64 Revision { public get; public init; }
+  property System.Guid RuntimeInstanceId { public get; public init; }
+  property System.String MutationId { public get; public init; }
+  property System.String OwnerToken { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String SourceContentIdentity { public get; public init; }
+  method public Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest <Clone>$()
+  method public System.Void Deconstruct(out System.Guid RuntimeInstanceId, out System.String OwnerToken, out System.Int64 Revision, out System.String MutationId, out System.String PackageId, out System.String SourceContentIdentity)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadStageRequest? right)
+type public sealed class Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult : System.IEquatable<Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult>
+  method public .ctor(System.String PackageId, System.String SourceContentIdentity, Sunder.Runtime.Contracts.PackageLifecycleStageResult Stage)
+  property Sunder.Runtime.Contracts.PackageLifecycleStageResult Stage { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String SourceContentIdentity { public get; public init; }
+  method public Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String SourceContentIdentity, out Sunder.Runtime.Contracts.PackageLifecycleStageResult Stage)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult? left, Sunder.Runtime.Contracts.DevPackageOwnerReloadStageResult? right)
 type public static class Sunder.Runtime.Contracts.ExecutionRuntimeErrorCatalog
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.ExecutionRuntimeErrorDescriptor> All { public static get; }
 type public static class Sunder.Runtime.Contracts.ExecutionRuntimeErrorCodes
@@ -581,6 +639,7 @@ type public sealed class Sunder.Runtime.Contracts.PackageLogEntryDescriptor : Sy
   property System.Boolean Truncated { public get; public init; }
   property System.Int64 SequenceId { public get; public init; }
   property Sunder.Runtime.Contracts.RuntimePackageLogLevel Level { public get; public init; }
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Properties { public get; public init; }
   property System.DateTimeOffset Timestamp { public get; public init; }
   property System.Guid RuntimeInstanceId { public get; public init; }
   property System.String Category { public get; public init; }

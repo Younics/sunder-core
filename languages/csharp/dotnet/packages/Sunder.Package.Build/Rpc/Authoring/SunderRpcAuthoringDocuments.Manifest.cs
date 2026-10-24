@@ -22,6 +22,12 @@ internal static partial class SunderRpcAuthoringDocuments
     internal static void ValidateReceiptConsumerRoles(SunderRpcContractLock contractLock, SunderPackageManifest projection,
         string role, IReadOnlySet<string> presentRoles, IReadOnlyList<SunderRpcRoleUse>? roleUses = null)
     {
+        var expectedProviders = (role == "runtime" ? contractLock.ProviderImports.Values : [])
+            .Select(import => (import.Key, import.PackageId, import.ContractId, import.Presence)).OrderBy(import => import.Key, StringComparer.Ordinal);
+        var actualProviders = (projection.ProviderImports ?? []).OfType<SunderPackageProviderImportManifest>()
+            .Select(import => (Key: import.Key!, PackageId: import.PackageId!, ContractId: import.ContractId!, Presence: import.Presence ?? "required")).OrderBy(import => import.Key, StringComparer.Ordinal);
+        if (!expectedProviders.SequenceEqual(actualProviders))
+            throw new InvalidDataException("rpc-authoring.evidence-mismatch: Provider imports or presence differ from the reviewed lock.");
         foreach (var import in contractLock.PackageImports.Values)
             if (!import.ConsumerRoles.Any(presentRoles.Contains))
                 throw new InvalidDataException($"package-api.consumer-roles-unavailable: '{import.PackageId}' has no selected role in the canonical project.");
@@ -119,8 +125,11 @@ internal static partial class SunderRpcAuthoringDocuments
             _ = ReceiptRecords(import, "bundleRefs", ["contractId", "contractVersion"]).ToArray();
             _ = ReceiptRecords(import, "useRefs", ["role", "contractId", "contractVersion"]).ToArray();
         }
-        foreach (var import in ReceiptRecords(root, "providerImports", ["key", "packageId", "contractId", "contractVersion", "bundleRef", "providerRefs"]))
+        foreach (var import in root.GetProperty("providerImports").EnumerateArray())
         {
+            string[] fields = ["key", "packageId", "contractId", "contractVersion", "bundleRef", "providerRefs"];
+            RequireObject(import, label + " provider import", [.. fields, "presence"], fields, ["presence"]);
+            if (import.TryGetProperty("presence", out _)) _ = RequireOneOf(import, "presence", label, "required", "optional");
             _ = RequirePackageId(import, "packageId", label);
             RequireObject(import.GetProperty("bundleRef"), label, ["contractId", "contractVersion"], ["contractId", "contractVersion"], []);
             _ = ReceiptRecords(import, "providerRefs", ["role", "providerId", "contractId", "contractVersion"]).ToArray();
@@ -362,7 +371,7 @@ internal static partial class SunderRpcAuthoringDocuments
         var presence = new Dictionary<string, string>(StringComparer.Ordinal);
         var pending = new Queue<string>();
         foreach (var import in projected.PackageApiImports!) AddPresence(import!.PackageId!, import.Presence!);
-        foreach (var import in projected.ProviderImports!) AddPresence(import!.PackageId!, "required");
+        foreach (var import in projected.ProviderImports!) AddPresence(import!.PackageId!, import.Presence ?? "required");
         while (pending.TryDequeue(out var id))
         {
             if (!artifacts.TryGetValue(id, out var artifact)) continue;

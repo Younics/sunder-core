@@ -6,6 +6,25 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class RuntimeRpcBrokerTests
 {
+    [Fact]
+    public async Task ForeignPublicationCannotRetireTheReceivingOwnersRpcActivations()
+    {
+        await using var owner = new RpcFixture();
+        await using var other = new RpcFixture();
+        await owner.PublishAsync(new TestHandler());
+        await other.PublishAsync(new TestHandler());
+        var original = Assert.Single(owner.Catalog.GetSnapshot().Providers);
+        var publication = await other.Owner.PreparePublicationAsync(ActivePackageSession.CreateEmpty(), other.Owner.Generation, default);
+        try
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                await owner.Owner.CommitPublicationAsync(publication, owner.Owner.Sources.Snapshot(), [], []));
+            Assert.Equal(original.Endpoint, Assert.Single(owner.Catalog.GetSnapshot().Providers).Endpoint);
+            Assert.Equal(other.Owner.Generation, owner.Owner.Generation);
+        }
+        finally { other.Owner.DiscardPublication(publication); }
+    }
+
     [Theory]
     [InlineData("exact")]
     [InlineData("birth")]
@@ -56,13 +75,10 @@ public sealed partial class RuntimeRpcBrokerTests
             Assert.Throws<RuntimeUnavailableException>(() => fixture.Owner.State.AcquireLease());
             if (mismatch == "exact")
             {
-                Assert.Null(fixture.Owner.State.AcquireRpcLease(caller));
-                var error = await Assert.ThrowsAsync<SunderRpcException>(async () =>
-                    await fixture.CreateClient(activation.Caller).DiscoverAsync("example.rpc"));
-                Assert.Equal(SunderRpcErrorKind.Unavailable, error.Error.Kind);
-                Assert.Equal("rpc.session.transitioning", error.Error.Code);
-                Assert.Equal(SunderRpcDispatchState.NotDispatched, error.Error.DispatchState);
-                Assert.Equal(SunderRpcRetrySafety.Safe, error.Error.RetrySafety);
+                using var continuing = fixture.Owner.State.AcquireRpcLease(caller);
+                Assert.NotNull(continuing);
+                Assert.False(continuing.RetirementToken.IsCancellationRequested);
+                Assert.Single((await fixture.CreateClient(activation.Caller).DiscoverAsync("example.rpc")).Providers);
                 var forged = await Assert.ThrowsAsync<SunderRpcException>(async () =>
                     await fixture.CreateClient(new("caller.package", Guid.NewGuid())).DiscoverAsync("example.rpc"));
                 Assert.Equal(SunderRpcErrorKind.StaleEndpoint, forged.Error.Kind);

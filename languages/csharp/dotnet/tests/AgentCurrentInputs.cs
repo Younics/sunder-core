@@ -24,7 +24,7 @@ internal sealed class AgentCurrentInputs
         Require(Expected.SchemaVersion == 1 && Expected.PackageVersion == "2.0.0" && Expected.PublicVersion == "1.0.0",
             "Unsupported current Agent inventory/version.");
         Require(Packages.Length == 15 && Packages.Count(package => package.HasApp) == 12
-                && Packages.Sum(package => package.Providers.Count) == 62, "Current Agent inventory requires 15 Worker / 12 App packages and 62 providers.");
+                && Packages.Sum(package => package.Providers.Count) == 64, "Current Agent inventory requires 15 Worker / 12 App packages and 64 providers.");
         foreach (var values in new[] { Packages.Select(p => p.Key), Packages.Select(p => p.PackageId), Packages.Select(p => p.ProjectPath) })
             Require(values.All(value => !string.IsNullOrWhiteSpace(value)) && values.Distinct(StringComparer.Ordinal).Count() == 15,
                 "Current Agent package keys, IDs and projects must be distinct.");
@@ -92,7 +92,7 @@ internal sealed class AgentCurrentInputs
     internal HashSet<string> AppPackageIds => Packages.Where(p => p.HasApp).Select(p => p.PackageId).ToHashSet(StringComparer.Ordinal);
     internal ExpectedPackage Package(string id) => Packages.Single(p => p.PackageId == id);
     internal ExpectedContract Contract(string id) => Expected.Contracts.Single(c => c.ContractId == id);
-    internal string Version(ExpectedContract contract) => contract.Exposure == "public" ? Expected.PublicVersion : Expected.PackageVersion;
+    internal string Version(ExpectedContract contract) => contract.ContractVersion ?? (contract.Exposure == "public" ? Expected.PublicVersion : Expected.PackageVersion);
     internal SunderRpcContractDescriptor Descriptor(string id) => _descriptors[id];
 
     internal static async Task<AgentCurrentInputs> LoadAsync(string agentRoot, CancellationToken token)
@@ -139,7 +139,7 @@ internal sealed class AgentCurrentInputs
     internal sealed record ExpectedPackage(string Key, string PackageId, string ProjectPath, bool HasApp,
         bool PackageApi, string[] RequiredRuntime, Dictionary<string, string> Providers);
     internal sealed record ExpectedContract(string ContractId, string PackageId, string Exposure, string Source,
-        string Service, string[] Methods, string[] Streams, bool Runtime, bool App);
+        string Service, string[] Methods, string[] Streams, bool Runtime, bool App, string? ContractVersion = null);
     internal sealed record Platform(string ContractId, string AuthorityKind, string AuthorityId, string Version);
     internal sealed record Inventory(int SchemaVersion, string PackageVersion, string PublicVersion,
         Platform Platform, ExpectedPackage[] Packages, ExpectedContract[] Contracts);

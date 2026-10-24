@@ -915,7 +915,7 @@
     "providerImport": {
       "type": "object",
       "additionalProperties": false,
-      "maxProperties": 6,
+      "maxProperties": 7,
       "required": [
         "key",
         "packageId",
@@ -936,6 +936,12 @@
         },
         "contractVersion": {
           "$ref": "#/$defs/semanticVersion"
+        },
+        "presence": {
+          "enum": [
+            "required",
+            "optional"
+          ]
         },
         "bundleRef": {
           "$ref": "#/$defs/contractRef"

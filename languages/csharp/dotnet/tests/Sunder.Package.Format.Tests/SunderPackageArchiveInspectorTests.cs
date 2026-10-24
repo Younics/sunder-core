@@ -514,8 +514,10 @@ public sealed partial class SunderPackageArchiveInspectorTests
         Assert.True(result.Success, string.Join(Environment.NewLine, result.Errors));
     }
 
-    [Fact]
-    public async Task ExtractAndValidateAsync_AcceptsExtendedDeadlineWorkerCapability()
+    [Theory]
+    [InlineData("rpc.extended-deadline.v1")]
+    [InlineData("rpc.call-ownership.v1")]
+    public async Task ExtractAndValidateAsync_AcceptsOptInRpcWorkerCapability(string capability)
     {
         var root = CreateTempDirectory();
         var target = CreateTarget(
@@ -526,7 +528,7 @@ public sealed partial class SunderPackageArchiveInspectorTests
             requiredHostCapabilities:
             [
                 "core.v1",
-                "rpc.extended-deadline.v1",
+                capability,
                 "execution-runtime.v1",
                 "rpc.v1",
                 "sdk-baseline-1-1.v1",

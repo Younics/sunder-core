@@ -73,6 +73,7 @@ internal sealed class AppPackageGenerationPublisher
 
                 _commitFence(candidate, () =>
                 {
+                    candidate.Composition.RequireCurrentActivations();
                     var previousGeneration = CurrentGeneration;
                     _detachGeneration(previousGeneration);
                     Volatile.Write(ref _currentGeneration, candidate);
@@ -167,7 +168,11 @@ internal sealed class AppPackageGenerationPublisher
         {
             // A candidate may already have captured this live activation. Serialize
             // fencing with its commit and force any pending candidate to re-read.
-            _latestCandidateRequestId++;
+            if (!activation.RetirementFenced)
+            {
+                activation.RetirementFenced = true;
+                _latestCandidateRequestId++;
+            }
             activation.Composition.UnpublishServices();
             detachViews();
         }

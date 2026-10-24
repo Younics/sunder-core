@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
@@ -11,7 +12,7 @@ internal sealed class RegistryAuthenticatedOperations
     private readonly RegistryHttpClient _registryClient;
     private readonly RegistryCredentialStore _credentialStore;
     private readonly RuntimeContentTransferStore? _transferStore;
-    private readonly PackageSessionLifecycleService? _packageSessions;
+    private readonly Func<long>? _generation;
 
     public RegistryAuthenticatedOperations(
         RegistryHttpClient registryClient,
@@ -21,12 +22,19 @@ internal sealed class RegistryAuthenticatedOperations
         : this(registryClient, credentialStore)
     {
         _transferStore = transferStore;
-        _packageSessions = packageSessions;
+        _generation = () => packageSessions.Generation;
     }
 
     internal RegistryAuthenticatedOperations(IHttpClientFactory httpClientFactory, RegistryCredentialStore credentialStore)
         : this(new RegistryHttpClient(httpClientFactory, new RuntimeTransportPolicyOptions(), TimeProvider.System), credentialStore)
     {
+    }
+
+    internal RegistryAuthenticatedOperations(IHttpClientFactory httpClientFactory, RegistryCredentialStore credentialStore,
+        RuntimeContentTransferStore transferStore, Func<long> generation) : this(httpClientFactory, credentialStore)
+    {
+        _transferStore = transferStore;
+        _generation = generation;
     }
 
     private RegistryAuthenticatedOperations(RegistryHttpClient registryClient, RegistryCredentialStore credentialStore)
@@ -43,7 +51,7 @@ internal sealed class RegistryAuthenticatedOperations
             null,
             response => ReadAsync(response, error => new RegistryPackageStarResponse(false, null, null, [error]), cancellationToken),
             () => new RegistryPackageStarResponse(false, null, null, ["Registry sign-in is required."]) { Forbidden = true },
-            () => new RegistryPackageStarResponse(false, null, null, ["Registry authorization was denied."]) { Forbidden = true },
+            error => new RegistryPackageStarResponse(false, null, null, [error]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryStackStarResponse> SetStackStarAsync(RuntimeRegistryStarRequest request, CancellationToken cancellationToken)
@@ -54,7 +62,7 @@ internal sealed class RegistryAuthenticatedOperations
             null,
             response => ReadAsync(response, error => new RegistryStackStarResponse(false, null, null, [error]), cancellationToken),
             () => new RegistryStackStarResponse(false, null, null, ["Registry sign-in is required."]) { Forbidden = true },
-            () => new RegistryStackStarResponse(false, null, null, ["Registry authorization was denied."]) { Forbidden = true },
+            error => new RegistryStackStarResponse(false, null, null, [error]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryStackManagementOperationResponse> SetStackVisibilityAsync(RuntimeRegistryStackVisibilityRequest request, CancellationToken cancellationToken)
@@ -70,7 +78,7 @@ internal sealed class RegistryAuthenticatedOperations
                 return new RegistryStackManagementOperationResponse(policy is not null, "Stack visibility updated.", policy is null ? ["Stack policy was missing."] : []);
             },
             () => new RegistryStackManagementOperationResponse(false, null, ["Registry sign-in is required."]) { Forbidden = true },
-            () => new RegistryStackManagementOperationResponse(false, null, ["Registry authorization was denied."]) { Forbidden = true },
+            error => new RegistryStackManagementOperationResponse(false, null, [error]) { Forbidden = true },
             cancellationToken, stackVisibility: request, alreadyVisible: () => new RegistryStackManagementOperationResponse(true, "Stack already has the requested visibility.", []));
 
     public Task<RegistryPackageManagementOperationResponse> SetYankAsync(RuntimeRegistryYankRequest request, CancellationToken cancellationToken)
@@ -117,7 +125,7 @@ internal sealed class RegistryAuthenticatedOperations
             "package",
             (response, token) => ReadAsync(response, error => new RegistryPublishPackageResponse(false, null, null, null, [], [error]), token),
             () => new RegistryPublishPackageResponse(false, null, null, null, [], ["Registry sign-in is required."]) { Forbidden = true },
-            () => new RegistryPublishPackageResponse(false, null, null, null, [], ["Registry authorization was denied."]) { Forbidden = true },
+            error => new RegistryPublishPackageResponse(false, null, null, null, [], [error]) { Forbidden = true },
             cancellationToken);
 
     public Task<RegistryPublishStackResponse> PublishStackAsync(RuntimeRegistryPublishRequest request, CancellationToken cancellationToken)
@@ -128,7 +136,7 @@ internal sealed class RegistryAuthenticatedOperations
             "stack",
             (response, token) => ReadAsync(response, error => new RegistryPublishStackResponse(false, null, null, [], [error]), token),
             () => new RegistryPublishStackResponse(false, null, null, [], ["Registry sign-in is required."]) { Forbidden = true },
-            () => new RegistryPublishStackResponse(false, null, null, [], ["Registry authorization was denied."]) { Forbidden = true },
+            error => new RegistryPublishStackResponse(false, null, null, [], [error]) { Forbidden = true },
             cancellationToken);
 
     private async Task<T> PublishAsync<T>(
@@ -138,12 +146,12 @@ internal sealed class RegistryAuthenticatedOperations
         string formName,
         Func<HttpResponseMessage, CancellationToken, Task<T>> read,
         Func<T> authenticationRequired,
-        Func<T> forbidden,
+        Func<string, T> forbidden,
         CancellationToken cancellationToken)
     {
         var transferStore = _transferStore ?? throw new InvalidOperationException("Runtime transfer storage is unavailable.");
-        var packageSessions = _packageSessions ?? throw new InvalidOperationException("Runtime package sessions are unavailable.");
-        var lease = transferStore.AcquireUpload(request.UploadId, uploadKind, packageSessions.Generation, consume: true);
+        var generation = _generation ?? throw new InvalidOperationException("Runtime package sessions are unavailable.");
+        var lease = transferStore.AcquireUpload(request.UploadId, uploadKind, generation(), consume: true);
         if (lease is null)
         {
             throw new InvalidDataException("Runtime upload was not found or expired.");
@@ -152,6 +160,19 @@ internal sealed class RegistryAuthenticatedOperations
         try
         {
             await using var stream = new FileStream(lease.FilePath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            string? stackId = null;
+            if (uploadKind == RuntimeUploadKind.Stack)
+            {
+                var inspection = lease.FilePath + ".inspection-" + Guid.NewGuid().ToString("N");
+                try
+                {
+                    var validation = await SunderStackArchiveInspector.ExtractAndValidateAsync(lease.FilePath, inspection, cancellationToken);
+                    if (!validation.Success || string.IsNullOrWhiteSpace(validation.Manifest?.StackId))
+                        throw new InvalidDataException("Stack upload validation failed: " + string.Join(" ", validation.Errors));
+                    stackId = validation.Manifest.StackId;
+                }
+                finally { if (Directory.Exists(inspection)) Directory.Delete(inspection, recursive: true); }
+            }
             using var form = new MultipartFormDataContent();
             using var content = new StreamContent(stream);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
@@ -170,7 +191,7 @@ internal sealed class RegistryAuthenticatedOperations
                 response => read(response, cancellationToken),
                 authenticationRequired,
                 forbidden,
-                cancellationToken, authorityPolicy: uploadKind == RuntimeUploadKind.Stack);
+                cancellationToken, authorityPolicy: uploadKind == RuntimeUploadKind.Stack, stackId: stackId);
         }
         finally
         {
@@ -185,9 +206,9 @@ internal sealed class RegistryAuthenticatedOperations
         HttpContent? content,
         Func<HttpResponseMessage, Task<T>> read,
         Func<T> authenticationRequired,
-        Func<T> forbidden,
+        Func<string, T> forbidden,
         CancellationToken cancellationToken, string? packagePolicyPackageId = null, bool authorityPolicy = false,
-        RuntimeRegistryStackVisibilityRequest? stackVisibility = null, Func<T>? alreadyVisible = null)
+        RuntimeRegistryStackVisibilityRequest? stackVisibility = null, Func<T>? alreadyVisible = null, string? stackId = null)
     {
         var origin = RegistryOrigin.Normalize(registryOriginValue);
         var snapshot = await _credentialStore.GetSnapshotAsync(origin, cancellationToken);
@@ -204,6 +225,46 @@ internal sealed class RegistryAuthenticatedOperations
         var credential = snapshot.Credential;
         using var request = new HttpRequestMessage(method, new Uri(origin, path)) { Content = content };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential.AccessToken);
+        if (stackId is not null)
+        {
+            using var stateRequest = new HttpRequestMessage(HttpMethod.Get,
+                new Uri(origin, RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.StackPolicy(stackId))));
+            stateRequest.Headers.Authorization = request.Headers.Authorization;
+            using var stateResponse = await _registryClient.SendAsync(stateRequest, cancellationToken);
+            if (stateResponse.StatusCode == HttpStatusCode.Unauthorized)
+            {
+                await _credentialStore.TryDeleteAsync(origin, snapshot, cancellationToken);
+                return authenticationRequired();
+            }
+            if (stateResponse.StatusCode == HttpStatusCode.Forbidden)
+                return forbidden("Reading Stack policy: " + await _registryClient.ReadErrorAsync(stateResponse, cancellationToken));
+            if (stateResponse.StatusCode == HttpStatusCode.NotFound)
+            {
+                using var reserveRequest = new HttpRequestMessage(HttpMethod.Put,
+                    new Uri(origin, RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.CurrentUserStackReservation(stackId))));
+                reserveRequest.Headers.Authorization = request.Headers.Authorization;
+                using var reserveResponse = await _registryClient.SendAsync(reserveRequest, cancellationToken);
+                if (reserveResponse.StatusCode == HttpStatusCode.Unauthorized)
+                {
+                    await _credentialStore.TryDeleteAsync(origin, snapshot, cancellationToken);
+                    return authenticationRequired();
+                }
+                if (reserveResponse.StatusCode == HttpStatusCode.Forbidden)
+                    return forbidden("Reserving Stack identity: " + await _registryClient.ReadErrorAsync(reserveResponse, cancellationToken));
+                if (!reserveResponse.IsSuccessStatusCode) return await read(reserveResponse);
+                var reservation = await _registryClient.ReadJsonAsync<RegistryIdentityReservationOperationResponse>(reserveResponse, cancellationToken);
+                if (reservation is not { Success: true, Reservation: { State: "Reserved", Kind: "Stack" } lease }
+                    || lease.ResourceId != stackId || lease.OwnerPrincipalId != credential.UserId || lease.LeaseId == Guid.Empty
+                    || lease.Revision <= 0 || lease.ExpiresAtUtc is { } expiry && expiry <= DateTimeOffset.UtcNow)
+                    throw new InvalidDataException("The Registry did not confirm a current exact Stack identity reservation.");
+            }
+            else if (!stateResponse.IsSuccessStatusCode) return await read(stateResponse);
+            else
+            {
+                var state = await _registryClient.ReadJsonAsync<RegistryStackPolicySnapshot>(stateResponse, cancellationToken);
+                if (state?.StackId != stackId) throw new InvalidDataException("The Registry returned an inconsistent Stack policy identity.");
+            }
+        }
         if (packagePolicyPackageId is not null || authorityPolicy || stackVisibility is not null)
         {
             using var policyRequest = new HttpRequestMessage(HttpMethod.Get, new Uri(origin,
@@ -216,7 +277,8 @@ internal sealed class RegistryAuthenticatedOperations
                 await _credentialStore.TryDeleteAsync(origin, snapshot, cancellationToken);
                 return authenticationRequired();
             }
-            if (policyResponse.StatusCode == HttpStatusCode.Forbidden) return forbidden();
+            if (policyResponse.StatusCode == HttpStatusCode.Forbidden)
+                return forbidden("Reading Registry publication policy: " + await _registryClient.ReadErrorAsync(policyResponse, cancellationToken));
             if (!policyResponse.IsSuccessStatusCode) return await read(policyResponse);
             var key = Convert.ToHexStringLower(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
             RegistryPolicyIdentity? policy;
@@ -243,7 +305,7 @@ internal sealed class RegistryAuthenticatedOperations
         }
         if (response.StatusCode == HttpStatusCode.Forbidden)
         {
-            return forbidden();
+            return forbidden("Registry operation: " + await _registryClient.ReadErrorAsync(response, cancellationToken));
         }
 
         return await read(response);
@@ -267,7 +329,7 @@ internal sealed class RegistryAuthenticatedOperations
     private static RegistryPackageManagementOperationResponse AuthenticationRequiredPackageManagement()
         => new(false, null, ["Registry sign-in is required."]) { Forbidden = true };
 
-    private static RegistryPackageManagementOperationResponse ForbiddenPackageManagement()
-        => new(false, null, ["Registry authorization was denied."]) { Forbidden = true };
+    private static RegistryPackageManagementOperationResponse ForbiddenPackageManagement(string error)
+        => new(false, null, [error]) { Forbidden = true };
 
 }

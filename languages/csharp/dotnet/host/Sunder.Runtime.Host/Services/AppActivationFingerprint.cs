@@ -9,13 +9,14 @@ internal static class AppActivationFingerprint
 {
     internal static string Create(Guid runtimeId, string packageId, IReadOnlyList<RuntimePackageSource> sources,
         IReadOnlyList<SessionPackageDescriptor> packages, bool developmentWorkerContinuation = false,
-        bool developmentAppContinuation = false)
+        bool developmentAppContinuation = false, string role = SunderPackageFormat.AppHostRole)
     {
         if (developmentWorkerContinuation && developmentAppContinuation)
             throw new ArgumentException("A continuation comparison must select exactly one role.");
         var byId = sources.ToDictionary(source => source.PackageId, StringComparer.Ordinal);
         var states = packages.ToDictionary(package => package.PackageId, StringComparer.Ordinal);
-        var closure = DependencyClosure(packageId, sources);
+        var closure = DependencyClosure(packageId, sources, role);
+        var required = CreateClosure(packageId, sources, role, livenessOnly: true);
         var evidence = closure.Select(id =>
         {
             if (!byId.TryGetValue(id, out var source)) return null;
@@ -28,11 +29,14 @@ internal static class AppActivationFingerprint
                 source.RegistryPolicyContentIdentity, source.InstalledPolicy, source.Compatibility, source.DevelopmentImports,
                 source.DevelopmentOmittedPackages, source.AcquiredTargets, source.Manifest,
                 ContentIndex = continuation is null ? source.ContentIndex : null,
-                Enabled = states.GetValueOrDefault(id)?.IsEnabled,
-                Readiness = states.GetValueOrDefault(id)?.Readiness,
+                // Imported contract/source bytes are compatibility dependencies,
+                // not a requirement that the contract owner's other role is live.
+                // Required-provider liveness is independently fenced by Host policy.
+                Enabled = required.Contains(id) ? states.GetValueOrDefault(id)?.IsEnabled : null,
+                Readiness = required.Contains(id) ? states.GetValueOrDefault(id)?.Readiness : null,
             };
         }).ToArray();
-        return Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { RuntimeId = runtimeId, PackageId = packageId, Closure = closure, Evidence = evidence })));
+        return Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new { RuntimeId = runtimeId, PackageId = packageId, Role = role, Closure = closure, Evidence = evidence })));
 
         // App-owned RPC implementations may be effective Worker dependencies.
         // Their payload changes are not qualified as UI-only continuation.
@@ -68,7 +72,12 @@ internal static class AppActivationFingerprint
         })));
     }
 
-    internal static IReadOnlySet<string> DependencyClosure(string packageId, IReadOnlyList<RuntimePackageSource> sources)
+    internal static IReadOnlySet<string> DependencyClosure(string packageId, IReadOnlyList<RuntimePackageSource> sources,
+        string role = SunderPackageFormat.AppHostRole)
+        => CreateClosure(packageId, sources, role, livenessOnly: false);
+
+    private static IReadOnlySet<string> CreateClosure(string packageId, IReadOnlyList<RuntimePackageSource> sources,
+        string role, bool livenessOnly)
     {
         var byId = sources.ToDictionary(source => source.PackageId, StringComparer.Ordinal);
         var closure = new SortedSet<string>(StringComparer.Ordinal);
@@ -78,15 +87,19 @@ internal static class AppActivationFingerprint
         {
             if (!closure.Add(id) || !byId.TryGetValue(id, out var source)) return;
             foreach (var dependency in source.Manifest?.DependsOn ?? [])
-                if (dependency?.PackageId is { } dependencyId) Visit(dependencyId);
-            foreach (var import in source.Manifest?.PackageArtifactImports ?? [])
-                if (import?.PackageId is { } importedId) Visit(importedId);
-            // Optional/required provider presence and readiness can change without a
-            // manifest edit. Retain only while the effective imported provider set agrees.
-            var contracts = (source.Manifest?.UsesContracts ?? []).Where(use => use is not null)
-                .Select(use => (use!.ContractId, use.ContractVersion)).ToHashSet();
+                if (dependency?.PackageId is { } dependencyId && (!livenessOnly || dependency.Presence != "optional")) Visit(dependencyId);
+            if (!livenessOnly)
+                foreach (var import in source.Manifest?.PackageArtifactImports ?? [])
+                    if (import?.PackageId is { } importedId) Visit(importedId);
+            // Optional catalogs are dynamic. Their presence or another role's
+            // imports must not reconstruct this role's unchanged activation.
+            var contracts = (source.Manifest?.UsesContracts ?? []).Where(use => use is not null
+                    && use.Role == role && use.Required != false
+                    && PackageCompatibilityAuthority.DevelopmentUseEnabled(source, role, use.ContractId!, use.ContractVersion!))
+                .Select(use => (use!.ContractId, use.ContractVersion, use.AbiSha256)).ToHashSet();
             foreach (var provider in sources.Where(candidate => (candidate.Manifest?.Provides ?? [])
-                         .Any(value => value is not null && contracts.Contains((value.ContractId, value.ContractVersion)))))
+                         .Any(value => value is not null && contracts.Contains((value.ContractId, value.ContractVersion, value.AbiSha256))
+                             && (value.Audience != "owner" || candidate.PackageId == source.PackageId))))
                 Visit(provider.PackageId);
         }
     }

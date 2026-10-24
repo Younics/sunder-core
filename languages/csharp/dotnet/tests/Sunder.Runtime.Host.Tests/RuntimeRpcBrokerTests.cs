@@ -446,7 +446,7 @@ public sealed partial class RuntimeRpcBrokerTests
     }
 
     [Fact]
-    public async Task ExactProviderFault_CancelsOldGenerationContentStreamWithoutFaultingHealthySibling()
+    public async Task ExactProviderFault_PreservesHealthySiblingStreamAndContentAuthority()
     {
         await using var fixture = new RpcFixture();
         var streamWaiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -487,7 +487,7 @@ public sealed partial class RuntimeRpcBrokerTests
         Assert.True(await client.TryReportInvariantViolationAsync(
             failing.Endpoint,
             new InvalidOperationException("fault exact provider")));
-        await generationCancelled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.False(generationCancelled.Task.IsCompleted);
         var surviving = Assert.Single(fixture.Catalog.GetSnapshot().Providers);
         Assert.Equal(healthy.Endpoint, surviving.Endpoint);
         Assert.Equal(healthy.ActivationEpoch, surviving.ActivationEpoch);
@@ -500,13 +500,8 @@ public sealed partial class RuntimeRpcBrokerTests
         Assert.False(healthyActivation!.RetirementToken.IsCancellationRequested);
 
         releaseNestedContent.TrySetResult();
-        var cancelled = await Assert.ThrowsAsync<SunderRpcException>(async () =>
-            await oldNext.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.Equal(SunderRpcErrorKind.Cancelled, cancelled.Error.Kind);
-        Assert.IsType<SunderRpcException>(nestedContentFailure);
-        Assert.Equal(
-            SunderRpcErrorKind.Unavailable,
-            ((SunderRpcException)nestedContentFailure!).Error.Kind);
+        Assert.False(await oldNext.WaitAsync(TimeSpan.FromSeconds(2)));
+        Assert.Null(nestedContentFailure);
         Assert.Equal(PackageReadinessState.Ready, fixture.Owner.State.GetSessionPackage("healthy.package")!.Readiness);
         Assert.Null(fixture.Owner.State.GetSessionPackage("healthy.package")!.FailureOrigin);
         Assert.DoesNotContain(
@@ -548,7 +543,7 @@ public sealed partial class RuntimeRpcBrokerTests
 
             streamWaiting.TrySetResult();
             await releaseNestedContent.Task.ConfigureAwait(false);
-            Assert.True(cancellationToken.IsCancellationRequested);
+            Assert.False(cancellationToken.IsCancellationRequested);
             try
             {
                 await using var nested = new MemoryStream([2]);
@@ -725,6 +720,8 @@ public sealed partial class RuntimeRpcBrokerTests
 
         var failure = await Assert.ThrowsAsync<SunderRpcException>(async () => await call);
         Assert.Equal(SunderRpcErrorKind.Cancelled, failure.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, failure.Error.RetrySafety);
         Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
     }
 
@@ -817,9 +814,8 @@ public sealed partial class RuntimeRpcBrokerTests
         else if (boundary == "request") await cancellation.CancelAsync();
         else
         {
-            // An unrelated package fault advances the real Runtime generation while
-            // the called provider and its execution remain live. The App session's
-            // lease loses its generation; its own retirement token need not cancel.
+            // A provider in this App's effective import closure faults, while
+            // the called healthy provider and its execution remain live.
             PackageActivationIdentity identity;
             using (var lease = fixture.Owner.State.AcquireLease())
             {
@@ -843,8 +839,8 @@ public sealed partial class RuntimeRpcBrokerTests
         {
             var retired = await Assert.ThrowsAsync<SunderRpcException>(async () =>
                 await fixture.Broker.DiscoverAppAsync(session.SessionId, "example.rpc", CancellationToken.None));
-            Assert.Equal(boundary == "close" ? SunderRpcErrorKind.Unavailable : SunderRpcErrorKind.StaleEndpoint, retired.Error.Kind);
-            Assert.Equal(boundary == "close" ? "rpc.app-session.retired" : "rpc.caller-retired", retired.Error.Code);
+            Assert.Equal(SunderRpcErrorKind.Unavailable, retired.Error.Kind);
+            Assert.Equal("rpc.app-session.retired", retired.Error.Code);
         }
         else Assert.Contains((await fixture.Broker.DiscoverAppAsync(session.SessionId, "example.rpc", CancellationToken.None)).Providers,
             provider => provider.Endpoint == endpoint);
@@ -884,7 +880,7 @@ public sealed partial class RuntimeRpcBrokerTests
         if (boundary == "close") fixture.AppSessions.Close(app.Session.SessionId);
         else if (boundary == "request") await cancellation.CancelAsync();
         else if (boundary == "scope") await fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, scope!.Id);
-        else if (boundary == "permission") await fixture.RevokeAsync(SunderRpcProtocol.DiscoverAction);
+        else if (boundary == "permission") await fixture.RevokeAsync(SunderRpcProtocol.DiscoverAction, app.ManifestSha256, SunderPackageFormat.AppHostRole);
         else
         {
             PackageActivationIdentity identity;
@@ -1005,7 +1001,7 @@ public sealed partial class RuntimeRpcBrokerTests
 
         try
         {
-            fixture.Catalog.ActivateSession(activation.Session, fixture.Owner.Generation + 1);
+            fixture.Catalog.ActivateSession(ActivePackageSession.CreateEmpty(), fixture.Owner.Generation + 1);
             await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
             var retirement = fixture.Catalog.DeactivatePackageWithRetirement(
@@ -1100,14 +1096,41 @@ public sealed partial class RuntimeRpcBrokerTests
         Assert.Equal(fixture.Owner.Generation, survivingCaller!.SessionGeneration);
     }
 
-    [Fact]
-    public async Task ProviderHandlerFault_CapturesSafeExactContextAndSanitizesPackageState()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task HostWriterRejectionIsOperationalAndDoesNotFaultEveryProviderHandler(bool closed)
+    {
+        await using var fixture = new RpcFixture();
+        var activation = await fixture.PublishAsync(new TestHandler
+        {
+            Unary = (_, _) => throw new WorkerTransportResourceException(closed ? WorkerTransportFailureKind.WriteQueueClosed
+                : WorkerTransportFailureKind.WriteQueueAdmission, "host-only queue diagnostic"),
+        });
+        await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+        await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+        var client = fixture.CreateClient(activation.Caller);
+        var provider = Assert.Single((await client.DiscoverAsync("example.rpc")).Providers);
+        var error = await Assert.ThrowsAsync<SunderRpcException>(() => client.InvokeAsync(provider.Endpoint,
+            "messages", "send", JsonSerializer.SerializeToElement(new { message = "hello" })).AsTask());
+        Assert.Equal(closed ? SunderRpcErrorKind.Unavailable : SunderRpcErrorKind.ResourceExhausted, error.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, error.Error.DispatchState);
+        Assert.Equal(PackageReadinessState.Ready, fixture.Owner.State.GetSessionPackage(provider.PackageId)!.Readiness);
+        Assert.DoesNotContain(fixture.OwnerLogger.Entries, entry => entry.EventId.Name == "RuntimeRpcProviderFault");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProviderHandlerFault_CapturesSafeExactContextAndSanitizesPackageState(bool transportFailure)
     {
         const string secret = "provider-secret=do-not-persist";
         await using var fixture = new RpcFixture();
         var activation = await fixture.PublishAsync(new TestHandler
         {
-            Unary = static (_, _) => throw new SecretBearingProviderException(secret),
+            Unary = (_, _) => throw (transportFailure
+                ? new WorkerTransportResourceException(WorkerTransportFailureKind.ValueNodes, secret, 257, 256)
+                : new SecretBearingProviderException(secret)),
         });
         await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
         await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
@@ -1138,12 +1161,16 @@ public sealed partial class RuntimeRpcBrokerTests
         Assert.Null(context.ValidationPath);
         Assert.Null(context.ValueUtf8Bytes);
         Assert.Null(context.ValueInlineDecodedBytes);
-        Assert.Equal(typeof(SecretBearingProviderException).FullName, context.ExceptionType);
+        var expectedType = transportFailure ? typeof(WorkerTransportResourceException) : typeof(SecretBearingProviderException);
+        Assert.Equal(expectedType.FullName, context.ExceptionType);
         Assert.Equal(
             RuntimeRpcFailureContextStore.CreateExceptionFingerprint(
-                typeof(SecretBearingProviderException).FullName!),
+                expectedType.FullName!),
             context.ExceptionFingerprint);
         Assert.True(context.ExceptionType.Length <= RuntimeRpcFailureContextStore.MaximumExceptionTypeCharacters);
+        Assert.Equal(transportFailure ? WorkerTransportFailureKind.ValueNodes : (WorkerTransportFailureKind?)null, context.TransportFailureKind);
+        Assert.Equal(transportFailure ? 257L : (long?)null, context.TransportObserved);
+        Assert.Equal(transportFailure ? 256L : (long?)null, context.TransportLimit);
         var persistedDiagnostic = Assert.Single(
             fixture.OwnerLogger.Entries,
             entry => entry.EventId.Name == "RuntimeRpcProviderFault");
@@ -1224,7 +1251,9 @@ public sealed partial class RuntimeRpcBrokerTests
         await stopped.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await replacement;
         var failure = await Assert.ThrowsAsync<SunderRpcException>(async () => await call);
-        Assert.Equal(SunderRpcErrorKind.Cancelled, failure.Error.Kind);
+        Assert.Equal(SunderRpcErrorKind.StaleEndpoint, failure.Error.Kind);
+        Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, failure.Error.DispatchState);
+        Assert.Equal(SunderRpcRetrySafety.Unsafe, failure.Error.RetrySafety);
     }
 
     [Theory]
@@ -1926,6 +1955,7 @@ public sealed partial class RuntimeRpcBrokerTests
             () => order.Add("session"));
         var call = new RuntimeRpcCallLease(
             sessionLease,
+            CancellationToken.None,
             new RuntimeRpcHostCallerActivation(contract, CancellationToken.None),
             new RuntimeRpcActivationLease(CancellationToken.None, () => order.Add("caller")),
             new RuntimeRpcActivationLease(CancellationToken.None, () => order.Add("callee")),
@@ -2239,12 +2269,24 @@ public sealed partial class RuntimeRpcBrokerTests
             await store.SetAsync(appKey, RuntimeRpcPermissionState.Granted, CancellationToken.None);
             Assert.True(store.TryAcquire(runtimeKey, out var runtimeLease));
             Assert.True(store.TryAcquire(appKey, out var appLease));
+            using var runtimeChanges = store.ObserveChanges(runtimeKey);
+            using var appChanges = store.ObserveChanges(appKey);
+            using var closedObserver = store.ObserveChanges(runtimeKey);
+            closedObserver.Dispose();
 
             await store.SetAsync(runtimeKey, RuntimeRpcPermissionState.Denied, CancellationToken.None);
 
             Assert.True(runtimeLease!.RevocationToken.IsCancellationRequested);
+            Assert.True(runtimeChanges.RevocationToken.IsCancellationRequested);
+            Assert.False(closedObserver.RevocationToken.IsCancellationRequested);
+            Assert.False(appChanges.RevocationToken.IsCancellationRequested);
             Assert.False(appLease!.RevocationToken.IsCancellationRequested);
             Assert.True(store.TryAcquire(appKey, out _));
+            using var freshChanges = store.ObserveChanges(runtimeKey);
+            Assert.False(freshChanges.RevocationToken.IsCancellationRequested);
+            store.Dispose();
+            Assert.True(freshChanges.RevocationToken.IsCancellationRequested);
+            Assert.True(appChanges.RevocationToken.IsCancellationRequested);
         }
         finally
         {
@@ -2648,6 +2690,7 @@ public sealed partial class RuntimeRpcBrokerTests
         {
             for (var generation = 2; generation < 80; generation++)
             {
+                fixture.Catalog.DeactivatePackage("provider.package", activation.Provider.ActivationId, faulted: false);
                 fixture.Catalog.ActivateSession(activation.Session, generation);
             }
             await Assert.ThrowsAsync<SlowRuntimeStreamConsumerException>(() =>
@@ -3026,7 +3069,7 @@ public sealed partial class RuntimeRpcBrokerTests
         using (var lease = fixture.Owner.State.AcquireLease())
         {
             Assert.Equal(lease.Generation, firstScope.SessionGeneration);
-            Assert.Same(lease.GenerationIdentity, firstScope.SessionGenerationIdentity);
+            Assert.Same(firstCaller, firstScope.SessionGenerationIdentity);
         }
         Assert.Same(
             firstScope,
@@ -3381,8 +3424,10 @@ public sealed partial class RuntimeRpcBrokerTests
         Assert.Equal(0, clock.ActiveTimerCount);
     }
 
-    [Fact]
-    public async Task CallScopeRegistry_CompetingRetireDeadlineAndCloseTeardownExactlyOnce()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CallScopeRegistry_CompetingRetireDeadlineAndCloseTeardownExactlyOnce(bool byOwnerId)
     {
         var clock = new ManualTimeProvider();
         using var sessionRetirement = new CancellationTokenSource();
@@ -3430,7 +3475,7 @@ public sealed partial class RuntimeRpcBrokerTests
         try
         {
             await discardStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            close = registry.CloseAsync(scope).AsTask();
+            close = byOwnerId ? registry.CloseAsync(caller, scope.Id).AsTask() : registry.CloseAsync(scope).AsTask();
             clock.Advance(TimeSpan.FromMinutes(1));
 
             Assert.False(retirement.IsCompleted);
@@ -3578,7 +3623,7 @@ public sealed partial class RuntimeRpcBrokerTests
             "rpc.provider.test"));
         await revoked.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.False(oldCaller.RetirementToken.IsCancellationRequested);
+        Assert.True(oldCaller.RetirementToken.IsCancellationRequested);
         using (var currentLease = fixture.Owner.State.AcquireLease())
         {
             Assert.False(oldCaller.IsCurrent(currentLease));
@@ -3586,8 +3631,8 @@ public sealed partial class RuntimeRpcBrokerTests
         var staleScope = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Broker
             .DiscoverScopeAsync(oldScope, "example.rpc", CancellationToken.None)
             .AsTask());
-        Assert.Equal(SunderRpcErrorKind.StaleEndpoint, staleScope.Error.Kind);
-        await fixture.Broker.CloseAppCallScopeAsync(app.Session.SessionId, oldScope.Id);
+        Assert.Equal(SunderRpcErrorKind.Unavailable, staleScope.Error.Kind);
+        await fixture.Broker.CloseCallScopeAsync(oldScope);
 
         var freshApp = await fixture.OpenAppCallerAsync();
         var freshScope = fixture.Broker.CreateAppCallScope(
@@ -3952,12 +3997,12 @@ public sealed partial class RuntimeRpcBrokerTests
             }
         }
 
-        public Task RevokeAsync(string action)
+        public Task RevokeAsync(string action, string? manifestSha256 = null, string callerRole = SunderPackageFormat.RuntimeHostRole)
             => _permissions.SetAsync(
                 ActivePermissionKey(
                     "caller.package",
-                    new string('a', 64),
-                    SunderPackageFormat.RuntimeHostRole,
+                    manifestSha256 ?? new string('a', 64),
+                    callerRole,
                     action),
                 RuntimeRpcPermissionState.Denied,
                 CancellationToken.None);

@@ -18,6 +18,11 @@ public interface IDevPackageOwnerSession : IAsyncDisposable
         Func<PackageLifecycleStageResult, CancellationToken, Task> retireActivations,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException("This owner session does not implement acknowledged release.");
+
+    /// <summary>Reloads one exact built output. Retrying an operation id resolves that operation, never a new build or owner.</summary>
+    Task<DevPackageOwnerReloadResult> ReloadStagedAsync(string operationId, string packageId, string sourceContentIdentity,
+        Func<PackageLifecycleStageResult, CancellationToken, Task> retireActivations, CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This owner session does not implement explicit reload.");
 }
 
 public sealed class DevPackageOwnerSessionOptions
@@ -71,6 +76,15 @@ internal interface IDevPackageOwnerClient : IDisposable
     Task<DevPackageOwnerReleaseResult> CommitDevPackageOwnerReleaseAsync(
         string ownerId, DevPackageOwnerReleaseCommitRequest request, CancellationToken token = default)
         => throw new NotSupportedException();
+
+    Task<DevPackageOwnerReloadStageResult> StageDevPackageOwnerReloadAsync(
+        string ownerId, DevPackageOwnerReloadStageRequest request, CancellationToken token = default) => throw new NotSupportedException();
+
+    Task<DevPackageOwnerReloadResult> CommitDevPackageOwnerReloadAsync(
+        string ownerId, DevPackageOwnerReloadCommitRequest request, CancellationToken token = default) => throw new NotSupportedException();
+
+    Task DiscardDevPackageOwnerReloadAsync(
+        string ownerId, DevPackageOwnerReloadCommitRequest request, CancellationToken token = default) => throw new NotSupportedException();
 }
 
 public sealed partial class DevPackageOwnerSession : IDevPackageOwnerSession
@@ -155,7 +169,7 @@ public sealed partial class DevPackageOwnerSession : IDevPackageOwnerSession
         try
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-            if (_releaseCommitPending || _pendingRetirementCallback is { IsCompleted: false })
+            if (_releaseCommitPending || _pendingRetirementCallback is { IsCompleted: false } || HasPendingReload)
                 throw new InvalidOperationException("Resolve the pending acknowledged owner release before acquiring another lease.");
             _pendingRelease = null;
             _retiredReleaseStage = null;
@@ -472,7 +486,7 @@ public sealed partial class DevPackageOwnerSession : IDevPackageOwnerSession
             DevPackageOwnerMutationRequest request;
             lock (_syncRoot)
             {
-                if (_releasing || _pendingRelease is not null || !LeaseMatches(_lease, expectedLease))
+                if (_releasing || _pendingRelease is not null || HasPendingReload || !LeaseMatches(_lease, expectedLease))
                 {
                     return;
                 }

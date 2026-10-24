@@ -1404,6 +1404,88 @@ public sealed class MainWindowViewModelShellViewTests
     }
 
     [Fact]
+    public async Task LayoutController_RealSplitterDragHasSingleGeometryOwner()
+    {
+        using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
+        await ui.Dispatch(async () =>
+        {
+            using var harness = CreateHarness();
+            Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
+            var shell = new Grid { RowDefinitions = new RowDefinitions("*,0,0") };
+            var top = new Grid { ColumnDefinitions = new ColumnDefinitions("0,0,*,4,280") };
+            shell.Children.Add(top);
+            var bottom = new Grid { ColumnDefinitions = new ColumnDefinitions("*,0,*") };
+            var splitter = new ShellGridSplitter
+            {
+                Width = 4,
+                ResizeDirection = GridResizeDirection.Columns,
+                ResizeBehavior = GridResizeBehavior.PreviousAndNext,
+                Background = Avalonia.Media.Brushes.Gray,
+                Template = new Avalonia.Controls.Templates.FuncControlTemplate<GridSplitter>((_, _) =>
+                    new Border { Background = Avalonia.Media.Brushes.Gray }),
+            };
+            Grid.SetColumn(splitter, 3);
+            top.Children.Add(splitter);
+            var controller = new MainWindowLayoutController(shell, top, bottom,
+                new GridSplitter(), splitter, new GridSplitter(), new GridSplitter(),
+                new Border(), new Border(), new Border(), new Border(), () => harness.ViewModel);
+            harness.ViewModel.PropertyChanged += (_, _) => controller.ApplyAdaptiveLayout();
+            var window = new Window { Width = 1200, Height = 800, Content = shell };
+            window.Show();
+            try
+            {
+                controller.ApplyAdaptiveLayout();
+                window.UpdateLayout();
+                var original = top.ColumnDefinitions[4].ActualWidth;
+                var origin = splitter.TranslatePoint(new Point(2, 100), window)!.Value;
+                Avalonia.Headless.HeadlessWindowExtensions.MouseDown(window, origin, Avalonia.Input.MouseButton.Left);
+                for (var step = 1; step <= 6; step++)
+                {
+                    var target = origin + new Vector(-step * 10, 0);
+                    Avalonia.Headless.HeadlessWindowExtensions.MouseMove(window, target);
+                    window.UpdateLayout();
+                    Assert.InRange(Math.Abs(top.ColumnDefinitions[4].ActualWidth - (original + step * 10)), 0, 1);
+                    Assert.InRange(Math.Abs(harness.ViewModel.RightPanelWidth - top.ColumnDefinitions[4].ActualWidth), 0, 1);
+                }
+                Avalonia.Headless.HeadlessWindowExtensions.MouseUp(window, origin + new Vector(-60, 0), Avalonia.Input.MouseButton.Left);
+                window.UpdateLayout();
+                controller.ApplyAdaptiveLayout();
+                window.UpdateLayout();
+                Assert.InRange(Math.Abs(top.ColumnDefinitions[4].ActualWidth - original - 60), 0, 1);
+
+                // Repeated input at a clamp must not let GridSplitter's native
+                // write escape the model when ApplyAdaptiveLayout is a no-op.
+                origin = splitter.TranslatePoint(new Point(2, 100), window)!.Value;
+                Avalonia.Headless.HeadlessWindowExtensions.MouseDown(window, origin, Avalonia.Input.MouseButton.Left);
+                for (var step = 1; step <= 3; step++)
+                {
+                    Avalonia.Headless.HeadlessWindowExtensions.MouseMove(window, origin + new Vector(step * 180, 0));
+                    window.UpdateLayout();
+                    Assert.InRange(Math.Abs(harness.ViewModel.RightPanelWidth - top.ColumnDefinitions[4].ActualWidth), 0, 1);
+                }
+                Avalonia.Headless.HeadlessWindowExtensions.MouseUp(window, origin + new Vector(540, 0), Avalonia.Input.MouseButton.Left);
+                var clampedWidth = harness.ViewModel.RightPanelWidth;
+                splitter.RaiseEvent(new Avalonia.Input.KeyEventArgs
+                {
+                    RoutedEvent = Avalonia.Input.InputElement.KeyDownEvent,
+                    Key = Avalonia.Input.Key.Left,
+                });
+                window.UpdateLayout();
+                Assert.Equal(clampedWidth + splitter.KeyboardIncrement, harness.ViewModel.RightPanelWidth);
+                Assert.InRange(Math.Abs(harness.ViewModel.RightPanelWidth - top.ColumnDefinitions[4].ActualWidth), 0, 1);
+                return true;
+            }
+            finally { window.Close(); }
+        }, default);
+    }
+
+    public sealed class SplitterTestApplication : Application
+    {
+        public static AppBuilder BuildAvaloniaApp()
+            => Avalonia.Headless.AvaloniaHeadlessPlatformExtensions.UseHeadless(AppBuilder.Configure<SplitterTestApplication>(), new());
+    }
+
+    [Fact]
     public async Task ApplyPackageLifecycleChangesAsync_WhenRuntimeHasNoActivePackages_RemovesLoadedPackageViews()
     {
         using var harness = CreateHarness(new EmptyRuntimeApiClientFactory());
@@ -1687,8 +1769,10 @@ public sealed class MainWindowViewModelShellViewTests
         await ApplyAsync(updatedPackage, recoveredSource, generation: 7, ["agent"]);
     }
 
-    [Fact]
-    public async Task RetainedRuntimeBackedChat_KeepsVisibleBoundaryAndReopensRpcAcrossDevAddRemove()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetainedRuntimeBackedChat_KeepsVisibleBoundaryAndExactRpcAcrossDevAddRemove(bool exactSourceAuthority)
     {
         var root = CreateTempDirectory();
         var folder = CreateAppPackageSource(root, "agent");
@@ -1703,7 +1787,8 @@ public sealed class MainWindowViewModelShellViewTests
         using var harness = CreateHarness(root, new ThrowingRuntimeApiClientFactory(), host, host);
         var builder = CreateActiveAgentPackage();
         var project = builder with { PackageId = "project", DisplayName = "Project", Views = [] };
-        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with { ActivationFingerprint = new('a', 64) };
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
+        { ActivationFingerprint = new('a', 64), PolicySubject = exactSourceAuthority ? new("agent", "1.0.0", new('c', 64)) : null };
         var projectSource = RuntimeContractTestData.Snapshot("project", PackageSourceKind.Dev, projectFolder) with { ActivationFingerprint = new('b', 64), SessionGeneration = 2 };
         await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(CreateRuntimeSnapshot([builder], [source], 1), [source]);
         var boundary = Assert.IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView);
@@ -1725,7 +1810,7 @@ public sealed class MainWindowViewModelShellViewTests
         var ping = (Task)view.GetType().GetMethod(nameof(ShellLifecycleThreadAffinedPackageView.InvokeRuntimePingAsync))!.Invoke(view, [CancellationToken.None])!;
         await ping;
         Assert.Equal(2, handler.RpcRequestCount);
-        Assert.Equal([1L, 2L, 2L, 3L], handler.OpenGenerations.ToArray());
+        Assert.Equal(exactSourceAuthority ? [1L, 2L] : new long[] { 1L, 2L, 2L, 3L }, handler.OpenGenerations.ToArray());
     }
 
     [Fact]
@@ -3670,6 +3755,8 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
 
     public const string StageSideEffectsPathFileName = "stage-side-effects-path";
 
+    public const string ActivationServicePathFileName = "activation-service-path";
+
     public const string InvokeRuntimeDuringNavigationMarkerFileName =
         "invoke-runtime-during-navigation";
 
@@ -3684,6 +3771,11 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
     public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
         _packageFolder = context.ContentRootPath;
+        var activationServicePath = Path.Combine(_packageFolder, ActivationServicePathFileName);
+        if (File.Exists(activationServicePath))
+        {
+            services.AddSingleton(_ => new ShellLifecycleActivationService(File.ReadAllText(activationServicePath)));
+        }
         if (HasMarker(ThrowServiceDisposalMarkerFileName))
         {
             services.AddSingleton<ShellLifecycleThrowingOwnedService>();
@@ -3778,6 +3870,14 @@ public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
     private bool HasMarker(string fileName) =>
         !string.IsNullOrWhiteSpace(_packageFolder)
         && File.Exists(Path.Combine(_packageFolder, fileName));
+
+    public void StartAppServices(IServiceProvider services, CancellationToken activationCancellationToken)
+    {
+        if (HasMarker(ActivationServicePathFileName))
+        {
+            services.GetRequiredService<ShellLifecycleActivationService>().Start(activationCancellationToken);
+        }
+    }
 }
 
 public sealed class ShellLifecycleThrowingOwnedService : IDisposable

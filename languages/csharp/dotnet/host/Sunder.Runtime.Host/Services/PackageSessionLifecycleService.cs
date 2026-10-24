@@ -165,7 +165,8 @@ internal sealed partial class PackageSessionLifecycleService
     private async Task<PackageLifecycleStageResult> StageCoreAsync(
         PackageLifecycleStageRequest request,
         bool developmentWorkerContinuation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DevelopmentOwnerReload? ownerReload = null)
     {
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
@@ -182,6 +183,7 @@ internal sealed partial class PackageSessionLifecycleService
         var currentPackages = _sessions.State.GetActivePackages();
         var currentSources = _sessions.State.GetActivePackageSources();
         var sources = _sessions.Sources.Snapshot();
+        if (ownerReload is not null) RequireOwnedReloadFolder(sources, ownerReload);
         var reloadFolders = ResolveReloadFolders(sources, request.PackageIds, errors);
         if (developmentWorkerContinuation && sources.ActiveDevOverlays.Any(overlay => DevPackageWatchService.IsPublicationInProgress(overlay.Folder)))
             errors.Add("Dev package output publication is still in progress.");
@@ -216,6 +218,11 @@ internal sealed partial class PackageSessionLifecycleService
 
         var stagedPackages = loaded.Session.GetActivePackages();
         var stagedSources = loaded.Session.GetActivePackageSources();
+        if (ownerReload is not null && !MatchesOwnedReload(stagedSources, ownerReload))
+        {
+            await loaded.Session.DisposeAsync();
+            throw new RuntimeConflictException("The staged development output does not match the explicitly selected package revision.");
+        }
         var impacted = PackageSessionImpactAnalyzer.Compare(currentPackages, currentSources, stagedPackages, stagedSources, reloadFolders);
         var stageId = Guid.NewGuid().ToString("N");
         PreparedPackageSession candidate;
@@ -240,7 +247,7 @@ internal sealed partial class PackageSessionLifecycleService
             const string message = "Package lifecycle stage preparation failed.";
             return PackageLifecycleStageResult.Failed(message, currentPackages, warnings, [message]);
         }
-        return RegisterPreparedStage(candidate, impacted);
+        return RegisterPreparedStage(candidate, impacted, reloadOwnerId: ownerReload?.OwnerId);
     }
 
     public Task<PackageLifecycleOperationResult> CommitStageAsync(
@@ -255,7 +262,7 @@ internal sealed partial class PackageSessionLifecycleService
         await using var operation = await _gate.EnterAsync(cancellationToken);
         var operationToken = operation.CancellationToken;
         await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
-        if (_stages.Get(stageId) is { } pending && pending.ReleaseOwnerId != releaseOwnerId)
+        if (_stages.Get(stageId) is { } pending && (pending.ReleaseOwnerId ?? pending.ReloadOwnerId) != releaseOwnerId)
             throw new RuntimeAuthenticationException("This lifecycle stage requires its development owner credentials.");
         if (!_stages.TryTake(stageId, out var stage))
         {

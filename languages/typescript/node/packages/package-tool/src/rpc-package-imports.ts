@@ -86,7 +86,7 @@ export async function preparePackageImports(lock: ContractLock, cacheRoot: strin
   }
   for (const imported of lock.providerImports.values()) {
     const record = lock.packageArtifacts.get(imported.packageId)!.contracts.get(imported.contractId)!;
-    addDependency(imported.packageId, "required"); addDependency(record.authorityId, "required");
+    addDependency(imported.packageId, imported.presence); addDependency(record.authorityId, imported.presence);
     addProvider(imported.key, materialize(record));
   }
   for (const [key, imported] of lock.platformImports) {
@@ -100,7 +100,7 @@ export async function preparePackageImports(lock: ContractLock, cacheRoot: strin
   // artifact. Materialize that recursive closure without creating consumer uses.
   for (const {artifactId,contract} of packageReferenceClosure(lock,projections,presentRoles)) {
     materialize(contract);
-    const presence=lock.packageImports.get(artifactId)?.presence??"required";
+    const presence=selectedPresence(lock,artifactId,presentRoles);
     addDependency(contract.authorityId,presence);
   }
   function addProvider(key: string, contract: LoadedContract): void {
@@ -149,7 +149,8 @@ export function importProjection(imports: PackageImportAnalysis, roles: Readonly
       const contractVersion = imports.providerSurfaces.get(imported.key)!.descriptor.version;
       return { key: imported.key, packageId: imported.packageId, contractId: imported.contractId, contractVersion,
         bundleRef: { contractId: imported.contractId, contractVersion }, providerRefs: bindings.filter(binding => binding.key === imported.key)
-          .map(({ provider }) => ({ role: provider.role, providerId: provider.providerId, contractId: provider.contractId, contractVersion: provider.contractVersion })) };
+          .map(({ provider }) => ({ role: provider.role, providerId: provider.providerId, contractId: provider.contractId, contractVersion: provider.contractVersion })),
+        ...(imported.presence === "optional" ? { presence: "optional" } : {}) };
     }), platformImports: (roles.has("runtime") ? [...imports.lock.platformImports] : []).map(([key, value]) => ({ key,
       authorityKind: value.authorityKind, authorityId: value.authorityId, authorityReleaseRange: value.authorityReleaseRange, includePrerelease: value.includePrerelease,
       selectedAuthorityRelease: value.selectedAuthorityRelease, selectedAuthorityContentIdentity: value.selectedAuthorityContentIdentity,
@@ -195,10 +196,10 @@ export function importedDependenciesForRoles(imports: PackageImportAnalysis, rol
     for (const contract of imports.lock.packageArtifacts.get(selection.packageId)!.contracts.values()) if (contract.authorityKind === "package") add(contract.authorityId, selection.presence);
   }
   if (roles.has("runtime")) for (const selection of imports.lock.providerImports.values()) {
-    add(selection.packageId, "required"); add(imports.lock.packageArtifacts.get(selection.packageId)!.contracts.get(selection.contractId)!.authorityId, "required");
+    add(selection.packageId, selection.presence); add(imports.lock.packageArtifacts.get(selection.packageId)!.contracts.get(selection.contractId)!.authorityId, selection.presence);
   }
   for(const item of packageReferenceClosure(imports.lock,new Map(imports.contracts.map(contract=>[contract.descriptor.contractId,{modelProjection:contract.modelProjection}])),roles))
-    add(item.contract.authorityId,imports.lock.packageImports.get(item.artifactId)?.presence??"required");
+    add(item.contract.authorityId,selectedPresence(imports.lock,item.artifactId,roles));
   return [...values].sort(([a], [b]) => ordinal(a, b)).map(([packageId, presence]) => ({ packageId, presence, versionRange: imports.lock.packageArtifacts.get(packageId)!.requestedVersionRange }));
 }
 export function importReceiptArtifacts(imports: PackageImportAnalysis, roles?: ReadonlySet<PackageRole>): unknown[] {
@@ -206,6 +207,13 @@ export function importReceiptArtifacts(imports: PackageImportAnalysis, roles?: R
   const included = roles ? new Set(importProjection(imports, roles).packageArtifactImports.map(value => value.packageId)) : undefined;
   return [...imports.lock.packageArtifacts.keys()].filter(packageId => !included || included.has(packageId)).map(packageId => ({ packageId, ...raw.packageArtifacts[packageId],
     contracts: [...imports.lock.packageArtifacts.get(packageId)!.contracts.keys()].map(contractId => ({ contractId, ...(raw.packageArtifacts[packageId]!.contracts[contractId] as object) })) }));
+}
+
+function selectedPresence(lock: ContractLock, artifactId: string, roles: ReadonlySet<PackageRole>): "required" | "optional" {
+  const consumer = lock.packageImports.get(artifactId);
+  if (consumer?.presence === "required" && consumer.consumerRoles.some(role => roles.has(role))) return "required";
+  if (roles.has("runtime") && [...lock.providerImports.values()].some(value => value.packageId === artifactId && value.presence === "required")) return "required";
+  return "optional";
 }
 export function importedFacadeReceipt(imports: PackageImportAnalysis, roles?: ReadonlySet<PackageRole>) {
   return [...imports.lock.packageImports.values()].filter(value => !roles || value.consumerRoles.some(role => roles.has(role) && imports.presentRoles.has(role)))

@@ -10,6 +10,37 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed partial class RuntimeRpcBrokerTests
 {
     [Fact]
+    public async Task FailedScopeContentCleanupCompletesItsOriginalTeardownWithoutLosingTheFailure()
+    {
+        var caller = new RuntimeRpcHostCallerActivation(Contract(), CancellationToken.None);
+        var registry = new RuntimeRpcCallScopeRegistry(1, TimeProvider.System, CancellationToken.None,
+            _ => throw new IOException("Content cleanup failed."));
+        Assert.Equal(RuntimeRpcCallScopeRegistry.Outcome.Success, registry.Register(caller, 1, new object(), DateTimeOffset.UtcNow.AddMinutes(1),
+            null, false, default, default, TimeSpan.FromMinutes(1), out var scope));
+        await Assert.ThrowsAsync<IOException>(() => registry.CloseAsync(scope!).AsTask().WaitAsync(TimeSpan.FromSeconds(3)));
+        await Assert.ThrowsAsync<IOException>(() => registry.CloseAsync(scope!).AsTask().WaitAsync(TimeSpan.FromSeconds(3)));
+        Assert.True(scope!.IsRevoked);
+        Assert.True(scope.TeardownCompletion.IsFaulted);
+    }
+
+    [Fact]
+    public async Task AppScopeCleanupRemainsAuthorizedAfterCallerSessionRetiresButCannotCloseAnotherOwnersScope()
+    {
+        await using var fixture = await RetiringRpcFixture.CreateAsync(new TestHandler());
+        var id = Guid.NewGuid();
+        var app = await fixture.OpenAsync(id, await fixture.PermitAsync(id));
+        var scope = fixture.Broker.CreateAppCallScope(app.SessionId, null, default);
+        var foreign = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Broker.CloseAppCallScopeAsync("foreign-session", scope.Id).AsTask());
+        Assert.Equal("rpc.scope.unavailable", foreign.Error.Code);
+        Assert.False(scope.IsRevoked);
+        fixture.Manager.Close(app.SessionId);
+        await fixture.Broker.CloseAppCallScopeAsync(app.SessionId, scope.Id);
+        await fixture.Broker.CloseAppCallScopeAsync(app.SessionId, scope.Id);
+        Assert.True(scope.IsRevoked);
+        await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Broker.DiscoverAppAsync(app.SessionId, "example.rpc", default).AsTask());
+    }
+
+    [Fact]
     public async Task ActivationRetirementDrainsIgnoredCancellationAndEveryTransportScopeWithoutRetiringAnotherActivation()
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -149,14 +149,17 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants(bool consumer, bool contextBearing)
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    public async Task ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants(bool consumer, bool contextBearing, bool optionalPresence)
     {
         var contractLock = ReadJson(LockPath);
         contractLock["providerImports"]!["minimalProvider"] = new JsonObject { ["packageId"] = DependencyId, ["contractId"] = ContractId };
+        if (optionalPresence) contractLock["providerImports"]!["minimalProvider"]!["presence"] = "optional";
         if (!consumer)
         {
             contractLock["packageImports"]!.AsObject().Clear();
@@ -180,7 +183,8 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         Assert.Equal(consumer ? 1 : 0, generation.RpcUses.Length);
         var task = BuildManifest(generation);
         var manifest = ReadManifest(task.ManifestOutputPath);
-        Assert.Equal("required", Assert.Single(manifest.DependsOn!).Presence);
+        Assert.Equal(optionalPresence ? "optional" : "required", Assert.Single(manifest.DependsOn!).Presence);
+        Assert.Equal(optionalPresence ? "optional" : null, Assert.Single(manifest.ProviderImports!)!.Presence);
         Assert.Equal(consumer ? 1 : 0, manifest.UsesContracts!.Count);
         Assert.Single(Assert.Single(manifest.ProviderImports!)!.ProviderRefs!);
         Assert.Equal(consumer ? 1 : 0, manifest.PackageApiImports!.Count);

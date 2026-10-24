@@ -131,10 +131,16 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                     if (existing is not null)
                     {
                         if (existing.Key != key) throw Error("package-api.local-name-collision", "The provider tuple already has a different local key.");
-                        return new(false, before, request.Candidate is not null);
+                        if (request.Presence is null || request.Presence == existing.Presence)
+                            return new(false, before, request.Candidate is not null);
+                        providers[key]!["presence"] = request.Presence;
                     }
-                    if (providers.ContainsKey(key)) throw Error("package-api.local-name-collision", "The requested local provider key is already in use.");
-                    providers[key] = new JsonObject { ["packageId"] = packageId, ["contractId"] = request.ContractId };
+                    else
+                    {
+                        if (providers.ContainsKey(key)) throw Error("package-api.local-name-collision", "The requested local provider key is already in use.");
+                        providers[key] = new JsonObject { ["packageId"] = packageId, ["contractId"] = request.ContractId };
+                        if (request.Presence is not null) providers[key]!["presence"] = request.Presence;
+                    }
                 }
                 hydrate = true;
                 break;
@@ -325,7 +331,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
         if (request.Operation is not ("Add" or "Update" or "Implement")
             && (request.VersionRange is not null || request.IncludePrerelease is not null || request.RegistryOrigin is not null || request.Candidate is not null || request.PlatformCatalog is not null))
             throw Error("package-api.import-not-found", "This offline operation does not accept selection inputs.");
-        if (request.Operation is not ("Add" or "Update") && request.Presence is not null
+        if (request.Operation is not ("Add" or "Update" or "Implement") && request.Presence is not null
             || request.Operation != "Add" && request.LocalName is not null || request.Operation != "Implement" && request.ProviderKey is not null)
             throw Error("package-api.import-not-found", "The supplied intent option does not apply to this operation.");
         if (request.Operation == "Update" && request.PackageId is null && request.RegistryOrigin is not null)

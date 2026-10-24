@@ -213,7 +213,9 @@ internal static class PackageRpcImportValidator
             {
                 errors.Add("Provider imports must have unique (packageId, contractId) tuples.");
             }
-            AddDependency(import.PackageId, "required");
+            if (import.Presence is not null and not ("required" or "optional"))
+                errors.Add("Provider import presence must be required or optional when supplied.");
+            AddDependency(import.PackageId, import.Presence ?? "required");
             ValidateBundleReference(import.BundleRef, "package", import.PackageId);
             ValidateProviderReferences(import.BundleRef, import.ContractId, import.ContractVersion, import.ProviderRefs);
         }

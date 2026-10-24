@@ -27,8 +27,8 @@ internal sealed partial class PackageSessionLoadService
             if (!PathsEqual(source.SourceFolder, desired[source.PackageId].Folder)
                 || !previous.LoadedPackageMap.TryGetValue(source.PackageId, out var active)
                 || active.ActivationSessionGeneration is null || active.Worker.GenerationCompletion.IsCompleted
-                || AppActivationFingerprint.Create(Guid.Empty, source.PackageId, before, states)
-                    != AppActivationFingerprint.Create(Guid.Empty, source.PackageId, remaining, states)) return null;
+                 || AppActivationFingerprint.Create(Guid.Empty, source.PackageId, before, states, role: Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole)
+                     != AppActivationFingerprint.Create(Guid.Empty, source.PackageId, remaining, states, role: Sunder.Package.Format.SunderPackageFormat.RuntimeHostRole)) return null;
         }
         var valid = new bool[remaining.Length];
         await Parallel.ForEachAsync(Enumerable.Range(0, remaining.Length), new ParallelOptions

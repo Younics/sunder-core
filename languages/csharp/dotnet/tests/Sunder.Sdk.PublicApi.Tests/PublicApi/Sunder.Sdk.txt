@@ -84,6 +84,9 @@ type public interface Sunder.Sdk.Abstractions.IBackgroundTaskQueue
   method public abstract virtual Sunder.Sdk.Abstractions.BackgroundTaskSnapshot Enqueue(Sunder.Sdk.Abstractions.BackgroundTaskRequest request)
   method public abstract virtual System.Boolean Cancel(System.Guid taskId)
   method public abstract virtual System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.BackgroundTaskSnapshot> ListTasks(System.String? groupKey = null)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("app-activation-services.v1")
+type public interface Sunder.Sdk.Abstractions.IPackageAppActivationService
+  method public abstract virtual System.Void Start(System.Threading.CancellationToken activationCancellationToken)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("app-state-updates.v1")
 type public interface Sunder.Sdk.Abstractions.IPackageAppStateUpdates
   method public abstract virtual System.Threading.Tasks.Task RunAsync(System.String key, System.Func<Sunder.Sdk.Abstractions.PackageAppStateUpdateContext, System.Threading.Tasks.Task> update, System.Threading.CancellationToken cancellationToken = null)
@@ -122,11 +125,31 @@ type public interface Sunder.Sdk.Abstractions.IPackageContext
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development.v1")
 type public interface Sunder.Sdk.Abstractions.IPackageDevelopmentService
   method public abstract virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.IPackageDevelopmentSession> LoadAsync(System.String developmentFolder, System.Boolean watch, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentLogs> GetLogsAsync(System.String packageId, Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery query, System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development.v1")
 type public interface Sunder.Sdk.Abstractions.IPackageDevelopmentSession : System.IAsyncDisposable
   property System.String PackageId { public abstract virtual get; }
   method public abstract virtual System.Threading.Tasks.Task SetWatchAsync(System.Boolean watch, System.Threading.CancellationToken cancellationToken = null)
   method public abstract virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentStatus> GetStatusAsync(System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+  method public virtual System.Threading.Tasks.Task OpenViewAsync(System.String viewId, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentLogs> GetLogsAsync(Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery query, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-logs.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentLogs> GetLogsAsync(System.Int32 maximumEntries = 50, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-reload.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentRevision> ReloadAsync(System.String operationId, System.String sourceContentIdentity, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-views.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult> InteractViewAsync(Sunder.Sdk.Abstractions.PackageDevelopmentViewInput request, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentViewPage> QueryViewAsync(System.String viewId, Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery query, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-views.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot> InspectViewAsync(System.String viewId, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+  method public virtual System.Threading.Tasks.Task<Sunder.Sdk.Services.SunderContent> CaptureViewAsync(System.String viewId, Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery scope, System.Int32 maximumEdge = 1280, System.Threading.CancellationToken cancellationToken = null)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+  method public virtual System.Threading.Tasks.Task<System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentView>> GetViewsAsync(System.Threading.CancellationToken cancellationToken = null)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
 type public interface Sunder.Sdk.Abstractions.IPackageFileStore
   method public abstract virtual System.Threading.Tasks.Task DeleteAsync(System.String relativePath, System.Threading.CancellationToken cancellationToken = null)
@@ -202,6 +225,8 @@ attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("core.v1")
 type public interface Sunder.Sdk.Abstractions.ISunderAppPackageModule
   method public abstract virtual System.Void ConfigureAppServices(Microsoft.Extensions.DependencyInjection.IServiceCollection services, Sunder.Sdk.Abstractions.IPackageContext context)
   method public abstract virtual System.Void RegisterAppContributions(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, System.IServiceProvider services)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("app-activation-services.v1")
+  method public virtual System.Void StartAppServices(System.IServiceProvider services, System.Threading.CancellationToken activationCancellationToken)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("callbacks.v1")
 type public sealed class Sunder.Sdk.Abstractions.NullPackageCallbackClient : Sunder.Sdk.Abstractions.IPackageCallbackClient
   property System.Boolean IsAvailable { public final virtual get; }
@@ -247,6 +272,65 @@ type public enum Sunder.Sdk.Abstractions.PackageDevelopmentHostState : System.In
   field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Starting = 2
   field public const Sunder.Sdk.Abstractions.PackageDevelopmentHostState Unknown = 0
   field public System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-logs.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry>
+  method public .ctor(System.DateTimeOffset Timestamp, System.String Source, System.String Level, System.String Category, System.String Message, System.Boolean WasTruncated)
+  property System.Boolean WasTruncated { public get; public init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> Properties { public get; public init; }
+  property System.DateTimeOffset Timestamp { public get; public init; }
+  property System.String Category { public get; public init; }
+  property System.String Level { public get; public init; }
+  property System.String Message { public get; public init; }
+  property System.String Source { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry <Clone>$()
+  method public System.Void Deconstruct(out System.DateTimeOffset Timestamp, out System.String Source, out System.String Level, out System.String Category, out System.String Message, out System.Boolean WasTruncated)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry? left, Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry? left, Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery>
+  method public .ctor()
+  property System.Int32 MaximumBytes { public get; public init; }
+  property System.Int32 MaximumEntries { public get; public init; }
+  property Sunder.Sdk.Logging.PackageLogLevel MinimumLevel { public get; public init; }
+  property System.DateTimeOffset? Since { public get; public init; }
+  property System.DateTimeOffset? Until { public get; public init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+  property System.String? Contains { public get; public init; }
+  property System.String? Cursor { public get; public init; }
+  property System.String Source { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery <Clone>$()
+  method public System.Void Validate()
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery? left, Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery? left, Sunder.Sdk.Abstractions.PackageDevelopmentLogQuery? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-logs.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentLogs : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentLogs>
+  method public .ctor(System.String PackageId, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry> Entries, System.Boolean WasTruncated)
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+  property System.Boolean HasMore { public get; public init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+  property System.Boolean HistoryGap { public get; public init; }
+  property System.Boolean WasTruncated { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry> Entries { public get; public init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-log-queries.v1")
+  property System.String? NextCursor { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentLogs <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentLogEntry> Entries, out System.Boolean WasTruncated)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentLogs? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentLogs? left, Sunder.Sdk.Abstractions.PackageDevelopmentLogs? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentLogs? left, Sunder.Sdk.Abstractions.PackageDevelopmentLogs? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-revisions.v1")
 type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentRevision : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentRevision>
   method public .ctor(System.Guid RuntimeInstanceId, System.Int64 SessionGeneration, System.String SourceContentIdentity)
@@ -295,6 +379,120 @@ type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentStatus : Syst
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentStatus? left, Sunder.Sdk.Abstractions.PackageDevelopmentStatus? right)
   method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentStatus? left, Sunder.Sdk.Abstractions.PackageDevelopmentStatus? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentView : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentView>
+  method public .ctor(System.String ViewId, System.String Name, System.Boolean IsOpen)
+  property System.Boolean CanCapture { public get; public init; }
+  property System.Boolean IsOpen { public get; public init; }
+  property System.String Name { public get; public init; }
+  property System.String ViewId { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentView <Clone>$()
+  method public System.Void Deconstruct(out System.String ViewId, out System.String Name, out System.Boolean IsOpen)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentView? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentView? left, Sunder.Sdk.Abstractions.PackageDevelopmentView? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentView? left, Sunder.Sdk.Abstractions.PackageDevelopmentView? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-views.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentViewElement : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentViewElement>
+  method public .ctor(System.String Reference, System.String Role, System.String Name, System.Boolean IsEnabled, System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  property System.Boolean IsEnabled { public get; public init; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+  property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> State { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Actions { public get; public init; }
+  property System.String Name { public get; public init; }
+  property System.String Reference { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentViewElement <Clone>$()
+  method public System.Void Deconstruct(out System.String Reference, out System.String Role, out System.String Name, out System.Boolean IsEnabled, out System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentViewElement? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentViewElement? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewElement? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentViewElement? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewElement? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-views.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentViewInput : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentViewInput>
+  method public .ctor(System.String OperationId, System.String SnapshotId, System.String ElementReference, System.String Action, System.String? Text = null)
+  property System.String Action { public get; public init; }
+  property System.String ElementReference { public get; public init; }
+  property System.String OperationId { public get; public init; }
+  property System.String SnapshotId { public get; public init; }
+  property System.String? Text { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentViewInput <Clone>$()
+  method public System.Void Deconstruct(out System.String OperationId, out System.String SnapshotId, out System.String ElementReference, out System.String Action, out System.String? Text)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentViewInput? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentViewInput? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewInput? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentViewInput? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewInput? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-views.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult>
+  method public .ctor(System.String OperationId, System.String State, System.Boolean OutcomeUnknown)
+  property System.Boolean OutcomeUnknown { public get; public init; }
+  property System.String OperationId { public get; public init; }
+  property System.String State { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult <Clone>$()
+  method public System.Void Deconstruct(out System.String OperationId, out System.String State, out System.Boolean OutcomeUnknown)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewInputResult? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentViewPage : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentViewPage>
+  method public .ctor(Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot Snapshot, System.Boolean Partial, System.String? NextCursor)
+  property System.Boolean Partial { public get; public init; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot Snapshot { public get; public init; }
+  property System.String? NextCursor { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentViewPage <Clone>$()
+  method public System.Void Deconstruct(out Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot Snapshot, out System.Boolean Partial, out System.String? NextCursor)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentViewPage? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentViewPage? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewPage? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentViewPage? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewPage? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-feedback.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery>
+  method public .ctor()
+  property System.Boolean IncludeValue { public get; public init; }
+  property System.Int32 Limit { public get; public init; }
+  property System.String? Cursor { public get; public init; }
+  property System.String? ElementReference { public get; public init; }
+  property System.String? Name { public get; public init; }
+  property System.String? Role { public get; public init; }
+  property System.String? SnapshotId { public get; public init; }
+  property System.String? Text { public get; public init; }
+  property System.String? Within { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery <Clone>$()
+  method public System.Void Validate()
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewQuery? right)
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("package-development-views.v1")
+type public sealed class Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot : System.IEquatable<Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot>
+  method public .ctor(System.String SnapshotId, System.String PackageId, System.String ViewId, Sunder.Sdk.Abstractions.PackageDevelopmentRevision Revision, System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentViewElement> Elements, System.Boolean WasTruncated)
+  property System.Boolean WasTruncated { public get; public init; }
+  property Sunder.Sdk.Abstractions.PackageDevelopmentRevision Revision { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentViewElement> Elements { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String SnapshotId { public get; public init; }
+  property System.String ViewId { public get; public init; }
+  method public Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot <Clone>$()
+  method public System.Void Deconstruct(out System.String SnapshotId, out System.String PackageId, out System.String ViewId, out Sunder.Sdk.Abstractions.PackageDevelopmentRevision Revision, out System.Collections.Generic.IReadOnlyList<Sunder.Sdk.Abstractions.PackageDevelopmentViewElement> Elements, out System.Boolean WasTruncated)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot? left, Sunder.Sdk.Abstractions.PackageDevelopmentViewSnapshot? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("shell-view.v1")
 type public sealed class Sunder.Sdk.Abstractions.PackageHotbarView : System.IEquatable<Sunder.Sdk.Abstractions.PackageHotbarView>
   method public .ctor(System.String ViewId, System.String PackageId, System.String PackageDisplayName, System.String Title, System.String Glyph, Sunder.Sdk.Abstractions.PackageViewPlacement Placement, System.Int32 Order, System.Boolean IsOpen)
@@ -573,6 +771,7 @@ type public static class Sunder.Sdk.Compatibility.SunderSdkApiVersions
   field public const System.Int32 Current = 1
   field public const System.Int32 V1 = 1
 type public static class Sunder.Sdk.Compatibility.SunderSdkCapabilities
+  field public const System.String AppActivationServicesV1 = "app-activation-services.v1"
   field public const System.String AppStateUpdatesV1 = "app-state-updates.v1"
   field public const System.String AuthV1 = "auth.v1"
   field public const System.String BackgroundProcessesV1 = "background-processes.v1"
@@ -584,11 +783,17 @@ type public static class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field public const System.String DockerEnvironmentV1 = "docker-environment.v1"
   field public const System.String LoggingV1 = "logging.v1"
   field public const System.String NotificationsV1 = "notifications.v1"
+  field public const System.String PackageDevelopmentFeedbackV1 = "package-development-feedback.v1"
+  field public const System.String PackageDevelopmentLogQueriesV1 = "package-development-log-queries.v1"
+  field public const System.String PackageDevelopmentLogsV1 = "package-development-logs.v1"
+  field public const System.String PackageDevelopmentReloadV1 = "package-development-reload.v1"
   field public const System.String PackageDevelopmentRevisionsV1 = "package-development-revisions.v1"
   field public const System.String PackageDevelopmentV1 = "package-development.v1"
+  field public const System.String PackageDevelopmentViewsV1 = "package-development-views.v1"
   field public const System.String PackageLogNavigationV1 = "package-log-navigation.v1"
   field public const System.String PackagingV1 = "packaging.v1"
   field public const System.String RoleLocalWorkspaceV1 = "role-local-workspace.v1"
+  field public const System.String RpcCallOwnershipV1 = "rpc.call-ownership.v1"
   field public const System.String RpcExtendedDeadlineV1 = "rpc.extended-deadline.v1"
   field public const System.String RpcV1 = "rpc.v1"
   field public const System.String RuntimeGenerationsV1 = "runtime-generations.v1"

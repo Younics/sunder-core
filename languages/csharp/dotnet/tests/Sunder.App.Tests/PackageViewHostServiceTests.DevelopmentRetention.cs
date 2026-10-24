@@ -2,7 +2,10 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Features.Shell.State;
+using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.Views.Controls;
 using Sunder.Core.TestSupport;
@@ -21,6 +24,11 @@ public sealed partial class PackageViewHostServiceTests
     [InlineData(null)]
     [InlineData("worker-execution-observations.v1")]
     [InlineData("package-development-revisions.v1")]
+    [InlineData("package-development-reload.v1")]
+    [InlineData("package-development-logs.v1")]
+    [InlineData("package-development-log-queries.v1")]
+    [InlineData("package-development-views.v1")]
+    [InlineData("app-activation-services.v1")]
     public void ObservationTargetsRequireTrackedCallerRetentionRatherThanNullLifetimeFallback(string? capability)
     {
         var package = CreateActiveAgentPackage();
@@ -36,11 +44,16 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(capability is null, AppPackageGenerationBuilder.CanRetain(handle, package, source));
     }
 
-    [Fact]
-    public async Task WorkerOnlyDevelopmentEditsRetainAppBirthButPublishFreshPermitsSourcesAndRpcSessions()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DevelopmentRetentionRevalidatesExactActivationWithoutReplacingUnchangedRpcSessions(bool workerEdited)
     {
         using var temporary = TemporaryDirectoryScope.Create("app-worker-edit-retention");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
+        var manifestPath = Path.Combine(folder, "manifest", "sunder-package.json");
+        File.WriteAllText(manifestPath, File.ReadAllText(manifestPath).Replace("\"core.v1\"",
+            "\"core.v1\",\"package-development-revisions.v1\",\"worker-execution-observations.v1\"", StringComparison.Ordinal));
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
         {
@@ -71,8 +84,8 @@ public sealed partial class PackageViewHostServiceTests
             source = source with
             {
                 SessionGeneration = generation, SnapshotId = Guid.NewGuid().ToString("N"),
-                PolicySubject = source.PolicySubject! with { PackageContentIdentity = new((char)('b' + generation), 64) },
-                SourceContentIdentity = new((char)('b' + generation), 64),
+                PolicySubject = workerEdited ? source.PolicySubject! with { PackageContentIdentity = new((char)('b' + generation), 64) } : source.PolicySubject,
+                SourceContentIdentity = workerEdited ? new((char)('b' + generation), 64) : source.SourceContentIdentity,
             };
             source = source with { SnapshotUri = $"packages/ui-snapshots/{source.SnapshotId}" };
             policy.Expected = source;
@@ -97,22 +110,32 @@ public sealed partial class PackageViewHostServiceTests
             Assert.Equal("Activated", host.GetAppReadiness("agent", new(CreateRuntimeSnapshot(package, source, generation).RuntimeInstanceId, generation), source.ActivationFingerprint));
             var appliedStamp = new RuntimePackageStamp(CreateRuntimeSnapshot(package, source, generation).RuntimeInstanceId, generation);
             Assert.Equal("Activated", host.GetAppReadiness("agent", appliedStamp, source.ActivationFingerprint, source.SourceContentIdentity));
-            Assert.Equal("Pending", host.GetAppReadiness("agent", appliedStamp, source.ActivationFingerprint, previous.SourceContentIdentity));
+            Assert.Equal(workerEdited ? "Pending" : "Activated", host.GetAppReadiness("agent", appliedStamp, source.ActivationFingerprint, previous.SourceContentIdentity));
             Assert.True(await rpc.TryReportInvariantViolationAsync(endpoint, new Exception("after publication")));
             Assert.Equal(handler.SessionIds.Last(), handler.Reports.Last().SessionId);
-            await Assert.ThrowsAsync<ObjectDisposedException>(() => oldScope.TryReportInvariantViolationAsync(endpoint, new Exception("old scope")).AsTask());
+            if (workerEdited)
+                await Assert.ThrowsAsync<ObjectDisposedException>(() => oldScope.TryReportInvariantViolationAsync(endpoint, new Exception("old scope")).AsTask());
+            else
+                Assert.True(await oldScope.TryReportInvariantViolationAsync(endpoint, new Exception("unchanged caller")));
         }
+        // An unrelated generation after a Worker edit must compare the published
+        // source, not the immutable birth owner's source, and keep its current RPC.
+        source = source with { SessionGeneration = 5 };
+        policy.Expected = source;
+        await host.ApplyPackageDeltaAsync([package], [source]);
+        await host.WaitForRetirementsAsync();
+        Assert.Same(view, host.GetOrCreateView("agent.chat"));
         Assert.Equal(1, downloads);
-        Assert.Equal(4, policy.Requests.Count);
-        Assert.Equal(new long[] { 1, 2, 3, 4 }, handler.Opens.Select(open => open.SessionGeneration));
+        Assert.Equal(5, policy.Requests.Count);
+        Assert.Equal(workerEdited ? new long[] { 1, 2, 3, 4 } : [1], handler.Opens.Select(open => open.SessionGeneration));
         Assert.All(handler.Opens, open =>
         {
             Assert.Equal(birthStamp.AppGenerationId, open.AppGenerationId);
             Assert.Equal(birthStamp.ManifestSha256, open.ManifestSha256);
             Assert.False(string.IsNullOrEmpty(open.LoadPermitId));
         });
-        Assert.Equal(4, handler.Opens.Select(open => open.LoadPermitId).Distinct().Count());
-        Assert.Equal(3, handler.ClosedSessions.Count);
+        Assert.Equal(workerEdited ? 4 : 1, handler.Opens.Select(open => open.LoadPermitId).Distinct().Count());
+        Assert.Equal(workerEdited ? 3 : 0, handler.ClosedSessions.Count);
 
         AppPackageUiRecoveryRequest? recovery = null;
         host.PackageUiRecoveryRequested += request => recovery = request;
@@ -201,6 +224,90 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Same(view, host.GetOrCreateView("agent.chat"));
         Assert.Equal(3, policy.Requests.Count);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => scope.TryReportInvariantViolationAsync(endpoint, new Exception("retired scope")).AsTask());
+    }
+
+    [Fact]
+    public async Task UnchangedObservationActivationDoesNotBlockWebViewPublicationReloadAndUnload()
+    {
+        using var temporary = TemporaryDirectoryScope.Create("app-node-web-retained-sibling");
+        var folder = CreateAppPackageSource(temporary.GetPath("managed"), "agent");
+        var manifestPath = Path.Combine(folder, "manifest", "sunder-package.json");
+        File.WriteAllText(manifestPath, File.ReadAllText(manifestPath).Replace("\"core.v1\"",
+            "\"core.v1\",\"package-development-revisions.v1\",\"worker-execution-observations.v1\"", StringComparison.Ordinal));
+        var package = CreateActiveAgentPackage();
+        var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
+        { ActivationFingerprint = new('a', 64), PolicySubject = new("agent", "1.0.0", new('b', 64)) };
+        var policy = new ExactRetentionPolicy(source);
+        using var handler = new RetentionRpcHandler(policy);
+        using var transport = new RuntimeClientTransport(() => new(new Uri("http://runtime.test/"), "test-token"), handler);
+        await using var host = new PackageViewHostService(new AppPackageViewRegistry(), [], [], [], temporary.GetPath("session"),
+            getRuntimeConnectionInfo: transport.GetConnectionInfo, uiDispatcher: TestUiDispatcher, packagePolicy: policy,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync);
+        await host.ApplyPackageDeltaAsync([package], [source]);
+        var managedView = host.GetOrCreateView("agent.chat");
+        var managedOwner = RetentionGeneration(host).State.GetLoadedPackage("agent")!;
+        var webFolder = temporary.GetPath("node-output");
+        Directory.CreateDirectory(Path.Combine(webFolder, "manifest"));
+        var webViews = new[] { new PackageWebViewDescriptor("local.node.main", "Node", "/", null, "middle", true) };
+        var webTarget = new PackageTargetDescriptor("app", source.Target.Rid, "web", "index.html", "web", "1.1.0",
+            ["core.v1", "rpc.v1", "sdk-baseline-1-1.v1", "views.v1"], webViews);
+        File.WriteAllText(Path.Combine(webFolder, "manifest", "sunder-package.json"), JsonSerializer.Serialize(new
+        {
+            archiveFormatVersion = 1, manifestVersion = 1, id = "local.node", name = "Node", version = "1.0.0",
+            dependsOn = Array.Empty<object>(), contractBundles = Array.Empty<object>(), usesContracts = Array.Empty<object>(), provides = Array.Empty<object>(),
+            targets = new[] { new { role = webTarget.Role, rid = webTarget.Rid, kind = "web", entryPoint = "index.html", targetFramework = "web",
+                sdkVersion = "1.1.0", requiredHostCapabilities = webTarget.RequiredHostCapabilities,
+                views = new[] { new { viewId = "local.node.main", displayName = "Node", route = "/", defaultPlacement = "middle", showInHotbar = true } } } },
+        }));
+        var webPackage = CreateActivePackage("local.node") with { Views = [], Icon = null };
+        PackageUiSnapshotDescriptor? previousWeb = null;
+        for (var generation = 2; generation <= 3; generation++)
+        {
+            File.WriteAllText(Path.Combine(webFolder, "index.html"), $"<html><body>Node revision {generation}</body></html>");
+            var web = RuntimeContractTestData.Snapshot("local.node", PackageSourceKind.Dev, webFolder) with
+            {
+                SessionGeneration = generation, Target = webTarget, ActivationFingerprint = new((char)('a' + generation), 64),
+                PolicySubject = new("local.node", "1.0.0", new((char)('a' + generation), 64)), SourceContentIdentity = new((char)('a' + generation), 64),
+            };
+            source = source with { SessionGeneration = generation };
+            policy.Expected = source;
+            policy.AdditionalSources[web.PackageId] = web;
+            var stamp = new RuntimePackageStamp(CreateRuntimeSnapshot(package, source, generation).RuntimeInstanceId, generation);
+            var snapshot = new RuntimePackageSnapshot(stamp.RuntimeInstanceId, generation, generation, RuntimeBootstrapState.Ready,
+                [package, webPackage], [], [], []);
+            await host.ApplyPackageGenerationAsync(snapshot, [source, web], null, (_, _, _) =>
+            {
+                Assert.Equal("Pending", host.GetAppReadiness("local.node", stamp, web.ActivationFingerprint, web.SourceContentIdentity));
+                return Task.FromResult<Action?>(null);
+            }, default);
+            await host.WaitForRetirementsAsync();
+            Assert.Same(managedView, host.GetOrCreateView("agent.chat"));
+            Assert.Same(managedOwner.TargetLifetime, RetentionGeneration(host).State.GetLoadedPackage("agent")!.TargetLifetime);
+            Assert.Single(handler.Opens, open => open.PackageId == "agent");
+            Assert.Equal("Activated", host.GetAppReadiness("local.node", stamp, web.ActivationFingerprint, web.SourceContentIdentity));
+            if (previousWeb is not null)
+                Assert.Equal("Pending", host.GetAppReadiness("local.node", stamp, previousWeb.ActivationFingerprint, previousWeb.SourceContentIdentity));
+            var state = new ShellState();
+            var shell = new ShellCompositionService().Compose(host.FilterEnabledPackages(snapshot.ActivePackages), state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+            var view = Assert.Single(shell.PackageViews, item => item.ViewId == "local.node.main");
+            Assert.True(view.ShowInHotbarByDefault);
+            Assert.Null(view.Icon);
+            Assert.False(string.IsNullOrWhiteSpace(view.Glyph));
+            Assert.DoesNotContain(view.ViewId, state.HiddenHotbarViewIds);
+            var webOwner = RetentionGeneration(host).State.GetLoadedPackage("local.node")!;
+            await host.ApplyPackageDeltaAsync([package, webPackage], [source, web]);
+            await host.WaitForRetirementsAsync();
+            Assert.Same(webOwner.TargetLifetime, RetentionGeneration(host).State.GetLoadedPackage("local.node")!.TargetLifetime);
+            previousWeb = web;
+        }
+        source = source with { SessionGeneration = 4 };
+        policy.Expected = source;
+        await host.ApplyPackageDeltaAsync([package], [source]);
+        await host.WaitForRetirementsAsync();
+        Assert.DoesNotContain(host.FilterEnabledPackages([package]).SelectMany(item => item.Views), view => view.ViewId == "local.node.main");
+        Assert.Same(managedView, host.GetOrCreateView("agent.chat"));
+        Assert.False(GetIsDisposed(managedView!));
+        Assert.Equal(2, handler.ClosedSessions.Count);
     }
 
     [Theory]
@@ -525,6 +632,8 @@ public sealed partial class PackageViewHostServiceTests
     private sealed class ExactRetentionPolicy(PackageUiSnapshotDescriptor initial) : IAppPackagePolicy
     {
         internal PackageUiSnapshotDescriptor Expected = initial;
+        internal Dictionary<string, PackageUiSnapshotDescriptor> AdditionalSources { get; } = new(StringComparer.Ordinal);
+        internal PackageUiSnapshotDescriptor ExpectedFor(string id) => AdditionalSources.GetValueOrDefault(id) ?? Expected;
         internal bool Deny;
         internal ConcurrentQueue<PackageUiSnapshotDescriptor> Requests { get; } = new();
         internal ConcurrentDictionary<string, (Guid ActivationId, PackageUiSnapshotDescriptor Source)> Admissions { get; } = new();
@@ -535,7 +644,7 @@ public sealed partial class PackageViewHostServiceTests
             => OwnsRetirement(requirement) && RetiredActivationIds.Contains(requirement.AppActivationId);
         public async Task<AppPackageLoadAdmission> AcquireLoadAsync(PackageUiSnapshotDescriptor snapshot, Guid activationId, CancellationToken token)
         {
-            await RequireLoadAsync(snapshot, token);
+            await ValidateAsync(snapshot, token);
             var permit = Guid.NewGuid().ToString("N");
             Assert.True(Admissions.TryAdd(permit, (activationId, snapshot)));
             return new(activationId, permit, _ =>
@@ -547,8 +656,23 @@ public sealed partial class PackageViewHostServiceTests
         }
         public Task RequireLoadAsync(PackageUiSnapshotDescriptor snapshot, CancellationToken token)
         {
+            if (AppProcessPolicySupervisor.GetImplementedObservationCapabilities(snapshot.Target) is not null)
+                throw new InvalidOperationException("Update the App to implement the selected managed App capabilities.");
+            return ValidateAsync(snapshot, token);
+        }
+        public Task RequireRetainedLoadAsync(PackageUiSnapshotDescriptor snapshot, AppPackageLoadAdmission admission, CancellationToken token)
+        {
+            Assert.Equal("test-policy", admission.PolicySessionId);
+            Assert.True(Admissions.TryGetValue(admission.PermitId!, out var previous));
+            Assert.Equal(previous.ActivationId, admission.ActivationId);
+            Assert.Equal(previous.Source.PolicySubject!.PackageId, snapshot.PolicySubject!.PackageId);
+            Assert.Equal(previous.Source.Target, snapshot.Target);
+            return ValidateAsync(snapshot, token);
+        }
+        private Task ValidateAsync(PackageUiSnapshotDescriptor snapshot, CancellationToken token)
+        {
             token.ThrowIfCancellationRequested();
-            Assert.Same(Expected, snapshot); // Exact full policy, snapshot ID and new generation, never a role digest.
+            Assert.Same(ExpectedFor(snapshot.PackageId), snapshot); // Exact full policy, snapshot ID and new generation, never a role digest.
             Assert.NotNull(snapshot.PolicySubject);
             Requests.Enqueue(snapshot);
             return Deny ? Task.FromException(new InvalidOperationException("new source permit denied")) : Task.CompletedTask;
@@ -576,15 +700,16 @@ public sealed partial class PackageViewHostServiceTests
                             RuntimeProtocolFeatures.AppWebRpcV1, RuntimeProtocolFeatures.SchemaFirstRpcV1], new("Sunder.Runtime.Host", "1.0.0", "1.0.0")));
                 case "/api/v1/rpc/app-sessions/open":
                     var opened = (await request.Content!.ReadFromJsonAsync<RuntimeRpcAppSessionOpenRequest>(token))!;
-                    Assert.Contains(policy.Requests, source => ReferenceEquals(source, policy.Expected));
+                    var expected = policy.ExpectedFor(opened.PackageId);
+                    Assert.Contains(policy.Requests, source => ReferenceEquals(source, expected));
                     Assert.False(policy.Deny);
-                    Assert.Equal(policy.Expected.SessionGeneration, opened.SessionGeneration);
-                    Assert.Equal(policy.Expected.PolicySubject!.PackageId, opened.PackageId);
-                    Assert.Equal(policy.Expected.PolicySubject.Version, opened.PackageVersion);
+                    Assert.Equal(expected.SessionGeneration, opened.SessionGeneration);
+                    Assert.Equal(expected.PolicySubject!.PackageId, opened.PackageId);
+                    Assert.Equal(expected.PolicySubject.Version, opened.PackageVersion);
                     Assert.NotNull(opened.LoadPermitId);
                     Assert.True(policy.Admissions.TryGetValue(opened.LoadPermitId, out var admission));
                     Assert.Equal(opened.AppGenerationId, admission.ActivationId);
-                    Assert.Same(policy.Expected, admission.Source);
+                    Assert.Same(expected, admission.Source);
                     Opens.Enqueue(opened);
                     if (FailOpen) return new(HttpStatusCode.ServiceUnavailable);
                     var id = Guid.NewGuid().ToString("N");

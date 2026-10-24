@@ -13,6 +13,7 @@ internal sealed class PackageCallbackSessionCoordinator
     private readonly TimeProvider _timeProvider;
     private readonly CancellationToken _hostStopping;
     private readonly CancellationTokenRegistration _hostStoppingRegistration;
+    private readonly RuntimeRpcCatalog? _rpcCatalog;
     private readonly PackageCallbackSessionStore _sessions = new();
     private readonly object _transitionSync = new();
     private readonly object _cleanupSync = new();
@@ -23,12 +24,14 @@ internal sealed class PackageCallbackSessionCoordinator
         PackageSessionState sessionState,
         RuntimeAuthPolicyOptions? policy = null,
         TimeProvider? timeProvider = null,
-        CancellationToken hostStopping = default)
+        CancellationToken hostStopping = default,
+        RuntimeRpcCatalog? rpcCatalog = null)
     {
         _sessionState = sessionState;
         _policy = policy ?? new RuntimeAuthPolicyOptions();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _hostStopping = hostStopping;
+        _rpcCatalog = rpcCatalog;
         _hostStoppingRegistration = hostStopping.UnsafeRegister(
             static state => ((PackageCallbackSessionCoordinator)state!).BeginHostStopping(),
             this);
@@ -49,17 +52,18 @@ internal sealed class PackageCallbackSessionCoordinator
         var loadedPackage = _sessionState.GetLoadedPackage(lease, packageId);
         var handler = loadedPackage?.GetCallbackHandler(callbackHandlerId);
         if (handler is null) return null;
+        using var activation = AcquireActivation(loadedPackage!);
 
         var key = new PackageCallbackStartKey(
             packageId.ToUpperInvariant(),
-            lease.Generation,
+            loadedPackage!.RuntimeActivationId,
             callbackHandlerId.ToUpperInvariant(),
             BuildParametersKey(parameterSnapshot));
         var reservation = _sessions.BeginStart(
             key,
             _policy.MaxPackageCallbackSessions,
-            () => CreateStartingSession(lease, packageId, key, handler, callbackServer));
-        using var linked = lease.CreateLinkedCancellation(cancellationToken, _hostStopping);
+            () => CreateStartingSession(loadedPackage.RuntimeActivationId, packageId, key, handler, callbackServer));
+        using var linked = CreateCancellation(lease, activation, cancellationToken);
         if (!reservation.IsOwner)
         {
             return await reservation.Session.StartCompletion.Task.WaitAsync(linked.Token);
@@ -92,9 +96,10 @@ internal sealed class PackageCallbackSessionCoordinator
                 BoundMessage(result.Message),
                 result.LaunchUrl,
                 session.ExpiresAtUtc);
-            var published = _sessionState.ExecuteIfCurrent(
-                lease,
-                () => _sessions.TryPublishPending(session, status));
+            linked.Token.ThrowIfCancellationRequested();
+            var published = activation is null
+                ? _sessionState.ExecuteIfCurrent(lease, () => _sessions.TryPublishPending(session, status))
+                : _sessionState.ExecuteIfActivationCurrent(loadedPackage, () => _sessions.TryPublishPending(session, status));
             if (!published)
             {
                 await FinishRejectedStartAsync(session, PackageCallbackLifecycleState.Cancelled, packageStartInvoked);
@@ -121,7 +126,7 @@ internal sealed class PackageCallbackSessionCoordinator
     }
 
     private ActivePackageCallbackSession CreateStartingSession(
-        PackageSessionLease lease,
+        Guid activationId,
         string packageId,
         PackageCallbackStartKey key,
         IPackageCallbackHandler handler,
@@ -130,7 +135,7 @@ internal sealed class PackageCallbackSessionCoordinator
         var sessionId = Guid.NewGuid().ToString("N");
         return new ActivePackageCallbackSession(
             packageId,
-            lease.Generation,
+            activationId,
             key,
             sessionId,
             handler,
@@ -199,7 +204,8 @@ internal sealed class PackageCallbackSessionCoordinator
         string callbackSessionId)
     {
         SweepExpired(_timeProvider.GetUtcNow());
-        return _sessions.GetStatus(packageId, callbackSessionId, lease.Generation);
+        var package = _sessionState.GetLoadedPackage(lease, packageId);
+        return package is null ? null : _sessions.GetStatus(packageId, callbackSessionId, package.RuntimeActivationId);
     }
 
     public bool Cancel(
@@ -209,12 +215,14 @@ internal sealed class PackageCallbackSessionCoordinator
     {
         var now = _timeProvider.GetUtcNow();
         SweepExpired(now);
+        var package = _sessionState.GetLoadedPackage(lease, packageId);
+        if (package is null) return false;
         lock (_transitionSync)
         {
             var cancellation = _sessions.TryCancel(
                 packageId,
                 callbackSessionId,
-                lease.Generation,
+                package.RuntimeActivationId,
                 now + _policy.TerminalSessionRetention);
             if (cancellation is null)
             {
@@ -233,7 +241,11 @@ internal sealed class PackageCallbackSessionCoordinator
         CancellationToken cancellationToken = default)
     {
         SweepExpired(_timeProvider.GetUtcNow());
-        var session = _sessions.TryClaimCompletion(callbackSessionId, lease.Generation);
+        var packageId = _sessions.GetPackageId(callbackSessionId);
+        var package = packageId is null ? null : _sessionState.GetLoadedPackage(lease, packageId);
+        if (package is null) return false;
+        using var activation = AcquireActivation(package);
+        var session = _sessions.TryClaimCompletion(callbackSessionId, package.RuntimeActivationId);
         if (session is null) return false;
         session.PendingCancellation.Dispose();
         var completionCancellation = session.CompletionCancellation!;
@@ -242,7 +254,7 @@ internal sealed class PackageCallbackSessionCoordinator
         try
         {
             using var timeout = new CancellationTokenSource(_policy.PackageCallbackCompletionTimeout, _timeProvider);
-            using var lifecycle = lease.CreateLinkedCancellation(cancellationToken, _hostStopping);
+            using var lifecycle = CreateCancellation(lease, activation, cancellationToken);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(
                 lifecycle.Token,
                 timeout.Token,
@@ -261,6 +273,7 @@ internal sealed class PackageCallbackSessionCoordinator
                 ObservePackageTask(packageTask);
                 throw;
             }
+            linked.Token.ThrowIfCancellationRequested();
             if (!string.Equals(completion.PackageId, session.PackageId, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(completion.CallbackSessionId, callbackSessionId, StringComparison.Ordinal))
             {
@@ -313,6 +326,26 @@ internal sealed class PackageCallbackSessionCoordinator
             ScheduleCancellations(_sessions.Clear());
         }
     }
+
+    internal void Reconcile(ActivePackageSession session)
+    {
+        var activations = session.LoadedPackageMap.Values.Where(package => session.IsPackageEnabled(package.Descriptor.PackageId))
+            .ToDictionary(package => package.Descriptor.PackageId, package => package.RuntimeActivationId, StringComparer.OrdinalIgnoreCase);
+        lock (_transitionSync) ScheduleCancellations(_sessions.Reconcile(activations));
+    }
+
+    private RuntimeRpcActivationLease? AcquireActivation(ActiveLoadedPackage package)
+    {
+        if (_rpcCatalog is null) return null;
+        if (!_rpcCatalog.TryGetPackage(package.Descriptor.PackageId, package.RuntimeActivationId, out var owner)
+            || owner is null || !owner.ContinuesAs(package) || !owner.TryAcquireCallee(out var lease) || lease is null)
+            throw new RuntimeUnavailableException("The package callback activation is retired.");
+        return lease;
+    }
+
+    private CancellationTokenSource CreateCancellation(PackageSessionLease session, RuntimeRpcActivationLease? activation, CancellationToken request)
+        => activation is null ? session.CreateLinkedCancellation(request, _hostStopping)
+            : CancellationTokenSource.CreateLinkedTokenSource(request, _hostStopping, activation.RetirementToken);
 
     public void RemovePackageSessions(string packageId)
     {

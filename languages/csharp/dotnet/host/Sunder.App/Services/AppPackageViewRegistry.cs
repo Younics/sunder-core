@@ -143,6 +143,18 @@ internal sealed class AppPackageViewRegistry
         }
     }
 
+    internal Control? GetCachedPackageView(string packageId, string viewId)
+    {
+        if (RetainedPackage(packageId) is { } retained) return retained.GetCachedPackageView(packageId, viewId);
+        lock (_syncRoot)
+        {
+            return !_quarantinedViewIds.Contains(viewId) && _registeredViews.TryGetValue(viewId, out var registration)
+                && string.Equals(registration.PackageId, packageId, StringComparison.Ordinal)
+                && string.Equals(registration.Registration.Id, viewId, StringComparison.Ordinal)
+                ? _viewCache.GetValueOrDefault(viewId) : null;
+        }
+    }
+
     public void RegisterSettingsView<TView>(string packageId, IServiceProvider serviceProvider)
         where TView : Control
     {

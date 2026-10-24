@@ -1,6 +1,7 @@
 using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
@@ -231,12 +232,13 @@ public sealed class PackageCallbackSessionCoordinatorTests
     }
 
     [Fact]
-    public async Task CompletingCallback_IsCancelledBySiblingGenerationAdvanceAndFreshStartSucceeds()
+    public async Task CompletingCallback_SurvivesUnrelatedSiblingFaultWithItsExactActivation()
     {
         var handler = new TestCallbackHandler(blockCompletion: true);
+        using var catalog = new RuntimeRpcCatalog();
         var (state, callbacks) = await CreateCoordinatorAsync(
             handler,
-            includeFaultSibling: true);
+            includeFaultSibling: true, rpcCatalog: catalog);
         await using var server = CreateServer();
         PackageCallbackSessionResponse started;
         using (var startLease = state.AcquireLease())
@@ -252,7 +254,7 @@ public sealed class PackageCallbackSessionCoordinatorTests
         var completion = callbacks.CompleteAsync(
             completionLease,
             started.CallbackSessionId,
-            new Dictionary<string, string?> { ["code"] = "stale" });
+            new Dictionary<string, string?> { ["code"] = "winner" });
         await handler.CompletionEntered.WaitAsync(TimeSpan.FromSeconds(5));
         PackageActivationIdentity faultIdentity;
         long faultGeneration;
@@ -272,16 +274,18 @@ public sealed class PackageCallbackSessionCoordinatorTests
             new InvalidOperationException("sibling failed"),
             "run sibling package"));
 
-        Assert.False(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.True(completionLease.GenerationRetirementToken.IsCancellationRequested);
-        Assert.Null(handler.CompletedCode);
+        Assert.False(completion.IsCompleted);
+        handler.ReleaseCompletion();
+        Assert.True(await completion.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal("winner", handler.CompletedCode);
         using (var freshLease = state.AcquireLease())
         {
             Assert.Equal(faultGeneration + 1, freshLease.Generation);
-            Assert.Null(callbacks.GetStatus(
+            Assert.Equal(Sunder.Runtime.Contracts.PackageCallbackSessionState.Completed, callbacks.GetStatus(
                 freshLease,
                 "test.package",
-                started.CallbackSessionId));
+                started.CallbackSessionId)?.State);
             var fresh = await callbacks.StartAsync(
                 freshLease,
                 "test.package",
@@ -294,6 +298,44 @@ public sealed class PackageCallbackSessionCoordinatorTests
         completionLease.Dispose();
         await callbacks.ShutdownAsync();
         await state.ClearActiveSessionAsync();
+    }
+
+    [Fact]
+    public async Task PendingCallbackAndDeduplicationSurviveRetainedPublicationsUntilActualOwnerUnload()
+    {
+        var handler = new TestCallbackHandler();
+        using var catalog = new RuntimeRpcCatalog();
+        var (state, callbacks) = await CreateCoordinatorAsync(handler, rpcCatalog: catalog, retainable: true);
+        await using var server = CreateServer();
+        PackageCallbackSessionResponse started;
+        using (var lease = state.AcquireLease())
+            started = (await callbacks.StartAsync(lease, "test.package", handler.CallbackHandlerId, null, server))!;
+        try
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                var previous = state.ActiveSession;
+                var candidate = previous.CreateRetainedRemovalCandidate(previous.GetActivePackageSources());
+                await candidate.RetainUnchangedWorkersAsync(previous, [], default);
+                var publication = await state.PreparePublicationAsync(candidate, state.Generation, default);
+                await state.CommitPublicationAsync(publication, snapshot => catalog.ActivateSession(candidate, snapshot.Generation));
+                using var lease = state.AcquireLease();
+                Assert.Equal(Sunder.Runtime.Contracts.PackageCallbackSessionState.Pending,
+                    callbacks.GetStatus(lease, "test.package", started.CallbackSessionId)?.State);
+                Assert.Equal(started.CallbackSessionId,
+                    (await callbacks.StartAsync(lease, "test.package", handler.CallbackHandlerId, null, server))?.CallbackSessionId);
+                Assert.Equal(0, handler.CancellationCount);
+                Assert.Equal(1, server.RegisteredHandlerCount);
+            }
+        }
+        finally
+        {
+            catalog.DeactivateAll(state.Generation);
+            await state.ClearActiveSessionAsync();
+            await callbacks.ShutdownAsync();
+        }
+        Assert.Equal(1, handler.CancellationCount);
+        Assert.Equal(0, server.RegisteredHandlerCount);
     }
 
     [Fact]
@@ -426,16 +468,29 @@ public sealed class PackageCallbackSessionCoordinatorTests
     private static async Task<(PackageSessionState State, PackageCallbackSessionCoordinator Callbacks)> CreateCoordinatorAsync(
         TestCallbackHandler handler,
         CancellationToken hostStopping = default,
-        bool includeFaultSibling = false)
+        bool includeFaultSibling = false,
+        RuntimeRpcCatalog? rpcCatalog = null,
+        bool retainable = false)
     {
         PackageCallbackSessionCoordinator? callbacks = null;
         var state = new PackageSessionState(
             NullLogger.Instance,
             () => callbacks?.Clear(),
-            packageId => callbacks?.RemovePackageSessions(packageId));
-        callbacks = new PackageCallbackSessionCoordinator(state, hostStopping: hostStopping);
+            packageId => callbacks?.RemovePackageSessions(packageId),
+            reconcileAuthSessions: session => callbacks?.Reconcile(session));
+        callbacks = new PackageCallbackSessionCoordinator(state, hostStopping: hostStopping, rpcCatalog: rpcCatalog);
         var packageId = "test.package";
         var loadedPackage = CreateLoadedPackage(handler);
+        if (retainable) loadedPackage = loadedPackage with
+        {
+            ActivationSessionGeneration = 1,
+            Source = loadedPackage.Source with
+            {
+                Manifest = new() { Id = packageId, Version = "1.0.0" },
+                ContentIdentity = new('a', 64), ContentIndex = new SunderPackageContentIndex(1, []),
+            },
+            Worker = new RetainedCallbackWorker(handler),
+        };
         var loadedPackages = new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase)
         {
             [packageId] = loadedPackage,
@@ -466,6 +521,7 @@ public sealed class PackageCallbackSessionCoordinatorTests
                     FailureCount: 0),
                 StringComparer.OrdinalIgnoreCase));
         await state.PublishSessionAsync(session);
+        rpcCatalog?.ActivateSession(session, state.Generation);
         return (state, callbacks);
     }
 
@@ -502,6 +558,13 @@ public sealed class PackageCallbackSessionCoordinatorTests
 
     private static PackageCallbackServer CreateServer()
         => new(NullLogger<PackageCallbackServer>.Instance, GetFreePort());
+
+    private sealed class RetainedCallbackWorker(TestCallbackHandler handler)
+        : TestRuntimePackageWorker(callbackHandlers: new Dictionary<string, IPackageCallbackHandler> { [handler.CallbackHandlerId] = handler })
+    {
+        private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override Task GenerationCompletion => _completion.Task;
+    }
 
     private static int GetFreePort()
     {

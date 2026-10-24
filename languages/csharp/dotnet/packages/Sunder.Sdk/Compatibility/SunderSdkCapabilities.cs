@@ -21,12 +21,24 @@ public static class SunderSdkCapabilities
     public const string PackageDevelopmentV1 = "package-development.v1";
     /// <summary>Nullable, Host-source-bound observations of Runtime and applied development revisions.</summary>
     public const string PackageDevelopmentRevisionsV1 = "package-development-revisions.v1";
+    /// <summary>Exact-owner, finite staged development reload with correlated acknowledgement.</summary>
+    public const string PackageDevelopmentReloadV1 = "package-development-reload.v1";
+    /// <summary>Activation-owned, package-filtered bounded development logs.</summary>
+    public const string PackageDevelopmentLogsV1 = "package-development-logs.v1";
+    /// <summary>Filtered, byte-bounded development log queries and retained post-unload diagnostic scopes.</summary>
+    public const string PackageDevelopmentLogQueriesV1 = "package-development-log-queries.v1";
+    /// <summary>Bounded inspection and reference-scoped input for an owned development package view.</summary>
+    public const string PackageDevelopmentViewsV1 = "package-development-views.v1";
+    /// <summary>Semantic development view queries, discovery and explicit view opening.</summary>
+    public const string PackageDevelopmentFeedbackV1 = "package-development-feedback.v1";
     /// <summary>App observations of Host-owned cleanup evidence for exact worker executions.</summary>
     public const string WorkerExecutionObservationsV1 = "worker-execution-observations.v1";
     /// <summary>User navigation to package-filtered developer logs.</summary>
     public const string PackageLogNavigationV1 = "package-log-navigation.v1";
     /// <summary>Host-owned accepted App state work and pre-retirement settlement.</summary>
     public const string AppStateUpdatesV1 = "app-state-updates.v1";
+    /// <summary>App-owned services started after publication, independently of view navigation.</summary>
+    public const string AppActivationServicesV1 = "app-activation-services.v1";
     /// <summary>Activation-scoped worker background service contracts.</summary>
     public const string BackgroundServicesV1 = "background-services.v1";
     /// <summary>Staged worker generation lifecycle contracts.</summary>
@@ -57,6 +69,8 @@ public static class SunderSdkCapabilities
     public const string ViewNavigationPreparationV1 = "view-navigation-preparation.v1";
     /// <summary>Canonical schema-first RPC contracts, discovery, invocation, and provider registration.</summary>
     public const string RpcV1 = "rpc.v1";
+    /// <summary>Explicit Worker RPC parent ownership, including independently bounded activation-owned root calls.</summary>
+    public const string RpcCallOwnershipV1 = "rpc.call-ownership.v1";
     /// <summary>Capability-gated support for caller-requested RPC deadlines beyond the Host default.</summary>
     public const string RpcExtendedDeadlineV1 = "rpc.extended-deadline.v1";
     /// <summary>Stack data contracts.</summary>

@@ -541,100 +541,14 @@ internal sealed class PackageCallbackServer : IHostedService, IDisposable, IAsyn
         string? title = null,
         HttpStatusCode statusCode = HttpStatusCode.OK)
     {
-        var html = BuildCallbackPage(success, message, title);
+        var html = AuthorizationResultPage.Build(success, message, title);
         var bytes = Encoding.UTF8.GetBytes(html);
         response.StatusCode = (int)statusCode;
         response.ContentType = "text/html; charset=utf-8";
-        response.Headers.CacheControl = "no-store";
-        response.Headers.Pragma = "no-cache";
-        response.Headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
-        response.Headers["Referrer-Policy"] = "no-referrer";
-        response.Headers["X-Content-Type-Options"] = "nosniff";
-        response.Headers["X-Frame-Options"] = "DENY";
+        foreach (var header in AuthorizationResultPage.Headers) response.Headers[header.Name] = header.Value;
         response.ContentLength = bytes.Length;
         await response.Body.WriteAsync(bytes);
         await response.CompleteAsync();
     }
 
-    private static string BuildCallbackPage(bool success, string message, string? titleOverride)
-    {
-        var title = WebUtility.HtmlEncode(titleOverride ?? (success ? "Authorization complete" : "Authorization failed"));
-        var subtitle = WebUtility.HtmlEncode(message);
-
-        return $$"""
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="utf-8" />
-                <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                <title>{{title}}</title>
-                <style>
-                    :root {
-                        color-scheme: dark;
-                        --bg: #15171a;
-                        --bg-lifted: #1d2025;
-                        --text: #dedad3;
-                        --muted: #ccc7be;
-                        --accent-strong: #e7b765;
-                        --accent-rgb: 217, 154, 58;
-                        --success-rgb: 110, 231, 183;
-                        --white-rgb: 255, 255, 255;
-                        font-family: "IBM Plex Sans", system-ui, sans-serif;
-                    }
-
-                    * {
-                        box-sizing: border-box;
-                    }
-
-                    body {
-                        margin: 0;
-                        min-height: 100vh;
-                        background:
-                            radial-gradient(circle at 20% 10%, rgba(var(--accent-rgb), 0.18), transparent 28rem),
-                            radial-gradient(circle at 85% 0%, rgba(var(--success-rgb), 0.12), transparent 24rem),
-                            linear-gradient(180deg, var(--bg-lifted) 0%, var(--bg) 42rem);
-                        color: var(--text);
-                    }
-
-                    .boot-shell {
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        gap: 14px;
-                        min-height: 100vh;
-                    }
-
-                    .boot-mark {
-                        display: grid;
-                        width: 44px;
-                        height: 44px;
-                        place-items: center;
-                        border: 1px solid rgba(var(--accent-rgb), 0.46);
-                        border-radius: 14px;
-                        background: linear-gradient(135deg, rgba(var(--accent-rgb), 0.2), rgba(var(--white-rgb), 0.04));
-                        color: var(--accent-strong);
-                        font-weight: 800;
-                    }
-
-                    .boot-title {
-                        font-weight: 800;
-                    }
-
-                    .boot-subtitle {
-                        color: var(--muted);
-                    }
-                </style>
-            </head>
-            <body>
-                <main class="boot-shell">
-                    <div class="boot-mark">S</div>
-                    <div>
-                        <div class="boot-title">{{title}}</div>
-                        <div class="boot-subtitle">{{subtitle}}</div>
-                    </div>
-                </main>
-            </body>
-            </html>
-            """;
-    }
 }

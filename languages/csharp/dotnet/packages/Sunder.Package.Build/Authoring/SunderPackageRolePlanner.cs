@@ -113,6 +113,8 @@ internal static class SunderPackageRolePlanner
                 Fix(node, SunderPackageRoleMembership.Worker, "Worker lifecycle implementation");
             if (SunderPackageDependencyDiscovery.IsActivation(node.Type))
                 Fix(node, SunderPackageRoleMembership.Worker, "Worker activation implementation");
+            if (SunderPackageDependencyDiscovery.IsAppActivation(node.Type))
+                Fix(node, SunderPackageRoleMembership.App, "App activation implementation");
             if (SunderPackageDependencyDiscovery.IsSettingsSchemaProvider(node.Type))
                 Fix(node, SunderPackageRoleMembership.Worker, "Worker settings schema");
             if (SunderPackageDependencyDiscovery.IsStorageMigrationProvider(node.Type)

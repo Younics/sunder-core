@@ -862,6 +862,17 @@ an explicit targeted override is required to widen it.
 Descriptor bodies, credentials, mutable URLs, local paths, and generated source
 are forbidden.
 
+Provider imports may also select `presence: "optional"`. Omitted provider presence
+retains the existing **required** installation behavior. Select it explicitly with
+`ImplementSunderPackageApi -p:SunderPackageApiPresence=optional` or
+`sunder-package api implement <package> <contract> --presence optional`; repeat
+Implement with an explicit presence to review a change to an existing provider tuple.
+Build/restore never rewrite this intent. Required consumer or provider intent wins
+when the same dependency is coalesced. Optional installation does not grant consumer
+permissions, require provider readiness, or relax the exact descriptor/ABI/inventory
+checks when the integration is included. Complete reviewed import evidence is still
+required when the optional authority is absent.
+
 Canonical Registry origins are
 `https://<lowercase-ascii-dns-host>[:nondefault-port]/`. User info, path beyond
 `/`, query, fragment, Unicode/IDNA input, IP literals, default ports,

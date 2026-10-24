@@ -48,16 +48,19 @@ internal sealed class AppPackageGeneration(
     }
 
     internal void AddRpcReplacement(AppPackageRpcReplacement replacement) => _rpcReplacements.Add(replacement);
-    internal async Task PrepareDataHandoffsAsync(AppPackageGeneration previous, CancellationToken token)
+    internal async Task PrepareDataHandoffsAsync(IEnumerable<AppPackageGeneration> predecessors,
+        IReadOnlySet<string> replacementPackageIds, CancellationToken token)
     {
         var retained = ActivationGroups.ToHashSet();
-        foreach (var group in previous.ActivationGroups.Where(group => !retained.Contains(group)))
+        foreach (var group in predecessors.Distinct().Where(group => !retained.Contains(group)
+                     && group.ActivePackages.Any(package => replacementPackageIds.Contains(package.PackageId))))
         {
             var handoff = group.Composition.BeginDataHandoff();
             _dataHandoffs.Add(handoff);
         }
-        // No candidate module/view may observe state until all writes accepted
-        // by its predecessor have settled. Retained activations are not paused.
+        // Only actual replacements may read predecessor state. An absent/removed
+        // package retires independently and cannot block healthy publication. Its
+        // original owner remains a predecessor if that package returns later.
         await Task.WhenAll(_dataHandoffs.Select(handoff => handoff.Drained))
             .WaitAsync(AppShutdownBudgets.GenerationRetirement, token).ConfigureAwait(false);
     }
@@ -84,6 +87,9 @@ internal sealed class AppPackageGeneration(
 
     public Guid Id { get; } = id;
     internal RuntimePackageStamp? RuntimeStamp { get; set; }
+    // Accessed under the presentation publisher's commit fence. Retirement retries
+    // join the same owner; they cannot supersede another unrelated candidate again.
+    internal bool RetirementFenced { get; set; }
 
     public string? Folder { get; } = folder;
 

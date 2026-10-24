@@ -127,6 +127,13 @@ public sealed partial class RegistryRuntimeArchitectureTests
             using var callbackResponse = await callbackClient.GetAsync(
                 new UriBuilder(callback) { Query = $"code=test-code&state={Uri.EscapeDataString(query["state"])}" }.Uri);
             callbackResponse.EnsureSuccessStatusCode();
+            var html = await callbackResponse.Content.ReadAsStringAsync();
+            Assert.Contains("boot-shell", html, StringComparison.Ordinal);
+            Assert.Contains("Sunder Registry authorized", html, StringComparison.Ordinal);
+            Assert.True(callbackResponse.Headers.CacheControl?.NoStore);
+            Assert.Contains("default-src 'none'", Assert.Single(callbackResponse.Headers.GetValues("Content-Security-Policy")), StringComparison.Ordinal);
+            Assert.DoesNotContain(secret, html, StringComparison.Ordinal);
+            Assert.DoesNotContain(query["state"], html, StringComparison.Ordinal);
 
             RuntimeRegistryAuthSessionStatus? status = null;
             for (var attempt = 0; attempt < 50 && status?.State != RuntimeRegistryAuthSessionState.Succeeded; attempt++)

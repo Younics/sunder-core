@@ -62,9 +62,18 @@ internal sealed class RegistryHttpClient(
             var payload = await ReadBoundedAsync(response.Content, policy.MaxRegistryErrorBytes, cancellationToken);
             if (payload.Length > 0)
             {
-                var problem = JsonSerializer.Deserialize<RegistryProblemDetails>(payload, JsonOptions);
-                if (!string.IsNullOrWhiteSpace(problem?.Detail)) return problem.Detail;
-                if (!string.IsNullOrWhiteSpace(problem?.Title)) return problem.Title;
+                using var document = JsonDocument.Parse(payload);
+                var root = document.RootElement;
+                if (root.ValueKind != JsonValueKind.Object) return $"Registry request failed with HTTP {(int)response.StatusCode}.";
+                foreach (var name in new[] { "detail", "title" })
+                    if (root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+                        && !string.IsNullOrWhiteSpace(value.GetString())) return value.GetString()!;
+                if (root.TryGetProperty("errors", out var errors) && errors.ValueKind == JsonValueKind.Array)
+                {
+                    var messages = errors.EnumerateArray().Where(value => value.ValueKind == JsonValueKind.String)
+                        .Select(value => value.GetString()).Where(value => !string.IsNullOrWhiteSpace(value)).Take(8).ToArray();
+                    if (messages.Length > 0) return string.Join(" ", messages);
+                }
             }
         }
         catch (Exception exception) when (exception is JsonException or InvalidDataException)

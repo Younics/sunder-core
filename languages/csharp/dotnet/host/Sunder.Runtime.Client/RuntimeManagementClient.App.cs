@@ -88,6 +88,25 @@ public sealed partial class RuntimeManagementClient
         => SendDevPackageOwnerAsync<DevPackageOwnerReleaseCommitRequest, DevPackageOwnerReleaseResult>(HttpMethod.Post,
             $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/release/commit", request, token);
 
+    public Task<DevPackageOwnerReloadStageResult> StageDevPackageOwnerReloadAsync(
+        string ownerId, DevPackageOwnerReloadStageRequest request, CancellationToken token = default)
+        => SendDevPackageOwnerAsync<DevPackageOwnerReloadStageRequest, DevPackageOwnerReloadStageResult>(HttpMethod.Post,
+            $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/reload/stage", request, token);
+
+    public Task<DevPackageOwnerReloadResult> CommitDevPackageOwnerReloadAsync(
+        string ownerId, DevPackageOwnerReloadCommitRequest request, CancellationToken token = default)
+        => SendDevPackageOwnerAsync<DevPackageOwnerReloadCommitRequest, DevPackageOwnerReloadResult>(HttpMethod.Post,
+            $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/reload/commit", request, token);
+
+    public async Task DiscardDevPackageOwnerReloadAsync(
+        string ownerId, DevPackageOwnerReloadCommitRequest request, CancellationToken token = default)
+    {
+        using var message = CreateDevPackageOwnerRequest(HttpMethod.Post,
+            $"dev-package-owners/{Uri.EscapeDataString(ownerId)}/reload/discard", request);
+        using var response = await _transport.SendAsync(message, cancellationToken: token).ConfigureAwait(false);
+        await _responses.EnsureSuccessAsync(response, token).ConfigureAwait(false);
+    }
+
     public Task<RuntimeEventSnapshot> GetRuntimeEventSnapshotAsync(
         long afterSequenceId = 0,
         CancellationToken token = default)

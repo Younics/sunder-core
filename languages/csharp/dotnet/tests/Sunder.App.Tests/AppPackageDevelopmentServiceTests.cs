@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class AppPackageDevelopmentServiceTests
+public sealed partial class AppPackageDevelopmentServiceTests
 {
     [Theory]
     [InlineData(PackageReadinessState.Ready, "Activated", true, true, true)]
@@ -341,6 +341,128 @@ public sealed class AppPackageDevelopmentServiceTests
         Assert.Equal(0, Assert.Single(backend.Owners).Disposals);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExplicitReloadUsesTheExistingOwnerAndUncertainResolutionDoesNotReviewDifferentSource(bool lostReply)
+    {
+        var backend = new Backend { FailReload = lostReply, SourceContentIdentity = new('c', 64) };
+        var publication = new AppPackageGenerationPublication(); publication.Publish();
+        await using var service = new AppPackageDevelopmentService(backend, publication, Guid.NewGuid());
+        await using var session = await service.LoadAsync("first", false);
+        var owner = Assert.Single(backend.Owners);
+        var identity = new string('c', 64);
+        if (lostReply)
+        {
+            await Assert.ThrowsAsync<IOException>(() => session.ReloadAsync("reload", identity));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReloadAsync("new-operation", new('d', 64)));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReloadAsync("reload", new('d', 64)));
+            backend.FailReload = false;
+        }
+        var result = await session.ReloadAsync("reload", identity);
+        Assert.Equal(new(backend.RuntimeId, 4, identity), result);
+        Assert.Equal(2, backend.Preparations); // Initial Load and the first explicit reload, not resolution after a lost reply.
+        Assert.All(backend.Reloads, entry => { Assert.Same(owner, entry.Owner); Assert.Equal("reload", entry.Id); Assert.Equal(identity, entry.Identity); });
+        Assert.Equal(0, owner.Disposals);
+        Assert.False(owner.Watch);
+    }
+
+    [Fact]
+    public async Task ExplicitReloadRequiresNonWatchingOwnerAndItsOwningPublication()
+    {
+        var backend = new Backend();
+        var publication = new AppPackageGenerationPublication(); publication.Publish();
+        await using var service = new AppPackageDevelopmentService(backend, publication, Guid.NewGuid());
+        await using var session = await service.LoadAsync("first", true);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReloadAsync("reload", new('c', 64)));
+        await session.SetWatchAsync(false);
+        publication.Revoke();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.ReloadAsync("reload", new('c', 64)));
+        Assert.Empty(backend.Reloads);
+    }
+
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("package")]
+    [InlineData("count")]
+    [InlineData("text")]
+    public async Task DevelopmentLogsRejectOutOfScopeOrOversizedBackendResultsAndStopWithPublication(string boundary)
+    {
+        var entry = new PackageDevelopmentLogEntry(DateTimeOffset.UtcNow, "runtime", "Information", "package", "message", false);
+        var backend = new Backend
+        {
+            Logs = new(boundary == "package" ? "other.package" : "demo",
+                boundary == "count" ? [entry, entry] : [boundary == "text" ? entry with { Message = new('x', 64 * 1024 + 1) } : entry], false),
+        };
+        var publication = new AppPackageGenerationPublication(); publication.Publish();
+        await using var service = new AppPackageDevelopmentService(backend, publication, Guid.NewGuid());
+        await using var session = await service.LoadAsync("first", false);
+        if (boundary == "valid") Assert.Equal(backend.Logs, await session.GetLogsAsync(1));
+        else await Assert.ThrowsAsync<InvalidDataException>(() => session.GetLogsAsync(1));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => session.GetLogsAsync(101));
+        Assert.Equal(1, backend.LogReads);
+        publication.Revoke();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => session.GetLogsAsync(1));
+        Assert.Equal(1, backend.LogReads);
+    }
+
+    [Fact]
+    public async Task RetainedLogScopeWorksAfterFaultAndUnloadWithoutReacquiringAnOwnerAndCannotReadOtherPackages()
+    {
+        var backend = new Backend(); // Target starts faulted.
+        var publication = new AppPackageGenerationPublication(); publication.Publish();
+        await using var service = new AppPackageDevelopmentService(backend, publication, Guid.NewGuid());
+        var query = new PackageDevelopmentLogQuery();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GetLogsAsync("demo", query));
+        var session = await service.LoadAsync("first", false);
+        await session.GetLogsAsync(query);
+        await session.DisposeAsync();
+        await service.GetLogsAsync("demo", query);
+        Assert.Single(backend.Owners);
+        Assert.Equal(1, backend.Preparations);
+        Assert.Equal(2, backend.LogReads);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GetLogsAsync("foreign.package", query));
+        publication.Revoke();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => service.GetLogsAsync("demo", query));
+        Assert.Equal(2, backend.LogReads);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task PendingLogQueryPreservesCallerCancellationAndActivationRevocationWithoutReacquisition(bool throughSession, bool revoke)
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var backend = new Backend
+        {
+            BeforeLogs = async token =>
+            {
+                entered.TrySetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            },
+        };
+        var publication = new AppPackageGenerationPublication(); publication.Publish();
+        await using var service = new AppPackageDevelopmentService(backend, publication, Guid.NewGuid());
+        var session = await service.LoadAsync("first", false);
+        if (!throughSession) await session.DisposeAsync();
+        using var caller = new CancellationTokenSource();
+        var read = throughSession ? session.GetLogsAsync(new PackageDevelopmentLogQuery(), caller.Token)
+            : service.GetLogsAsync("demo", new PackageDevelopmentLogQuery(), caller.Token);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        if (revoke) publication.Revoke(); else caller.Cancel();
+        if (revoke) await Assert.ThrowsAsync<ObjectDisposedException>(() => read.WaitAsync(TimeSpan.FromSeconds(2)));
+        else
+        {
+            var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => read.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.Equal(caller.Token, error.CancellationToken);
+        }
+        Assert.Single(backend.Owners);
+        Assert.Equal(1, backend.Preparations);
+        Assert.Equal(1, backend.LogReads);
+    }
+
     private sealed class Backend : IAppPackageDevelopmentBackend
     {
         internal Guid RuntimeId { get; } = Guid.NewGuid();
@@ -353,7 +475,13 @@ public sealed class AppPackageDevelopmentServiceTests
         internal string? SourceContentIdentity { get; set; }
         internal string? AppliedContentIdentity { get; set; }
         internal bool RejectRelease { get; set; }
+        internal bool FailReload { get; set; }
+        internal PackageDevelopmentLogs Logs { get; init; } = new("demo", [], false);
+        internal int LogReads { get; private set; }
+        internal Func<CancellationToken, Task>? BeforeLogs { get; init; }
+        internal List<(IDevPackageOwnerSession Owner, string Id, string Identity)> Reloads { get; } = [];
         internal Func<string, CancellationToken, Task>? BeforeStatusAsync { get; set; }
+        internal Func<string, string, PackageDevelopmentRevision, CancellationToken, Task<AppDevelopmentViewBinding>>? OpenView { get; set; }
         internal int Preparations { get; private set; }
         internal TaskCompletionSource Acquiring { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDevPackageOwnerSession CreateOwner(string ownerPrefix)
@@ -383,8 +511,26 @@ public sealed class AppPackageDevelopmentServiceTests
                     State == PackageReadinessState.Failed ? 1 : 0) { SourceContentIdentity = SourceContentIdentity }], [], []);
         }
         public Task OpenLogsAsync(string packageId, AppPackageGenerationPublication publication, CancellationToken token) => Task.CompletedTask;
+        public Task<AppDevelopmentViewBinding> OpenDevelopmentViewAsync(string packageId, string viewId, PackageDevelopmentRevision revision, CancellationToken token)
+            => OpenView?.Invoke(packageId, viewId, revision, token) ?? throw new NotSupportedException();
+        public async Task<PackageDevelopmentLogs> GetLogsAsync(string packageId, int maximumEntries, CancellationToken token)
+        {
+            Assert.Equal("demo", packageId);
+            LogReads++;
+            if (BeforeLogs is not null) await BeforeLogs(token);
+            return Logs;
+        }
+        public Task<PackageDevelopmentLogs> GetLogsAsync(string packageId, PackageDevelopmentLogQuery query, CancellationToken token)
+            => GetLogsAsync(packageId, query.MaximumEntries, token);
         public Task ReleaseOwnerAsync(IDevPackageOwnerSession owner, CancellationToken token)
             => RejectRelease ? Task.FromException(new InvalidOperationException("Activation retirement was not acknowledged.")) : owner.DisposeAsync().AsTask();
+        public async Task<DevPackageOwnerReloadResult> ReloadOwnerAsync(IDevPackageOwnerSession owner, string operationId,
+            string packageId, string sourceContentIdentity, CancellationToken token)
+        {
+            Reloads.Add((owner, operationId, sourceContentIdentity));
+            if (FailReload) throw new IOException("Reload acknowledgement lost.");
+            return new(RuntimeId, "owner", "stage", packageId, sourceContentIdentity, await GetSnapshotAsync(token));
+        }
     }
 
     private sealed class Owner(Backend backend) : IDevPackageOwnerSession

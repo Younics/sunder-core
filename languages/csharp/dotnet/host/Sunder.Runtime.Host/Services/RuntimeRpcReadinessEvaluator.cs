@@ -79,6 +79,18 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
         return plan;
     }
 
+    internal bool AreRecoveryProvidersAvailable(ActivePackageSession session, ActiveLoadedPackage failed)
+    {
+        var caller = session.GetSessionPackages().Single(package => package.PackageId == failed.Descriptor.PackageId);
+        var providers = session.LoadedPackageMap.Values.Where(package => session.IsPackageEnabled(package.Descriptor.PackageId))
+            .SelectMany(package => package.RpcProviders.Values.Select(registration => new ActiveProvider(package.Descriptor.PackageId, registration)))
+            // The replacement advertises its own exact registrations before Start,
+            // just as the normal required-provider scheduler permits self edges.
+            .Concat(failed.RpcProviders.Values.Select(registration => new ActiveProvider(failed.Descriptor.PackageId, registration))).ToArray();
+        return caller.RpcContractUses.Where(use => use.Required && IsRoleActive(caller.HostRoles, use.Role))
+            .All(use => IsAvailable(caller, failed.Source, failed, use, providers));
+    }
+
     public IReadOnlyList<string> Evaluate(ActivePackageSession session)
     {
         var providers = session.LoadedPackageMap.Values

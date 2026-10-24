@@ -1,9 +1,17 @@
 namespace Sunder.App.Services;
 
+internal sealed class AppPackageActivationCleanupUnprovenException(string packageId)
+    : Exception($"App activation '{packageId}' has unproven local cleanup. Its original resources and development ownership remain quarantined; retirement has not been acknowledged.");
+
 internal sealed partial class AppPackageHostComposition
 {
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, Retirement> _packageRetirements = new(StringComparer.OrdinalIgnoreCase);
     internal IReadOnlyList<string> RetiringPackageIds => _packageRetirements.Keys.ToArray();
+    internal bool HasAcknowledgedRetirement(string packageId)
+        => _packageRetirements.TryGetValue(packageId, out var retirement)
+            && retirement.Drain.IsCompletedSuccessfully
+            && retirement.Drain.Result.CleanupOutcome == AppPackageUiCleanupOutcome.Proven
+            && retirement.Drain.Result.DataSettlementProven && retirement.Admission?.IsRetired == true;
 
     private sealed class Retirement(Func<Retirement, Task<AppPackageUnloadResult>> drain)
     {
@@ -70,6 +78,9 @@ internal sealed partial class AppPackageHostComposition
         AppPackageLoadAdmission.RequireOutsideCleanup(_activationOwnerId);
         var result = await RetireOwnedPackageAsync(packageId, preserveDisabled: false, useRetirementDeadline: true)
             .WaitAsync(token).ConfigureAwait(false);
+        if (_packageRetirements.TryGetValue(packageId, out var retirement) && retirement.Drain.IsCompletedSuccessfully
+            && (retirement.Drain.Result.CleanupOutcome != AppPackageUiCleanupOutcome.Proven || !retirement.Drain.Result.DataSettlementProven))
+            throw new AppPackageActivationCleanupUnprovenException(packageId);
         if (!result.WasLoaded || result.CleanupOutcome != AppPackageUiCleanupOutcome.Proven || !result.DataSettlementProven)
             throw new InvalidOperationException($"App activation '{packageId}' has not confirmed retirement; its development owner remains loaded.");
         PublishPackageStateChanged();

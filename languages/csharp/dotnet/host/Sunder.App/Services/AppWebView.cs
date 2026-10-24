@@ -9,6 +9,7 @@ namespace Sunder.App.Services;
 internal interface IAppWebView : IDisposable
 {
     Control Control { get; }
+    Rect CaptureViewport => new(Control.Bounds.Size);
 
     event EventHandler<AppWebNavigationStartingEventArgs>? NavigationStarting;
 
@@ -23,6 +24,8 @@ internal interface IAppWebView : IDisposable
     void Navigate(Uri uri);
 
     Task<string?> InvokeScriptAsync(string script);
+    Task<byte[]> CaptureAsync(Rect bounds, int maximumEdge, CancellationToken token)
+        => throw new NotSupportedException("This native browser backend does not support package capture.");
 
     void Stop();
 }
@@ -80,6 +83,7 @@ internal sealed class AppNativeWebView : IAppWebView
     private readonly string _userDataDirectory;
     private readonly IUiDispatcher _uiDispatcher;
     private int _disposed;
+    private long _adapterGeneration;
 
     public AppNativeWebView(string userDataDirectory, IUiDispatcher? uiDispatcher = null)
     {
@@ -116,6 +120,33 @@ internal sealed class AppNativeWebView : IAppWebView
 
     public void Stop() => _webView.Stop();
 
+    public Task<byte[]> CaptureAsync(Rect bounds, int maximumEdge, CancellationToken token)
+        => _uiDispatcher.InvokeAsync(async () =>
+        {
+            token.ThrowIfCancellationRequested();
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            var handle = _webView.TryGetPlatformHandle();
+            if (!OperatingSystem.IsMacOS() || handle is not IAppleWKWebViewPlatformHandle apple)
+                throw new NotSupportedException("Native capture is not supported by this browser backend.");
+            var viewport = CaptureViewport;
+            if (!viewport.Contains(bounds) || bounds.Width <= 0 || bounds.Height <= 0) throw new ArgumentException("The native capture region left its viewport.");
+            var retained = apple.GetWKWebViewRetained();
+            var generation = Volatile.Read(ref _adapterGeneration);
+            try
+            {
+                // Once submitted, await the real native callback even on cancellation.
+                // Owner retirement drains this task before releasing the browser.
+                var png = await MacOsWebViewCapture.CaptureAsync(retained, bounds.Translate(new Vector(-viewport.X, -viewport.Y)), maximumEdge);
+                token.ThrowIfCancellationRequested();
+                ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0 || generation != Volatile.Read(ref _adapterGeneration), this);
+                if (viewport != CaptureViewport) throw new InvalidOperationException("The native viewport changed during capture. Capture its current geometry again.");
+                return png;
+            }
+            finally { MacOsWebViewCapture.Release(retained); }
+        });
+
+    public Rect CaptureViewport => _webView.Bounds;
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -135,10 +166,10 @@ internal sealed class AppNativeWebView : IAppWebView
     }
 
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs args)
-        => _viewport.SetPlatformHandle(args.TryGetPlatformHandle());
+    { Interlocked.Increment(ref _adapterGeneration); _viewport.SetPlatformHandle(args.TryGetPlatformHandle()); }
 
     private void OnAdapterDestroyed(object? sender, WebViewAdapterEventArgs args)
-        => _viewport.SetPlatformHandle(null);
+    { Interlocked.Increment(ref _adapterGeneration); _viewport.SetPlatformHandle(null); }
 
     private void OnEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs args)
     {
@@ -239,6 +270,7 @@ internal sealed class AppNativeWebViewViewport : Decorator, IDisposable
             InvalidateMeasure();
         }
     }
+    internal IReadOnlyList<AppNativeWebViewClipRegion> CaptureRegions => _arrangedRegions;
 
     internal void SetPlatformHandle(IPlatformHandle? handle)
     {

@@ -52,6 +52,10 @@ public sealed class SunderPackageProviderImportManifest
     [JsonPropertyName("packageId")]
     public string? PackageId { get; init; }
 
+    /// <summary>Optional installation presence. Absent on existing required provider imports.</summary>
+    [JsonPropertyName("presence")]
+    public string? Presence { get; init; }
+
     [JsonPropertyName("contractId")]
     public string? ContractId { get; init; }
 

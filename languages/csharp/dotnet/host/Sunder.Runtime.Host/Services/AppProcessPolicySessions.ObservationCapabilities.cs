@@ -16,7 +16,7 @@ internal sealed partial class AppProcessPolicySessions
         var required = targets.Where(target => target?.Role == SunderPackageFormat.AppHostRole)
             .SelectMany(target => target!.RequiredHostCapabilities ?? [])
             .Where(capability => capability is SunderSdkCapabilities.WorkerExecutionObservationsV1
-                or SunderSdkCapabilities.PackageDevelopmentRevisionsV1)
+                or SunderSdkCapabilities.PackageDevelopmentRevisionsV1 or SunderSdkCapabilities.PackageDevelopmentReloadV1 or SunderSdkCapabilities.PackageDevelopmentLogsV1 or SunderSdkCapabilities.PackageDevelopmentLogQueriesV1 or SunderSdkCapabilities.PackageDevelopmentViewsV1 or SunderSdkCapabilities.PackageDevelopmentFeedbackV1 or SunderSdkCapabilities.AppActivationServicesV1)
             .Select(capability => capability!).Distinct(StringComparer.Ordinal).ToArray();
         var implemented = request.AppImplementedCapabilities;
         if (implemented is not null && (implemented.Count > 128

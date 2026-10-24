@@ -73,7 +73,15 @@ public sealed class PackageSessionStateTests
     [Fact]
     public async Task ClearActiveSessionAsync_DrainsOutstandingLeaseBeforeDisposal()
     {
-        var state = CreateState();
+        var rpcRetirement = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRpc = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var state = new PackageSessionState(NullLogger.Instance, static () => { }, static _ => { },
+            retireRpcActivations: generation =>
+            {
+                Assert.Equal(1, generation);
+                rpcRetirement.TrySetResult();
+                return releaseRpc.Task;
+            });
         var sessionFolder = CreateTempDirectory();
         var session = CreateSession(sessionFolder);
         await state.PublishSessionAsync(session);
@@ -81,6 +89,14 @@ public sealed class PackageSessionStateTests
 
         try
         {
+            using var cancellation = new CancellationTokenSource();
+            var cancelled = state.ClearActiveSessionAsync(cancellation.Token);
+            Assert.False(rpcRetirement.Task.IsCompleted);
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
+            using (var reopened = state.AcquireLease()) Assert.Same(session, reopened.Session);
+            Assert.False(rpcRetirement.Task.IsCompleted);
+
             var clear = state.ClearActiveSessionAsync();
             await Task.Yield();
 
@@ -88,14 +104,20 @@ public sealed class PackageSessionStateTests
             Assert.True(Directory.Exists(sessionFolder));
             Assert.True(lease.RetirementToken.IsCancellationRequested);
             Assert.Throws<RuntimeUnavailableException>(() => state.AcquireLease());
+            Assert.False(rpcRetirement.Task.IsCompleted);
 
             lease.Dispose();
+            await rpcRetirement.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(clear.IsCompleted);
+            Assert.True(Directory.Exists(sessionFolder));
+            releaseRpc.TrySetResult();
             await clear.WaitAsync(TimeSpan.FromSeconds(2));
 
             Assert.False(Directory.Exists(sessionFolder));
         }
         finally
         {
+            releaseRpc.TrySetResult();
             lease.Dispose();
             await state.ClearActiveSessionAsync();
             TryDeleteDirectory(sessionFolder);

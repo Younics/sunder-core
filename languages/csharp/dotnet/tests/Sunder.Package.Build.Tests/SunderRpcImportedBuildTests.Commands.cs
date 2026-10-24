@@ -196,6 +196,11 @@ public sealed partial class SunderRpcImportedBuildTests
         Assert.Single(implemented.ContractLock.PackageArtifacts);
         Assert.Single(implemented.ContractLock.PackageImports);
         Assert.Equal("minimalProvider", Assert.Single(implemented.ContractLock.ProviderImports).Key);
+        Assert.Equal("required", Assert.Single(implemented.ContractLock.ProviderImports).Value.Presence);
+        var optional = await commands.ExecuteAsync(LockPath, cache, new("Implement", DependencyId, ContractId, Presence: "optional"));
+        Assert.True(optional.Changed);
+        Assert.Equal("optional", Assert.Single(optional.ContractLock.ProviderImports).Value.Presence);
+        Assert.False((await commands.ExecuteAsync(LockPath, cache, new("Implement", DependencyId, ContractId))).Changed);
         Assert.False(Directory.Exists(Path.Combine(_root, "obj")));
         File.WriteAllText(Path.Combine(_root, "Provider.cs"), ProviderSource);
         var generate = CreateGeneration();

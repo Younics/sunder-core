@@ -16,7 +16,10 @@ internal sealed class PackageSessionState(
     Action clearAuthSessions,
     Action<string> removePackageAuthSessions,
     TimeSpan? sessionDrainTimeout = null,
-    TimeProvider? timeProvider = null)
+    TimeProvider? timeProvider = null,
+    Action<ActivePackageSession>? reconcileAuthSessions = null,
+    Func<long, Task>? retireRpcActivations = null,
+    Func<ActivePackageSession, ActiveLoadedPackage, bool>? recoveryProvidersAvailable = null)
 {
     private readonly object _syncRoot = new();
     private SessionEntry _activeEntry = new(ActivePackageSession.CreateEmpty(), generation: 0);
@@ -30,6 +33,7 @@ internal sealed class PackageSessionState(
     private long _generation;
     private readonly TimeSpan _sessionDrainTimeout = sessionDrainTimeout ?? TimeSpan.FromSeconds(10);
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    internal event Action<ActivePackageSession>? RpcSessionChanging;
 
     public PackageSessionLease AcquireLease()
     {
@@ -39,6 +43,12 @@ internal sealed class PackageSessionState(
     private PackageSessionLease AcquireLeaseUnderLock()
     {
         var entry = _activeEntry;
+        EnsureAcceptingLeasesUnderLock(entry);
+        return CreateLeaseUnderLock(entry);
+    }
+
+    private void EnsureAcceptingLeasesUnderLock(SessionEntry entry)
+    {
         if (entry.Draining)
         {
             throw new RuntimeUnavailableException("The active package session is draining and is not accepting new requests.");
@@ -53,13 +63,11 @@ internal sealed class PackageSessionState(
         {
             throw new RuntimeUnavailableException("The active package session is still activating and is not accepting requests.");
         }
-        return CreateLeaseUnderLock(entry);
     }
 
-    // Null means no work was admitted for an exact continuing Worker during a
-    // publication drain. Classify under the same lock as ordinary admission so
-    // publication cannot turn a temporary fence into a false stale-birth error.
-    internal PackageSessionLease? AcquireRpcLease(RuntimeRpcPackageActivation caller)
+    // A catalog publication cannot fence an exact continuing Worker. Classify
+    // under the same lock as ordinary admission, retaining every birth check.
+    internal PackageSessionLease AcquireRpcLease(RuntimeRpcPackageActivation caller)
     {
         lock (_syncRoot)
         {
@@ -80,9 +88,33 @@ internal sealed class PackageSessionState(
                 && !caller.RetirementToken.IsCancellationRequested
                 && !caller.Package.Worker.GenerationCompletion.IsCompleted)
             {
-                return null;
+                return CreateRpcLeaseUnderLock(entry, caller);
             }
-            return AcquireLeaseUnderLock();
+            EnsureAcceptingLeasesUnderLock(entry);
+            return CreateRpcLeaseUnderLock(entry, caller);
+        }
+    }
+
+    private PackageSessionLease CreateRpcLeaseUnderLock(SessionEntry entry, RuntimeRpcPackageActivation caller)
+    {
+        // RPC execution is owned/drained by exact caller and callee activation leases,
+        // not by the replaceable catalog snapshot. This short snapshot lease carries
+        // no session-wide retirement or resource ownership across an invocation.
+        return new PackageSessionLease(entry.Session, entry.Generation, 0, entry, entry.GenerationEpoch,
+            caller.RetirementToken, CancellationToken.None, static () => { });
+    }
+
+    internal PackageSessionLease AcquireAppRpcLease(RuntimeRpcAppCallerSession caller)
+    {
+        lock (_syncRoot)
+        {
+            var entry = _activeEntry;
+            if (!entry.AcceptingLeases || _packageRecoveryCommit is not null
+                || !caller.MatchesSession(entry.Session)
+                || entry.Draining && (entry.DrainSuccessor is null || !caller.MatchesSession(entry.DrainSuccessor)))
+                throw new RuntimeUnavailableException("The App RPC activation is no longer current.");
+            return new PackageSessionLease(entry.Session, entry.Generation, 0, entry, caller,
+                caller.RetirementToken, CancellationToken.None, static () => { });
         }
     }
 
@@ -275,6 +307,7 @@ internal sealed class PackageSessionState(
             {
                 previousEntry = _activeEntry;
                 previousEntry.Draining = true;
+                RpcSessionChanging?.Invoke(ActivePackageSession.CreateEmpty());
                 retirement = previousEntry.Retirement;
                 SignalRetirementIfDrained(previousEntry);
             }
@@ -306,6 +339,11 @@ internal sealed class PackageSessionState(
             {
                 throw new InvalidOperationException("The active package session changed while it was draining.");
             }
+            // Only committed teardown retires the exact RPC activations. A
+            // cancelled drain must reopen admission without withdrawing them.
+            if (retireRpcActivations is not null)
+                previousEntry.RetirementCallbacks = CombineRetirementCallbacks(
+                    previousEntry.RetirementCallbacks, retireRpcActivations(_generation));
             previousEntry.Retired = true;
             _activeEntry = new SessionEntry(ActivePackageSession.CreateEmpty(), _generation);
         }
@@ -477,7 +515,7 @@ internal sealed class PackageSessionState(
             try
             {
                 committed?.Invoke(CapturePublicationSnapshotUnderLock());
-                clearAuthSessions();
+                ReconcileAuthSessions(_activeEntry.Session);
             }
             catch (Exception exception)
             {
@@ -495,6 +533,27 @@ internal sealed class PackageSessionState(
             throw publicationException;
         }
         return (generation, warnings);
+    }
+
+    internal void TrackPreviousRpcRetirement(SessionPublication handle, Task retirement)
+    {
+        lock (_syncRoot)
+        {
+            var publication = RequireMutablePublication(handle);
+            publication.PreviousEntry.RetirementCallbacks = CombineRetirementCallbacks(
+                publication.PreviousEntry.RetirementCallbacks, retirement);
+        }
+    }
+
+    internal void ValidateRpcRetirementPublication(SessionPublication handle)
+    {
+        lock (_syncRoot)
+        {
+            var publication = RequireMutablePublication(handle);
+            if (publication.Completed || !ReferenceEquals(_pendingPublication, publication)
+                || !ReferenceEquals(_activeEntry, publication.PreviousEntry) || !_activeEntry.Draining)
+                throw new InvalidOperationException("The package publication no longer owns the active session drain.");
+        }
     }
 
     internal void DiscardPublication(SessionPublication publicationHandle)
@@ -743,7 +802,7 @@ internal sealed class PackageSessionState(
             try
             {
                 committed?.Invoke(CapturePublicationSnapshotUnderLock());
-                clearAuthSessions();
+                ReconcileAuthSessions(_activeEntry.Session);
             }
             catch (Exception exception)
             {
@@ -1389,6 +1448,29 @@ internal sealed class PackageSessionState(
         }
     }
 
+    internal bool ExecuteIfActivationCurrent(ActiveLoadedPackage package, Func<bool> action)
+    {
+        lock (_syncRoot)
+        {
+            if (!_activeEntry.AcceptingLeases || _packageRecoveryCommit is not null
+                || !Owns(_activeEntry.Session) || _activeEntry.Draining && (_activeEntry.DrainSuccessor is null || !Owns(_activeEntry.DrainSuccessor)))
+                return false;
+            return action();
+        }
+
+        bool Owns(ActivePackageSession session) => session.IsPackageEnabled(package.Descriptor.PackageId)
+            && session.TryGetLoadedPackage(package.Descriptor.PackageId, out var current)
+            && current is not null && current.RuntimeActivationId == package.RuntimeActivationId
+            && current.ActivationSessionGeneration == package.ActivationSessionGeneration
+            && ReferenceEquals(current.Worker, package.Worker);
+    }
+
+    private void ReconcileAuthSessions(ActivePackageSession session)
+    {
+        if (reconcileAuthSessions is null) clearAuthSessions();
+        else reconcileAuthSessions(session);
+    }
+
     internal RpcReadinessRefresh? RefreshRpcReadiness(
         RuntimeRpcReadinessEvaluator evaluator,
         long? expectedGeneration = null)
@@ -1506,6 +1588,7 @@ internal sealed class PackageSessionState(
             return RuntimePackageRecoveryValidation.Stale;
         }
         return request.Session.AreRecoveryDependenciesAvailable(request.PackageId)
+            && recoveryProvidersAvailable?.Invoke(request.Session, request.FailedPackage) != false
             ? RuntimePackageRecoveryValidation.Ready
             : RuntimePackageRecoveryValidation.DependencyUnavailable;
     }
@@ -1767,7 +1850,7 @@ internal sealed class PackageSessionState(
             ? current
             : Task.WhenAll(existing, current);
 
-    private static SessionGenerationEpoch AdvanceGenerationUnderLock(
+    private SessionGenerationEpoch AdvanceGenerationUnderLock(
         SessionEntry entry,
         long generation)
     {
@@ -1775,6 +1858,8 @@ internal sealed class PackageSessionState(
         entry.RetiredGenerationEpochs.Add(retiredEpoch);
         entry.GenerationEpoch = new SessionGenerationEpoch(generation);
         entry.Generation = generation;
+        RpcSessionChanging?.Invoke(entry.DrainSuccessor ?? entry.Session);
+        reconcileAuthSessions?.Invoke(entry.DrainSuccessor ?? entry.Session);
         return retiredEpoch;
     }
 

@@ -118,7 +118,9 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
                     "healthy.package",
                     healthyAfter.ActivationId)));
             Assert.False(healthyLease!.RetirementToken.IsCancellationRequested);
-            Assert.Equal(harness.Owner.Generation, healthyAfter.SessionGeneration);
+            Assert.Equal(healthyBefore.SessionGeneration, healthyAfter.SessionGeneration);
+            Assert.Equal(harness.Owner.Generation, healthyActivation.SessionGeneration);
+            Assert.Equal(harness.Owner.Generation, harness.Catalog.SessionGeneration);
 
             Assert.False(harness.Catalog.TryGetActiveEndpoint(failedEndpoint, out _, out var stale));
             Assert.True(stale);
@@ -505,6 +507,49 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
             "previous.package");
         Assert.Same(previousSession, harness.Owner.State.ActiveSession);
         Assert.Equal(1, harness.GetFactoryCount("previous.package"));
+    }
+
+    [Fact]
+    public async Task RejectedPublicationWithDrainingDependencyFaultRestoresHealthyPackagesAndDefersDependants()
+    {
+        var delays = new ControlledRecoveryDelay();
+        await using var harness = await RecoveryHarness.CreateAsync(
+            [
+                new PackagePlan("dependency.package", "dependency.provider", new RecoveryWorker(), static () => new RecoveryWorker()),
+                new PackagePlan("dependent.package", "dependent.provider", new RecoveryWorker(), static () => new RecoveryWorker(),
+                    [new PackageDependencyDescriptor("dependency.package", "1.0.0")]),
+                new PackagePlan("healthy.package", "healthy.provider", new RecoveryWorker(), static () => new RecoveryWorker()),
+                new PackagePlan("optional.package", "optional.provider", new RecoveryWorker(), static () => new RecoveryWorker(),
+                    [new PackageDependencyDescriptor("dependency.package", "1.0.0")], OptionalDependency: true),
+            ], delays.DelayAsync, enableReadiness: true);
+        var previous = harness.Owner.State.ActiveSession;
+        var dependency = harness.GetLoadedPackage("dependency.package");
+        var candidateWorker = new BlockingFailCommitWorker();
+        var rejected = harness.Publisher.PublishAsync(harness.CreateCandidateSession("candidate.package", candidateWorker),
+            harness.Owner.Sources.Snapshot(), [], [], harness.Owner.Generation, CancellationToken.None);
+        await candidateWorker.CommitEntered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        harness.Owner.HandleRuntimeGenerationFault("dependency.package",
+            new(dependency.RuntimeActivationId, harness.ActivationGeneration), new IOException("transport failed while draining"));
+        candidateWorker.ReleaseCommit();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rejected);
+        Assert.Same(previous, harness.Owner.State.ActiveSession);
+        Assert.Contains(harness.Owner.GetSnapshot().ActivePackages, package => package.PackageId == "healthy.package");
+        Assert.Equal(PackageReadinessState.Failed, harness.Owner.State.GetSessionPackage("dependency.package")!.Readiness);
+        Assert.Equal(PackageReadinessState.Failed, harness.Owner.State.GetSessionPackage("dependent.package")!.Readiness);
+        Assert.Equal(PackageReadinessState.Ready, harness.Owner.State.GetSessionPackage("optional.package")!.Readiness);
+        using var lease = harness.Owner.State.AcquireLease();
+        Assert.Same(previous, lease.Session);
+        var dependencyBackoff = await delays.NextAsync("dependency.package");
+        var dependentBackoff = await delays.NextAsync("dependent.package");
+        dependentBackoff.Release();
+        var dependencyWait = await delays.NextAsync("dependent.package");
+        Assert.Equal(0, harness.GetFactoryCount("dependent.package"));
+        dependencyBackoff.Release();
+        await WaitForEventAsync(harness.Events, RuntimeEventKind.PackageRecoverySucceeded, "dependency.package");
+        dependencyWait.Release();
+        await WaitForEventAsync(harness.Events, RuntimeEventKind.PackageRecoverySucceeded, "dependent.package");
+        Assert.Equal(4, harness.Owner.GetSnapshot().ActivePackages.Count);
     }
 
     [Fact]
@@ -1405,7 +1450,8 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
         RecoveryWorker InitialWorker,
         Func<RecoveryWorker>? CreateReplacement = null,
         IReadOnlyList<PackageDependencyDescriptor>? Dependencies = null,
-        string Version = "1.0.0");
+        string Version = "1.0.0",
+        bool OptionalDependency = false);
 
     public enum RecoveryFenceMutation
     {
@@ -1460,7 +1506,8 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
             Action? packageRecoveryPublication = null,
             Func<CancellationToken, Task>? beforeRecoverySuccess = null,
             Func<PackageStorageActivationTransaction, Task>? rollbackAsync = null,
-            Action? requestHostStop = null)
+            Action? requestHostStop = null,
+            bool enableReadiness = false)
         {
             var root = Path.Combine(
                 Path.GetTempPath(),
@@ -1494,6 +1541,7 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
                 NullLogger<PackageSessionPublisher>.Instance,
                 lifecyclePolicy,
                 catalog,
+                rpcReadiness: enableReadiness ? new RuntimeRpcReadinessEvaluator(new RuntimeRpcPermissionStore(new RuntimePackagePaths(root))) : null,
                 timeProvider: timeProvider);
             var coordinator = new RuntimePackageRecoveryCoordinator(
                 queue,
@@ -1661,7 +1709,13 @@ public sealed class RuntimePackageRecoveryCoordinatorTests
                 plan.PackageId,
                 PackageSourceKind.Dev,
                 sourcePath,
-                Dependencies: plan.Dependencies);
+                Dependencies: plan.Dependencies,
+                Manifest: plan.OptionalDependency ? new SunderPackageManifest
+                {
+                    Id = plan.PackageId, Version = plan.Version,
+                    DependsOn = plan.Dependencies!.Select(dependency => new SunderPackageDependencyManifest
+                        { PackageId = dependency.PackageId, VersionRange = dependency.VersionRange, Presence = "optional" }).ToArray(),
+                } : null);
         }
 
         private ActiveLoadedPackage CreateLoadedPackage(

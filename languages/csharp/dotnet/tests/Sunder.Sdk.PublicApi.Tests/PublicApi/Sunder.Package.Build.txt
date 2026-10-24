@@ -8,8 +8,6 @@ type public sealed class Sunder.Package.Build.Tasks.AggregateSunderPackageTask :
   property Microsoft.Build.Framework.ITaskItem[] TargetLeaves { public get; public set; }
   property System.String ContractCacheRoot { public get; public set; }
   property System.String? ContractLockPath { public get; public set; }
-  property System.String DevelopmentRevision { public get; public set; }
-  property System.String DevelopmentRevisionFile { public get; public set; }
   attribute Microsoft.Build.Framework.RequiredAttribute
   property System.String ExpectedPackageVersion { public get; public set; }
   attribute Microsoft.Build.Framework.OutputAttribute

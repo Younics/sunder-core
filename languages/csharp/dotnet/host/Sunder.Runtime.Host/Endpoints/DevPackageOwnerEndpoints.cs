@@ -26,6 +26,16 @@ internal static class DevPackageOwnerEndpoints
             }
         });
         var owners = endpoints.MapGroup("/dev-package-owners");
+        owners.MapPost("{ownerId}/reload/stage", (string ownerId, DevPackageOwnerReloadStageRequest request,
+            DevPackageOwnerLeaseService leases, CancellationToken token) => leases.StageReloadAsync(ownerId, request, token));
+        owners.MapPost("{ownerId}/reload/commit", (string ownerId, DevPackageOwnerReloadCommitRequest request,
+            DevPackageOwnerLeaseService leases, CancellationToken token) => leases.CommitReloadAsync(ownerId, request, token));
+        owners.MapPost("{ownerId}/reload/discard", async (string ownerId, DevPackageOwnerReloadCommitRequest request,
+            DevPackageOwnerLeaseService leases, CancellationToken token) =>
+        {
+            await leases.DiscardReloadAsync(ownerId, request, token);
+            return Results.NoContent();
+        });
         owners.MapPost("{ownerId}/release/stage", (string ownerId, DevPackageOwnerReleaseStageRequest request,
             DevPackageOwnerLeaseService leases, CancellationToken token) => leases.StageReleaseAsync(ownerId, request, token));
         owners.MapPost("{ownerId}/release/commit", (string ownerId, DevPackageOwnerReleaseCommitRequest request,

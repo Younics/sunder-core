@@ -34,7 +34,12 @@ internal sealed record RuntimePackageSource(
 
     internal string EffectiveSnapshotFolder => string.IsNullOrWhiteSpace(SnapshotFolder) ? SourceFolder : SnapshotFolder;
 
-    internal IReadOnlyList<PackageDependencyDescriptor> PackageDependencies => Dependencies ?? [];
+    // Optional contract/artifact presence participates in compatibility evidence,
+    // not Worker startup/recovery liveness. Do not turn an optional Agent import
+    // into a requirement that Maker must stop when Agent becomes unavailable.
+    internal IReadOnlyList<PackageDependencyDescriptor> PackageDependencies => (Dependencies ?? [])
+        .Where(dependency => !(Manifest?.DependsOn ?? []).Any(declaration => declaration.PackageId == dependency.PackageId
+            && declaration.Presence == "optional")).ToArray();
 
     internal RuntimePackageSource AsCommittedInstalledSource()
         => Kind == PackageSourceKind.Installed

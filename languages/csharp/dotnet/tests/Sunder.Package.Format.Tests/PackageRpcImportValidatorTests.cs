@@ -333,6 +333,47 @@ public sealed class PackageRpcImportValidatorTests
         Assert.Empty(Validate(json));
     }
 
+    [Theory]
+    [InlineData("optional", "optional", true)]
+    [InlineData("required", "required", true)]
+    [InlineData("optional", "required", false)]
+    [InlineData("suggested", "optional", false)]
+    public void ProviderPresence_RequiresMatchingDependencyIntent(string providerPresence, string dependencyPresence, bool valid)
+    {
+        var json = ProviderManifest();
+        Set(json, "providerImports/0/presence", JsonValue.Create(providerPresence));
+        Set(json, "dependsOn/0/presence", JsonValue.Create(dependencyPresence));
+        Assert.Equal(valid, Validate(json).Count == 0);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("true")]
+    [InlineData("1")]
+    [InlineData("\"\"")]
+    [InlineData("\"Optional\"")]
+    [InlineData("\"suggested\"")]
+    [InlineData("[]")]
+    [InlineData("{}")]
+    public void ProviderPresence_StrictManifestAdmissionDoesNotTreatMalformedValuesAsAbsence(string presence)
+    {
+        var json = ProviderManifest();
+        Assert.Empty(Validate(json)); // An absent provider presence retains required intent.
+        Set(json, "providerImports/0/presence", JsonNode.Parse(presence));
+        Assert.NotEmpty(Validate(json));
+    }
+
+    [Fact]
+    public void RequiredConsumerPresence_WinsOverOptionalProviderPresence()
+    {
+        var json = ApiManifest("required");
+        var provider = ProviderManifest();
+        Set(provider, "providerImports/0/presence", JsonValue.Create("optional"));
+        json["provides"] = provider["provides"]!.DeepClone();
+        json["providerImports"] = provider["providerImports"]!.DeepClone();
+        Assert.Empty(Validate(json));
+    }
+
     [Fact]
     public void OwnerAndReexportProviderImports_AcceptCompleteSharedProviderReferences()
     {
