@@ -3,12 +3,12 @@ import type { WorkerResourceProfile } from "./types";
 
 export const SUNDER_WORKER_STANDARD_RESOURCE_PROFILE: WorkerResourceProfile = Object.freeze({
   version: 1,
-  rpcValueBytes: 8 * 1024 * 1024,
+  rpcValueBytes: 32 * 1024 * 1024,
   valueDepth: 64,
-  valueNodes: 524_288,
-  objectMembers: 4_096,
-  inlineDecodedBytes: 512 * 1024,
-  contentReferenceBytes: 64 * 1024 * 1024,
+  valueNodes: 4_194_304,
+  objectMembers: 65_536,
+  inlineDecodedBytes: 4 * 1024 * 1024,
+  contentReferenceBytes: 256 * 1024 * 1024,
 });
 
 export function computeWorkerResourceProfileHash(profile: WorkerResourceProfile): string {

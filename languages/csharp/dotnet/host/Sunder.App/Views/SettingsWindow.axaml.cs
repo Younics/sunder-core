@@ -56,7 +56,9 @@ public partial class SettingsWindow : Window
 
     private void SectionButton_OnClick(object? sender, RoutedEventArgs e)
     {
-        if (sender is Control { DataContext: SettingsSectionItemViewModel item } && ViewModel is not null)
+        var item = (sender as Button)?.CommandParameter as SettingsSectionItemViewModel
+                   ?? (sender as Control)?.DataContext as SettingsSectionItemViewModel;
+        if (item is not null && ViewModel is not null)
         {
             _tasks.Run(_ => ViewModel.SelectSectionAsync(item), "selecting a settings section");
         }

@@ -20,12 +20,19 @@ internal sealed class CallOwnershipProbe
 
         await Send("named", id);
         using var named = await Next("host.invoke");
+        await Send("nested", named.RootElement.GetProperty("id").GetString());
+        using var nested = await Next("host.invoke");
+        await Send("sibling", id);
+        using var sibling = await Next("host.invoke");
         await Send("root", null);
         using var root = await Next("host.invoke");
         await status("call-ownership.json", new
         {
             namedDeadline = named.RootElement.GetProperty("context").GetProperty("deadlineUtc").GetString(),
             rootDeadline = root.RootElement.GetProperty("context").GetProperty("deadlineUtc").GetString(),
+            namedDepth = named.RootElement.GetProperty("context").GetProperty("callDepth").GetInt32(),
+            nestedDepth = nested.RootElement.GetProperty("context").GetProperty("callDepth").GetInt32(),
+            siblingDepth = sibling.RootElement.GetProperty("context").GetProperty("callDepth").GetInt32(),
             rootDepth = root.RootElement.GetProperty("context").GetProperty("callDepth").GetInt32(),
             lineageEnabled = Environment.GetEnvironmentVariable("SUNDER_RPC_EXTENDED_DEADLINE_V1"),
         });
@@ -33,11 +40,17 @@ internal sealed class CallOwnershipProbe
         if (remaining > TimeSpan.Zero) await Task.Delay(remaining);
         await write(new { type = "worker.result", id = root.RootElement.GetProperty("id").GetString(), value = new { accepted = true } });
         using var rootResult = await Next(null);
+        await write(new { type = "worker.result", id = sibling.RootElement.GetProperty("id").GetString(), value = new { accepted = true } });
+        using var siblingResult = await Next(null);
+        await write(new { type = "worker.result", id = nested.RootElement.GetProperty("id").GetString(), value = new { accepted = true } });
+        using var nestedResult = await Next(null);
         await write(new { type = "worker.result", id = named.RootElement.GetProperty("id").GetString(), value = new { accepted = true } });
         using var namedResult = await Next(null);
         await write(new { type = "worker.result", id, value = new
         {
             accepted = rootResult.RootElement.GetProperty("type").GetString() == "host.result"
+                && siblingResult.RootElement.GetProperty("type").GetString() == "host.result"
+                && nestedResult.RootElement.GetProperty("type").GetString() == "host.result"
                 && namedResult.RootElement.GetProperty("type").GetString() == "host.result",
         } });
 

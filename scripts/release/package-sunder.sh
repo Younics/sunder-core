@@ -287,7 +287,7 @@ if [[ "$runtime" == osx-* ]]; then
 fi
 
 if ! command -v vpk >/dev/null 2>&1; then
-  echo "The Velopack CLI 'vpk' was not found. Install it with: dotnet tool install --global vpk --version 0.0.1298" >&2
+  echo "The Velopack CLI 'vpk' was not found. Install it with: dotnet tool install --global vpk --version 1.2.161" >&2
   exit 127
 fi
 if ! command -v jq >/dev/null 2>&1; then

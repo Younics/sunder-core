@@ -571,12 +571,12 @@ for (const kind of ["invocation", "contribution"] as const) {
 test("standard Worker resource profile matches the normative policy and canonical hash", () => {
   assert.deepEqual(SUNDER_WORKER_STANDARD_RESOURCE_PROFILE, {
     version: 1,
-    rpcValueBytes: 8 * 1024 * 1024,
+    rpcValueBytes: 32 * 1024 * 1024,
     valueDepth: 64,
-    valueNodes: 524_288,
-    objectMembers: 4_096,
-    inlineDecodedBytes: 512 * 1024,
-    contentReferenceBytes: 64 * 1024 * 1024,
+    valueNodes: 4_194_304,
+    objectMembers: 65_536,
+    inlineDecodedBytes: 4 * 1024 * 1024,
+    contentReferenceBytes: 256 * 1024 * 1024,
   });
   assert.equal(Object.isFrozen(SUNDER_WORKER_STANDARD_RESOURCE_PROFILE), true);
   assert.equal(
@@ -589,8 +589,33 @@ test("standard Worker resource profile matches the normative policy and canonica
       rpcValueBytes: SUNDER_WORKER_STANDARD_RESOURCE_PROFILE.rpcValueBytes,
       version: 1,
     }),
-    "15bde75ca257659d5742c38f678a445bc4bdfb7e21eff9b81fedc3195e0a3ec9",
+    "193ef7db23f37ba14b8a95a2b3e8f95324c5aae6f2f05313351eb8636a24dc9e",
   );
+});
+
+for (const large of [false, true]) test(`developer resource profile admits large messages (large=${large})`, async () => {
+  const worker = startWorker();
+  const profile: WorkerResourceProfile = large ? {
+    version: 1, rpcValueBytes: 64 * 1024 * 1024, valueDepth: 64, valueNodes: 8_388_608,
+    objectMembers: 131_072, inlineDecodedBytes: 8 * 1024 * 1024, contentReferenceBytes: 512 * 1024 * 1024,
+  } : SUNDER_WORKER_STANDARD_RESOURCE_PROFILE;
+  try {
+    await handshake(worker, profile);
+    const text = "x".repeat((large ? 33 : 9) * 1024 * 1024);
+    worker.child.stdin.write(encodeFrame({ ...object(invocation("large-profile", "unary", "echo")), request: { text } }, {
+      ...SUNDER_WORKER_LIMITS, maxFrameBytes: profile.rpcValueBytes + 64 * 1024,
+      maxRpcValueBytes: profile.rpcValueBytes, maxValueNodes: profile.valueNodes, maxObjectMembers: profile.objectMembers,
+    }));
+    const response = await worker.messages.next();
+    assert.equal(response.type, "worker.result");
+    const echoed = object(object(response.value).request).text;
+    assert.equal(typeof echoed, "string");
+    assert.equal((echoed as string).length, text.length);
+    assert.equal(createHash("sha256").update(echoed as string).digest("hex"), createHash("sha256").update(text).digest("hex"));
+    send(worker, { type: "host.shutdown", shutdownId: "large-profile-stop", reason: "test" });
+    assert.equal((await worker.messages.next()).type, "worker.shutdown-ack");
+    assert.equal(await exitCode(worker.child), 0);
+  } finally { worker.child.kill("SIGKILL"); }
 });
 
 test("worker requires the exact closed effective resource profile hash", async () => {
@@ -2154,7 +2179,7 @@ interface WorkerProcess {
 }
 
 class MessageQueue {
-  readonly #decoder = new FrameDecoder();
+  readonly #decoder = new FrameDecoder(SUNDER_WORKER_LIMITS);
   readonly #values: Array<Readonly<Record<string, JsonValue>>> = [];
   readonly #waiters: Array<(value: Readonly<Record<string, JsonValue>>) => void> = [];
 

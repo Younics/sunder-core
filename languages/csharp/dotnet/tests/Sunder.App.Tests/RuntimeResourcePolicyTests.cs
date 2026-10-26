@@ -10,6 +10,14 @@ public sealed class RuntimeResourcePolicyTests
     {
         AssertPolicy(
             RuntimeResourcePolicies.ProtocolCeilings,
+            64 * 1024 * 1024,
+            64,
+            8_388_608,
+            131_072,
+            8 * 1024 * 1024,
+            512 * 1024 * 1024);
+        AssertPolicy(
+            RuntimeResourcePolicies.Standard,
             32 * 1024 * 1024,
             64,
             4_194_304,
@@ -17,21 +25,13 @@ public sealed class RuntimeResourcePolicyTests
             4 * 1024 * 1024,
             256 * 1024 * 1024);
         AssertPolicy(
-            RuntimeResourcePolicies.Standard,
-            8 * 1024 * 1024,
-            64,
-            524_288,
-            4_096,
-            512 * 1024,
-            64 * 1024 * 1024);
-        AssertPolicy(
             RuntimeResourcePolicies.Large,
-            16 * 1024 * 1024,
+            64 * 1024 * 1024,
             64,
-            2_097_152,
-            16_384,
-            2 * 1024 * 1024,
-            256 * 1024 * 1024);
+            8_388_608,
+            131_072,
+            8 * 1024 * 1024,
+            512 * 1024 * 1024);
     }
 
     [Fact]
@@ -41,17 +41,17 @@ public sealed class RuntimeResourcePolicyTests
         _ = RuntimeResourcePolicies.ProtocolCeilings;
 
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(rpcValueBytes: 1024 * 1024 - 1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(rpcValueBytes: 32 * 1024 * 1024 + 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(rpcValueBytes: 64 * 1024 * 1024 + 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(valueDepth: 15));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(valueDepth: 65));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(valueNodes: 16_383));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(valueNodes: 4_194_305));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(valueNodes: 8_388_609));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(objectMembers: 255));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(objectMembers: 65_537));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(objectMembers: 131_073));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(inlineDecodedBytes: 16 * 1024 - 1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(inlineDecodedBytes: 4 * 1024 * 1024 + 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(inlineDecodedBytes: 8 * 1024 * 1024 + 1));
         Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(contentReferenceBytes: 1024 * 1024 - 1));
-        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(contentReferenceBytes: 256 * 1024 * 1024 + 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => CreatePolicy(contentReferenceBytes: 512 * 1024 * 1024 + 1));
     }
 
     [Fact]
@@ -87,8 +87,8 @@ public sealed class RuntimeResourcePolicyTests
             Encoding.UTF8.GetBytes(valid.Replace("\"version\":1", "\"version\":2", StringComparison.Ordinal))));
         Assert.Throws<InvalidDataException>(() => RuntimeResourcePolicyContract.ParseSettings(
             Encoding.UTF8.GetBytes(valid.Replace(
-                "\"rpcValueBytes\":8388608",
-                "\"rpcValueBytes\":33554433",
+                "\"rpcValueBytes\":33554432",
+                "\"rpcValueBytes\":67108865",
                 StringComparison.Ordinal))));
         Assert.Throws<InvalidDataException>(() => RuntimeResourcePolicyContract.ParseSettings(
             Encoding.UTF8.GetBytes(valid[..^1] + ",\"unexpected\":true}")));

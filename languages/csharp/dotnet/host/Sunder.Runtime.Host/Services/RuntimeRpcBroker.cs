@@ -139,6 +139,12 @@ internal sealed partial class RuntimeRpcBroker
         return new CurrentCallFrameLease(previous);
     }
 
+    internal RuntimeRpcCallFrame CaptureInvocationFrame(SunderRpcInvocationContext context)
+        => CurrentCall.Value is { } frame
+           && frame.Depth == context.CallDepth && frame.DeadlineUtc == context.DeadlineUtc
+            ? frame
+            : new RuntimeRpcCallFrame(context.CallDepth, context.DeadlineUtc);
+
     public ValueTask<ISunderRpcCallScope> CreateCallScopeAsync(
         RuntimeRpcCallerStamp callerStamp,
         SunderRpcCallOptions? options,
@@ -1108,7 +1114,8 @@ internal sealed partial class RuntimeRpcBroker
                 CurrentCall.Value,
                 scope,
                 _timeProvider,
-                TargetSupportsExtendedDeadline(acquiredProvider));
+                TargetSupportsExtendedDeadline(acquiredProvider),
+                callSite: $"{providerSnapshot.PackageId}/{serviceId}.{methodId}");
             ThrowAcquisitionFailure(frameResult.Failure);
             var frame = frameResult.Frame!;
             var now = frameResult.AcquiredAtUtc!.Value;

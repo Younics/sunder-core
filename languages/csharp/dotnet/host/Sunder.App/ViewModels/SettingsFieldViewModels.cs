@@ -127,6 +127,14 @@ public sealed partial class SettingsSectionItemViewModel(
 
     public string Title { get; } = title;
 
+    private string _navigationTitle = title;
+
+    public string NavigationTitle
+    {
+        get => _navigationTitle;
+        internal set => SetProperty(ref _navigationTitle, value);
+    }
+
     public string Description { get; } = description;
 
     public bool IsPackage { get; } = isPackage;

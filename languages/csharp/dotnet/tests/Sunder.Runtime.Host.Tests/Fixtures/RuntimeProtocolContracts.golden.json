@@ -15,12 +15,12 @@
     "informationalVersion": "1.2.3+test"
   },
   "resourceProfile": {
-    "effectiveProfileHash": "15bde75ca257659d5742c38f678a445bc4bdfb7e21eff9b81fedc3195e0a3ec9",
-    "maximumRpcValueBytes": 8388608,
+    "effectiveProfileHash": "193ef7db23f37ba14b8a95a2b3e8f95324c5aae6f2f05313351eb8636a24dc9e",
+    "maximumRpcValueBytes": 33554432,
     "maximumValueDepth": 64,
-    "maximumValueNodes": 524288,
-    "maximumObjectMembers": 4096,
-    "maximumInlineDecodedBytes": 524288,
-    "maximumContentReferenceBytes": 67108864
+    "maximumValueNodes": 4194304,
+    "maximumObjectMembers": 65536,
+    "maximumInlineDecodedBytes": 4194304,
+    "maximumContentReferenceBytes": 268435456
   }
 }

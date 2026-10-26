@@ -575,10 +575,111 @@
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
   </Style>
 
-  <Style Selector="Button.secondary-action.settings-nav-button.selected">
+  <Style Selector="Button.settings-nav-button, ToggleButton.settings-group-toggle">
+    <Setter Property="Template">
+      <ControlTemplate>
+        <!-- Keep Fluent's PART_ContentPresenter state chrome out of this shared navigation row. -->
+        <ContentPresenter Name="PART_SettingsNavigationPresenter"
+                          Background="{TemplateBinding Background}"
+                          BorderBrush="{TemplateBinding BorderBrush}"
+                          BorderThickness="{TemplateBinding BorderThickness}"
+                          CornerRadius="{TemplateBinding CornerRadius}"
+                          Padding="{TemplateBinding Padding}"
+                          Content="{TemplateBinding Content}"
+                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                          HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}"
+                          VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}" />
+      </ControlTemplate>
+    </Setter>
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    <Setter Property="CornerRadius" Value="6" />
+    <Setter Property="VerticalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button">
+    <Setter Property="Padding" Value="10,7" />
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="BorderThickness" Value="2,0,0,0" />
+    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    <Setter Property="FontSize" Value="13" />
+  </Style>
+
+  <Style Selector="Border.settings-package-row">
+    <Setter Property="MinHeight" Value="36" />
+    <Setter Property="Margin" Value="0,2" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderThickness" Value="2,0,0,0" />
+    <Setter Property="CornerRadius" Value="6" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+  </Style>
+
+  <Style Selector="Border.settings-package-row:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button:pointerover, Button.settings-nav-button:pressed">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button.selected">
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
+  <Style Selector="Border.settings-package-row.selected">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Selected}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button.selected, Border.settings-package-row.selected Button.settings-nav-button">
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button.group-root, Button.settings-nav-button.group-root:pointerover">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Margin" Value="0" />
+  </Style>
+
+  <Style Selector="ToggleButton.settings-group-toggle">
+    <Setter Property="Width" Value="32" />
+    <Setter Property="Padding" Value="0" />
+    <Setter Property="BorderThickness" Value="1" />
+    <Setter Property="HorizontalContentAlignment" Value="Center" />
+  </Style>
+
+  <Style Selector="ToggleButton.settings-group-toggle:checked">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+  </Style>
+
+  <Style Selector="ToggleButton.settings-group-toggle:pointerover, ToggleButton.settings-group-toggle:pressed">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button:focus-visible, ToggleButton.settings-group-toggle:focus-visible">
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+  </Style>
+
+  <Style Selector="Button.settings-nav-button.group-root:focus-visible">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Accent.Overlay}" />
+  </Style>
+
+  <Style Selector="Border.settings-package-children">
+    <Setter Property="Margin" Value="14,2,0,4" />
+    <Setter Property="Padding" Value="8,0,0,0" />
+    <Setter Property="BorderThickness" Value="1,0,0,0" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
   </Style>
 
   <Style Selector="Button.star-action">

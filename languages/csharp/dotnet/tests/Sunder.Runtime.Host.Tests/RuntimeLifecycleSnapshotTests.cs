@@ -108,6 +108,7 @@ public sealed class RuntimeLifecycleSnapshotTests
         {
             new("first.view", "test.package", "First", Icon: null, DefaultPlacement: null),
         };
+        var requiredPackageIds = new List<string> { "required.dependency" };
         var session = new ActivePackageSession(
             sessionFolder: null,
             new Dictionary<string, ActiveLoadedPackage>(StringComparer.OrdinalIgnoreCase),
@@ -125,7 +126,7 @@ public sealed class RuntimeLifecycleSnapshotTests
                     FailureOrigin: null,
                     LastError: null,
                     LastFailureAtUtc: null,
-                    FailureCount: 0),
+                    FailureCount: 0) { RequiredPackageIds = requiredPackageIds },
             });
         var warnings = new List<string> { "original warning" };
         var errors = new List<string> { "original error" };
@@ -137,12 +138,16 @@ public sealed class RuntimeLifecycleSnapshotTests
             errors,
             expectedGeneration: 0);
         views[0] = views[0] with { Title = "mutated view" };
+        requiredPackageIds[0] = "mutated.dependency";
         warnings[0] = "mutated warning";
         errors[0] = "mutated error";
 
         var committed = owner.GetSnapshot();
         Assert.Equal("First", Assert.Single(Assert.Single(committed.ActivePackages).Views).Title);
         Assert.Equal("First", Assert.Single(Assert.Single(committed.SessionPackages).Views).Title);
+        Assert.Equal("required.dependency", Assert.Single(Assert.Single(committed.SessionPackages).RequiredPackageIds!));
+        Assert.Throws<NotSupportedException>(() =>
+            ((IList<string>)committed.SessionPackages[0].RequiredPackageIds!)[0] = "mutated.dependency");
         Assert.Equal("original warning", Assert.Single(committed.Warnings));
         Assert.Equal("original error", Assert.Single(committed.Errors));
         Assert.Throws<NotSupportedException>(() =>

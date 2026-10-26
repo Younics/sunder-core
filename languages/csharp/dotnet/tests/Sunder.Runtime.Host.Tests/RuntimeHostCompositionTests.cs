@@ -191,20 +191,21 @@ public sealed class RuntimeHostCompositionTests
         var largeRpc = RuntimeRpcPolicyOptions.FromResourcePolicy(RuntimeResourcePolicies.Large);
         var largeTransport = RuntimeTransportPolicyOptions.FromResourcePolicy(RuntimeResourcePolicies.Large);
 
-        Assert.Equal(8 * 1024 * 1024, standardRpc.MaxPayloadBytes);
-        Assert.Equal(524_288, standardRpc.MaxPayloadNodes);
-        Assert.Equal(4_096, standardRpc.MaxObjectMembers);
-        Assert.Equal(512 * 1024, standardRpc.MaxInlineDecodedBytes);
-        Assert.Equal(64L * 1024 * 1024, standardTransport.MaxRpcContentBytes);
-        Assert.Equal(256L * 1024 * 1024, standardTransport.MaxRpcContentBytesPerCall);
-        Assert.Equal(1024L * 1024 * 1024, standardTransport.MaxRpcContentBytesPerPackage);
-        Assert.Equal(2L * 1024 * 1024 * 1024, standardTransport.MaxRpcContentBytesPerRuntime);
+        Assert.Equal(32 * 1024 * 1024, standardRpc.MaxPayloadBytes);
+        Assert.Equal(4_194_304, standardRpc.MaxPayloadNodes);
+        Assert.Equal(65_536, standardRpc.MaxObjectMembers);
+        Assert.Equal(4 * 1024 * 1024, standardRpc.MaxInlineDecodedBytes);
+        Assert.Equal(256L * 1024 * 1024, standardTransport.MaxRpcContentBytes);
+        Assert.Equal(1024L * 1024 * 1024, standardTransport.MaxRpcContentBytesPerCall);
+        Assert.Equal(4L * 1024 * 1024 * 1024, standardTransport.MaxRpcContentBytesPerPackage);
+        Assert.Equal(8L * 1024 * 1024 * 1024, standardTransport.MaxRpcContentBytesPerRuntime);
+        Assert.Equal(256, standardTransport.MaxRpcContentReferencesPerCall);
 
-        Assert.Equal(16 * 1024 * 1024, largeRpc.MaxPayloadBytes);
-        Assert.Equal(2_097_152, largeRpc.MaxPayloadNodes);
-        Assert.Equal(16_384, largeRpc.MaxObjectMembers);
-        Assert.Equal(2 * 1024 * 1024, largeRpc.MaxInlineDecodedBytes);
-        Assert.Equal(256L * 1024 * 1024, largeTransport.MaxRpcContentBytes);
+        Assert.Equal(64 * 1024 * 1024, largeRpc.MaxPayloadBytes);
+        Assert.Equal(8_388_608, largeRpc.MaxPayloadNodes);
+        Assert.Equal(131_072, largeRpc.MaxObjectMembers);
+        Assert.Equal(8 * 1024 * 1024, largeRpc.MaxInlineDecodedBytes);
+        Assert.Equal(512L * 1024 * 1024, largeTransport.MaxRpcContentBytes);
         Assert.Equal(RuntimeTransportPolicyOptions.MaximumRpcContentBytesPerCall, largeTransport.MaxRpcContentBytesPerCall);
         Assert.Equal(RuntimeTransportPolicyOptions.MaximumRpcContentBytesPerPackage, largeTransport.MaxRpcContentBytesPerPackage);
         Assert.Equal(RuntimeTransportPolicyOptions.MaximumRpcContentBytesPerRuntime, largeTransport.MaxRpcContentBytesPerRuntime);

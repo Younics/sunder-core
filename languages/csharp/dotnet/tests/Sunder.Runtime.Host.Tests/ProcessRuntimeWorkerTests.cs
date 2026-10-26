@@ -2630,7 +2630,8 @@ public sealed partial class ProcessRuntimeWorkerTests
             string? packageDataRoot = null,
             IExecutionRuntimeProcessLease? executionRuntimeLease = null,
             bool callOwnership = false,
-            bool? declareExtendedDeadline = null)
+            bool? declareExtendedDeadline = null,
+            RuntimeRpcPolicyOptions? rpcPolicy = null)
         {
             var root = Path.Combine(Path.GetTempPath(), "sunder-worker-tests", Guid.NewGuid().ToString("N"));
             var shadow = Path.Combine(root, "projection");
@@ -2741,7 +2742,7 @@ public sealed partial class ProcessRuntimeWorkerTests
                 owner.State,
                 owner,
                 hostStopping: CancellationToken.None,
-                policy: null,
+                policy: rpcPolicy,
                 timeProvider: null,
                 contentStore: transfers,
                 transportPolicy: new RuntimeTransportPolicyOptions());

@@ -10,6 +10,9 @@ internal sealed class SettingsPackageSectionLoader(
     public async Task<SettingsPackageSectionsLoadResult> LoadAsync(CancellationToken cancellationToken)
     {
         var schemas = await runtimeApiClient.GetPackageSettingsSchemasAsync(cancellationToken);
+        var packages = runtimeApiClient is IRuntimeSnapshotClient snapshots
+            ? (await snapshots.GetRuntimePackageSnapshotAsync(cancellationToken)).SessionPackages
+            : [];
         cancellationToken.ThrowIfCancellationRequested();
 
         var sections = new List<SettingsSectionItemViewModel>();
@@ -45,10 +48,13 @@ internal sealed class SettingsPackageSectionLoader(
             .OrderBy(section => section.Title, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        return new SettingsPackageSectionsLoadResult(orderedSections, schemasByPackageId);
+        return new SettingsPackageSectionsLoadResult(orderedSections, schemasByPackageId) { Packages = packages };
     }
 }
 
 internal sealed record SettingsPackageSectionsLoadResult(
     IReadOnlyList<SettingsSectionItemViewModel> Sections,
-    IReadOnlyDictionary<string, PackageSettingsSchemaDescriptor> SchemasByPackageId);
+    IReadOnlyDictionary<string, PackageSettingsSchemaDescriptor> SchemasByPackageId)
+{
+    public IReadOnlyList<SessionPackageDescriptor> Packages { get; init; } = [];
+}

@@ -51,8 +51,8 @@ public sealed class RuntimeResourcePolicyLaunchTests
         var payload = RuntimeResourcePolicyContract.SerializeLaunchPayload(
             RuntimeResourcePolicies.Standard);
         payload = payload.Replace(
-            "\"rpcValueBytes\":8388608",
-            "\"rpcValueBytes\":33554433",
+            "\"rpcValueBytes\":33554432",
+            "\"rpcValueBytes\":67108865",
             StringComparison.Ordinal);
 
         WithLaunchEnvironment(payload, () =>
@@ -68,7 +68,7 @@ public sealed class RuntimeResourcePolicyLaunchTests
     public void EffectiveProfileHash_IsCanonicalAndStable()
     {
         const string standardHash =
-            "15bde75ca257659d5742c38f678a445bc4bdfb7e21eff9b81fedc3195e0a3ec9";
+            "193ef7db23f37ba14b8a95a2b3e8f95324c5aae6f2f05313351eb8636a24dc9e";
 
         Assert.Equal(
             standardHash,

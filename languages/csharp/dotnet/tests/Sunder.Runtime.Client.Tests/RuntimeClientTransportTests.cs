@@ -529,14 +529,14 @@ public sealed class RuntimeClientTransportTests
         await transport.NegotiateAsync();
 
         Assert.Equal(first.RuntimeInstanceId, transport.CurrentResourceProfile?.RuntimeInstanceId);
-        Assert.Equal(8 * RuntimeResourcePolicies.Mebibyte, transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
+        Assert.Equal(32 * RuntimeResourcePolicies.Mebibyte, transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
         Assert.Equal(first.ResourceProfile!.EffectiveProfileHash, transport.CurrentResourceProfile?.EffectiveProfileHash);
 
         current = second;
         await transport.RefreshHandshakeAsync();
 
         Assert.Equal(second.RuntimeInstanceId, transport.CurrentResourceProfile?.RuntimeInstanceId);
-        Assert.Equal(16 * RuntimeResourcePolicies.Mebibyte, transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
+        Assert.Equal(64 * RuntimeResourcePolicies.Mebibyte, transport.ResourceLimits.EffectivePolicy.MaximumRpcValueBytes);
         Assert.Equal(second.ResourceProfile!.EffectiveProfileHash, transport.CurrentResourceProfile?.EffectiveProfileHash);
     }
 

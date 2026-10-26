@@ -19,7 +19,7 @@ public sealed class RuntimeRpcCallFrameCalculatorTests
     public void Merge_PreservesSingleFrameAndCombinesMaximumDepthWithEarliestDeadline()
     {
         var first = new RuntimeRpcCallFrame(2, Now.AddMinutes(10));
-        var second = new RuntimeRpcCallFrame(5, Now.AddMinutes(20));
+        var second = new RuntimeRpcCallFrame(5, Now.AddMinutes(20)) { RecentCalls = ["package/service.method"] };
 
         Assert.Null(RuntimeRpcCallFrameCalculator.Merge(null, null));
         Assert.Same(first, RuntimeRpcCallFrameCalculator.Merge(first, null));
@@ -29,6 +29,33 @@ public sealed class RuntimeRpcCallFrameCalculatorTests
             RuntimeRpcCallFrameCalculator.Merge(first, second));
         Assert.Equal(5, merged.Depth);
         Assert.Equal(Now.AddMinutes(10), merged.DeadlineUtc);
+        Assert.Equal(second.RecentCalls, merged.RecentCalls);
+        Assert.Equal(second.RecentCalls, RuntimeRpcCallFrameCalculator.Merge(second, first)!.RecentCalls);
+    }
+
+    [Fact]
+    public void NestingDiagnostics_KeepOnlyBoundedSanitizedRecentCallsWithinWorkerMessageLimit()
+    {
+        RuntimeRpcCallFrame? parent = null;
+        for (var depth = 1; depth <= 128; depth++)
+        {
+            parent = RuntimeRpcCallFrameCalculator.CreateChild(parent, depth, Now.AddMinutes(5),
+                $"package{depth}/service.method\n{new string('x', 256)}");
+            Assert.InRange(parent.RecentCalls.Count, 1, 4);
+            Assert.All(parent.RecentCalls, call =>
+            {
+                Assert.InRange(call.Length, 1, 88);
+                Assert.DoesNotContain('\n', call);
+            });
+        }
+
+        var message = RuntimeRpcCallFrameCalculator.DescribeNestingLimit(parent, 129, 128, "next/service.method");
+        Assert.Contains("depth 129", message);
+        Assert.Contains("limit is 128", message);
+        Assert.Contains("package128/service.method", message);
+        Assert.DoesNotContain("package125/", message);
+        Assert.EndsWith("next/service.method", message);
+        Assert.InRange(message.Length, 1, 512);
     }
 
     [Fact]

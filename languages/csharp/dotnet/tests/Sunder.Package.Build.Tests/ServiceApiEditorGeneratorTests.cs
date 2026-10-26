@@ -13,7 +13,7 @@ using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed class ServiceApiEditorGeneratorTests
+public sealed partial class ServiceApiEditorGeneratorTests
 {
     [Fact]
     public void PortableAnalyzerReferencesOnlyCompilerAndNetstandardContracts()
@@ -27,6 +27,15 @@ public sealed class ServiceApiEditorGeneratorTests
         {
             "netstandard", "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp", "System.Collections.Immutable",
         }));
+        // Build tasks may use newer Roslyn, but an editor analyzer must still load
+        // in the minimum supported SDK's compiler without CS9057 or missing contracts.
+        foreach (var name in new[] { "Microsoft.CodeAnalysis", "Microsoft.CodeAnalysis.CSharp" })
+        {
+            Assert.Equal(new Version(5, 0, 0, 0),
+                Assert.Single(references, value => metadata.GetString(value.Name) == name).Version);
+        }
+        Assert.Equal(new Version(9, 0, 0, 0),
+            Assert.Single(references, value => metadata.GetString(value.Name) == "System.Collections.Immutable").Version);
     }
 
     [Fact]

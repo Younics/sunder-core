@@ -43,7 +43,7 @@ if ($Runtime -notin @("win-x64", "win-arm64")) {
 
 $vpk = Get-Command "vpk" -ErrorAction SilentlyContinue
 if ($null -eq $vpk) {
-    throw "The Velopack CLI 'vpk' was not found. Install it with: dotnet tool install --global vpk --version 0.0.1298"
+    throw "The Velopack CLI 'vpk' was not found. Install it with: dotnet tool install --global vpk --version 1.2.161"
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path

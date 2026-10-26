@@ -156,7 +156,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes squashfs-tools
           dotnet new globaljson --sdk-version 9.0.100 --roll-forward disable --output "$RUNNER_TEMP/velopack-sdk"
-          (cd "$RUNNER_TEMP/velopack-sdk" && dotnet tool install --tool-path "$RUNNER_TEMP/velopack" vpk --version 0.0.1298)
+          (cd "$RUNNER_TEMP/velopack-sdk" && dotnet tool install --tool-path "$RUNNER_TEMP/velopack" vpk --version 1.2.161)
           PATH="$RUNNER_TEMP/velopack:$PATH" bash scripts/release/package-sunder.sh \
             --version 1.0.0-smoke.1 --runtime linux-x64 --output-root "$RUNNER_TEMP/linux-package" --strict-release
           git diff --exit-code -- ':(glob)languages/csharp/dotnet/**/packages.lock.json'

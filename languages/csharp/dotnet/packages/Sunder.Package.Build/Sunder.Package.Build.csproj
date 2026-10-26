@@ -23,6 +23,10 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <SunderPackageBuildTaskSourceLockOwner>true</SunderPackageBuildTaskSourceLockOwner>
+    <!-- The editor analyzer runs in the consumer's compiler, including the 10.0.100
+         SDK floor (Roslyn 5.0). These are compile-only contracts,
+         independent of the newer Roslyn used by the isolated build tasks. -->
+    <_SunderEditorRoslynVersion>5.0.0</_SunderEditorRoslynVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -60,9 +64,13 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" PrivateAssets="all" GeneratePathProperty="true" />
     <PackageReference Include="Microsoft.CodeAnalysis.Common" PrivateAssets="all" GeneratePathProperty="true" />
     <PackageReference Include="NETStandard.Library" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" />
-    <!-- The portable editor compilation needs the netstandard reference; this is
-         not a runtime dependency of the net10 task assembly. -->
-    <PackageReference Include="System.Collections.Immutable" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" NoWarn="NU1510" />
+    <PackageDownload Include="Microsoft.CodeAnalysis.Common" Version="[$(_SunderEditorRoslynVersion)]" />
+    <PackageDownload Include="Microsoft.CodeAnalysis.CSharp" Version="[$(_SunderEditorRoslynVersion)]" />
+    <!-- Explicitly consumed by the portable compiler below, not a net10 runtime
+         dependency. The SDK's pruning diagnostic cannot see that reference. -->
+    <PackageReference Include="System.Collections.Immutable" PrivateAssets="all" ExcludeAssets="all" GeneratePathProperty="true" NoWarn="NU1510">
+      <IncludeAssets>none</IncludeAssets>
+    </PackageReference>
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" PrivateAssets="all" />
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" PrivateAssets="all" />
   </ItemGroup>
@@ -85,11 +93,13 @@
 
   <ItemGroup>
     <_SunderEditorSource Include="Editor/*.cs;Editor/Shared/*.cs" />
-    <_SunderEditorReference Include="$(PkgNETStandard_Library)/build/netstandard2.0/ref/*.dll;$(PkgMicrosoft_CodeAnalysis_Common)/lib/netstandard2.0/Microsoft.CodeAnalysis.dll;$(PkgMicrosoft_CodeAnalysis_CSharp)/lib/netstandard2.0/Microsoft.CodeAnalysis.CSharp.dll;$(PkgSystem_Collections_Immutable)/lib/netstandard2.0/System.Collections.Immutable.dll" />
+    <_SunderEditorReference Include="$(PkgNETStandard_Library)/build/netstandard2.0/ref/*.dll;$(NuGetPackageRoot)microsoft.codeanalysis.common/$(_SunderEditorRoslynVersion)/lib/netstandard2.0/Microsoft.CodeAnalysis.dll;$(NuGetPackageRoot)microsoft.codeanalysis.csharp/$(_SunderEditorRoslynVersion)/lib/netstandard2.0/Microsoft.CodeAnalysis.CSharp.dll;$(PkgSystem_Collections_Immutable)/lib/netstandard2.0/System.Collections.Immutable.dll" />
   </ItemGroup>
+  <!-- A restored contract can select an older file whose timestamp predates the
+       analyzer. Track the restore graph as well as the selected reference files. -->
   <Target Name="_BuildSunderEditorGenerator" BeforeTargets="CoreCompile"
           DependsOnTargets="_AcquireSunderPackageBuildTaskSourceLockForOwner"
-          Inputs="@(_SunderEditorSource);@(_SunderEditorReference);$(MSBuildProjectFullPath)"
+          Inputs="@(_SunderEditorSource);@(_SunderEditorReference);$(MSBuildProjectFullPath);$(ProjectAssetsFile)"
           Outputs="$(IntermediateOutputPath)sunder-editor-generator/Sunder.Package.Build.Editor.dll">
     <MakeDir Directories="$(IntermediateOutputPath)sunder-editor-generator" />
     <Csc Sources="@(_SunderEditorSource)" References="@(_SunderEditorReference)" NoStandardLib="true" NoConfig="true"

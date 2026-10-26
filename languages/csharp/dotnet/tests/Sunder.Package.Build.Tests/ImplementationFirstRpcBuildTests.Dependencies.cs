@@ -30,7 +30,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await File.WriteAllTextAsync(Path.Combine(backend, "Backend.Library.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><NuGetAudit>false</NuGetAudit></PropertyGroup>
-              <ItemGroup><PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" /></ItemGroup>
+              <ItemGroup><PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.13" /></ItemGroup>
             </Project>
             """);
         await File.WriteAllTextAsync(Path.Combine(backend, "Engine.cs"), """
@@ -71,9 +71,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
               <ItemGroup>
                 {{sdkReferences}}
                 <ProjectReference Include="../backend/Backend.Library.csproj" />
-                <PackageReference Include="Avalonia" Version="12.0.3" />
-                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+                <PackageReference Include="Avalonia" Version="12.1.4" />
+                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
               </ItemGroup>
               <Import Project="{{SecurityElement.Escape(Path.Combine(packages, "Sunder.Package.Build/build/Sunder.Package.Build.targets"))}}" />
               <Target Name="AssertRoleBuildImports" BeforeTargets="CoreCompile" Condition="'$(SunderPackageCompilationRole)' != ''">

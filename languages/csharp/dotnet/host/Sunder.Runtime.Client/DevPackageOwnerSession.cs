@@ -13,6 +13,10 @@ public interface IDevPackageOwnerSession : IAsyncDisposable
 
     Task ReleaseAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Observes only the original acknowledged lease. Never acquires, retargets or resolves a mutation.</summary>
+    Task<DevPackageOwnerLeaseResponse?> ObserveAsync(CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("This owner session does not support read-only lease observation.");
+
     /// <summary>Prepare, await shell retirement, and commit exact owner withdrawal. Failures propagate; null means no owned lease.</summary>
     Task<RuntimePackageSnapshot?> ReleaseStagedAsync(
         Func<PackageLifecycleStageResult, CancellationToken, Task> retireActivations,
@@ -29,6 +33,8 @@ public sealed class DevPackageOwnerSessionOptions
 {
     public TimeSpan ReleaseTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
+    public TimeSpan ReloadTimeout { get; init; } = TimeSpan.FromSeconds(30);
+
     public TimeSpan MinimumHeartbeatDelay { get; init; } = TimeSpan.FromSeconds(1);
 
     public TimeSpan MaximumHeartbeatDelay { get; init; } = TimeSpan.FromSeconds(10);
@@ -38,6 +44,10 @@ public sealed class DevPackageOwnerSessionOptions
         if (ReleaseTimeout <= TimeSpan.Zero || ReleaseTimeout == Timeout.InfiniteTimeSpan)
         {
             throw new ArgumentOutOfRangeException(nameof(ReleaseTimeout), "The owner release timeout must be bounded and positive.");
+        }
+        if (ReloadTimeout <= TimeSpan.Zero || ReloadTimeout == Timeout.InfiniteTimeSpan)
+        {
+            throw new ArgumentOutOfRangeException(nameof(ReloadTimeout), "The reload timeout must be bounded and positive.");
         }
         if (MinimumHeartbeatDelay <= TimeSpan.Zero)
         {
@@ -169,7 +179,9 @@ public sealed partial class DevPackageOwnerSession : IDevPackageOwnerSession
         try
         {
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-            if (_releaseCommitPending || _pendingRetirementCallback is { IsCompleted: false } || HasPendingReload)
+            if (HasPendingReload)
+                throw new InvalidOperationException("Resolve the original pending reload before acquiring another lease. Status observation does not require acquisition.");
+            if (_releaseCommitPending || _pendingRetirementCallback is { IsCompleted: false })
                 throw new InvalidOperationException("Resolve the pending acknowledged owner release before acquiring another lease.");
             _pendingRelease = null;
             _retiredReleaseStage = null;

@@ -1842,7 +1842,54 @@ public sealed partial class RuntimeRpcBrokerTests
                     "send",
                     JsonSerializer.SerializeToElement(new { message = "recursive" })));
             Assert.Equal(SunderRpcErrorKind.ResourceExhausted, depth.Error.Kind);
+            Assert.Equal("rpc.call.depth-limit", depth.Error.Code);
+            Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, depth.Error.DispatchState);
+            Assert.Equal(SunderRpcRetrySafety.Unsafe, depth.Error.RetrySafety);
+            Assert.Contains("depth 3", depth.Error.Message);
             Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+
+            handler.Unary = static (_, _) => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { accepted = true }));
+            var healthy = await callerClient.InvokeAsync(endpoint, "messages", "send",
+                JsonSerializer.SerializeToElement(new { message = "after-recursion" }));
+            Assert.True(healthy.GetProperty("accepted").GetBoolean());
+        }
+
+        // With the generous default nesting guard, actual simultaneous-call
+        // capacity can be reached first. It must still unwind without retiring
+        // the provider or leaking the leases needed by a subsequent request.
+        await using (var fixture = new RpcFixture())
+        {
+            var handler = new TestHandler();
+            var activation = await fixture.PublishAsync(handler, providerUsesContract: true);
+            await fixture.GrantAsync(SunderRpcProtocol.DiscoverAction);
+            await fixture.GrantAsync(SunderRpcProtocol.InvokeAction);
+            await fixture.GrantAsync("provider.package", SunderRpcProtocol.InvokeAction);
+            var callerClient = fixture.CreateClient(activation.Caller);
+            var providerClient = fixture.CreateClient(activation.Provider);
+            var endpoint = Assert.Single((await callerClient.DiscoverAsync("example.rpc")).Providers).Endpoint;
+            SunderRpcException? childRejection = null;
+            handler.Unary = async (request, token) =>
+            {
+                await Task.Yield();
+                try { return await providerClient.InvokeAsync(endpoint, "messages", "send", request, cancellationToken: token); }
+                catch (SunderRpcException failure)
+                {
+                    childRejection = failure;
+                    return JsonSerializer.SerializeToElement(new { accepted = true });
+                }
+            };
+
+            var handled = await callerClient.InvokeAsync(endpoint, "messages", "send",
+                JsonSerializer.SerializeToElement(new { message = "recursive-capacity" }));
+            Assert.True(handled.GetProperty("accepted").GetBoolean());
+            Assert.NotNull(childRejection);
+            Assert.Equal("rpc.caller.concurrency-limit", childRejection.Error.Code);
+            Assert.Equal(SunderRpcDispatchState.NotDispatched, childRejection.Error.DispatchState);
+            Assert.Equal(SunderRpcRetrySafety.Safe, childRejection.Error.RetrySafety);
+            Assert.Equal(SunderRpcProviderState.Active, Assert.Single(fixture.Catalog.GetSnapshot().Providers).State);
+            handler.Unary = static (_, _) => ValueTask.FromResult(JsonSerializer.SerializeToElement(new { accepted = true }));
+            Assert.True((await callerClient.InvokeAsync(endpoint, "messages", "send",
+                JsonSerializer.SerializeToElement(new { message = "after-capacity" }))).GetProperty("accepted").GetBoolean());
         }
     }
 

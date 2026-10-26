@@ -29,12 +29,12 @@ public sealed class RuntimeApiBoundaryTests
             new RuntimeProductVersionDiagnostics("Sunder.Runtime.Host", "1.2.3", "1.2.3+test"),
             new RuntimeResourceProfileDescriptor(
                 RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Standard),
-                8 * 1024 * 1024,
+                32 * 1024 * 1024,
                 64,
-                524_288,
-                4_096,
-                512 * 1024,
-                64 * 1024 * 1024));
+                4_194_304,
+                65_536,
+                4 * 1024 * 1024,
+                256 * 1024 * 1024));
         var actual = JsonSerializer.SerializeToNode(handshake, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         var fixturePath = Path.Combine(AppContext.BaseDirectory, "Fixtures", "RuntimeProtocolContracts.golden.json");
         var expected = JsonNode.Parse(File.ReadAllText(fixturePath));

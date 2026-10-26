@@ -95,7 +95,7 @@ internal sealed partial class AppDevelopmentViewOperations
                 }
             }
             using var bytes = new MemoryStream();
-            output.Save(bytes);
+            output.Save(bytes, PngBitmapEncoderOptions.Default);
             if (bytes.Length > 2 * 1024 * 1024) throw new InvalidDataException("Package image exceeds its 2 MiB budget. Capture one element instead.");
             RequireView(binding, token);
             if (selected is not null) _ = SelectedElement(binding, scope.SnapshotId!, scope.ElementReference!);

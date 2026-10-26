@@ -225,13 +225,16 @@ internal sealed partial class AppPackageDevelopmentService : IPackageDevelopment
                 await _gate.WaitAsync(operation.Token).ConfigureAwait(false);
                 try
                 {
-                    // Reuses the owner protocol to reacquire after a Host restart. No App
-                    // activation inference: readiness below is read from the actual Host snapshot.
-                    var lease = await owner.AcquireAsync([folder], _watch, operation.Token).ConfigureAwait(false);
-                    ValidateIdentity(lease);
+                    // Normal maintenance may reconnect an idle owner after a Host
+                    // restart. An unresolved reload must instead observe its original
+                    // lease: acquisition is both prohibited and unsafe at that boundary.
+                    var lease = _reloadUnresolved
+                        ? await owner.ObserveAsync(operation.Token).ConfigureAwait(false)
+                        : await owner.AcquireAsync([folder], _watch, operation.Token).ConfigureAwait(false);
+                    if (lease is not null) ValidateIdentity(lease);
                     var snapshot = await service.Backend.GetSnapshotAsync(operation.Token).ConfigureAwait(false);
                     var current = snapshot.SessionPackages.FirstOrDefault(item => string.Equals(item.PackageId, PackageId, StringComparison.Ordinal));
-                    var sameGeneration = snapshot.RuntimeInstanceId == lease.RuntimeInstanceId && snapshot.SessionGeneration >= lease.SessionGeneration
+                    var sameGeneration = lease is not null && snapshot.RuntimeInstanceId == lease.RuntimeInstanceId && snapshot.SessionGeneration >= lease.SessionGeneration
                         && lease.ExpiresAtUtc > DateTimeOffset.UtcNow;
                     var observed = sameGeneration && snapshot.BootstrapState == RuntimeBootstrapState.Ready && current is not null;
                     var installed = await service.Backend.IsInstalledAsync(PackageId, operation.Token).ConfigureAwait(false);
@@ -252,8 +255,8 @@ internal sealed partial class AppPackageDevelopmentService : IPackageDevelopment
                         && current.Readiness is PackageReadinessState.Ready or PackageReadinessState.Degraded
                         && (!hasApp || app.Readiness == PackageDevelopmentAppReadiness.Activated && app.AppliedSourceContentIdentity == sourceIdentity)
                             ? revision : null;
-                    var ownerPackage = lease.Packages[0];
-                    var effectiveWatch = ownerPackage.EffectiveWatch
+                    var ownerPackage = lease?.Packages[0];
+                    var effectiveWatch = lease is null ? false : ownerPackage!.EffectiveWatch
                         ?? throw new InvalidDataException("Update the Host to observe effective development watch state.");
                     operation.Token.ThrowIfCancellationRequested();
                     return new(PackageId, observed, effectiveWatch,
@@ -261,8 +264,8 @@ internal sealed partial class AppPackageDevelopmentService : IPackageDevelopment
                             : sameGeneration && snapshot.BootstrapState == RuntimeBootstrapState.Ready
                                 ? PackageDevelopmentRuntimeReadiness.NotLoaded : PackageDevelopmentRuntimeReadiness.Unknown,
                         observed ? current!.LastError : sameGeneration && snapshot.Errors.Count > 0 ? string.Join(" | ", snapshot.Errors)
-                            : "The Host has not yet confirmed this development owner in its current package snapshot.",
-                        observed && installed) { RequestedWatch = ownerPackage.Watch, AppReadiness = app.Readiness,
+                         : "The Host has not yet confirmed this original development owner in its current package snapshot. Observe its original operation before another mutation.",
+                         observed && installed) { RequestedWatch = ownerPackage?.Watch ?? _watch, AppReadiness = app.Readiness,
                             HostState = sameGeneration ? HostState(snapshot.BootstrapState) : PackageDevelopmentHostState.Reconnecting,
                             RuntimeRevision = revision, AppliedRevision = applied };
                 }

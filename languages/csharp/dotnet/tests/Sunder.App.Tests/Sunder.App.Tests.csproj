@@ -10,6 +10,8 @@
     <None Include="SdkCorpusAppProbe.cs" />
     <Compile Remove="PolicyHeartbeatProcessProbe.cs" />
     <None Include="PolicyHeartbeatProcessProbe.cs" />
+    <Compile Remove="MacOsWindowDelegateProcessProbe.cs" />
+    <None Include="MacOsWindowDelegateProcessProbe.cs" />
   </ItemGroup>
 
   <Target Name="WriteSunderAppTargetPathForTests"
@@ -42,5 +44,22 @@
          TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
          NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
          ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+
+  <Target Name="BuildMacOsWindowDelegateProcessProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectDirectory)/MacOsWindowDelegateProcessProbe.cs;@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)window-delegate-probe/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)window-delegate-probe" />
+    <Csc Sources="MacOsWindowDelegateProcessProbe.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)window-delegate-probe/Sunder.App.Tests.dll"
+         TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+  <Target Name="CopyMacOsWindowDelegateProbeNativeAssets" AfterTargets="BuildMacOsWindowDelegateProcessProbe">
+    <ItemGroup>
+      <_WindowDelegateProbeNative Include="$(TargetDir)runtimes/osx/native/*.dylib" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_WindowDelegateProbeNative)" DestinationFolder="$(TargetDir)window-delegate-probe" SkipUnchangedFiles="true" />
   </Target>
 </Project>

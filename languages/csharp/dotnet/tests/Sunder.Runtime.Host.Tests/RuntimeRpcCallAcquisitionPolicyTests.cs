@@ -200,6 +200,8 @@ public sealed class RuntimeRpcCallAcquisitionPolicyTests
             targetSupportsExtendedDeadline: true);
 
         Assert.Equal("rpc.call.depth-limit", depth.Failure!.Code);
+        Assert.Contains("2", depth.Failure.Message);
+        Assert.Contains("limit is 1", depth.Failure.Message);
         Assert.Equal(0, clock.UtcNowReads);
 
         var deadline = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
@@ -224,6 +226,52 @@ public sealed class RuntimeRpcCallAcquisitionPolicyTests
         Assert.Equal(1, success.Frame!.Depth);
         Assert.Equal(Now.AddMinutes(30), success.Frame.DeadlineUtc);
         Assert.Equal(2, clock.UtcNowReads);
+    }
+
+    [Fact]
+    public void FrameAcquisition_DefaultAllows128NestedCallsAndDoesNotCountSiblingOrSequentialCalls()
+    {
+        var policy = new RuntimeRpcPolicyOptions();
+        var clock = new CountingTimeProvider(Now);
+        RuntimeRpcCallFrame? parent = null;
+        for (var level = 1; level <= 128; level++)
+        {
+            var acquired = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
+                policy, null, parent, null, clock, targetSupportsExtendedDeadline: true);
+            Assert.True(acquired.Succeeded, acquired.Failure?.Message);
+            Assert.Equal(level, acquired.Frame!.Depth);
+            var sibling = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
+                policy, null, parent, null, clock, targetSupportsExtendedDeadline: true);
+            Assert.Equal(level, sibling.Frame!.Depth);
+            parent = acquired.Frame;
+        }
+
+        var rejected = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
+            policy, null, parent, null, clock, targetSupportsExtendedDeadline: true);
+        Assert.Equal("rpc.call.depth-limit", rejected.Failure!.Code);
+        Assert.Contains("129", rejected.Failure.Message);
+        Assert.Contains("limit is 128", rejected.Failure.Message);
+        for (var call = 0; call < 1000; call++)
+        {
+            var root = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
+                policy, null, null, null, clock, targetSupportsExtendedDeadline: true);
+            Assert.True(root.Succeeded);
+            Assert.Equal(1, root.Frame!.Depth);
+        }
+    }
+
+    [Fact]
+    public void FrameAcquisition_DepthCannotOverflowIntoAnAdmittedRoot()
+    {
+        var clock = new CountingTimeProvider(Now);
+        var rejected = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
+            new RuntimeRpcPolicyOptions { MaxNestedCallDepth = int.MaxValue }, null,
+            new RuntimeRpcCallFrame(int.MaxValue, Now.AddMinutes(5)), null, clock,
+            targetSupportsExtendedDeadline: true);
+
+        Assert.Equal("rpc.call.depth-limit", rejected.Failure!.Code);
+        Assert.Contains("2147483648", rejected.Failure.Message);
+        Assert.Equal(0, clock.UtcNowReads);
     }
 
     [Theory]

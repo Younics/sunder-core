@@ -18,6 +18,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
+[Collection(HeadlessAppCollection.Name)]
 public sealed partial class PackageViewHostServiceTests
 {
     [Fact]

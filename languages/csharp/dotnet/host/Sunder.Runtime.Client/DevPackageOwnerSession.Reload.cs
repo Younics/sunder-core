@@ -17,11 +17,12 @@ public sealed partial class DevPackageOwnerSession
             || sourceContentIdentity is not { Length: 64 } || !sourceContentIdentity.All(c => c is >= '0' and <= '9' or >= 'a' and <= 'f'))
             throw new ArgumentException("Explicit reload requires an operation id, package id and canonical source content identity.");
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
-        using var timeout = new CancellationTokenSource(_options.ReleaseTimeout);
+        using var timeout = new CancellationTokenSource(_options.ReloadTimeout);
         using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
-        await _mutationGate.WaitAsync(operation.Token).ConfigureAwait(false);
+        var entered = false;
         try
         {
+            await _mutationGate.WaitAsync(operation.Token).ConfigureAwait(false); entered = true;
             if (_pendingRelease is not null || _releaseCommitPending)
                 throw new InvalidOperationException("Resolve the exact pending owner release before reloading.");
             if (_reload?.Request.MutationId != operationId)
@@ -47,18 +48,21 @@ public sealed partial class DevPackageOwnerSession
                 var handshake = await client.GetRuntimeHandshakeAsync(operation.Token).ConfigureAwait(false);
                 if (handshake.RuntimeInstanceId != reload.Request.RuntimeInstanceId)
                     throw new InvalidOperationException("The reload belongs to the previous Runtime. Its outcome is unknown; do not replay it.");
-                reload.Prepared ??= await client.StageDevPackageOwnerReloadAsync(OwnerId, reload.Request, operation.Token).ConfigureAwait(false);
+                reload.Phase = "preparing";
+                reload.Prepared ??= await ResolveAsync(() => client.StageDevPackageOwnerReloadAsync(OwnerId, reload.Request, operation.Token)).ConfigureAwait(false);
                 var prepared = reload.Prepared;
                 var stage = prepared.Stage;
                 if (!stage.Success || stage.StageId is null || stage.BaseStamp?.RuntimeInstanceId != reload.Request.RuntimeInstanceId
                     || prepared.PackageId != packageId || prepared.SourceContentIdentity != sourceContentIdentity)
                     throw new InvalidDataException("Runtime returned a mismatched development reload stage.");
+                reload.Phase = "retiring";
                 if (reload.Retirement is null || reload.Retirement.IsCanceled || reload.Retirement.IsFaulted)
                     reload.Retirement = retireActivations(stage, operation.Token);
                 await reload.Retirement.WaitAsync(operation.Token).ConfigureAwait(false);
                 operation.Token.ThrowIfCancellationRequested();
                 reload.CommitStarted = true;
-                var result = await client.CommitDevPackageOwnerReloadAsync(OwnerId, CommitRequest(reload), operation.Token).ConfigureAwait(false);
+                reload.Phase = "committing";
+                var result = await ResolveAsync(() => client.CommitDevPackageOwnerReloadAsync(OwnerId, CommitRequest(reload), operation.Token)).ConfigureAwait(false);
                 var current = result.Snapshot.SessionPackages.SingleOrDefault(package => package.PackageId == packageId);
                 if (result.RuntimeInstanceId != reload.Request.RuntimeInstanceId || result.OwnerId != OwnerId || result.StageId != stage.StageId
                     || result.PackageId != packageId || result.SourceContentIdentity != sourceContentIdentity
@@ -67,6 +71,25 @@ public sealed partial class DevPackageOwnerSession
                     throw new InvalidDataException("Runtime returned a mismatched development reload acknowledgement.");
                 reload.Result = result;
                 return result;
+
+                async Task<T> ResolveAsync<T>(Func<Task<T>> resolve)
+                {
+                    while (true)
+                    {
+                        operation.Token.ThrowIfCancellationRequested();
+                        try { return await resolve().ConfigureAwait(false); }
+                        catch (Exception error) when (error is HttpRequestException
+                            or RuntimeClientException { StatusCode: HttpStatusCode.RequestTimeout or HttpStatusCode.BadGateway
+                                or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout })
+                        {
+                            // Only this originally admitted reload resolves its exact
+                            // idempotent stage/commit. Status readers never do this,
+                            // and no new build, owner, output or retirement is selected.
+                            reload.LastTransportFailure ??= error;
+                            await Task.Delay(TimeSpan.FromMilliseconds(50), operation.Token).ConfigureAwait(false);
+                        }
+                    }
+                }
             }
             catch (Exception error)
             {
@@ -87,9 +110,10 @@ public sealed partial class DevPackageOwnerSession
         }
         catch (OperationCanceledException error) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException("The explicit development reload exceeded its bounded operation budget. Resolve this operation before retrying a build.", error);
+            throw new TimeoutException($"The explicit development reload exceeded its bounded {_reload?.Phase ?? "admission"} budget. Observe this original operation before another mutation.",
+                _reload?.LastTransportFailure ?? error);
         }
-        finally { _mutationGate.Release(); }
+        finally { if (entered) _mutationGate.Release(); }
     }
 
     private static DevPackageOwnerReloadCommitRequest CommitRequest(ReloadOperation reload)
@@ -103,5 +127,7 @@ public sealed partial class DevPackageOwnerSession
         internal bool CommitStarted { get; set; }
         internal DevPackageOwnerReloadResult? Result { get; set; }
         internal Exception? Failure { get; set; }
+        internal Exception? LastTransportFailure { get; set; }
+        internal string Phase { get; set; } = "preparing";
     }
 }

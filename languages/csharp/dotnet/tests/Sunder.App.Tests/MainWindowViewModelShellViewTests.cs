@@ -25,6 +25,7 @@ using static Sunder.App.Tests.TestSupport.TestPaths;
 
 namespace Sunder.App.Tests;
 
+[Collection(HeadlessAppCollection.Name)]
 public sealed class MainWindowViewModelShellViewTests
 {
     [Fact]
@@ -1406,7 +1407,7 @@ public sealed class MainWindowViewModelShellViewTests
     [Fact]
     public async Task LayoutController_RealSplitterDragHasSingleGeometryOwner()
     {
-        using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
+        await using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
         await ui.Dispatch(async () =>
         {
             using var harness = CreateHarness();
@@ -1439,6 +1440,12 @@ public sealed class MainWindowViewModelShellViewTests
                 var original = top.ColumnDefinitions[4].ActualWidth;
                 var origin = splitter.TranslatePoint(new Point(2, 100), window)!.Value;
                 Avalonia.Headless.HeadlessWindowExtensions.MouseDown(window, origin, Avalonia.Input.MouseButton.Left);
+                // Avalonia 12 starts the drag after the threshold-crossing move;
+                // measure deltas from that established gesture, not MouseDown.
+                origin += new Vector(-10, 0);
+                Avalonia.Headless.HeadlessWindowExtensions.MouseMove(window, origin);
+                window.UpdateLayout();
+                original = top.ColumnDefinitions[4].ActualWidth;
                 for (var step = 1; step <= 6; step++)
                 {
                     var target = origin + new Vector(-step * 10, 0);

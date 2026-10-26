@@ -37,13 +37,14 @@ public sealed class RuntimeResourcePolicyStatusSourceTests
             Assert.True(viewModel.ShowPendingNotice);
             Assert.Equal(
                 RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Standard),
-                viewModel.CurrentProfileHash);
+                transport.CurrentResourceProfile?.EffectiveProfileHash);
 
             current = Handshake(RuntimeResourcePolicies.Large);
             await viewModel.RefreshCurrentEffectivePolicyAsync(CancellationToken.None);
 
             Assert.False(viewModel.ShowPendingNotice);
-            Assert.Equal(viewModel.DesiredProfileHash, viewModel.CurrentProfileHash);
+            Assert.Equal(RuntimeResourcePolicyContract.GetEffectiveProfileHash(RuntimeResourcePolicies.Large),
+                transport.CurrentResourceProfile?.EffectiveProfileHash);
             Assert.Equal(current.RuntimeInstanceId, transport.CurrentResourceProfile?.RuntimeInstanceId);
             Assert.Equal(2, handler.RequestCount);
         }

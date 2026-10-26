@@ -18,6 +18,7 @@ public sealed class SettingsPackageSectionsViewModel : ViewModelBase
     }
 
     public ObservableCollection<SettingsSectionItemViewModel> PackageSections { get; } = [];
+    public ObservableCollection<SettingsPackageNavigationGroup> NavigationGroups { get; } = [];
 
     public ObservableCollection<SettingsFieldSectionViewModel> SelectedPackageSections { get; } = [];
 
@@ -28,6 +29,7 @@ public sealed class SettingsPackageSectionsViewModel : ViewModelBase
 
     internal void ApplySections(SettingsPackageSectionsLoadResult result)
     {
+        var expanded = NavigationGroups.Where(group => group.IsExpanded).Select(group => group.Root.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
         PackageSections.Clear();
         _schemasByPackageId.Clear();
 
@@ -40,12 +42,28 @@ public sealed class SettingsPackageSectionsViewModel : ViewModelBase
         {
             PackageSections.Add(section);
         }
+        NavigationGroups.Clear();
+        foreach (var group in SettingsPackageNavigationProjector.Project(result.Sections, result.Packages))
+        {
+            group.IsExpanded = expanded.Contains(group.Root.PackageId);
+            NavigationGroups.Add(group);
+        }
 
         OnPropertyChanged(nameof(HasPackageSections));
     }
 
     internal SettingsSectionItemViewModel? FindSection(string packageId)
         => PackageSections.FirstOrDefault(section => string.Equals(section.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
+
+    internal void RevealSection(SettingsSectionItemViewModel section)
+    {
+        foreach (var group in NavigationGroups.Where(group => group.Children.Contains(section))) group.IsExpanded = true;
+    }
+
+    internal void CollapseNavigationGroups()
+    {
+        foreach (var group in NavigationGroups) group.IsExpanded = false;
+    }
 
     internal bool TryGetSchema(string packageId, out PackageSettingsSchemaDescriptor? schema)
         => _schemasByPackageId.TryGetValue(packageId, out schema);

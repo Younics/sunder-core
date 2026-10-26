@@ -11,6 +11,7 @@ public sealed partial class DevPackageOwnerSessionTests
     private static readonly DevPackageOwnerSessionOptions FastOptions = new()
     {
         ReleaseTimeout = TimeSpan.FromMilliseconds(100),
+        ReloadTimeout = TimeSpan.FromMilliseconds(100),
         MinimumHeartbeatDelay = TimeSpan.FromMilliseconds(10),
         MaximumHeartbeatDelay = TimeSpan.FromMilliseconds(20),
     };

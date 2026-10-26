@@ -3852,12 +3852,12 @@ function resourceProfile(value: JsonValue | undefined, expectedHash: string): Wo
     contentReferenceBytes: integerValue(root, "contentReferenceBytes"),
   };
   if (profile.version !== 1
-    || profile.rpcValueBytes <= 0 || profile.rpcValueBytes > 32 * 1024 * 1024
+    || profile.rpcValueBytes <= 0 || profile.rpcValueBytes > 64 * 1024 * 1024
     || profile.valueDepth <= 0 || profile.valueDepth > 64
-    || profile.valueNodes <= 0 || profile.valueNodes > 4_194_304
-    || profile.objectMembers <= 0 || profile.objectMembers > 65_536
-    || profile.inlineDecodedBytes <= 0 || profile.inlineDecodedBytes > 4 * 1024 * 1024
-    || profile.contentReferenceBytes <= 0 || profile.contentReferenceBytes > 256 * 1024 * 1024) {
+    || profile.valueNodes <= 0 || profile.valueNodes > 8_388_608
+    || profile.objectMembers <= 0 || profile.objectMembers > 131_072
+    || profile.inlineDecodedBytes <= 0 || profile.inlineDecodedBytes > 8 * 1024 * 1024
+    || profile.contentReferenceBytes <= 0 || profile.contentReferenceBytes > 512 * 1024 * 1024) {
     throw new ProtocolError("Host resourceProfile exceeds Worker V1 protocol ceilings.");
   }
   const normalized: WorkerResourceProfile = Object.freeze({ ...profile, version: 1 });

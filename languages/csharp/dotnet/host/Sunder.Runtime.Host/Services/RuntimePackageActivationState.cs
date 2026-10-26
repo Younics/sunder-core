@@ -11,4 +11,7 @@ internal sealed record RuntimePackageActivationState(
     string? Icon,
     SunderPackageTargetKey? SelectedTargetKey = null,
     SunderPackageTargetManifest? SelectedTarget = null,
-    IReadOnlyList<SunderPackageContractUseManifest?>? RpcContractUses = null);
+    IReadOnlyList<SunderPackageContractUseManifest?>? RpcContractUses = null)
+{
+    public IReadOnlyList<string>? RequiredPackageIds { get; init; }
+}

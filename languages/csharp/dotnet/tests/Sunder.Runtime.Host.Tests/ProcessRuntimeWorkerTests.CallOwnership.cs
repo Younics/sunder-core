@@ -12,7 +12,7 @@ public sealed partial class ProcessRuntimeWorkerTests
     [InlineData(false, true)]
     [InlineData(true, true)]
     [InlineData(true, false)]
-    public async Task Worker_CallOwnershipSeparatesWatchDeadlineWithoutDroppingParentOrDepth(bool callOwnership, bool declareExtendedDeadline)
+    public async Task Worker_CallOwnershipSeparatesRootsAndSiblingsWhileRetainingNamedParent(bool callOwnership, bool declareExtendedDeadline)
     {
         await using var fixture = await WorkerFixture.CreateAsync("nested-call-ownership",
             callOwnership: callOwnership, declareExtendedDeadline: declareExtendedDeadline);
@@ -30,7 +30,10 @@ public sealed partial class ProcessRuntimeWorkerTests
         var named = status.RootElement.GetProperty("namedDeadline").GetDateTimeOffset();
         var root = status.RootElement.GetProperty("rootDeadline").GetDateTimeOffset();
         Assert.Equal(callOwnership, result.GetProperty("accepted").GetBoolean());
-        Assert.Equal(3, status.RootElement.GetProperty("rootDepth").GetInt32());
+        Assert.Equal(2, status.RootElement.GetProperty("namedDepth").GetInt32());
+        Assert.Equal(3, status.RootElement.GetProperty("nestedDepth").GetInt32());
+        Assert.Equal(callOwnership ? 2 : 4, status.RootElement.GetProperty("siblingDepth").GetInt32());
+        Assert.Equal(callOwnership ? 1 : 5, status.RootElement.GetProperty("rootDepth").GetInt32());
         Assert.Equal("1", status.RootElement.GetProperty("lineageEnabled").GetString());
         if (callOwnership)
         {

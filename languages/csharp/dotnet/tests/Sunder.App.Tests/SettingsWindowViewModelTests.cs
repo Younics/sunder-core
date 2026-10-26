@@ -593,7 +593,7 @@ public sealed class SettingsWindowViewModelTests
     }
 
     [Fact]
-    public async Task AdvancedRuntimeResources_ShowsDesiredAndReportedCurrentEffectivePolicy()
+    public async Task AdvancedRuntimeResources_ShowsEditableCustomLimitsAndUsesReportedPolicyForPendingNotice()
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-settings-tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
@@ -624,8 +624,7 @@ public sealed class SettingsWindowViewModelTests
             Assert.True(viewModel.ShowAdvancedSettings);
             Assert.True(viewModel.RuntimeResources.IsCustom);
             Assert.Equal("10", viewModel.RuntimeResources.CustomRpcValueMiBText);
-            Assert.Contains("10 MiB RPC value", viewModel.RuntimeResources.DesiredEffectiveText, StringComparison.Ordinal);
-            Assert.Equal(viewModel.RuntimeResources.DesiredProfileHash, viewModel.RuntimeResources.CurrentProfileHash);
+            Assert.False(viewModel.RuntimeResources.AreLimitsReadOnly);
             Assert.False(viewModel.RuntimeResources.ShowPendingNotice);
             Assert.Equal(1, statusSource.GetCount);
         }
@@ -656,7 +655,7 @@ public sealed class SettingsWindowViewModelTests
             await viewModel.SelectSectionAsync(viewModel.CoreSections.Single(section => section.Id == "advanced"));
             viewModel.RuntimeResources.SelectedPresetOption = viewModel.RuntimeResources.PresetOptions.Single(
                 option => option.Preset == RuntimeResourcePolicyPreset.Custom);
-            viewModel.RuntimeResources.CustomRpcValueMiBText = "33";
+            viewModel.RuntimeResources.CustomRpcValueMiBText = "65";
             viewModel.RuntimeResources.SelectedPresetOption = viewModel.RuntimeResources.PresetOptions.Single(
                 option => option.Preset == RuntimeResourcePolicyPreset.Large);
 
@@ -694,14 +693,14 @@ public sealed class SettingsWindowViewModelTests
             await viewModel.SelectSectionAsync(viewModel.CoreSections.Single(section => section.Id == "advanced"));
             viewModel.RuntimeResources.SelectedPresetOption = viewModel.RuntimeResources.PresetOptions.Single(
                 option => option.Preset == RuntimeResourcePolicyPreset.Custom);
-            viewModel.RuntimeResources.CustomRpcValueMiBText = "33";
+            viewModel.RuntimeResources.CustomRpcValueMiBText = "65";
 
             var applied = await viewModel.ApplyAsync();
 
             Assert.False(applied);
             Assert.False(File.Exists(settingsPath));
             Assert.True(viewModel.RuntimeResources.HasValidationError);
-            Assert.Contains("1 to 32", viewModel.StatusText, StringComparison.Ordinal);
+            Assert.Contains("1 to 64", viewModel.StatusText, StringComparison.Ordinal);
         }
         finally
         {
@@ -832,8 +831,49 @@ public sealed class SettingsWindowViewModelTests
                     ]),
             ]);
 
-    private sealed class FakeRuntimeApiClient : IRuntimePackageSettingsClient
+    [Fact]
+    public async Task RequiredDependencyNavigation_RevealsDirectSelectionAndPreservesExpansionAcrossRefreshButReopensCollapsed()
     {
+        using var runtime = new FakeRuntimeApiClient
+        {
+            ConfigurationSchemas = [CreateSchema("root", "AI Agent"), CreateSchema("child", "AI Agent - OpenAI")],
+            SessionPackages = [Package("root"), Package("child", "root")],
+        };
+        using var vm = CreateViewModel(runtime);
+        await vm.RefreshPackageSectionsAsync();
+        var group = Assert.Single(vm.PackageSettings.NavigationGroups);
+        Assert.False(group.IsExpanded);
+        Assert.True(await vm.SelectPackageSettingsAsync("child"));
+        Assert.True(group.IsExpanded);
+        Assert.True(Assert.Single(group.Children).IsSelected);
+        Assert.Equal("OpenAI", Assert.Single(group.Children).NavigationTitle);
+        Assert.Equal("AI Agent - OpenAI", vm.SelectedTitle);
+        await vm.RefreshPackageSectionsAsync();
+        var refreshed = Assert.Single(vm.PackageSettings.NavigationGroups);
+        Assert.NotSame(group, refreshed);
+        Assert.True(refreshed.IsExpanded);
+        Assert.True(Assert.Single(refreshed.Children).IsSelected);
+        Assert.Equal("OpenAI", Assert.Single(refreshed.Children).NavigationTitle);
+        vm.SetWindowVisible(true);
+        Assert.False(refreshed.IsExpanded);
+        Assert.True(await vm.SelectPackageSettingsAsync("root"));
+        Assert.True(refreshed.Root.IsSelected);
+        Assert.False(refreshed.IsExpanded);
+        Assert.True(await vm.SelectPackageSettingsAsync("child"));
+        Assert.True(refreshed.IsExpanded);
+
+        static SessionPackageDescriptor Package(string id, params string[] required)
+            => new(id, id, "1.0.0", PackageHostRoles.Runtime, null, true, PackageReadinessState.Ready,
+                [], null, null, null, 0) { RequiredPackageIds = required };
+    }
+
+    private sealed class FakeRuntimeApiClient : IRuntimePackageSettingsClient, IRuntimeSnapshotClient
+    {
+        public IReadOnlyList<SessionPackageDescriptor> SessionPackages { get; init; } = [];
+
+        public Task<RuntimePackageSnapshot> GetRuntimePackageSnapshotAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(new RuntimePackageSnapshot(Guid.NewGuid(), 1, 1, RuntimeBootstrapState.Ready, [], SessionPackages, [], []));
+
         public IReadOnlyList<PackageSettingsSchemaDescriptor> ConfigurationSchemas { get; set; } = [];
 
         public Dictionary<string, PackageSettingsValuesResponse?> ConfigurationValues { get; } = new(StringComparer.OrdinalIgnoreCase);

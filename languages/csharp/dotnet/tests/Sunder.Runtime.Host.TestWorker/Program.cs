@@ -667,6 +667,12 @@ while (true)
         var id = root.GetProperty("id").GetString();
         var kind = root.GetProperty("kind").GetString();
         var method = root.GetProperty("methodId").GetString();
+        if (mode == "nested-call-nesting")
+        {
+            await CallNestingProbe.HandleAsync(root,
+                () => ReadFrameAsync(input), value => WriteFrameAsync(output, value), WriteStatusAsync);
+            continue;
+        }
         if (mode == "nested-call-ownership")
         {
             await callOwnershipProbe.HandleAsync(root,

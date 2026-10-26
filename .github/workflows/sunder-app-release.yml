@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 env:
   DOTNET_VERSION: "10.0.100"
-  VELOPACK_VERSION: "0.0.1298"
+  VELOPACK_VERSION: "1.2.161"
   RELEASE_CHANNEL: stable
   RELEASE_REPO_URL: https://github.com/${{ github.repository }}
 

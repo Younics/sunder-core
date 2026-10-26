@@ -357,6 +357,10 @@ public sealed partial class AppPackageDevelopmentServiceTests
             await Assert.ThrowsAsync<IOException>(() => session.ReloadAsync("reload", identity));
             await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReloadAsync("new-operation", new('d', 64)));
             await Assert.ThrowsAsync<InvalidOperationException>(() => session.ReloadAsync("reload", new('d', 64)));
+            var acquisitions = owner.Acquisitions;
+            await session.GetStatusAsync();
+            Assert.Equal(acquisitions, owner.Acquisitions);
+            Assert.Equal(1, owner.Observations);
             backend.FailReload = false;
         }
         var result = await session.ReloadAsync("reload", identity);
@@ -536,14 +540,23 @@ public sealed partial class AppPackageDevelopmentServiceTests
     private sealed class Owner(Backend backend) : IDevPackageOwnerSession
     {
         internal int Disposals { get; private set; }
+        internal int Acquisitions { get; private set; }
+        internal int Observations { get; private set; }
         internal bool Watch { get; private set; }
         public async Task<DevPackageOwnerLeaseResponse> AcquireAsync(IReadOnlyList<string> folders, bool watch, CancellationToken cancellationToken = default)
         {
             Assert.Single(folders);
+            Acquisitions++;
             Watch = watch;
             backend.Acquiring.TrySetResult();
             if (backend.BlockAcquire) await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return new(backend.RuntimeId, "owner", "mutation", 1, DateTimeOffset.UtcNow.AddMinutes(1), 3, [new("demo", watch) { EffectiveWatch = true }]);
+        }
+        public Task<DevPackageOwnerLeaseResponse?> ObserveAsync(CancellationToken cancellationToken = default)
+        {
+            Observations++;
+            return Task.FromResult<DevPackageOwnerLeaseResponse?>(new(backend.RuntimeId, "owner", "mutation", 1,
+                DateTimeOffset.UtcNow.AddMinutes(1), 3, [new("demo", Watch) { EffectiveWatch = true }]));
         }
         public Task ReleaseAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public ValueTask DisposeAsync() { Disposals++; return ValueTask.CompletedTask; }

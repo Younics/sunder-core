@@ -48,7 +48,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await File.WriteAllTextAsync(Path.Combine(native, "helper/Helper.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup><TargetFramework>net10.0</TargetFramework><NuGetAudit>false</NuGetAudit></PropertyGroup>
-              <ItemGroup><PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" /></ItemGroup>
+              <ItemGroup><PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" /></ItemGroup>
             </Project>
             """);
         await File.WriteAllTextAsync(Path.Combine(native, "helper/Helper.cs"), "public static class Helper { public static string Render(string value) => value; }");

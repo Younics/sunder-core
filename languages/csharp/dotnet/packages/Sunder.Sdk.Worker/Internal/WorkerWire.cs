@@ -55,12 +55,12 @@ internal static class WorkerWire
             ReadPositiveInt32(value, "inlineDecodedBytes"),
             ReadPositiveInt32(value, "contentReferenceBytes"));
         if (profile.Version != 1
-            || profile.RpcValueBytes > 32 * 1024 * 1024
+            || profile.RpcValueBytes > 64 * 1024 * 1024
             || profile.ValueDepth > 64
-            || profile.ValueNodes > 4_194_304
-            || profile.ObjectMembers > 65_536
-            || profile.InlineDecodedBytes > 4 * 1024 * 1024
-            || profile.ContentReferenceBytes > 256 * 1024 * 1024)
+            || profile.ValueNodes > 8_388_608
+            || profile.ObjectMembers > 131_072
+            || profile.InlineDecodedBytes > 8 * 1024 * 1024
+            || profile.ContentReferenceBytes > 512 * 1024 * 1024)
         {
             throw new WorkerProtocolException("Host resourceProfile exceeds Worker V1 protocol ceilings.");
         }

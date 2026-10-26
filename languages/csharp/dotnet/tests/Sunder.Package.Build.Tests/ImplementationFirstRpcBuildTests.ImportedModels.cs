@@ -139,9 +139,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
               </PropertyGroup>
               <ItemGroup>
                 {{string.Join(Environment.NewLine, references.Select(name => $"<Reference Include=\"{name}\" HintPath=\"{SecurityElement.Escape(Path.Combine(Path.GetDirectoryName(taskAssembly)!, name + ".dll"))}\" Private=\"true\" />"))}}
-                {{(app ? "<PackageReference Include=\"Avalonia\" Version=\"12.0.3\" />" : "")}}
-                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+                {{(app ? "<PackageReference Include=\"Avalonia\" Version=\"12.1.4\" />" : "")}}
+                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
               </ItemGroup>
               <Import Project="{{SecurityElement.Escape(Path.Combine(FindRepositoryRoot(), "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.targets"))}}" />
             </Project>

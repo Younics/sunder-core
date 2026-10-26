@@ -64,7 +64,10 @@ internal static class PackageProtocolMapper
             lastError,
             lastError is null ? null : DateTimeOffset.UtcNow,
             failureCount,
-            ToProtocolRpcContractUses(activation.RpcContractUses));
+            ToProtocolRpcContractUses(activation.RpcContractUses))
+        {
+            RequiredPackageIds = activation.RequiredPackageIds,
+        };
     }
 
     public static SessionPackageDescriptor BuildSessionDescriptor(
@@ -90,7 +93,10 @@ internal static class PackageProtocolMapper
             lastError,
             lastError is null ? null : DateTimeOffset.UtcNow,
             failureCount,
-            ToProtocolRpcContractUses(activation.RpcContractUses));
+            ToProtocolRpcContractUses(activation.RpcContractUses))
+        {
+            RequiredPackageIds = activation.RequiredPackageIds,
+        };
     }
 
     private static IReadOnlyList<PackageRpcContractUseDescriptor> ToProtocolRpcContractUses(

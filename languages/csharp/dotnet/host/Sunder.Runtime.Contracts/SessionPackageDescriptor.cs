@@ -15,6 +15,16 @@ public sealed record SessionPackageDescriptor(
     int FailureCount,
     IReadOnlyList<PackageRpcContractUseDescriptor>? RpcContractUses = null)
 {
+    private IReadOnlyList<string>? _requiredPackageIds;
+
+    /// <summary>Validated required dependencies of this exact session source; null on older Hosts.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<string>? RequiredPackageIds
+    {
+        get => _requiredPackageIds;
+        init => _requiredPackageIds = value is null ? null : RuntimeContractCollections.Freeze(value);
+    }
+
     /// <summary>Full content identity of the actual validated source in this Runtime snapshot; absent on older Hosts.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? SourceContentIdentity { get; init; }

@@ -52,8 +52,8 @@ public sealed class AppRuntimeResourcePolicySettingsServiceTests
             RuntimeResourcePolicies.DefaultSelection,
             writeIndented: false));
         File.WriteAllText(path, json.Replace(
-            "\"contentReferenceBytes\":67108864",
-            "\"contentReferenceBytes\":268435457",
+            "\"contentReferenceBytes\":268435456",
+            "\"contentReferenceBytes\":536870913",
             StringComparison.Ordinal));
         var service = new AppRuntimeResourcePolicySettingsService(path);
 

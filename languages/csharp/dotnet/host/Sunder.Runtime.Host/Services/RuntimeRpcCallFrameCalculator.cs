@@ -2,19 +2,50 @@ using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed record RuntimeRpcCallFrame(int Depth, DateTimeOffset DeadlineUtc);
+internal sealed record RuntimeRpcCallFrame(int Depth, DateTimeOffset DeadlineUtc)
+{
+    // Host-only, bounded diagnostic tail. Never includes arguments or content.
+    public IReadOnlyList<string> RecentCalls { get; init; } = [];
+}
 
 internal static class RuntimeRpcCallFrameCalculator
 {
+    private const int MaximumRecentCalls = 4;
+    private const int MaximumCallSiteCharacters = 88;
+
     public static RuntimeRpcCallFrame? Merge(
         RuntimeRpcCallFrame? first,
         RuntimeRpcCallFrame? second)
     {
         if (first is null) return second;
         if (second is null) return first;
-        return new RuntimeRpcCallFrame(
-            Math.Max(first.Depth, second.Depth),
-            first.DeadlineUtc < second.DeadlineUtc ? first.DeadlineUtc : second.DeadlineUtc);
+        var deepest = first.Depth >= second.Depth ? first : second;
+        return deepest with
+        {
+            DeadlineUtc = first.DeadlineUtc < second.DeadlineUtc ? first.DeadlineUtc : second.DeadlineUtc,
+        };
+    }
+
+    public static RuntimeRpcCallFrame CreateChild(
+        RuntimeRpcCallFrame? parent, int depth, DateTimeOffset deadline, string? callSite)
+        => new(depth, deadline) { RecentCalls = AppendCallSite(parent, callSite) };
+
+    public static string DescribeNestingLimit(
+        RuntimeRpcCallFrame? parent, long depth, int limit, string? callSite)
+    {
+        var message = $"The RPC call chain reached nesting depth {depth}; the limit is {limit}.";
+        var recent = AppendCallSite(parent, callSite);
+        return recent.Count == 0 ? message : $"{message} Recent calls: {string.Join(" -> ", recent)}";
+    }
+
+    private static IReadOnlyList<string> AppendCallSite(RuntimeRpcCallFrame? parent, string? callSite)
+    {
+        var recent = parent?.RecentCalls ?? [];
+        if (callSite is null) return recent;
+        var bounded = new string(callSite.Take(MaximumCallSiteCharacters)
+            .Select(character => char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or '/'
+                ? character : '_').ToArray());
+        return recent.TakeLast(MaximumRecentCalls - 1).Append(bounded).ToArray();
     }
 
     public static DateTimeOffset CalculateScopeDeadline(

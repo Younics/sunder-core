@@ -112,6 +112,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     public void SetWindowVisible(bool visible)
     {
+        if (visible && !_windowVisible) PackageSettings.CollapseNavigationGroups();
         _windowVisible = visible;
         if (visible && IsPackageRuntimesSelection && PackageRuntimes is not null)
             _tasks.Observe(PackageRuntimes.ActivateAsync(), "opening Package Runtimes");
@@ -370,6 +371,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
             return false;
         }
 
+        _packageSettings.RevealSection(item);
         return await SelectSectionCoreAsync(item, parameterSnapshot, cancellationToken);
     }
 

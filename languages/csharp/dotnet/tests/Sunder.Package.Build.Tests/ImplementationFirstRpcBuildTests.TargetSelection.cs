@@ -45,9 +45,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
               <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'"><DefineConstants>$(DefineConstants);WINDOWS_FLAVOR</DefineConstants></PropertyGroup>
               <ItemGroup>
                 {{string.Join(Environment.NewLine, new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }.Select(name => $"<Reference Include=\"{name}\" HintPath=\"{SecurityElement.Escape(Path.Combine(Path.GetDirectoryName(taskAssembly)!, name + ".dll"))}\" Private=\"true\" />"))}}
-                <PackageReference Include="Avalonia" Version="12.0.3" />
-                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+                <PackageReference Include="Avalonia" Version="12.1.4" />
+                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
                 <Compile Include="../linked/Host.cs" Condition="'$(RuntimeIdentifier)' != '{{otherRid}}'" />
                 <Compile Include="../linked/Other.cs" Condition="'$(RuntimeIdentifier)' == '{{otherRid}}'" />
               </ItemGroup>

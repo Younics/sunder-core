@@ -67,7 +67,7 @@ public sealed partial class AppWebBridgeTests
                 StringComparison.Ordinal);
             Assert.Contains("detail.kind !== 'domain'", bootstrap, StringComparison.Ordinal);
             Assert.Contains("const encoder = new TextEncoder();", bootstrap, StringComparison.Ordinal);
-            Assert.Contains("rpcValueBytes: 8388608", bootstrap, StringComparison.Ordinal);
+            Assert.Contains("rpcValueBytes: 33554432", bootstrap, StringComparison.Ordinal);
             Assert.Contains("valueDepth: 64", bootstrap, StringComparison.Ordinal);
             Assert.Contains("pending.size >= maxPendingRequests", bootstrap, StringComparison.Ordinal);
             Assert.Contains("state.timer = setTimeout", bootstrap, StringComparison.Ordinal);

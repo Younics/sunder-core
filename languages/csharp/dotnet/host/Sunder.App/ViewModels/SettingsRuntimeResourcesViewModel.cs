@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
 
@@ -33,19 +34,14 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
         RuntimeResourcePolicyEffectiveStatus.Unavailable(
             "Current effective policy has not been requested.");
     private SettingsRuntimeResourcePresetOption _selectedPresetOption = Presets[0];
-    private string _customRpcValueMiBText = "8";
+    private RuntimeResourcePolicySelection _savedSelection = RuntimeResourcePolicies.DefaultSelection;
+    private string _customRpcValueMiBText = "32";
     private string _customValueDepthText = "64";
-    private string _customValueNodesText = "524288";
-    private string _customObjectMembersText = "4096";
-    private string _customInlineDecodedKiBText = "512";
-    private string _customContentReferenceMiBText = "64";
+    private string _customValueNodesText = "4194304";
+    private string _customObjectMembersText = "65536";
+    private string _customInlineDecodedKiBText = "4096";
+    private string _customContentReferenceMiBText = "256";
     private string _validationMessage = string.Empty;
-    private string _desiredPresetText = "Standard";
-    private string _desiredEffectiveText = string.Empty;
-    private string _desiredProfileHash = string.Empty;
-    private string _currentEffectiveText = "Unavailable";
-    private string _currentProfileHash = "Not reported";
-    private string _currentStatusText = string.Empty;
     private bool _showPendingNotice = true;
     private string _pendingDetailText = string.Empty;
     private bool _updating;
@@ -71,45 +67,63 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
                 return;
             }
             OnPropertyChanged(nameof(IsCustom));
+            OnPropertyChanged(nameof(AreLimitsReadOnly));
+            NotifyLimitFields();
             UpdatePresentation();
         }
     }
 
     public bool IsCustom => SelectedPresetOption.Preset == RuntimeResourcePolicyPreset.Custom;
+    public bool AreLimitsReadOnly => !IsCustom;
+    private RuntimeResourcePolicy PresetPolicy => SelectedPresetOption.Preset == RuntimeResourcePolicyPreset.Large
+        ? RuntimeResourcePolicies.Large : RuntimeResourcePolicies.Standard;
+
+    public string RpcValueRange => Range(RuntimeResourcePolicies.CustomMinimums.MaximumRpcValueBytes,
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumRpcValueBytes, RuntimeResourcePolicies.Mebibyte, "MiB per encoded RPC value");
+    public string ValueDepthRange => Range(RuntimeResourcePolicies.CustomMinimums.MaximumValueDepth,
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumValueDepth, 1, "JSON levels (not RPC call depth)");
+    public string ValueNodesRange => Range(RuntimeResourcePolicies.CustomMinimums.MaximumValueNodes,
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumValueNodes, 1, "nodes");
+    public string ObjectMembersRange => Range(RuntimeResourcePolicies.CustomMinimums.MaximumObjectMembers,
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumObjectMembers, 1, "members per object");
+    public string InlineDecodedRange => Range(RuntimeResourcePolicies.CustomMinimums.MaximumInlineDecodedBytes,
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumInlineDecodedBytes, RuntimeResourcePolicies.Kibibyte, "KiB decoded binary");
+    public string ContentReferenceRange => Range(RuntimeResourcePolicies.CustomMinimums.MaximumContentReferenceBytes,
+        RuntimeResourcePolicies.ProtocolCeilings.MaximumContentReferenceBytes, RuntimeResourcePolicies.Mebibyte, "MiB per referenced content item");
 
     public string CustomRpcValueMiBText
     {
-        get => _customRpcValueMiBText;
+        get => IsCustom ? _customRpcValueMiBText : ToUnitText(PresetPolicy.MaximumRpcValueBytes, RuntimeResourcePolicies.Mebibyte);
         set => SetCustomText(ref _customRpcValueMiBText, value);
     }
 
     public string CustomValueDepthText
     {
-        get => _customValueDepthText;
+        get => IsCustom ? _customValueDepthText : ToUnitText(PresetPolicy.MaximumValueDepth, 1);
         set => SetCustomText(ref _customValueDepthText, value);
     }
 
     public string CustomValueNodesText
     {
-        get => _customValueNodesText;
+        get => IsCustom ? _customValueNodesText : ToUnitText(PresetPolicy.MaximumValueNodes, 1);
         set => SetCustomText(ref _customValueNodesText, value);
     }
 
     public string CustomObjectMembersText
     {
-        get => _customObjectMembersText;
+        get => IsCustom ? _customObjectMembersText : ToUnitText(PresetPolicy.MaximumObjectMembers, 1);
         set => SetCustomText(ref _customObjectMembersText, value);
     }
 
     public string CustomInlineDecodedKiBText
     {
-        get => _customInlineDecodedKiBText;
+        get => IsCustom ? _customInlineDecodedKiBText : ToUnitText(PresetPolicy.MaximumInlineDecodedBytes, RuntimeResourcePolicies.Kibibyte);
         set => SetCustomText(ref _customInlineDecodedKiBText, value);
     }
 
     public string CustomContentReferenceMiBText
     {
-        get => _customContentReferenceMiBText;
+        get => IsCustom ? _customContentReferenceMiBText : ToUnitText(PresetPolicy.MaximumContentReferenceBytes, RuntimeResourcePolicies.Mebibyte);
         set => SetCustomText(ref _customContentReferenceMiBText, value);
     }
 
@@ -127,42 +141,6 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
 
     public bool HasValidationError => !string.IsNullOrEmpty(ValidationMessage);
 
-    public string DesiredPresetText
-    {
-        get => _desiredPresetText;
-        private set => SetProperty(ref _desiredPresetText, value);
-    }
-
-    public string DesiredEffectiveText
-    {
-        get => _desiredEffectiveText;
-        private set => SetProperty(ref _desiredEffectiveText, value);
-    }
-
-    public string DesiredProfileHash
-    {
-        get => _desiredProfileHash;
-        private set => SetProperty(ref _desiredProfileHash, value);
-    }
-
-    public string CurrentEffectiveText
-    {
-        get => _currentEffectiveText;
-        private set => SetProperty(ref _currentEffectiveText, value);
-    }
-
-    public string CurrentProfileHash
-    {
-        get => _currentProfileHash;
-        private set => SetProperty(ref _currentProfileHash, value);
-    }
-
-    public string CurrentStatusText
-    {
-        get => _currentStatusText;
-        private set => SetProperty(ref _currentStatusText, value);
-    }
-
     public bool ShowPendingNotice
     {
         get => _showPendingNotice;
@@ -178,6 +156,7 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
     internal void LoadSettings()
     {
         var selection = _coordinator.LoadSettings();
+        _savedSelection = selection;
         _preservedCustomPolicy = selection.CustomPolicy;
         _updating = true;
         try
@@ -222,6 +201,7 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
         var result = await _coordinator.SaveSettingsAsync(selection!, cancellationToken);
         if (result.Success)
         {
+            _savedSelection = selection!;
             UpdatePresentation();
         }
         return result;
@@ -257,9 +237,10 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
             RuntimeResourcePolicies.Mebibyte);
     }
 
-    private void SetCustomText(ref string field, string? value)
+    private void SetCustomText(ref string field, string? value, [CallerMemberName] string? propertyName = null)
     {
-        if (SetProperty(ref field, value ?? string.Empty) && !_updating)
+        if (!IsCustom && !_updating) return;
+        if (SetProperty(ref field, value ?? string.Empty, propertyName) && !_updating)
         {
             UpdatePresentation();
         }
@@ -272,49 +253,22 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
             return;
         }
 
-        DesiredPresetText = SelectedPresetOption.Label;
         if (!TryCreateSelection(out var selection, out var validationMessage))
         {
-            ValidationMessage = IsCustom ? validationMessage : string.Empty;
-            DesiredEffectiveText = IsCustom ? "Custom values are invalid." : FormatPolicy(
-                SelectedPresetOption.Preset == RuntimeResourcePolicyPreset.Large
-                    ? RuntimeResourcePolicies.Large
-                    : RuntimeResourcePolicies.Standard);
-            DesiredProfileHash = IsCustom ? "Unavailable" : RuntimeResourcePolicyContract.GetEffectiveProfileHash(
-                SelectedPresetOption.Preset == RuntimeResourcePolicyPreset.Large
-                    ? RuntimeResourcePolicies.Large
-                    : RuntimeResourcePolicies.Standard);
-            ShowPendingNotice = false;
-            PendingDetailText = string.Empty;
+            ValidationMessage = validationMessage;
         }
         else
         {
             ValidationMessage = string.Empty;
-            var effectivePolicy = selection!.EffectivePolicy;
-            DesiredEffectiveText = FormatPolicy(effectivePolicy);
-            DesiredProfileHash = selection.EffectiveProfileHash;
-            ShowPendingNotice = !_currentStatus.IsAvailable
-                                || !string.Equals(
-                                    _currentStatus.EffectiveProfileHash,
-                                    selection.EffectiveProfileHash,
-                                    StringComparison.Ordinal);
-            PendingDetailText = _currentStatus.IsAvailable
-                ? "The saved policy takes effect on the next Runtime worker start. Applying does not restart Runtime."
-                : "The current Runtime does not report this profile yet. Applying saves only; the policy is loaded on the next Runtime worker start.";
         }
-
-        if (_currentStatus.EffectivePolicy is { } currentPolicy)
-        {
-            CurrentEffectiveText = FormatPolicy(currentPolicy);
-            CurrentProfileHash = _currentStatus.EffectiveProfileHash!;
-            CurrentStatusText = "Reported by the running Runtime.";
-        }
-        else
-        {
-            CurrentEffectiveText = "Unavailable";
-            CurrentProfileHash = "Not reported";
-            CurrentStatusText = _currentStatus.UnavailableReason ?? "Current effective policy is unavailable.";
-        }
+        ShowPendingNotice = !_currentStatus.IsAvailable
+                            || !string.Equals(_currentStatus.EffectiveProfileHash,
+                                _savedSelection.EffectiveProfileHash, StringComparison.Ordinal);
+        PendingDetailText = selection is null || selection.EffectiveProfileHash != _savedSelection.EffectiveProfileHash
+            ? "Apply or Save to keep your changes. Saved changes take effect when Runtime next starts; saving does not restart it."
+            : _currentStatus.IsAvailable
+                ? "Saved changes take effect when Runtime next starts. Saving does not restart Runtime."
+                : "The running Runtime profile is unavailable. Saved changes take effect when Runtime next starts.";
     }
 
     private bool TryCreateSelection(
@@ -322,57 +276,55 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
         out string validationMessage)
     {
         selection = null;
+        if (!IsCustom)
+        {
+            selection = new RuntimeResourcePolicySelection(SelectedPresetOption.Preset, _preservedCustomPolicy);
+            validationMessage = string.Empty;
+            return true;
+        }
         if (!TryReadInRange(
                 CustomRpcValueMiBText,
                 "RPC value limit",
-                1,
-                32,
+                RuntimeResourcePolicies.CustomMinimums.MaximumRpcValueBytes / RuntimeResourcePolicies.Mebibyte,
+                RuntimeResourcePolicies.MaximumRpcValueBytes / RuntimeResourcePolicies.Mebibyte,
                 out var rpcValueMiB,
                 out validationMessage)
             || !TryReadInRange(
                 CustomValueDepthText,
                 "Value depth",
-                16,
-                64,
+                RuntimeResourcePolicies.CustomMinimums.MaximumValueDepth,
+                RuntimeResourcePolicies.MaximumValueDepth,
                 out var valueDepth,
                 out validationMessage)
             || !TryReadInRange(
                 CustomValueNodesText,
                 "Value nodes",
-                16_384,
-                4_194_304,
+                RuntimeResourcePolicies.CustomMinimums.MaximumValueNodes,
+                RuntimeResourcePolicies.MaximumValueNodes,
                 out var valueNodes,
                 out validationMessage)
             || !TryReadInRange(
                 CustomObjectMembersText,
                 "Object members",
-                256,
-                65_536,
+                RuntimeResourcePolicies.CustomMinimums.MaximumObjectMembers,
+                RuntimeResourcePolicies.MaximumObjectMembers,
                 out var objectMembers,
                 out validationMessage)
             || !TryReadInRange(
                 CustomInlineDecodedKiBText,
                 "Inline decoded data",
-                16,
-                4_096,
+                RuntimeResourcePolicies.CustomMinimums.MaximumInlineDecodedBytes / RuntimeResourcePolicies.Kibibyte,
+                RuntimeResourcePolicies.MaximumInlineDecodedBytes / RuntimeResourcePolicies.Kibibyte,
                 out var inlineDecodedKiB,
                 out validationMessage)
             || !TryReadInRange(
                 CustomContentReferenceMiBText,
                 "Content reference",
-                1,
-                256,
+                RuntimeResourcePolicies.CustomMinimums.MaximumContentReferenceBytes / RuntimeResourcePolicies.Mebibyte,
+                RuntimeResourcePolicies.MaximumContentReferenceBytes / RuntimeResourcePolicies.Mebibyte,
                 out var contentReferenceMiB,
                 out validationMessage))
         {
-            if (!IsCustom)
-            {
-                selection = new RuntimeResourcePolicySelection(
-                    SelectedPresetOption.Preset,
-                    _preservedCustomPolicy);
-                validationMessage = string.Empty;
-                return true;
-            }
             return false;
         }
 
@@ -412,16 +364,18 @@ public sealed class SettingsRuntimeResourcesViewModel : ViewModelBase
         return true;
     }
 
-    private static string FormatPolicy(RuntimeResourcePolicy policy)
-        => $"{FormatBytes(policy.MaximumRpcValueBytes)} RPC value; depth {policy.MaximumValueDepth:N0}; "
-           + $"{policy.MaximumValueNodes:N0} nodes; {policy.MaximumObjectMembers:N0} object members; "
-           + $"{FormatBytes(policy.MaximumInlineDecodedBytes)} inline decoded; "
-           + $"{FormatBytes(policy.MaximumContentReferenceBytes)} content reference";
+    private void NotifyLimitFields()
+    {
+        OnPropertyChanged(nameof(CustomRpcValueMiBText));
+        OnPropertyChanged(nameof(CustomValueDepthText));
+        OnPropertyChanged(nameof(CustomValueNodesText));
+        OnPropertyChanged(nameof(CustomObjectMembersText));
+        OnPropertyChanged(nameof(CustomInlineDecodedKiBText));
+        OnPropertyChanged(nameof(CustomContentReferenceMiBText));
+    }
 
-    private static string FormatBytes(int bytes)
-        => bytes % RuntimeResourcePolicies.Mebibyte == 0
-            ? $"{bytes / RuntimeResourcePolicies.Mebibyte:N0} MiB"
-            : $"{bytes / RuntimeResourcePolicies.Kibibyte:N0} KiB";
+    private static string Range(int minimum, int maximum, int unit, string suffix)
+        => $"{minimum / unit:N0}–{maximum / unit:N0} {suffix}";
 
     private static string ToUnitText(int bytes, int unit)
         => (bytes / unit).ToString(CultureInfo.InvariantCulture);

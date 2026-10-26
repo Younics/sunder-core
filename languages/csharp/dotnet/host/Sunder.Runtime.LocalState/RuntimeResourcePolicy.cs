@@ -102,14 +102,20 @@ public static class RuntimeResourcePolicies
 {
     public const int Mebibyte = 1024 * 1024;
     public const int Kibibyte = 1024;
+    public const int MaximumRpcValueBytes = 64 * Mebibyte;
+    public const int MaximumValueDepth = 64;
+    public const int MaximumValueNodes = 8_388_608;
+    public const int MaximumObjectMembers = 131_072;
+    public const int MaximumInlineDecodedBytes = 8 * Mebibyte;
+    public const int MaximumContentReferenceBytes = 512 * Mebibyte;
 
     public static RuntimeResourcePolicy ProtocolCeilings { get; } = new(
-        32 * Mebibyte,
-        64,
-        4_194_304,
-        65_536,
-        4 * Mebibyte,
-        256 * Mebibyte);
+        MaximumRpcValueBytes,
+        MaximumValueDepth,
+        MaximumValueNodes,
+        MaximumObjectMembers,
+        MaximumInlineDecodedBytes,
+        MaximumContentReferenceBytes);
 
     public static RuntimeResourcePolicy CustomMinimums { get; } = new(
         Mebibyte,
@@ -120,20 +126,20 @@ public static class RuntimeResourcePolicies
         Mebibyte);
 
     public static RuntimeResourcePolicy Standard { get; } = new(
-        8 * Mebibyte,
+        32 * Mebibyte,
         64,
-        524_288,
-        4_096,
-        512 * Kibibyte,
-        64 * Mebibyte);
+        4_194_304,
+        65_536,
+        4 * Mebibyte,
+        256 * Mebibyte);
 
     public static RuntimeResourcePolicy Large { get; } = new(
-        16 * Mebibyte,
+        64 * Mebibyte,
         64,
-        2_097_152,
-        16_384,
-        2 * Mebibyte,
-        256 * Mebibyte);
+        8_388_608,
+        131_072,
+        8 * Mebibyte,
+        512 * Mebibyte);
 
     public static RuntimeResourcePolicySelection DefaultSelection { get; } = new(
         RuntimeResourcePolicyPreset.Standard,
@@ -150,32 +156,32 @@ public static class RuntimeResourcePolicies
         ValidateRange(
             maximumRpcValueBytes,
             Mebibyte,
-            32 * Mebibyte,
+            MaximumRpcValueBytes,
             nameof(RuntimeResourcePolicy.MaximumRpcValueBytes));
         ValidateRange(
             maximumValueDepth,
             16,
-            64,
+            MaximumValueDepth,
             nameof(RuntimeResourcePolicy.MaximumValueDepth));
         ValidateRange(
             maximumValueNodes,
             16_384,
-            4_194_304,
+            MaximumValueNodes,
             nameof(RuntimeResourcePolicy.MaximumValueNodes));
         ValidateRange(
             maximumObjectMembers,
             256,
-            65_536,
+            MaximumObjectMembers,
             nameof(RuntimeResourcePolicy.MaximumObjectMembers));
         ValidateRange(
             maximumInlineDecodedBytes,
             16 * Kibibyte,
-            4 * Mebibyte,
+            MaximumInlineDecodedBytes,
             nameof(RuntimeResourcePolicy.MaximumInlineDecodedBytes));
         ValidateRange(
             maximumContentReferenceBytes,
             Mebibyte,
-            256 * Mebibyte,
+            MaximumContentReferenceBytes,
             nameof(RuntimeResourcePolicy.MaximumContentReferenceBytes));
     }
 

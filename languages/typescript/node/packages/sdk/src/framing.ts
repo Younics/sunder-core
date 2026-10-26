@@ -14,13 +14,13 @@ export interface FrameLimits {
 }
 
 const DEFAULT_LIMITS: FrameLimits = Object.freeze({
-  maxFrameBytes: 8 * 1024 * 1024 + 64 * 1024,
+  maxFrameBytes: 32 * 1024 * 1024 + 64 * 1024,
   maxHeaderBytes: 8 * 1024,
   maxMessageDepth: 72,
-  maxRpcValueBytes: 8 * 1024 * 1024,
+  maxRpcValueBytes: 32 * 1024 * 1024,
   maxValueDepth: 64,
-  maxValueNodes: 524_288,
-  maxObjectMembers: 4_096,
+  maxValueNodes: 4_194_304,
+  maxObjectMembers: 65_536,
   maxEnvelopeReserveBytes: 64 * 1024,
 });
 

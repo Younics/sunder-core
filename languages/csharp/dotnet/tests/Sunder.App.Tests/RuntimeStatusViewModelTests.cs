@@ -8,8 +8,28 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
+[Collection(HeadlessAppCollection.Name)]
 public sealed class RuntimeStatusViewModelTests
 {
+    [Fact]
+    public async Task HostNeutralConstructionDoesNotReadAThemeOwnedByAnotherThread()
+    {
+        await using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
+        await ui.Dispatch(async () =>
+        {
+            var application = Assert.IsType<SettingsWindowLayoutTests.SettingsTestApplication>(Avalonia.Application.Current);
+            await Task.Run(() =>
+            {
+                Assert.Same(application, Avalonia.Application.Current);
+                Assert.False(application.CheckAccess());
+                var viewModel = CreateViewModel(new FakeRuntimeApiClientFactory());
+                Assert.Null(viewModel.RuntimeStatusBrush);
+            });
+            return true;
+        }, default);
+        Assert.Null(Avalonia.Application.Current);
+    }
+
     [Fact]
     public async Task ApplyRuntimeAddressAsync_WhenAddressIsInvalid_DoesNotUseRuntimeApiClient()
     {

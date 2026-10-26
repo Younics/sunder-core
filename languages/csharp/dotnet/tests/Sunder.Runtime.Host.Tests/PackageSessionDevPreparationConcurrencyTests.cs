@@ -79,6 +79,7 @@ public sealed class PackageSessionDevPreparationConcurrencyTests
             Assert.Equal(folders.Select(folder =>
                 $"Package '{PackageId(folder)}' depends on 'missing.package' >=0.0.0-0, but that package was not supplied."), result.Errors);
             Assert.Empty(session.GetActivePackages());
+            Assert.All(session.GetSessionPackages(), package => Assert.Equal(new[] { "missing.package" }, package.RequiredPackageIds));
             for (var index = 0; index < folders.Length; index++)
             {
                 var candidateFolder = Path.Combine(session.SessionFolder!, $"{index:D2}-{PackageId(folders[index])}");

@@ -14,7 +14,7 @@ public sealed partial class PackageViewHostServiceTests
     [Fact]
     public async Task DevelopmentViewBindingRequiresAnAlreadyCachedAttachedExactPackageView()
     {
-        using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
         await ui.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("development-view-binding");
@@ -72,7 +72,7 @@ public sealed partial class PackageViewHostServiceTests
     [InlineData("package-disabled")]
     public async Task IssuedDevelopmentViewBindingsNeverFollowAReplacedOrRetiredAuthority(string boundary)
     {
-        using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
         await ui.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("development-view-retirement");

@@ -21,12 +21,12 @@ internal sealed record RuntimeTransportPolicyOptions
     public int MaxPendingContentTransfers { get; init; } = 32;
     public long MaxPendingContentTransferBytes { get; init; } = 2 * SunderPackageFormat.MaxArchiveBytes;
     public long MaxRpcContentBytes { get; init; } = RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes;
-    public long MaxRpcContentBytesPerCall { get; init; } = 256L * 1024 * 1024;
-    public long MaxRpcContentBytesPerPackage { get; init; } = 1024L * 1024 * 1024;
-    public long MaxRpcContentBytesPerRuntime { get; init; } = 2L * 1024 * 1024 * 1024;
-    public int MaxRpcContentReferencesPerCall { get; init; } = 64;
-    public int MaxRpcContentReferencesPerPackage { get; init; } = 256;
-    public int MaxRpcContentReferencesPerRuntime { get; init; } = 512;
+    public long MaxRpcContentBytesPerCall { get; init; } = MaximumRpcContentBytesPerCall;
+    public long MaxRpcContentBytesPerPackage { get; init; } = MaximumRpcContentBytesPerPackage;
+    public long MaxRpcContentBytesPerRuntime { get; init; } = MaximumRpcContentBytesPerRuntime;
+    public int MaxRpcContentReferencesPerCall { get; init; } = MaximumRpcContentReferencesPerCall;
+    public int MaxRpcContentReferencesPerPackage { get; init; } = MaximumRpcContentReferencesPerPackage;
+    public int MaxRpcContentReferencesPerRuntime { get; init; } = MaximumRpcContentReferencesPerRuntime;
     public int MaxRpcContentUses { get; init; } = 32;
 
     internal static RuntimeTransportPolicyOptions FromResourcePolicy(RuntimeResourcePolicy policy)
@@ -56,9 +56,12 @@ internal sealed record RuntimeTransportPolicyOptions
 
     private static int ScaleReferenceLimit(int standard, int contentBytes, int ceiling)
     {
+        // Fixed historical scale, not the mutable Standard preset. Otherwise
+        // promoting a preset silently reduces admitted content-reference counts.
+        const int referenceScaleBytes = 64 * 1024 * 1024;
         var scaled = ((long)standard * contentBytes
-                      + RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes - 1)
-                     / RuntimeResourcePolicies.Standard.MaximumContentReferenceBytes;
+                      + referenceScaleBytes - 1)
+                     / referenceScaleBytes;
         return (int)Math.Clamp(scaled, 1, ceiling);
     }
 }
@@ -108,7 +111,8 @@ internal sealed record RuntimeRpcPolicyOptions
     public int MaxConcurrentCallsPerCallee { get; init; } = 64;
     public int MaxConcurrentObservationsPerCaller { get; init; } = 32;
     public int MaxConcurrentObservationsPerCallee { get; init; } = 64;
-    public int MaxNestedCallDepth { get; init; } = 8;
+    // Runaway causal recursion guard, not a budget for sequential or sibling calls.
+    public int MaxNestedCallDepth { get; init; } = 128;
     public int MaxStreamEvents { get; init; } = 100_000;
     public int MaxStreamEventsPerSecond { get; init; } = 1000;
     public int MaxAppCallerSessions { get; init; } = 128;

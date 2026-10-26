@@ -415,6 +415,9 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
         public bool ImplementsSelector(IntPtr target, IntPtr selector) =>
             ObjectiveC.ImplementsSelector(target, selector);
 
+        public bool IsWindowDelegateSelector(IntPtr selector) =>
+            ObjectiveC.IsWindowDelegateSelector(selector);
+
         public void SendWindowDelegateCallback(
             IntPtr target,
             IntPtr selector,
@@ -480,6 +483,10 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
                 {
                     return true;
                 }
+                if (!Instance.IsWindowDelegateSelector(selector))
+                {
+                    return false;
+                }
                 if (MacOsWindowDelegateProxy.IsRegistered(proxy))
                 {
                     return MacOsWindowDelegateProxy.ForwardDelegateRespondsToSelector(
@@ -513,6 +520,10 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
         {
             try
             {
+                if (!Instance.IsWindowDelegateSelector(selector))
+                {
+                    return IntPtr.Zero;
+                }
                 if (MacOsWindowDelegateProxy.IsRegistered(proxy))
                 {
                     return ObjectiveC.Autorelease(
@@ -625,6 +636,32 @@ internal sealed class MacOsNativeFullScreenTransition : INativeFullScreenTransit
         private const string AppKitLibrary = "/System/Library/Frameworks/AppKit.framework/AppKit";
         private const string MethodEncoding = "v@:@";
         private static readonly Lazy<IntPtr> AppKit = new(() => NativeLibrary.Load(AppKitLibrary));
+        private static readonly Lazy<IntPtr> WindowDelegateProtocol = new(() => objc_getProtocol("NSWindowDelegate"));
+
+        public static bool IsWindowDelegateSelector(IntPtr selector)
+        {
+            var protocol = WindowDelegateProtocol.Value;
+            // AvnWindow is its own delegate. Forwarding arbitrary inherited
+            // NSWindow/NSResponder methods back to it creates a window -> proxy
+            // -> window cycle (notably the Services validRequestor query).
+            return protocol != IntPtr.Zero && selector != IntPtr.Zero
+                && (protocol_getMethodDescription(protocol, selector, true, true).Name != IntPtr.Zero
+                    || protocol_getMethodDescription(protocol, selector, false, true).Name != IntPtr.Zero);
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private readonly struct MethodDescription
+        {
+            public readonly IntPtr Name;
+            public readonly IntPtr Types;
+        }
+
+        [DllImport(Library)]
+        private static extern MethodDescription protocol_getMethodDescription(
+            IntPtr protocol,
+            IntPtr selector,
+            [MarshalAs(UnmanagedType.I1)] bool required,
+            [MarshalAs(UnmanagedType.I1)] bool instance);
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate void NotificationCallback(

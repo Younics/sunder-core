@@ -456,6 +456,39 @@ public sealed class WorkerRuntimeTests
         await worker.ShutdownAsync();
     }
 
+    [Theory]
+    [InlineData(32, 4_194_304, 65_536, 4, 256)]
+    [InlineData(64, 8_388_608, 131_072, 8, 512)]
+    public async Task Worker_DeveloperProfilesAdmitLargeValuesAndStillRejectBeyondNegotiatedBoundary(
+        int valueMiB, int nodes, int members, int inlineMiB, int contentMiB)
+    {
+        var profile = new WorkerResourceProfile(1, valueMiB * 1024 * 1024, 64, nodes, members,
+            inlineMiB * 1024 * 1024, contentMiB * 1024 * 1024);
+        var handler = new TestRpcHandler
+        {
+            Unary = (_, _, method, request, _) => ValueTask.FromResult(method == "oversized"
+                ? JsonSerializer.SerializeToElement(new string('x', profile.RpcValueBytes)) : request.Clone()),
+        };
+        await using var worker = new WorkerHarness(_ => new SunderWorkerOptions([WorkerHarness.Registration(handler)]));
+        await ActivateAsync(worker, profile);
+        Assert.Equal(profile.RpcValueBytes * 8L, worker.Limits.MaximumWriteQueueBytes);
+        // Above the old Standard for both profiles, and above the old protocol
+        // ceiling for Large. Test actual framed traffic, not just profile parsing.
+        var length = (valueMiB == 32 ? 9 : 33) * 1024 * 1024;
+        var payload = JsonSerializer.SerializeToElement(new { text = new string('x', length) });
+        await worker.SendInvocationAsync("developer-profile", "unary", "echo", payload);
+        using (var response = await worker.ReadAsync())
+        {
+            Assert.Equal("worker.result", response.RootElement.GetProperty("type").GetString());
+            Assert.Equal(length, response.RootElement.GetProperty("value").GetProperty("text").GetString()!.Length);
+        }
+        await worker.SendInvocationAsync("over-boundary", "unary", "oversized");
+        using (var rejected = await worker.ReadAsync()) Assert.Equal("worker.error", rejected.RootElement.GetProperty("type").GetString());
+        await worker.SendInvocationAsync("after-boundary", "unary", "echo");
+        using (var healthy = await worker.ReadAsync()) Assert.Equal("worker.result", healthy.RootElement.GetProperty("type").GetString());
+        await worker.ShutdownAsync();
+    }
+
     [Fact]
     public async Task Worker_OversizedOutboundRequestIsNotRegisteredOrDispatched()
     {

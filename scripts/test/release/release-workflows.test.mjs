@@ -162,6 +162,15 @@ test("strict App packaging retains signing, notarization and Full-only feeds", a
   assert.doesNotMatch(source, /vpk upload github/u);
   const shell = await readFile(resolve(root, "scripts/release/package-sunder.sh"), "utf8");
   const powershell = await readFile(resolve(root, "scripts/release/package-sunder.ps1"), "utf8");
+  const central = await readFile(resolve(root, "languages/csharp/dotnet/Directory.Packages.props"), "utf8");
+  const version = /Include="Velopack" Version="([^"]+)"/u.exec(central)?.[1];
+  assert.ok(version, "Missing Velopack library version");
+  assert.equal(/VELOPACK_VERSION: "([^"]+)"/u.exec(source)?.[1], version);
+  const validation = await workflow("host-validation");
+  assert.equal(/vpk --version ([\d.]+)/u.exec(validation)?.[1], version);
+  for (const script of [shell, powershell]) {
+    assert.equal(/dotnet tool install --global vpk --version ([\d.]+)/u.exec(script)?.[1], version);
+  }
   assert.match(shell, /strict_release" != "true" && -n "\$github_repository_url"/u);
   assert.match(shell, /strict_delta_packages[\s\S]+history-dependent delta/u);
   assert.match(powershell, /-not \$StrictRelease -and -not \[string\]::IsNullOrWhiteSpace\(\$GitHubRepositoryUrl\)/u);

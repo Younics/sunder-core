@@ -77,10 +77,10 @@ public sealed partial class ImplementationFirstRpcBuildTests
               </PropertyGroup>
               <ItemGroup>
                 {{string.Join(Environment.NewLine, references.Select(name => $"<Reference Include=\"{name}\" HintPath=\"{SecurityElement.Escape(Path.Combine(Path.GetDirectoryName(taskAssembly)!, name + ".dll"))}\" Private=\"true\" />"))}}
-                <PackageReference Include="Avalonia" Version="12.0.3" />
+                <PackageReference Include="Avalonia" Version="12.1.4" />
                 <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
                 <AvaloniaResource Include="{{SecurityElement.Escape(linked)}}" Link="assets\banner.txt" />
                 <EmbeddedResource Include="app.data" LogicalName="fixture.app" SunderPackageAssetRole="app" />
                 <EmbeddedResource Include="worker.data" LogicalName="fixture.worker" SunderPackageAssetRole="worker" />
@@ -200,9 +200,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><NuGetAudit>false</NuGetAudit></PropertyGroup>
                   <ItemGroup>
-                <PackageReference Include="Avalonia.Headless" Version="12.0.3" />
+                <PackageReference Include="Avalonia.Headless" Version="12.1.4" />
                 <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
-                    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
+                    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
                     <Reference Include="ResourceRoles.App" HintPath="{{SecurityElement.Escape(Path.Combine(app, "ResourceRoles.App.dll"))}}" />
                     <Reference Include="ResourceRoles" HintPath="{{SecurityElement.Escape(Path.Combine(worker, "ResourceRoles.dll"))}}" Aliases="worker" />
                     {{string.Join(Environment.NewLine, new[] { "Sunder.Sdk", "Sunder.Sdk.Avalonia", "Microsoft.Extensions.DependencyInjection.Abstractions" }

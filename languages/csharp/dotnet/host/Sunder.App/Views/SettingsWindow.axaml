@@ -70,6 +70,12 @@
     </DataTemplate>
   </Window.DataTemplates>
 
+  <Window.Styles>
+    <Style Selector="Border.settings-package-content">
+      <Setter Property="Padding" Value="18" />
+    </Style>
+  </Window.Styles>
+
   <Grid RowDefinitions="52,*,Auto"
         Background="{DynamicResource Sunder.Brush.Background.App}">
     <controls:WindowTitleBar Grid.Row="0">
@@ -94,14 +100,17 @@
         <Border Grid.Column="0"
                 x:Name="SettingsSidebarPane"
                 Background="{DynamicResource Sunder.Brush.Surface.Base}"
-                Padding="16">
-          <ScrollViewer>
-            <StackPanel Spacing="10">
+                Padding="0">
+          <ScrollViewer x:Name="SettingsSidebarScrollViewer"
+                        AllowAutoHide="False"
+                        VerticalScrollBarVisibility="Visible"
+                        HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Spacing="10" Margin="16,16,8,16">
               <TextBlock Classes="section-title" Text="Categories" />
               <ItemsControl ItemsSource="{Binding CoreSections}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
-                    <Button Classes="secondary-action settings-nav-button"
+                    <Button Classes="settings-nav-button"
                             Classes.selected="{Binding IsSelected}"
                             Click="SectionButton_OnClick"
                             CommandParameter="{Binding}"
@@ -118,16 +127,48 @@
                 <TextBlock Classes="section-title" Text="Packages" />
               </StackPanel>
 
-              <ItemsControl ItemsSource="{Binding PackageSettings.PackageSections}"
-                            IsVisible="{Binding PackageSettings.HasPackageSections}">
+              <ItemsControl ItemsSource="{Binding PackageSettings.NavigationGroups}"
+                             IsVisible="{Binding PackageSettings.HasPackageSections}">
                 <ItemsControl.ItemTemplate>
-                  <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
-                    <Button Classes="secondary-action settings-nav-button"
-                            Classes.selected="{Binding IsSelected}"
-                            Click="SectionButton_OnClick"
-                            CommandParameter="{Binding}"
-                            HorizontalAlignment="Stretch"
-                            Content="{Binding Title}" />
+                  <DataTemplate x:DataType="vm:SettingsPackageNavigationGroup">
+                    <StackPanel>
+                      <Border Classes="settings-package-row" Classes.selected="{Binding Root.IsSelected}">
+                        <Grid ColumnDefinitions="*,Auto">
+                          <Button Classes="settings-nav-button group-root"
+                                  CommandParameter="{Binding Root}"
+                                  Click="SectionButton_OnClick" HorizontalAlignment="Stretch"
+                                  ToolTip.Tip="{Binding Root.Title}">
+                            <TextBlock Text="{Binding Root.Title}" TextTrimming="CharacterEllipsis" />
+                          </Button>
+                          <ToggleButton Grid.Column="1" Classes="settings-group-toggle"
+                                        IsVisible="{Binding HasChildren}"
+                                        IsChecked="{Binding IsExpanded}"
+                                        ToolTip.Tip="{Binding ToggleDescription}"
+                                        AutomationProperties.Name="{Binding ToggleDescription}">
+                            <Path Width="5" Height="9" Data="M 1 1 L 5 5 L 1 9"
+                                  Stroke="{Binding $parent[ToggleButton].Foreground}" StrokeThickness="1.5"
+                                  StrokeLineCap="Round" StrokeJoin="Round" Stretch="Uniform"
+                                  RenderTransformOrigin="50%,50%">
+                              <Path.RenderTransform>
+                                <RotateTransform Angle="{Binding ChevronAngle}" />
+                              </Path.RenderTransform>
+                            </Path>
+                          </ToggleButton>
+                        </Grid>
+                      </Border>
+                      <Border Classes="settings-package-children" IsVisible="{Binding IsExpanded}">
+                        <ItemsControl ItemsSource="{Binding Children}">
+                          <ItemsControl.ItemTemplate>
+                            <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
+                              <Button Classes="settings-nav-button" Classes.selected="{Binding IsSelected}"
+                                      Click="SectionButton_OnClick" HorizontalAlignment="Stretch" ToolTip.Tip="{Binding Title}">
+                                <TextBlock Text="{Binding NavigationTitle}" TextTrimming="CharacterEllipsis" />
+                              </Button>
+                            </DataTemplate>
+                          </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                      </Border>
+                    </StackPanel>
                   </DataTemplate>
                 </ItemsControl.ItemTemplate>
               </ItemsControl>
@@ -144,11 +185,14 @@
                       DragCompleted="SettingsSplitter_OnDragCompleted" />
 
         <Border Grid.Column="2"
-                Classes="workspace-surface"
+                x:Name="SettingsSelectionPane"
+                Classes.workspace-surface="{Binding IsCoreSelection}"
+                Classes.settings-package-content="{Binding IsPackageSelection}"
+                AutomationProperties.Name="{Binding SelectedTitle}"
                 Margin="16">
-          <Grid RowDefinitions="Auto,*"
-                RowSpacing="14">
-            <StackPanel Spacing="6">
+          <Grid RowDefinitions="Auto,*">
+            <StackPanel x:Name="SettingsSelectionHeader" Spacing="6" Margin="0,0,0,14"
+                        IsVisible="{Binding IsCoreSelection}">
               <TextBlock Classes="page-title" Text="{Binding SelectedTitle}" />
               <TextBlock Classes="caption" Text="{Binding SelectedDescription}" TextWrapping="Wrap" />
             </StackPanel>
@@ -345,19 +389,14 @@
                           </DataTemplate>
                         </controls:SunderComboBox.ItemTemplate>
                       </controls:SunderComboBox>
-                      <TextBlock Classes="caption"
-                                 Text="{Binding RuntimeResources.SelectedPresetOption.Description}"
-                                 TextWrapping="Wrap" />
                     </StackPanel>
                   </Border>
 
                   <Border Classes="card-surface">
-                    <Expander Header="Custom limits"
-                              IsExpanded="{Binding RuntimeResources.IsCustom, Mode=OneWay}"
-                              IsEnabled="{Binding RuntimeResources.IsCustom}">
-                      <StackPanel Margin="0,14,0,0" Spacing="14">
+                      <StackPanel Spacing="14">
+                        <TextBlock Classes="section-title" Text="Resource limits" />
                         <TextBlock Classes="caption"
-                                   Text="Values outside these ranges are rejected, never clamped."
+                                   Text="Choose Custom to edit. Limits apply to each message or content item, not the whole session."
                                    TextWrapping="Wrap" />
 
                         <Grid ColumnDefinitions="*,150"
@@ -366,55 +405,55 @@
                               RowSpacing="14">
                           <StackPanel Grid.Row="0" Spacing="3">
                             <TextBlock Classes="section-title" Text="RPC value limit" />
-                            <TextBlock Classes="caption" Text="1-32 MiB per encoded RPC value" />
+                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.RpcValueRange}" />
                           </StackPanel>
                           <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomRpcValueMiBText}" />
+                            <TextBox Text="{Binding RuntimeResources.CustomRpcValueMiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
                             <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="MiB" />
                           </Grid>
 
                           <StackPanel Grid.Row="1" Spacing="3">
                             <TextBlock Classes="section-title" Text="Value depth" />
-                            <TextBlock Classes="caption" Text="16-64 nested levels" />
+                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.ValueDepthRange}" />
                           </StackPanel>
                           <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomValueDepthText}" />
+                            <TextBox Text="{Binding RuntimeResources.CustomValueDepthText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
                             <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="levels" />
                           </Grid>
 
                           <StackPanel Grid.Row="2" Spacing="3">
                             <TextBlock Classes="section-title" Text="Value nodes" />
-                            <TextBlock Classes="caption" Text="16,384-4,194,304 nodes" />
+                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.ValueNodesRange}" />
                           </StackPanel>
                           <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomValueNodesText}" />
+                            <TextBox Text="{Binding RuntimeResources.CustomValueNodesText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
                             <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="nodes" />
                           </Grid>
 
                           <StackPanel Grid.Row="3" Spacing="3">
                             <TextBlock Classes="section-title" Text="Object members" />
-                            <TextBlock Classes="caption" Text="256-65,536 members per object" />
+                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.ObjectMembersRange}" />
                           </StackPanel>
                           <Grid Grid.Row="3" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomObjectMembersText}" />
+                            <TextBox Text="{Binding RuntimeResources.CustomObjectMembersText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
                             <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="members" />
                           </Grid>
 
                           <StackPanel Grid.Row="4" Spacing="3">
                             <TextBlock Classes="section-title" Text="Inline decoded data" />
-                            <TextBlock Classes="caption" Text="16-4,096 KiB (4 MiB maximum)" />
+                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.InlineDecodedRange}" />
                           </StackPanel>
                           <Grid Grid.Row="4" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomInlineDecodedKiBText}" />
+                            <TextBox Text="{Binding RuntimeResources.CustomInlineDecodedKiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
                             <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="KiB" />
                           </Grid>
 
                           <StackPanel Grid.Row="5" Spacing="3">
                             <TextBlock Classes="section-title" Text="Content reference" />
-                            <TextBlock Classes="caption" Text="1-256 MiB per referenced content item" />
+                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.ContentReferenceRange}" />
                           </StackPanel>
                           <Grid Grid.Row="5" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomContentReferenceMiBText}" />
+                            <TextBox Text="{Binding RuntimeResources.CustomContentReferenceMiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
                             <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="MiB" />
                           </Grid>
                         </Grid>
@@ -427,41 +466,6 @@
                                      TextWrapping="Wrap" />
                         </Border>
                       </StackPanel>
-                    </Expander>
-                  </Border>
-
-                  <Border Classes="card-surface">
-                    <StackPanel Spacing="14">
-                      <TextBlock Classes="section-title" Text="Desired and Current Effective Policy" />
-                      <Grid ColumnDefinitions="150,*"
-                            RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
-                            ColumnSpacing="16"
-                            RowSpacing="9">
-                        <TextBlock Grid.Row="0" Classes="section-title" Text="Desired preset" />
-                        <TextBlock Grid.Row="0" Grid.Column="1" Classes="muted"
-                                   Text="{Binding RuntimeResources.DesiredPresetText}" />
-                        <TextBlock Grid.Row="1" Classes="section-title" Text="Desired effective" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Classes="muted"
-                                   Text="{Binding RuntimeResources.DesiredEffectiveText}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="2" Classes="section-title" Text="Desired hash" />
-                        <TextBlock Grid.Row="2" Grid.Column="1" Classes="caption"
-                                   Text="{Binding RuntimeResources.DesiredProfileHash}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="3" Classes="section-title" Text="Current effective" />
-                        <TextBlock Grid.Row="3" Grid.Column="1" Classes="muted"
-                                   Text="{Binding RuntimeResources.CurrentEffectiveText}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="4" Classes="section-title" Text="Current hash" />
-                        <TextBlock Grid.Row="4" Grid.Column="1" Classes="caption"
-                                   Text="{Binding RuntimeResources.CurrentProfileHash}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Grid.Row="5" Classes="section-title" Text="Current status" />
-                        <TextBlock Grid.Row="5" Grid.Column="1" Classes="caption"
-                                   Text="{Binding RuntimeResources.CurrentStatusText}"
-                                   TextWrapping="Wrap" />
-                      </Grid>
-                    </StackPanel>
                   </Border>
 
                   <Border Padding="14"
@@ -473,7 +477,7 @@
                     <StackPanel Spacing="4">
                       <TextBlock Classes="section-title"
                                  Foreground="{DynamicResource Sunder.Brush.Accent}"
-                                 Text="Pending until Runtime restarts" />
+                                  Text="Applies on next Runtime start" />
                       <TextBlock Classes="muted"
                                  Text="{Binding RuntimeResources.PendingDetailText}"
                                  TextWrapping="Wrap" />

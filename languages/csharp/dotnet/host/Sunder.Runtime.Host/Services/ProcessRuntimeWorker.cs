@@ -1019,7 +1019,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         byte[] body,
         bool consumePendingReservation = false)
     {
-        var call = new HostCall(id, kind, context, providerId, serviceId, methodId,
+        var call = new HostCall(id, kind, context, _broker.CaptureInvocationFrame(context), providerId, serviceId, methodId,
             _transportLimits.MaximumStreamQueueBytes);
         lock (_stateGate)
         {
@@ -3055,27 +3055,24 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 throw new SunderWorkerProtocolException(
                     $"Process worker used unknown or completed parent invocation id '{parentId}'.");
             }
-            declaredParent = new(parentCall.Context.CallDepth, parentCall.Context.DeadlineUtc);
+            declaredParent = parentCall.Frame;
         }
 
+        // Ownership-aware Workers explicitly distinguish request-owned children
+        // from activation-owned roots. Only the named Host invocation contributes
+        // ancestry: an unrelated watch, root or deeper sibling is not a parent.
+        // Scope ancestry is independently retained and merged by the broker.
+        if (_rpcCallOwnershipV1) return declaredParent;
+
+        // Legacy Workers cannot establish independent ownership. Keep their
+        // conservative V1 inheritance rather than treating omitted/null parents
+        // as permission to escape an inbound request's deadline or nesting.
         RuntimeRpcCallFrame? frame = null;
         foreach (var hostCall in _hostCalls.Values)
         {
-            var context = hostCall.Context;
-            frame = frame is null
-                ? new RuntimeRpcCallFrame(context.CallDepth, context.DeadlineUtc)
-                : new RuntimeRpcCallFrame(
-                    Math.Max(frame.Depth, context.CallDepth),
-                    frame.DeadlineUtc < context.DeadlineUtc
-                        ? frame.DeadlineUtc
-                        : context.DeadlineUtc);
+            frame = RuntimeRpcCallFrameCalculator.Merge(frame, hostCall.Frame);
         }
-        if (!_rpcCallOwnershipV1 || frame is null) return frame;
-        // This manifest capability permits independently bounded root work. A named
-        // parent still caps its children; unrelated calls do not supply a deadline.
-        // Retain the process-wide depth floor so concurrent/reentrant roots cannot
-        // evade the Host's recursion limit by selecting a shallower or null parent.
-        return new RuntimeRpcCallFrame(frame.Depth, declaredParent?.DeadlineUtc ?? DateTimeOffset.MaxValue);
+        return frame;
     }
 
     private void HandleWorkerCancellation(JsonElement root)
@@ -3674,6 +3671,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         string id,
         HostCallKind kind,
         SunderRpcInvocationContext context,
+        RuntimeRpcCallFrame frame,
         string providerId,
         string serviceId,
         string methodId,
@@ -3682,6 +3680,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         public string Id { get; } = id;
         public HostCallKind Kind { get; } = kind;
         public SunderRpcInvocationContext Context { get; } = context;
+        public RuntimeRpcCallFrame Frame { get; } = frame;
         public string ProviderId { get; } = providerId;
         public string ServiceId { get; } = serviceId;
         public string MethodId { get; } = methodId;

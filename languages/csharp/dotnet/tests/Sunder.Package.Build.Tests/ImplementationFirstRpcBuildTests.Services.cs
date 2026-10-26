@@ -50,9 +50,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
         document.Root.Add(new XElement("ItemGroup",
             new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }.Select(name => new XElement("Reference",
                 new XAttribute("Include", name), new XAttribute("HintPath", Path.Combine(Path.GetDirectoryName(taskAssembly)!, name + ".dll")), new XAttribute("Private", "true"))),
-            new XElement("PackageReference", new XAttribute("Include", "Avalonia"), new XAttribute("Version", "12.0.3")),
-            new XElement("PackageReference", new XAttribute("Include", "Microsoft.Extensions.DependencyInjection"), new XAttribute("Version", "10.0.8")),
-            new XElement("PackageReference", new XAttribute("Include", "Microsoft.Extensions.Logging.Abstractions"), new XAttribute("Version", "10.0.8"))));
+            new XElement("PackageReference", new XAttribute("Include", "Avalonia"), new XAttribute("Version", "12.1.4")),
+            new XElement("PackageReference", new XAttribute("Include", "Microsoft.Extensions.DependencyInjection"), new XAttribute("Version", "10.0.13")),
+            new XElement("PackageReference", new XAttribute("Include", "Microsoft.Extensions.Logging.Abstractions"), new XAttribute("Version", "10.0.13"))));
         document.Save(project);
         var baseline = Path.Combine(root, "sunder-contracts.owned.json");
         var history = await File.ReadAllBytesAsync(baseline);

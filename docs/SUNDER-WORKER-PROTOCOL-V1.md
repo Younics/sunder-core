@@ -35,6 +35,33 @@ handle. A transport payload handle only moves bytes for one protocol operation. 
 and carries none of the content store's owner, audience, generation, endpoint, expiry, repeatability, or use-count
 authority.
 
+### Runtime resource profiles
+
+The Runtime supplies one closed, hashed effective profile during `host.hello`.
+The App's saved selection is applied at the next Runtime start, not retroactively
+to an active process. Both SDKs validate and use the reported profile.
+
+| Per-value/item limit | Standard | Large / current ceilings |
+| --- | ---: | ---: |
+| Encoded RPC request, response or stream event | 32 MiB | 64 MiB |
+| JSON value depth (not causal RPC call depth) | 64 | 64 |
+| Value nodes | 4,194,304 | 8,388,608 |
+| Members per object | 65,536 | 131,072 |
+| Decoded inline binary | 4 MiB | 8 MiB |
+| Host-mediated content item | 256 MiB | 512 MiB |
+
+These are per-value limits, not session or project totals. Large bytes should use
+authority-bound content references and large collections should be paged/streamed.
+Existing explicit custom values remain custom; selecting a built-in preset uses
+the current definition on the next Runtime start. Older SDKs that cannot support
+the Large ceilings reject that profile; there is no silent downgrade.
+
+Write queues remain bounded to eight RPC values and stream-consumer queues to
+two values in bytes, with their separate message-count limits. These are admission
+ceilings, not reservations or preallocations. Content aggregates remain capped at
+1 GiB per call, 4 GiB per package and 8 GiB per Runtime. Content-reference count
+scaling uses a fixed 64 MiB reference scale rather than the mutable Standard preset.
+
 ## Composition And Lifecycle
 
 Composition and non-destructive candidate preparation finish while the previous generation remains active. Persistent
@@ -185,21 +212,34 @@ authenticated process activation and applies the active session lease. A target 
 causes the official SDKs to add nullable `parentInvocationId` to `worker.invoke`, `worker.subscribe`, and
 `worker.scope-open`. Non-opted targets omit the field and retain the original strict V1 envelopes. The Host requires
 the field exactly for opted-in targets, accepts a non-null value only when it identifies a live Host-owned call, and
-derives deadline/depth from Host state, never from worker-supplied values. It also conservatively inherits the earliest
-deadline and greatest depth across all live calls for that process, so omission by a legacy worker or a null value from
-an opted-in worker cannot escape an inbound invocation.
+derives deadline/depth from Host state, never from worker-supplied values. Without explicit independent-call ownership,
+it conservatively inherits the earliest deadline and greatest depth across live calls for that process, so omission or
+a null parent cannot escape an inbound invocation. This is a legacy compatibility fallback, not causal attribution.
 
 `rpc.call-ownership.v1` explicitly permits a Worker to run activation-owned work independently
 of inbound requests. It uses the same required nullable `parentInvocationId` field in both
 official SDKs. A live named parent caps the child's deadline; null starts a root bounded by
 the normal Host deadline policy and activation retirement. Other inbound calls, including
 watches, do not cap that deadline. The Host still derives identity and parent validity from
-its own state and retains the greatest active process call depth as a recursion floor.
+its own state. A named child has its named parent's depth plus one; a null parent starts at depth one.
+Unrelated watches, independent roots and deeper siblings do not contribute to that depth. Existing call scopes
+retain their Host-owned ancestry even when a later request declares a null or shallower parent: opening or reusing
+a scope cannot reset nesting. Named children also retain their parent's deadline cap.
 This capability deliberately authorizes independent roots; it is not proof that arbitrary
 worker code retained its request ancestry. Without the capability, conservative V1 inheritance
 is unchanged. Ordinary request-owned work must retain its SDK parent and cancellation token;
 activation-owned work must suppress request execution-context flow and use its owning
 service's cancellation token. No scope or content authority is extended by starting a root.
+
+The default causal-nesting guard allows 128 levels. It bounds runaway nested recursion, not total requests,
+sequential calls, sibling fan-out, observation count or session duration. The first child beyond the guard is
+rejected before dispatch with `rpc.call.depth-limit`; its bounded diagnostic includes the attempted depth,
+limit and recent package/service/method path, never request arguments. The provider remains active and its
+caller may handle the rejection. Independent work is unaffected. If the failure propagates through already
+dispatched ancestors, their dispatch metadata still reflects possible effects; it is not rewritten to
+`not-dispatched`. Real concurrency, observation, queue, payload, deadline and retirement limits remain separate
+and may be reached first. A cycle that completes each call before scheduling another root is not growing
+nesting and is not diagnosed as recursion by this guard.
 
 The implemented capabilities are:
 

@@ -166,9 +166,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
               <ItemGroup>
                 {{sdkReferences}}
                 <ProjectReference Include="../source library/SourceLibrary.csproj" />
-                <PackageReference Include="Avalonia" Version="12.0.3" />
-                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.8" />
-                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.8" />
+                <PackageReference Include="Avalonia" Version="12.1.4" />
+                <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.13" />
+                <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.13" />
               </ItemGroup>
               {{buildImport}}
             </Project>

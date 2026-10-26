@@ -890,7 +890,13 @@ internal sealed class PackageSessionPreparer
             selectedTargetKey,
             selectedTarget,
             (manifest.UsesContracts ?? []).Where(use => use is not null
-                && (acquiredTargets is null || acquiredTargets.Any(key => key.Role == use.Role))).ToArray());
+                && (acquiredTargets is null || acquiredTargets.Any(key => key.Role == use.Role))).ToArray())
+        {
+            RequiredPackageIds = (manifest.DependsOn ?? [])
+                .Where(dependency => dependency?.Presence == "required")
+                .Select(dependency => dependency!.PackageId!)
+                .Order(StringComparer.Ordinal).ToArray(),
+        };
 
     internal static bool InventoryMatches(
         SunderPackageContentIndex contentIndex,

@@ -181,7 +181,7 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
 
     private bool ForwardDelegateRespondsToSelector(IntPtr selector)
     {
-        if (_disposed || _proxy == IntPtr.Zero)
+        if (_disposed || _proxy == IntPtr.Zero || !_interop.IsWindowDelegateSelector(selector))
         {
             return false;
         }
@@ -201,7 +201,7 @@ internal sealed class MacOsWindowDelegateProxy : IDisposable
 
     private IntPtr AcquireForwardingTarget(IntPtr selector)
     {
-        if (_disposed || _proxy == IntPtr.Zero)
+        if (_disposed || _proxy == IntPtr.Zero || !_interop.IsWindowDelegateSelector(selector))
         {
             return IntPtr.Zero;
         }
@@ -251,6 +251,8 @@ internal interface IMacOsWindowDelegateInterop
     bool TrySetWindowDelegate(IntPtr windowHandle, IntPtr windowDelegate);
 
     IntPtr AcquireForwardDelegate(IntPtr proxy);
+
+    bool IsWindowDelegateSelector(IntPtr selector);
 
     bool ImplementsSelector(IntPtr target, IntPtr selector);
 

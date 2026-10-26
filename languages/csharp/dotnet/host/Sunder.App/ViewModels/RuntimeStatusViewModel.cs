@@ -364,6 +364,10 @@ public sealed partial class RuntimeStatusViewModel : ViewModelBase
     private static IBrush? ResolveThemeBrush(string resourceKey)
     {
         var application = Application.Current;
+        // Host-neutral status models can be constructed without a UI dispatcher
+        // (including after a headless session). Avalonia 12 property reads are
+        // thread-affine too; do not inspect a foreign application's theme.
+        if (application is null || !application.CheckAccess()) return null;
         if (application?.Resources.TryGetResource(resourceKey, application.ActualThemeVariant, out var resource) == true
             && resource is IBrush brush)
         {

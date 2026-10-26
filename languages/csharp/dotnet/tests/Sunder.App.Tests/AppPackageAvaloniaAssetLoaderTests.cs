@@ -6,6 +6,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
+[Collection(HeadlessAppCollection.Name)]
 public sealed class AppPackageAvaloniaAssetLoaderTests
 {
     private static readonly Uri PackageResourceUri = new("avares://Sunder.App/Assets/Images/icon.png");

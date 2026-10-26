@@ -242,10 +242,11 @@ internal static class RuntimeRpcCallAcquisitionPolicy
         RuntimeRpcCallFrame? currentFrame,
         RuntimeRpcCallerScopeState? scope,
         TimeProvider timeProvider,
-        bool targetSupportsExtendedDeadline)
+        bool targetSupportsExtendedDeadline,
+        string? callSite = null)
     {
         var parent = RuntimeRpcCallFrameCalculator.Merge(currentFrame, scope?.ParentFrame);
-        var depth = (parent?.Depth ?? 0) + 1;
+        var depth = (long)(parent?.Depth ?? 0) + 1;
         if (depth > policy.MaxNestedCallDepth)
         {
             return new RuntimeRpcCallFrameAcquisitionResult(
@@ -254,7 +255,8 @@ internal static class RuntimeRpcCallAcquisitionPolicy
                 new RuntimeRpcCallAcquisitionFailure(
                     SunderRpcErrorKind.ResourceExhausted,
                     "rpc.call.depth-limit",
-                    "The nested RPC call depth limit was reached."));
+                    RuntimeRpcCallFrameCalculator.DescribeNestingLimit(
+                        parent, depth, policy.MaxNestedCallDepth, callSite)));
         }
 
         var now = timeProvider.GetUtcNow();
@@ -271,7 +273,7 @@ internal static class RuntimeRpcCallAcquisitionPolicy
         }
 
         return new RuntimeRpcCallFrameAcquisitionResult(
-            new RuntimeRpcCallFrame(depth, deadline),
+            RuntimeRpcCallFrameCalculator.CreateChild(parent, (int)depth, deadline, callSite),
             now,
             null);
     }

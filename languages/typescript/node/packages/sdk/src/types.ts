@@ -35,13 +35,14 @@ export interface WorkerLimits {
 }
 
 export const SUNDER_WORKER_LIMITS: Readonly<WorkerLimits> = Object.freeze({
-  maxFrameBytes: 32 * 1024 * 1024 + 64 * 1024,
+  // Bootstrap ceilings, replaced by host.hello's effective resource profile.
+  maxFrameBytes: 64 * 1024 * 1024 + 64 * 1024,
   maxHeaderBytes: 8 * 1024,
   maxMessageDepth: 72,
-  maxRpcValueBytes: 32 * 1024 * 1024,
+  maxRpcValueBytes: 64 * 1024 * 1024,
   maxValueDepth: 64,
-  maxValueNodes: 524_288,
-  maxObjectMembers: 4_096,
+  maxValueNodes: 8_388_608,
+  maxObjectMembers: 131_072,
   maxEnvelopeReserveBytes: 64 * 1024,
   maxInboundCalls: 64,
   maxOutboundCalls: 32,
@@ -52,11 +53,11 @@ export const SUNDER_WORKER_LIMITS: Readonly<WorkerLimits> = Object.freeze({
   maxControlCalls: 320,
   maxStreamQueueMessages: 32,
   maxWriteQueue: 128,
-  maxStreamQueueBytes: 64 * 1024 * 1024,
-  maxWriteQueueBytes: 256 * 1024 * 1024,
+  maxStreamQueueBytes: 128 * 1024 * 1024,
+  maxWriteQueueBytes: 512 * 1024 * 1024,
   maxRememberedIds: 2048,
   maxDiagnosticCharacters: 4096,
-  maxContentBytes: 256 * 1024 * 1024,
+  maxContentBytes: 512 * 1024 * 1024,
   maxPayloadBytes: 1024 * 1024,
   maxFilePayloadBytes: 16 * 1024 * 1024,
   maxContentUses: 32,

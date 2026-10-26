@@ -6,11 +6,13 @@ internal sealed record WorkerLimits
 
     public static WorkerLimits Default => new();
 
-    public int MaximumRpcValueBytes { get; set; } = 32 * Mebibyte;
+    // Bootstrap transport ceilings. host.hello replaces them with the exact
+    // effective profile before package configuration or RPC dispatch.
+    public int MaximumRpcValueBytes { get; set; } = 64 * Mebibyte;
     public int MaximumValueDepth { get; set; } = 64;
-    public int MaximumValueNodes { get; set; } = 524_288;
-    public int MaximumObjectMembers { get; set; } = 4_096;
-    public int MaximumFrameBytes { get; set; } = 32 * Mebibyte + WorkerProtocol.EnvelopeReserveBytes;
+    public int MaximumValueNodes { get; set; } = 8_388_608;
+    public int MaximumObjectMembers { get; set; } = 131_072;
+    public int MaximumFrameBytes { get; set; } = 64 * Mebibyte + WorkerProtocol.EnvelopeReserveBytes;
     public int MaximumHeaderBytes { get; init; } = 8 * 1024;
     public int MaximumMessageDepth { get; set; } = 72;
     public int MaximumInboundCalls { get; init; } = 64;
@@ -24,11 +26,11 @@ internal sealed record WorkerLimits
     public int MaximumControlCalls { get; init; } = 320;
     public int MaximumStreamQueueMessages { get; init; } = 32;
     public int MaximumWriteQueueMessages { get; init; } = 128;
-    public long MaximumStreamQueueBytes { get; set; } = 64L * Mebibyte;
-    public long MaximumWriteQueueBytes { get; set; } = 256L * Mebibyte;
+    public long MaximumStreamQueueBytes { get; set; } = 128L * Mebibyte;
+    public long MaximumWriteQueueBytes { get; set; } = 512L * Mebibyte;
     public int MaximumRememberedHostIds { get; init; } = 2048;
     public int MaximumDiagnosticCharacters { get; init; } = 4096;
-    public long MaximumContentBytes { get; set; } = 256L * Mebibyte;
+    public long MaximumContentBytes { get; set; } = 512L * Mebibyte;
     public int MaximumPayloadBytes { get; init; } = 1024 * 1024;
     public int MaximumFilePayloadBytes { get; init; } = 16 * 1024 * 1024;
     public int MaximumContentUses { get; init; } = 32;
