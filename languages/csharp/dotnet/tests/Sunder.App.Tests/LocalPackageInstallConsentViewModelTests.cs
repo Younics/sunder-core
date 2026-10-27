@@ -30,7 +30,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
     }
 
     [Fact]
-    public void Valid_ProjectsIdentityTargetsAndDeclaredRpcAccess()
+    public void Valid_ProjectsIdentityFeaturesAndDeclaredPublicServiceAccess()
     {
         var manifest = new SunderPackageManifest
         {
@@ -46,9 +46,10 @@ public sealed class LocalPackageInstallConsentViewModelTests
                 new SunderPackageTargetManifest
                 {
                     Role = "runtime",
+                    Rid = AppPackageTargetEnvironment.CurrentRid,
                     RequiredHostCapabilities = [SunderSdkCapabilities.DockerEnvironmentV1],
                 },
-                new SunderPackageTargetManifest { Role = "app" },
+                new SunderPackageTargetManifest { Role = "app", Rid = AppPackageTargetEnvironment.CurrentRid, RequiredHostCapabilities = ["core.v1"] },
             ],
             UsesContracts =
             [
@@ -62,7 +63,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
                     Actions = ["invoke", "discover"],
                 },
             ],
-            ContractBundles = [],
+            ContractBundles = [new SunderPackageContractBundleManifest { Source = "imported", ContractId = "example.messages", Version = "1.4.0+local", Exposure = "public" }],
             Provides = [],
         };
         var validation = new SunderPackageArchiveValidationResult(manifest, [], [])
@@ -83,14 +84,12 @@ public sealed class LocalPackageInstallConsentViewModelTests
         Assert.Equal("App + Runtime", viewModel.TargetText);
         Assert.True(viewModel.HasDockerEnvironmentAccess);
         Assert.Equal(new string('b', 64), viewModel.SensitiveCapabilityManifestSha256);
-        var access = Assert.Single(viewModel.RpcContractUses);
-        Assert.Equal(SunderPackageFormat.RuntimeHostRole, access.Role);
+        var access = Assert.Single(viewModel.Information.ServiceAccess);
+        Assert.Equal("Background worker", access.Scope);
         Assert.Equal("example.messages", access.ContractId);
-        Assert.Equal("1.4.0+local", access.ContractVersion);
-        Assert.Equal("Runtime caller", access.CallerRoleText);
-        Assert.Equal("Version 1.4.0+local", access.ContractVersionText);
-        Assert.Equal("discover | invoke", access.ActionsText);
-        Assert.Equal("1 contract | 2 actions", viewModel.RpcAccessSummary);
+        Assert.Equal("1.4.0+local", access.Version);
+        Assert.Equal("Find services · Call services", access.Actions);
+        Assert.True(Assert.Single(viewModel.Information.Features).IsSensitive);
     }
 
     [Fact]
@@ -101,7 +100,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
             ["Manifest is missing.", "Content index is invalid."]);
 
         Assert.True(viewModel.IsInvalid);
-        Assert.Empty(viewModel.RpcContractUses);
+        Assert.False(viewModel.Information.IsLoaded);
         Assert.Contains("Manifest is missing.", viewModel.ValidationMessage, StringComparison.Ordinal);
         Assert.Contains("Content index is invalid.", viewModel.ValidationMessage, StringComparison.Ordinal);
     }

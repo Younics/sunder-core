@@ -1,113 +1,59 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Sunder.App.ViewModels"
+             xmlns:controls="using:Sunder.App.Views.Controls"
              x:Class="Sunder.App.Views.Controls.InstalledPackageDetails"
-             x:DataType="vm:PackagesWindowViewModel"
-             mc:Ignorable="d">
-  <StackPanel Spacing="14">
-    <TextBlock Classes="caption" Text="{Binding SelectedPackageStatus}" />
-    <TextBlock Classes="muted" Text="{Binding SelectedPackageOperationHint}" TextWrapping="Wrap" />
-
-    <TextBlock Classes="caption"
-               Text="{Binding Operations.SelectedPackageOperationStatusText}"
-               IsVisible="{Binding Operations.ShowSelectedPackageOperationStatus}"
-               TextWrapping="Wrap" />
-    <ProgressBar Minimum="0"
-                 Maximum="100"
-                 Margin="0,5,0,0"
-                 Value="{Binding Operations.SelectedPackageOperationProgressPercent}"
-                 IsIndeterminate="{Binding Operations.SelectedPackageOperationIsIndeterminate}"
-                   IsVisible="{Binding Operations.ShowSelectedPackageOperationStatus}" />
-
-    <Border Classes="card-surface"
-            IsVisible="{Binding HasSelectedPackageExecutionRuntimes}">
-      <Expander IsExpanded="True">
+             x:DataType="vm:PackagesWindowViewModel">
+  <UserControl.Styles>
+    <Style Selector="TextBlock.attention-title"><Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" /></Style>
+    <Style Selector="TextBlock.attention-title.package-failed"><Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Danger}" /></Style>
+  </UserControl.Styles>
+  <StackPanel Spacing="16">
+    <Border Classes="settings-note-card" IsVisible="{Binding SelectedInstalledPackage.NeedsAttention}">
+      <StackPanel Spacing="6">
+        <TextBlock Classes="attention-title" FontWeight="SemiBold"
+                   Classes.package-failed="{Binding SelectedInstalledPackage.IsFailed}"
+                   Text="{Binding SelectedInstalledPackage.AttentionSummary}" TextWrapping="Wrap" />
+        <TextBlock Classes="muted" Text="{Binding SelectedPackageOperationHint}" TextWrapping="Wrap" />
+        <Expander IsExpanded="False" IsVisible="{Binding SelectedPackageHasError}">
+          <Expander.Header><TextBlock Text="Failure details" /></Expander.Header>
+          <TextBlock Classes="muted" Text="{Binding SelectedPackageError}" TextWrapping="Wrap" />
+        </Expander>
+      </StackPanel>
+    </Border>
+    <StackPanel Spacing="6" IsVisible="{Binding Operations.ShowSelectedPackageOperationStatus}">
+      <TextBlock Text="{Binding Operations.SelectedPackageOperationStatusText}" TextWrapping="Wrap" />
+      <ProgressBar Minimum="0" Maximum="100" Value="{Binding Operations.SelectedPackageOperationProgressPercent}"
+                   IsIndeterminate="{Binding Operations.SelectedPackageOperationIsIndeterminate}" />
+    </StackPanel>
+    <Border Classes="card-surface" IsVisible="{Binding HasSelectedPackageExecutionRuntimes}">
+      <Expander IsExpanded="{Binding SelectedPackageExecutionRuntimeNeedsAttention}">
         <Expander.Header>
-          <StackPanel Spacing="2">
-            <TextBlock Classes="section-title" Text="Execution Runtime" />
-            <TextBlock Classes="caption"
-                       Text="{Binding SelectedPackageExecutionRuntimeSummary}" />
+          <StackPanel Spacing="3">
+            <TextBlock Classes="section-title" Text="Runtime compatibility" />
+            <TextBlock Classes="caption" Text="{Binding SelectedPackageExecutionRuntimeSummary}" TextWrapping="Wrap" />
           </StackPanel>
         </Expander.Header>
-        <ItemsControl Margin="0,12,0,0"
-                      ItemsSource="{Binding SelectedPackageExecutionRuntimes}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:PackageExecutionRuntimeStatusViewModel">
-              <Border Classes="settings-note-card" Margin="0,0,0,8">
-                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
-                  <StackPanel Spacing="3">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                      <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
-                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding StatusText}" />
-                    </Grid>
-                    <TextBlock Classes="caption" Text="{Binding TargetText}" />
-                    <TextBlock Classes="muted"
-                               Text="{Binding DetailText}"
-                               TextWrapping="Wrap" />
-                  </StackPanel>
-                   <Button Grid.Column="1"
-                           Classes="primary-action compact-action"
-                           Content="{Binding ActionText}"
-                          IsVisible="{Binding CanRepair}"
-                          Command="{Binding $parent[ItemsControl].DataContext.RepairExecutionRuntimeCommand}"
-                          CommandParameter="{Binding}" />
-                </Grid>
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
+        <ItemsControl ItemsSource="{Binding SelectedPackageExecutionRuntimes}" Margin="0,8,0,0">
+          <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:PackageExecutionRuntimeStatusViewModel">
+            <StackPanel Spacing="5" Margin="0,8">
+              <WrapPanel ItemSpacing="12" LineSpacing="6">
+                <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+              </WrapPanel>
+              <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
+              <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
+              <Button Classes="primary-action compact-action" Content="{Binding ActionText}" IsVisible="{Binding CanRepair}"
+                      HorizontalAlignment="Left" Command="{Binding $parent[ItemsControl].DataContext.RepairExecutionRuntimeCommand}" CommandParameter="{Binding}" />
+            </StackPanel>
+          </DataTemplate></ItemsControl.ItemTemplate>
         </ItemsControl>
       </Expander>
     </Border>
-
-    <Border Classes="card-surface">
-      <Expander IsExpanded="False">
-        <Expander.Header>
-          <StackPanel Spacing="2">
-            <TextBlock Classes="section-title" Text="RPC Access" />
-            <TextBlock Classes="caption"
-                       Text="{Binding SelectedInstalledPackage.RpcAccessSummary}" />
-          </StackPanel>
-        </Expander.Header>
-        <StackPanel Margin="0,12,0,0" Spacing="10">
-          <TextBlock Classes="muted"
-                     IsVisible="{Binding SelectedInstalledPackage.HasNoRpcContractUses}"
-                     Text="This package does not declare access to another package's RPC contract."
-                     TextWrapping="Wrap" />
-          <ItemsControl ItemsSource="{Binding SelectedInstalledPackage.RpcContractUses}"
-                        IsVisible="{Binding SelectedInstalledPackage.HasRpcContractUses}">
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:PackageRpcAccessItemViewModel">
-                <Border Classes="settings-note-card" Margin="0,0,0,8">
-                  <StackPanel Spacing="4">
-                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                      <TextBlock FontWeight="SemiBold" Text="{Binding ContractId}" />
-                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding RequirementText}" />
-                    </Grid>
-                    <Grid ColumnDefinitions="Auto,Auto" ColumnSpacing="8">
-                      <TextBlock Classes="caption" Text="{Binding CallerRoleText}" />
-                      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding ContractVersionText}" />
-                    </Grid>
-                    <TextBlock Classes="muted" Text="{Binding ActionsText}" TextWrapping="Wrap" />
-                  </StackPanel>
-                </Border>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </StackPanel>
-      </Expander>
-    </Border>
-
-    <Separator />
-    <TextBlock Classes="section-title" Text="Last Error" IsVisible="{Binding SelectedPackageHasError}" />
-    <TextBlock Classes="muted"
-               IsVisible="{Binding SelectedPackageHasError}"
-               Text="{Binding SelectedPackageError}"
-               TextWrapping="Wrap" />
-    <TextBlock Classes="muted"
-               IsVisible="{Binding ShowNoInstalledPackageError}"
-               Text="No package failure has been recorded for the selected package."
-               TextWrapping="Wrap" />
+    <controls:PackageInformationView DataContext="{Binding Information}" />
+    <Expander IsExpanded="False" IsVisible="{Binding SelectedInstalledPackage.ShowHistoricalError}">
+      <Expander.Header><TextBlock Text="Last recorded failure" /></Expander.Header>
+      <TextBlock Classes="muted" Text="{Binding SelectedPackageError}" TextWrapping="Wrap" />
+    </Expander>
   </StackPanel>
 </UserControl>

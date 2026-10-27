@@ -15,7 +15,6 @@ public sealed class LocalPackageInstallConsentViewModel
         string targetText,
         bool hasDockerEnvironmentAccess,
         string? sensitiveCapabilityManifestSha256,
-        IReadOnlyList<PackageRpcAccessItemViewModel> rpcContractUses,
         string validationMessage,
         bool isValid)
     {
@@ -26,7 +25,6 @@ public sealed class LocalPackageInstallConsentViewModel
         TargetText = targetText;
         HasDockerEnvironmentAccess = hasDockerEnvironmentAccess;
         SensitiveCapabilityManifestSha256 = sensitiveCapabilityManifestSha256;
-        RpcContractUses = rpcContractUses;
         ValidationMessage = validationMessage;
         IsValid = isValid;
     }
@@ -39,21 +37,19 @@ public sealed class LocalPackageInstallConsentViewModel
     public string TargetText { get; }
     public bool HasDockerEnvironmentAccess { get; }
     public string? SensitiveCapabilityManifestSha256 { get; }
-    public IReadOnlyList<PackageRpcAccessItemViewModel> RpcContractUses { get; }
-    public string RpcAccessSummary => PackageRpcAccessProjection.Summary(RpcContractUses);
-    public bool HasRpcContractUses => RpcContractUses.Count > 0;
-    public bool HasNoRpcContractUses => !HasRpcContractUses;
     public string ValidationMessage { get; }
     public bool IsValid { get; }
     public bool IsInvalid => !IsValid;
     public string DismissButtonText => IsValid ? "Cancel" : "Close";
     public IReadOnlyList<ExecutionRuntimeDownloadItemViewModel> RuntimeDownloads { get; private init; } = [];
+    public PackageInformationViewModel Information { get; private init; } = PackageInformationViewModel.Unavailable();
     public bool HasRuntimeDownloads => RuntimeDownloads.Count != 0;
 
     internal LocalPackageInstallConsentViewModel WithRuntimes(RuntimePackageRuntimePrerequisitePlan plan)
         => new(FileName, PackageName, PackageIdentity, Summary, TargetText, HasDockerEnvironmentAccess,
-            SensitiveCapabilityManifestSha256, RpcContractUses, ValidationMessage, IsValid)
+            SensitiveCapabilityManifestSha256, ValidationMessage, IsValid)
         {
+            Information = Information,
             RuntimeDownloads = plan.Requirements.Select(item =>
             {
                 var identity = item.Installation?.Resolution?.Artifact.Identity ?? item.InstalledRuntime;
@@ -102,9 +98,11 @@ public sealed class LocalPackageInstallConsentViewModel
                     SunderPackageFormat.ManifestPath,
                     StringComparison.Ordinal)).Sha256
                 : null,
-            PackageRpcAccessProjection.FromManifest(manifest.UsesContracts ?? []),
             validationMessage,
-            isValid: true);
+            isValid: true)
+        {
+            Information = PackageInformationViewModel.Create(SunderPackageInformation.FromManifest(manifest), AppPackageTargetEnvironment.CurrentRid),
+        };
     }
 
     internal static LocalPackageInstallConsentViewModel Invalid(
@@ -118,7 +116,6 @@ public sealed class LocalPackageInstallConsentViewModel
             "Invalid archive",
             false,
             null,
-            [],
             string.Join(Environment.NewLine, errors),
             isValid: false);
 }

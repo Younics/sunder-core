@@ -5,6 +5,9 @@ namespace Sunder.App.Services;
 
 public sealed partial class RuntimeApiClient : IRuntimeApiClient, IRuntimeRpcManagementClient
 {
+    public async Task<PackageInformationDescriptor?> GetPackageInformationAsync(string packageId, CancellationToken cancellationToken = default)
+        => await _management.GetPackageInformationAsync(packageId, cancellationToken);
+
     private readonly RuntimeClientTransport? _ownedTransport;
     private readonly RuntimeManagementClient _management;
 

@@ -151,6 +151,7 @@ internal static class RuntimeHostComposition
         services.AddSingleton<PackageSessionPublisher>();
         services.AddSingleton<PackageLifecycleStageStore>();
         services.AddSingleton<RuntimePackageUiService>();
+        services.AddSingleton<PackageInformationService>();
         services.AddSingleton<PackageSessionLifecycleService>();
         services.AddSingleton<InstalledPackageLifecycleService>();
         services.AddHostedService<PackageStageCleanupService>();

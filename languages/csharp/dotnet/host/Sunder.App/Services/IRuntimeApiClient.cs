@@ -168,7 +168,10 @@ public interface IRuntimePackagesClient :
     IRuntimePackageSessionClient,
     IRuntimePackageUiClient,
     IRuntimePackageChangeClient,
-    IRuntimeExecutionRuntimeClient;
+    IRuntimeExecutionRuntimeClient
+{
+    Task<PackageInformationDescriptor?> GetPackageInformationAsync(string packageId, CancellationToken cancellationToken = default);
+}
 
 public interface IRuntimeStacksClient :
     IRuntimeStackClient,

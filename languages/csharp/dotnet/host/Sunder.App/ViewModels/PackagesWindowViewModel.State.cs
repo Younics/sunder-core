@@ -134,6 +134,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     public ObservableCollection<PackageExecutionRuntimeStatusViewModel> SelectedPackageExecutionRuntimes { get; } = [];
 
     public bool HasSelectedPackageExecutionRuntimes => SelectedPackageExecutionRuntimes.Count > 0;
+    public bool SelectedPackageExecutionRuntimeNeedsAttention => SelectedPackageExecutionRuntimes.Any(runtime => runtime.ShowWarning);
 
     public string SelectedPackageExecutionRuntimeSummary
     {
@@ -307,7 +308,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && ShowMarketplaceInstallAction
         && Marketplace.SelectedPackage is { IsYanked: false }
         && Marketplace.SelectedVersion is { IsYanked: false }
-        && Marketplace.RpcAccessLoaded
+        && Marketplace.VersionDetailsLoaded
         && Marketplace.RuntimePlanCanApply
         && !Operations.SelectedPackageHasActiveOperation;
 
@@ -318,7 +319,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && Marketplace.SelectedVersion is { } selectedVersion
         && GetPackageUpdate(Marketplace.SelectedPackage.PackageId) is { } update
         && string.Equals(selectedVersion.Version, update.AvailableVersion, StringComparison.Ordinal)
-        && Marketplace.RpcAccessLoaded
+        && Marketplace.VersionDetailsLoaded
         && Marketplace.RuntimePlanCanApply
         && !Operations.SelectedPackageHasActiveOperation;
 
@@ -410,6 +411,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnModeChanged(PackageWindowMode value)
     {
+        _informationRequest.Invalidate();
+        _marketplaceVersionDetailsRequest.Invalidate();
+        Information = PackageInformationViewModel.Loading();
         OnPropertyChanged(nameof(IsMarketplaceMode));
         OnPropertyChanged(nameof(IsInstalledMode));
         OnPropertyChanged(nameof(SearchPlaceholder));

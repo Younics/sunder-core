@@ -23,9 +23,7 @@ internal sealed record PackageSelectionDetails(
             item.DisplayName,
             $"{item.PackageId} · v{item.Version} · {item.SourceLabel}",
             item.StatusText,
-            item.HasUpdate
-                ? $"Views: {item.ViewCount} · State: {item.StatusText} · Update available: {item.AvailableVersion}"
-                : $"Views: {item.ViewCount} · State: {item.StatusText}",
+            item.Summary ?? "Package features, dependencies and public integrations.",
             item.Glyph,
             item.IconImage,
             item.IconLoadError ?? string.Empty,

@@ -9,8 +9,8 @@
         mc:Ignorable="d"
         Width="1200"
         Height="820"
-        MinWidth="980"
-        MinHeight="680"
+        MinWidth="600"
+        MinHeight="480"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
         Title="Packages"
@@ -86,7 +86,7 @@
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="430" MinWidth="240" MaxWidth="900" />
           <ColumnDefinition Width="4" />
-          <ColumnDefinition Width="*" MinWidth="420" />
+          <ColumnDefinition Width="*" MinWidth="0" />
         </Grid.ColumnDefinitions>
         <Border Grid.Column="0"
                 x:Name="PackagesListPane"
@@ -157,6 +157,7 @@
 
             <Grid Grid.Row="2">
               <ListBox Classes="package-list"
+                       PointerReleased="PackageList_OnPointerReleased" KeyUp="PackageList_OnKeyUp"
                        ItemsSource="{Binding Marketplace.Packages}"
                        SelectedItem="{Binding SelectedMarketplacePackage, Mode=TwoWay}"
                        IsVisible="{Binding IsMarketplaceMode}">
@@ -183,6 +184,7 @@
               </ListBox>
 
               <ListBox Classes="package-list"
+                       PointerReleased="PackageList_OnPointerReleased" KeyUp="PackageList_OnKeyUp"
                        ItemsSource="{Binding Installed.Packages}"
                        SelectedItem="{Binding SelectedInstalledPackage, Mode=TwoWay}"
                        IsVisible="{Binding IsInstalledMode}">
@@ -220,6 +222,7 @@
         </Border>
 
         <GridSplitter Grid.Column="1"
+                      x:Name="PackagesSplitter"
                       Width="4"
                       ResizeDirection="Columns"
                       ResizeBehavior="PreviousAndNext"
@@ -228,18 +231,26 @@
                       DragCompleted="PackagesSplitter_OnDragCompleted" />
 
         <Border Grid.Column="2"
+                x:Name="PackagesDetailPane"
                 Classes="workspace-surface"
                 Margin="16">
-          <ScrollViewer>
+          <Grid RowDefinitions="Auto,*">
+          <WrapPanel Margin="18,12,18,0" ItemSpacing="8" LineSpacing="6">
+            <Button x:Name="CompactPackageBackButton" Classes="secondary-action compact-action" Content="‹ Packages"
+                    Click="CompactPackageBackButton_OnClick" IsVisible="False" />
+            <Button Classes="secondary-action compact-action" Content="‹ Previous package"
+                    Command="{Binding GoBackInPackageDetailsCommand}" IsVisible="{Binding CanGoBackInPackageDetails}" />
+          </WrapPanel>
+          <ScrollViewer x:Name="PackageDetailsScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
             <StackPanel Margin="18"
                         Spacing="16">
               <controls:PackageDetailsHeader />
 
+              <controls:PackageWarningsPanel IsVisible="{Binding Operations.HasWarnings}" />
+
               <controls:MarketplacePackageDetails IsVisible="{Binding ShowMarketplaceDetails}" />
 
               <controls:InstalledPackageDetails IsVisible="{Binding ShowInstalledDetails}" />
-
-              <controls:PackageWarningsPanel IsVisible="{Binding Operations.HasWarnings}" />
 
               <TextBlock Classes="muted"
                          IsVisible="{Binding ShowNoSelection}"
@@ -247,24 +258,18 @@
                          TextWrapping="Wrap" />
             </StackPanel>
           </ScrollViewer>
+          </Grid>
         </Border>
         </Grid>
       </Border>
     </Border>
 
     <Grid Grid.Row="2"
-          ColumnDefinitions="Auto,*,Auto,Auto"
+          ColumnDefinitions="*,Auto"
           Margin="20,16,20,16"
           ColumnSpacing="16">
-      <Button Classes="secondary-action"
-              Command="{Binding InstallPackageCommand}"
-              Content="Install from disk"
-              IsEnabled="{Binding CanInstallPackage}" />
-
-      <StackPanel Grid.Column="2"
-                  Orientation="Horizontal"
-                  Spacing="12"
-                  HorizontalAlignment="Right">
+      <WrapPanel ItemSpacing="10" LineSpacing="8">
+        <Button Classes="secondary-action" Command="{Binding InstallPackageCommand}" Content="Install from disk" IsEnabled="{Binding CanInstallPackage}" />
         <Button Classes="primary-action"
                 Command="{Binding InstallSelectedMarketplacePackageCommand}"
                 Content="Install"
@@ -309,8 +314,8 @@
                 Command="{Binding CancelSelectedPackageOperationCommand}"
                 Content="Cancel"
                 IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
-      </StackPanel>
-      <controls:BackgroundTaskMonitor Grid.Column="3"
+      </WrapPanel>
+      <controls:BackgroundTaskMonitor Grid.Column="1"
                                           HorizontalAlignment="Right"
                                           DataContext="{Binding PackageProcesses}" />
     </Grid>

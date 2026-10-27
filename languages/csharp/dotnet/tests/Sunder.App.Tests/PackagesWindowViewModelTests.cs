@@ -189,7 +189,7 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
-    public async Task InstalledPackageDetails_ProjectDeclaredRpcAccess()
+    public async Task InstalledPackageDetails_LoadSourceBoundInformation()
     {
         var runtimeClient = new FakeRuntimeApiClient(
         [
@@ -207,20 +207,76 @@ public sealed class PackagesWindowViewModelTests
                         Actions: ["invoke", "discover"]),
                 ]),
         ]);
+        runtimeClient.Information = (_, _) => Task.FromResult<PackageInformationDescriptor?>(InformationFor("agent", "runtime", "dev.sunder.execution", "1.4.2+desktop"));
         using var viewModel = CreateViewModel(runtimeClient);
 
         await viewModel.InitializeAsync();
+        await WaitForConditionAsync(() => viewModel.Information.IsLoaded);
 
-        var package = Assert.IsType<PackageCatalogItemViewModel>(viewModel.SelectedInstalledPackage);
-        var access = Assert.Single(package.RpcContractUses);
-        Assert.Equal(SunderPackageFormat.RuntimeHostRole, access.Role);
+        var access = Assert.Single(viewModel.Information.ServiceAccess);
+        Assert.Equal("Background worker", access.Scope);
         Assert.Equal("dev.sunder.execution", access.ContractId);
-        Assert.Equal("1.4.2+desktop", access.ContractVersion);
-        Assert.Equal("Runtime caller", access.CallerRoleText);
-        Assert.Equal("Version 1.4.2+desktop", access.ContractVersionText);
-        Assert.Equal("Required", access.RequirementText);
-        Assert.Equal("discover | invoke", access.ActionsText);
-        Assert.Equal("1 contract | 2 actions", package.RpcAccessSummary);
+        Assert.Equal("1.4.2+desktop", access.Version);
+        Assert.Equal("Required for service readiness", access.Requirement);
+        Assert.Equal("Find services · Call services", access.Actions);
+        var unchanged = viewModel.Information;
+        viewModel.SearchText = "agent";
+        Assert.Same(unchanged, viewModel.Information);
+    }
+
+    [Fact]
+    public async Task Information_LateOrMismatchedSourceCannotReplaceCurrentSelection()
+    {
+        var late = new TaskCompletionSource<PackageInformationDescriptor?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new FakeRuntimeApiClient([CreateInstalledPackage("alpha", true), CreateInstalledPackage("beta", true)]);
+        var first = true;
+        runtime.Information = (id, _) =>
+        {
+            if (id == "alpha" && first)
+            {
+                first = false;
+                started.TrySetResult();
+                return late.Task; // deliberately ignores cancellation
+            }
+            var info = InformationFor(id, "runtime", "example." + id, "1.0.0");
+            return Task.FromResult<PackageInformationDescriptor?>(info);
+        };
+        using var vm = CreateViewModel(runtime);
+        await vm.InitializeAsync();
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        vm.SelectedInstalledPackage = vm.Installed.Packages.Single(value => value.PackageId == "beta");
+        await WaitForConditionAsync(() => vm.Information.IsLoaded);
+        late.SetResult(InformationFor("alpha", "runtime", "example.stale", "1.0.0"));
+        await Task.Yield();
+        Assert.Equal("example.beta", Assert.Single(vm.Information.ServiceAccess).ContractId);
+
+        runtime.Information = (id, _) => Task.FromResult<PackageInformationDescriptor?>(InformationFor(id, "runtime", "example." + id, "1.0.0") with { Version = "9.0.0" });
+        vm.SelectedInstalledPackage = vm.Installed.Packages.Single(value => value.PackageId == "alpha");
+        await WaitForConditionAsync(() => vm.Information.HasStatus && !vm.Information.Status.StartsWith("Loading", StringComparison.Ordinal));
+        Assert.False(vm.Information.HasNoPublicBindings);
+        Assert.Empty(vm.Information.ServiceAccess);
+    }
+
+    [Fact]
+    public async Task DependencyNavigationReturnsToTheOriginalFilteredPackage()
+    {
+        var runtime = new FakeRuntimeApiClient([CreateInstalledPackage("alpha", true), CreateInstalledPackage("beta", true)]);
+        runtime.Information = (id, _) => Task.FromResult<PackageInformationDescriptor?>(new(id, "1.0.0", new('a', 64), PackageSourceKind.Installed,
+            [new("runtime", AppPackageTargetEnvironment.CurrentRid, "core.v1")],
+            id == "alpha" ? [new("beta", ">=1.0.0", "optional", [])] : [], [], []));
+        using var vm = CreateViewModel(runtime);
+        await vm.InitializeAsync();
+        vm.SearchText = "alpha";
+        await WaitForConditionAsync(() => vm.Information.Dependencies.Count == 1);
+        Assert.Single(vm.Installed.Packages);
+        vm.Information.Dependencies[0].NavigateCommand!.Execute(null);
+        await WaitForConditionAsync(() => vm.SelectedInstalledPackage?.PackageId == "beta");
+        Assert.True(vm.CanGoBackInPackageDetails);
+        await vm.GoBackInPackageDetailsCommand.ExecuteAsync(null);
+        Assert.Equal("alpha", vm.SearchText);
+        Assert.Equal("alpha", vm.SelectedInstalledPackage!.PackageId);
+        Assert.False(vm.CanGoBackInPackageDetails);
     }
 
     [Fact]
@@ -434,7 +490,7 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
-    public async Task DevOverlayDetails_UseActiveSessionRpcAccessInsteadOfInstalledManifest()
+    public async Task DevOverlayDetails_UseActiveSourceInformationInsteadOfInstalledDeclarations()
     {
         var runtimeClient = new FakeRuntimeApiClient(
         [
@@ -480,15 +536,18 @@ public sealed class PackagesWindowViewModelTests
                     ]),
             ],
         };
+        runtimeClient.Information = (_, _) => Task.FromResult<PackageInformationDescriptor?>(InformationFor("agent", "app", "example.development", "2.0.0") with { SourceKind = PackageSourceKind.Dev, Summary = "Development overlay summary" });
         using var viewModel = CreateViewModel(runtimeClient);
 
         await viewModel.InitializeAsync();
+        await WaitForConditionAsync(() => viewModel.Information.IsLoaded);
 
-        var access = Assert.Single(viewModel.SelectedInstalledPackage!.RpcContractUses);
-        Assert.Equal(SunderPackageFormat.AppHostRole, access.Role);
+        var access = Assert.Single(viewModel.Information.ServiceAccess);
+        Assert.Equal("Desktop UI", access.Scope);
         Assert.Equal("example.development", access.ContractId);
-        Assert.Equal("2.0.0", access.ContractVersion);
-        Assert.Equal("discover | invoke", access.ActionsText);
+        Assert.Equal("Development overlay summary", viewModel.SelectedPackageSummary);
+        Assert.Equal("2.0.0", access.Version);
+        Assert.Equal("Find services · Call services", access.Actions);
     }
 
     [Fact]
@@ -795,7 +854,7 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
-    public async Task MarketplaceVersionSelection_LoadsDeclaredRpcAccess()
+    public async Task MarketplaceVersionSelection_LoadsDeclaredPublicInformation()
     {
         var registryClient = new FakeRegistryApiClient
         {
@@ -824,16 +883,13 @@ public sealed class PackagesWindowViewModelTests
         viewModel.RegistryUrlText = "https://registry.example/";
 
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => viewModel.Marketplace.RpcContractUses.Count == 1);
+        await WaitForConditionAsync(() => viewModel.Information.ServiceAccess.Count == 1);
 
-        var access = Assert.Single(viewModel.Marketplace.RpcContractUses);
-        Assert.Equal(SunderPackageFormat.AppHostRole, access.Role);
+        var access = Assert.Single(viewModel.Information.ServiceAccess);
+        Assert.Equal("Desktop UI", access.Scope);
         Assert.Equal("dev.sunder.execution", access.ContractId);
-        Assert.Equal("1.7.3", access.ContractVersion);
-        Assert.Equal("App caller", access.CallerRoleText);
-        Assert.Equal("Version 1.7.3", access.ContractVersionText);
-        Assert.Equal("discover | invoke", access.ActionsText);
-        Assert.Equal("1 contract | 2 actions", viewModel.Marketplace.RpcAccessSummary);
+        Assert.Equal("1.7.3", access.Version);
+        Assert.Equal("Find services · Call services", access.Actions);
     }
 
     [Fact]
@@ -913,18 +969,18 @@ public sealed class PackagesWindowViewModelTests
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
         await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
-        Assert.True(viewModel.Marketplace.RpcAccessLoading);
-        Assert.False(viewModel.Marketplace.HasNoRpcContractUses);
+        Assert.False(viewModel.Marketplace.VersionDetailsLoaded);
+        Assert.False(viewModel.Information.IsLoaded);
         Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
-        Assert.Equal("Loading declared access...", viewModel.Marketplace.RpcAccessSummary);
+        Assert.Contains("Loading", viewModel.Information.Status, StringComparison.Ordinal);
 
         releaseRequest.SetResult();
-        await WaitForConditionAsync(() => viewModel.Marketplace.HasRpcAccessError);
+        await WaitForConditionAsync(() => viewModel.Marketplace.HasRuntimePreflightError);
 
-        Assert.False(viewModel.Marketplace.RpcAccessLoaded);
-        Assert.False(viewModel.Marketplace.HasNoRpcContractUses);
+        Assert.False(viewModel.Marketplace.VersionDetailsLoaded);
+        Assert.False(viewModel.Information.HasNoPublicBindings);
         Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
-        Assert.Equal("Declared access unavailable", viewModel.Marketplace.RpcAccessSummary);
+        Assert.Contains("unavailable", viewModel.Information.Status, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1361,7 +1417,16 @@ public sealed class PackagesWindowViewModelTests
             ManifestFormatVersion: SunderPackageFormat.CurrentManifestVersion,
             ArchiveFormatVersion: SunderPackageFormat.CurrentArchiveFormatVersion,
             PublishedAtUtc: DateTimeOffset.UtcNow,
-            TrustedArtifactOrigins: []);
+            TrustedArtifactOrigins: [])
+        {
+            Information = new RegistryPackageInformation(new('a', 64),
+                [new("app", AppPackageTargetEnvironment.CurrentRid, "core.v1"), new("runtime", AppPackageTargetEnvironment.CurrentRid, "core.v1")], [], [],
+                (usesContracts ?? []).Select(use => new RegistryPackagePublicUse(use.Role, use.ContractId, use.ContractVersion, use.Required, use.Actions)).ToArray()),
+        };
+
+    private static PackageInformationDescriptor InformationFor(string id, string role, string contract, string version)
+        => new(id, "1.0.0", new('a', 64), PackageSourceKind.Installed,
+            [new(role, AppPackageTargetEnvironment.CurrentRid, "core.v1")], [], [], [new(role, contract, version, true, ["discover", "invoke"])]);
 
     private static RuntimeRegistryResolveInstallPlanResponse CreateRuntimePlan(
         RegistryExecutionRuntimeRequirement requirement,
@@ -1714,6 +1779,9 @@ public sealed class PackagesWindowViewModelTests
         public IReadOnlyList<RegistryPackageUpdate> RegistryUpdates { get; init; } = [];
 
         public IReadOnlyList<SessionPackageDescriptor> SessionPackages { get; init; } = [];
+        public Func<string, CancellationToken, Task<PackageInformationDescriptor?>> Information { get; set; } = (_, _) => Task.FromResult<PackageInformationDescriptor?>(null);
+        public Task<PackageInformationDescriptor?> GetPackageInformationAsync(string packageId, CancellationToken cancellationToken = default)
+            => Information(packageId, cancellationToken);
 
         public IReadOnlyList<InstalledExecutionRuntimeSummary> ExecutionRuntimes { get; set; } = [];
 

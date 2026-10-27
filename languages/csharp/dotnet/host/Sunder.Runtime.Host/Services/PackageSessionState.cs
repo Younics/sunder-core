@@ -250,6 +250,16 @@ internal sealed class PackageSessionState(
         }
     }
 
+    internal (bool HasSource, PackageInformationDescriptor? Information) GetPackageInformation(string packageId)
+    {
+        lock (_syncRoot)
+        {
+            return _activeEntry.Session.TryGetPackageSource(packageId, out var source) && source is not null
+                ? (true, PackageInformationProjection.FromSource(source))
+                : (_activeEntry.Session.TryGetSessionPackage(packageId, out _), null);
+        }
+    }
+
     public IReadOnlyList<RuntimePackageSource> GetActivePackageSources()
     {
         lock (_syncRoot)

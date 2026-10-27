@@ -10,46 +10,28 @@ namespace Sunder.App.Tests;
 public sealed class PackageCatalogPresentationTests
 {
     [Fact]
-    public void RpcAccessProjection_GroupsByCallerRoleAndPresentsExactVersions()
+    public void Information_PreservesCallerScopeExactVersionsAndServiceReadinessSeparately()
     {
-        var projected = PackageRpcAccessProjection.FromRuntime(
-        [
-            new PackageRpcContractUseDescriptor(
-                SunderPackageFormat.RuntimeHostRole,
-                "example.rpc",
-                "2.0.0+runtime",
-                new string('b', 64),
-                Required: false,
-                Actions: ["subscribe"]),
-            new PackageRpcContractUseDescriptor(
-                SunderPackageFormat.AppHostRole,
-                "example.rpc",
-                "1.0.0+app",
-                new string('a', 64),
-                Required: true,
-                Actions: ["invoke", "discover"]),
-        ]);
-
-        Assert.Collection(
-            projected,
-            access =>
-            {
-                Assert.Equal(SunderPackageFormat.AppHostRole, access.Role);
-                Assert.Equal("1.0.0+app", access.ContractVersion);
-                Assert.Equal("App caller", access.CallerRoleText);
-                Assert.Equal("Version 1.0.0+app", access.ContractVersionText);
-                Assert.Equal("Required", access.RequirementText);
-                Assert.Equal("discover | invoke", access.ActionsText);
-            },
-            access =>
-            {
-                Assert.Equal(SunderPackageFormat.RuntimeHostRole, access.Role);
-                Assert.Equal("2.0.0+runtime", access.ContractVersion);
-                Assert.Equal("Runtime caller", access.CallerRoleText);
-                Assert.Equal("Version 2.0.0+runtime", access.ContractVersionText);
-                Assert.Equal("Optional", access.RequirementText);
-                Assert.Equal("subscribe", access.ActionsText);
-            });
+        var facts = new SunderPackageInformation(
+            [new("app", "osx-arm64", "storage.v1"), new("runtime", "osx-arm64", "storage.v1")], [], [],
+            [new("app", "example.service", "1.0.0+app", true, ["discover", "invoke"]),
+             new("runtime", "example.service", "2.0.0+runtime", false, ["subscribe"])]);
+        var information = PackageInformationViewModel.Create(facts, "osx-arm64");
+        Assert.Collection(information.ServiceAccess, access =>
+        {
+            Assert.Equal("Desktop UI", access.Scope);
+            Assert.Equal("1.0.0+app", access.Version);
+            Assert.Equal("Required for service readiness", access.Requirement);
+            Assert.Equal("Find services · Call services", access.Actions);
+        }, access =>
+        {
+            Assert.Equal("Background worker", access.Scope);
+            Assert.Equal("2.0.0+runtime", access.Version);
+            Assert.Equal("Optional service", access.Requirement);
+            Assert.Equal("Receive live updates", access.Actions);
+        });
+        Assert.Empty(information.Dependencies);
+        Assert.Single(information.Features);
     }
 
     [Fact]

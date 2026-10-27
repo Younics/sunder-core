@@ -10,9 +10,7 @@ namespace Sunder.App.ViewModels;
 public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposable
 {
     private readonly MarketplacePackageProfileViewModel _profile;
-    private bool _rpcAccessLoaded;
-    private bool _rpcAccessLoading;
-    private string _rpcAccessError = string.Empty;
+    private bool _versionDetailsLoaded;
     private bool _runtimePreflightLoaded;
     private bool _runtimePreflightLoading;
     private string _runtimePreflightError = string.Empty;
@@ -62,8 +60,6 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
 
     public ObservableCollection<RegistryUserAttributionViewModel> Maintainers { get; } = [];
 
-    public ObservableCollection<PackageRpcAccessItemViewModel> RpcContractUses { get; } = [];
-
     public ObservableCollection<MarketplaceExecutionRuntimeRequirementViewModel> ExecutionRuntimeRequirements { get; } = [];
 
     public ObservableStringBuilder ReadmeMarkdownBuilder => _profile.ReadmeMarkdownBuilder;
@@ -90,25 +86,7 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
 
     public bool HasMaintainers => Maintainers.Count > 0;
 
-    public bool RpcAccessLoaded => _rpcAccessLoaded;
-
-    public bool RpcAccessLoading => _rpcAccessLoading;
-
-    public bool HasRpcAccessError => !string.IsNullOrWhiteSpace(_rpcAccessError);
-
-    public string RpcAccessError => _rpcAccessError;
-
-    public bool HasRpcContractUses => RpcAccessLoaded && RpcContractUses.Count > 0;
-
-    public bool HasNoRpcContractUses => RpcAccessLoaded && !HasRpcContractUses;
-
-    public string RpcAccessSummary => RpcAccessLoading
-        ? "Loading declared access..."
-        : HasRpcAccessError
-            ? "Declared access unavailable"
-            : RpcAccessLoaded
-                ? PackageRpcAccessProjection.Summary(RpcContractUses)
-                : "Select a package version";
+    public bool VersionDetailsLoaded => _versionDetailsLoaded;
 
     public string CurrentRid => AppPackageTargetEnvironment.CurrentRid;
 
@@ -197,24 +175,10 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
         Versions.Clear();
     }
 
-    public void BeginRpcContractUseLoad()
+    public void SetVersionDetailsLoaded(bool loaded)
     {
-        SetRpcContractUses([], loaded: false, loading: true, error: null);
-    }
-
-    public void CompleteRpcContractUseLoad(IReadOnlyList<PackageRpcAccessItemViewModel> uses)
-    {
-        SetRpcContractUses(uses, loaded: true, loading: false, error: null);
-    }
-
-    public void FailRpcContractUseLoad(string error)
-    {
-        SetRpcContractUses([], loaded: false, loading: false, error);
-    }
-
-    public void ClearRpcContractUses()
-    {
-        SetRpcContractUses([], loaded: false, loading: false, error: null);
+        _versionDetailsLoaded = loaded;
+        OnPropertyChanged(nameof(VersionDetailsLoaded));
     }
 
     public void BeginRuntimePreflightLoad()
@@ -276,25 +240,6 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
             loaded: false,
             loading: false,
             error: null);
-    }
-
-    private void SetRpcContractUses(
-        IReadOnlyList<PackageRpcAccessItemViewModel> uses,
-        bool loaded,
-        bool loading,
-        string? error)
-    {
-        RpcContractUses.ReplaceWith(uses);
-        _rpcAccessLoaded = loaded;
-        _rpcAccessLoading = loading;
-        _rpcAccessError = error ?? string.Empty;
-        OnPropertyChanged(nameof(RpcAccessLoaded));
-        OnPropertyChanged(nameof(RpcAccessLoading));
-        OnPropertyChanged(nameof(HasRpcAccessError));
-        OnPropertyChanged(nameof(RpcAccessError));
-        OnPropertyChanged(nameof(HasRpcContractUses));
-        OnPropertyChanged(nameof(HasNoRpcContractUses));
-        OnPropertyChanged(nameof(RpcAccessSummary));
     }
 
     private MarketplaceExecutionRuntimeRequirementViewModel CreateRuntimeRequirement(

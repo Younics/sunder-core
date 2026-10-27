@@ -45,7 +45,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
         AvailableVersion = state.AvailableVersion;
         DeprecatedUpdateMessage = state.DeprecatedUpdateMessage;
         OperationHint = state.OperationHint;
-        RpcContractUses = state.RpcContractUses;
+        Summary = state.Summary;
         _onSelect = onSelect;
     }
 
@@ -92,14 +92,12 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     public string UpdateText => HasUpdate ? $"Update {AvailableVersion}" : string.Empty;
 
     public string OperationHint { get; }
+    public string? Summary { get; }
 
-    public IReadOnlyList<PackageRpcAccessItemViewModel> RpcContractUses { get; }
-
-    public bool HasRpcContractUses => RpcContractUses.Count > 0;
-
-    public bool HasNoRpcContractUses => !HasRpcContractUses;
-
-    public string RpcAccessSummary => PackageRpcAccessProjection.Summary(RpcContractUses);
+    public bool NeedsAttention => IsFailed || StatusText is "Needs configuration" or "Degraded";
+    public string AttentionSummary => IsFailed ? "Package could not continue" : StatusText == "Needs configuration"
+        ? "Configuration needed" : "Some package features are unavailable";
+    public bool ShowHistoricalError => !NeedsAttention && !string.IsNullOrWhiteSpace(LastError);
 
     [ObservableProperty]
     private bool _isSelected;
@@ -126,8 +124,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     private void Select() => _onSelect(this);
 
     internal bool HasState(PackageCatalogItemState state)
-        => _state with { RpcContractUses = state.RpcContractUses } == state
-           && _state.RpcContractUses.SequenceEqual(state.RpcContractUses);
+        => _state == state;
 
     internal static PackageCatalogItemState CreateState(
         SessionPackageDescriptor? sessionPackage,
@@ -158,9 +155,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
             update?.AvailableVersion,
             update?.DeprecatedMessage,
             ToOperationHint(installedPackage, update),
-            PackageRpcAccessProjection.FromRuntime(
-                sessionPackage?.RpcContractUses ?? installedPackage?.RpcContractUses ?? []),
-            iconUri);
+            iconUri,
+            sessionPackage is null ? installedPackage?.Summary : null);
     }
 
     private static string ToGlyph(PackageIconDescriptor? icon, string displayName)
@@ -206,7 +202,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
                 PackageFailureOrigin.RuntimeAuthentication => "runtime auth",
                 PackageFailureOrigin.RuntimeBackgroundService => "runtime background service",
                 PackageFailureOrigin.RuntimeProcess => "runtime process",
-                PackageFailureOrigin.RuntimeRpcProvider => "runtime RPC provider",
+                PackageFailureOrigin.RuntimeRpcProvider => "package service",
                 _ => "package fault",
             };
 
@@ -260,5 +256,5 @@ internal sealed record PackageCatalogItemState(
     string? AvailableVersion,
     string? DeprecatedUpdateMessage,
     string OperationHint,
-    IReadOnlyList<PackageRpcAccessItemViewModel> RpcContractUses,
-    Uri? IconUri);
+    Uri? IconUri,
+    string? Summary = null);

@@ -9,6 +9,10 @@ internal static class InstalledPackageEndpoints
     {
         var group = endpoints.MapGroup("/packages");
 
+        group.MapGet("{packageId}/information", async (
+            string packageId, PackageInformationService information, CancellationToken cancellationToken) =>
+            Results.Ok(RuntimeEndpointErrors.Required(await information.GetAsync(packageId, cancellationToken), "Package details")));
+
         group.MapGet(
             "installed",
             async (InstalledPackageLifecycleService installedPackages, CancellationToken cancellationToken) =>

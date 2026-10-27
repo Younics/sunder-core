@@ -341,6 +341,12 @@ public sealed class InstalledPackageStoreTests
         Assert.Equal(contractUse.Required, sessionUse.Required);
         Assert.Equal(contractUse.Actions, sessionUse.Actions);
 
+        var information = Assert.IsType<PackageInformationDescriptor>(PackageInformationProjection.FromSource(
+            await PackageCompatibilityAuthority.ReadSourceAsync(package, CancellationToken.None)));
+        Assert.Equal(package.ContentIdentity, information.ContentIdentity);
+        Assert.Empty(information.PublicBindings);
+        Assert.Empty(information.PublicUses); // private worker/UI declarations stay private
+
         var manifestPath = Path.Combine(installPath, "manifest", "sunder-package.json");
         var manifestJson = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
         manifestJson["usesContracts"] = new JsonArray();
@@ -349,6 +355,7 @@ public sealed class InstalledPackageStoreTests
 
         var tampered = Assert.Throws<InvalidDataException>(() => store.ToDescriptor(package));
         Assert.Contains("content identity", tampered.Message, StringComparison.OrdinalIgnoreCase);
+        await Assert.ThrowsAsync<InvalidDataException>(() => PackageCompatibilityAuthority.ReadSourceAsync(package, CancellationToken.None));
     }
 
     private static readonly JsonSerializerOptions TestJsonOptions = new() { WriteIndented = true };

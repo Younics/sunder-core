@@ -1,0 +1,150 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.PackageInformationView"
+             x:DataType="vm:PackageInformationViewModel">
+  <UserControl.Styles>
+    <Style Selector="Border.information-row">
+      <Setter Property="Padding" Value="0,12" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    </Style>
+    <Style Selector="Border.sensitive-access">
+      <Setter Property="BorderThickness" Value="2,0,0,0" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+      <Setter Property="Padding" Value="10,0,0,0" />
+    </Style>
+    <Style Selector="TextBlock.access-label">
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+      <Setter Property="FontSize" Value="11" />
+    </Style>
+  </UserControl.Styles>
+  <UserControl.Resources>
+    <DataTemplate x:Key="FeatureRow" x:DataType="vm:PackageFeatureItemViewModel">
+      <Border Classes="information-row">
+        <Border Classes.sensitive-access="{Binding IsSensitive}">
+          <StackPanel Spacing="4">
+            <WrapPanel ItemSpacing="10" LineSpacing="4">
+              <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
+              <TextBlock Classes="access-label" Text="Sensitive access" IsVisible="{Binding IsSensitive}" VerticalAlignment="Center" />
+            </WrapPanel>
+            <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
+            <TextBlock Classes="caption" Text="{Binding Scope}" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+      </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="BindingRow" x:DataType="vm:PackageBindingItemViewModel">
+      <Border Classes="information-row">
+        <StackPanel Spacing="4">
+          <WrapPanel ItemSpacing="10" LineSpacing="4">
+            <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
+            <Border Classes="package-row-badge"><TextBlock Text="{Binding Kind}" /></Border>
+          </WrapPanel>
+          <TextBlock Classes="caption" Text="{Binding Identity}" TextWrapping="Wrap" />
+          <TextBlock Classes="caption" Text="{Binding Scope}" TextWrapping="Wrap" IsVisible="{Binding HasScope}" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="DependencyRow" x:DataType="vm:PackageDependencyItemViewModel">
+      <Border Classes="information-row">
+        <StackPanel Spacing="6">
+          <WrapPanel ItemSpacing="10" LineSpacing="6">
+            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap" />
+            <Border Classes="package-row-badge"><TextBlock Text="{Binding Requirement}" /></Border>
+          </WrapPanel>
+          <TextBlock Classes="caption" Text="{Binding PackageId}" IsVisible="{Binding HasDisplayName}" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+          <TextBlock Classes="caption" Text="{Binding VersionRange, StringFormat='Compatible versions: {0}'}" TextWrapping="Wrap" />
+          <TextBlock Classes="muted" Text="{Binding Explanation}" TextWrapping="Wrap" />
+          <Button Classes="secondary-action compact-action" Content="Open package" Command="{Binding NavigateCommand}"
+                  IsVisible="{Binding CanNavigate}" HorizontalAlignment="Left" />
+          <Expander IsVisible="{Binding HasBindings}" IsExpanded="False">
+            <Expander.Header><TextBlock Classes="caption" Text="{Binding BindingSummary}" TextWrapping="Wrap" /></Expander.Header>
+            <ItemsControl ItemsSource="{Binding Bindings}" ItemTemplate="{StaticResource BindingRow}" />
+          </Expander>
+          <TextBlock Classes="caption" Text="No public binding relationship declared." IsVisible="{Binding HasNoBindings}" TextWrapping="Wrap" />
+        </StackPanel>
+      </Border>
+    </DataTemplate>
+  </UserControl.Resources>
+  <StackPanel Spacing="16">
+    <Border Classes="settings-note-card" IsVisible="{Binding HasStatus}">
+      <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+    </Border>
+    <StackPanel Spacing="16" IsVisible="{Binding IsLoaded}">
+      <Border Classes="card-surface">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="section-title" Text="Uses Sunder features" />
+          <TextBlock Classes="caption" Text="{Binding FeatureSummary}" />
+          <TextBlock Classes="muted" Text="Declared for this platform, not live usage or a complete list of operating-system access." TextWrapping="Wrap" />
+          <TextBlock Classes="muted" Text="Review sensitive access before installing. Only install packages and sources you trust."
+                     IsVisible="{Binding HasSensitiveFeatures}" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding PrimaryFeatures}" ItemTemplate="{StaticResource FeatureRow}" />
+          <Expander IsVisible="{Binding HasAdditionalFeatures}" IsExpanded="False">
+            <Expander.Header><TextBlock Text="More" /></Expander.Header>
+            <ItemsControl ItemsSource="{Binding AdditionalFeatures}" ItemTemplate="{StaticResource FeatureRow}" />
+          </Expander>
+        </StackPanel>
+      </Border>
+      <Border Classes="card-surface">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="section-title" Text="Dependencies and integrations" />
+          <TextBlock Classes="caption" Text="{Binding DependencySummary}" />
+          <TextBlock Classes="muted" Text="No package dependencies declared." IsVisible="{Binding HasNoDependencies}" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding PrimaryDependencies}" ItemTemplate="{StaticResource DependencyRow}" />
+          <Expander IsVisible="{Binding HasAdditionalDependencies}" IsExpanded="False">
+            <Expander.Header><TextBlock Text="Show all dependencies" /></Expander.Header>
+            <ItemsControl ItemsSource="{Binding AdditionalDependencies}" ItemTemplate="{StaticResource DependencyRow}" />
+          </Expander>
+        </StackPanel>
+      </Border>
+      <Border Classes="card-surface">
+        <StackPanel Spacing="6">
+          <TextBlock Classes="section-title" Text="Public bindings" />
+          <TextBlock Classes="caption" Text="{Binding BindingSummary}" />
+          <TextBlock Classes="muted" Text="Services and extension points available to other packages. Private connections are not listed." TextWrapping="Wrap" />
+          <TextBlock Classes="muted" Text="No public bindings declared." IsVisible="{Binding HasNoPublicBindings}" TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding PrimaryBindings}" ItemTemplate="{StaticResource BindingRow}" />
+          <Expander IsVisible="{Binding HasAdditionalBindings}" IsExpanded="False">
+            <Expander.Header><TextBlock Text="Show all public bindings" /></Expander.Header>
+            <ItemsControl ItemsSource="{Binding AdditionalBindings}" ItemTemplate="{StaticResource BindingRow}" />
+          </Expander>
+        </StackPanel>
+      </Border>
+      <Expander IsVisible="{Binding HasServiceAccess}" IsExpanded="False">
+        <Expander.Header>
+          <StackPanel Spacing="3">
+            <TextBlock FontWeight="SemiBold" Text="Declared service access" />
+            <TextBlock Classes="caption" Text="{Binding AccessSummary}" />
+          </StackPanel>
+        </Expander.Header>
+        <StackPanel Spacing="8">
+          <TextBlock Classes="muted" Text="Access this version declares, not a record of calls or the provider currently selected. Service readiness is separate from required package dependencies." TextWrapping="Wrap" />
+          <ItemsControl ItemsSource="{Binding ServiceAccess}">
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:PackageServiceAccessItemViewModel">
+              <Border Classes="information-row"><StackPanel Spacing="4">
+                <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding Identity}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding Scope}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding Requirement}" TextWrapping="Wrap" />
+                <TextBlock Classes="muted" Text="{Binding Actions}" TextWrapping="Wrap" />
+              </StackPanel></Border>
+            </DataTemplate></ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
+      </Expander>
+      <Expander IsVisible="{Binding HasTechnicalFeatures}" IsExpanded="False">
+        <Expander.Header><TextBlock FontWeight="SemiBold" Text="Technical details" /></Expander.Header>
+        <ItemsControl ItemsSource="{Binding TechnicalFeatures}">
+          <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:PackageFeatureItemViewModel">
+            <Border Classes="information-row"><StackPanel Spacing="3">
+              <TextBlock Classes="caption" FontFamily="monospace" Text="{Binding Identifiers}" TextWrapping="Wrap" />
+              <TextBlock Classes="caption" Text="{Binding Scope}" TextWrapping="Wrap" />
+            </StackPanel></Border>
+          </DataTemplate></ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Expander>
+    </StackPanel>
+  </StackPanel>
+</UserControl>

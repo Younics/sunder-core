@@ -7,6 +7,9 @@ namespace Sunder.Runtime.Client;
 
 public sealed partial class RuntimeManagementClient
 {
+    public Task<PackageInformationDescriptor> GetPackageInformationAsync(string packageId, CancellationToken token = default)
+        => GetRequiredAsync<PackageInformationDescriptor>($"packages/{Uri.EscapeDataString(packageId)}/information", token);
+
     public async Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken token = default)
         => await GetRequiredAsync<IReadOnlyList<InstalledPackageDescriptor>>("packages/installed", token).ConfigureAwait(false);
 

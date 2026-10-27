@@ -70,6 +70,10 @@ public sealed record RegistryPackageVersionDetails(
     DateTimeOffset PublishedAtUtc,
     IReadOnlyList<string> TrustedArtifactOrigins)
 {
+    /// <summary>Selected immutable-version details; null when supplied by an older Registry.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPackageInformation? Information { get; init; }
+
     /// <summary>Verified original publication policy; absent evidence never confirms a previous upload.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryPackagePublicationEvidence? Publication { get; init; }

@@ -177,6 +177,7 @@ public sealed partial class PackagesWindowViewModel
     {
         OnPropertyChanged(nameof(HasSelectedPackageExecutionRuntimes));
         OnPropertyChanged(nameof(SelectedPackageExecutionRuntimeSummary));
+        OnPropertyChanged(nameof(SelectedPackageExecutionRuntimeNeedsAttention));
         RepairExecutionRuntimeCommand.NotifyCanExecuteChanged();
     }
 
@@ -370,6 +371,7 @@ public sealed partial class PackagesWindowViewModel
 
         _marketplaceSearchScheduler.Dispose();
         _marketplaceVersionDetailsRequest.Dispose();
+        _informationRequest.Dispose();
         _tasks.Dispose();
         CancelMarketplacePackageDetailsSpinnerDelay();
         ObserveSelectedInstalledPackage(null);

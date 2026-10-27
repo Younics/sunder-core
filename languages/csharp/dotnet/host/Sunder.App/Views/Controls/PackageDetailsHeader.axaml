@@ -29,6 +29,10 @@
       <TextBlock Classes="page-title" Text="{Binding SelectedPackageTitle}" TextWrapping="Wrap" />
       <TextBlock Classes="caption" Text="{Binding SelectedPackageSubtitle}" TextWrapping="Wrap" />
       <TextBlock Classes="muted" Text="{Binding SelectedPackageSummary}" TextWrapping="Wrap" />
+      <WrapPanel ItemSpacing="8" LineSpacing="6" IsVisible="{Binding ShowInstalledDetails}">
+        <Border Classes="package-row-badge"><TextBlock Text="{Binding SelectedPackageStatus}" /></Border>
+        <TextBlock Classes="caption" Text="{Binding SelectedInstalledPackage.UpdateText}" IsVisible="{Binding SelectedInstalledPackage.HasUpdate}" TextWrapping="Wrap" />
+      </WrapPanel>
     </StackPanel>
 
     <StackPanel Grid.Row="1"
