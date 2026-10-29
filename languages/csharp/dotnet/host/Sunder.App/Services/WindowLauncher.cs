@@ -218,8 +218,8 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
         _developerLog.Enable();
         _developerLogWindow ??= CreateDeveloperLogWindow();
-        ((DeveloperLogWindowViewModel)_developerLogWindow.DataContext!).SelectPackage(packageId);
         ShowWindow(_developerLogWindow);
+        _developerLogWindow.SelectPackage(packageId);
     }
 
     internal async Task OpenDevelopmentViewAsync(string packageId, string viewId, Sunder.Sdk.Abstractions.PackageDevelopmentRevision revision, CancellationToken token)
@@ -404,6 +404,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
 
     private static void ShowWindow(Window window)
     {
+        if (window is MainWindow mainWindow) mainWindow.RestoreWindowStateForReopen();
         WindowCloseToHideCoordinator.PrepareToShow(window);
         if (window.IsVisible)
         {

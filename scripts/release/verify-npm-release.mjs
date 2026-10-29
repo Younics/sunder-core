@@ -5,6 +5,7 @@ import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { policy } from "../toolchains.mjs";
 
 const [version, npmVersionRange, npmTag, artifactArgument, repository, workflowPath, commit, tagPolicy, packageName] = process.argv.slice(2);
 if ((process.argv.length !== 10 && process.argv.length !== 11)
@@ -54,8 +55,8 @@ if (packages.length !== (packageName === undefined ? coordinatedPackages.length 
 }
 
 const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
-if (npmVersion !== "11.19.0") {
-  throw new Error(`npm 11.19.0 is required, found ${npmVersion}.`);
+if (npmVersion !== policy.npm) {
+  throw new Error(`npm ${policy.npm} is required, found ${npmVersion}.`);
 }
 
 const assert = (condition, message) => {

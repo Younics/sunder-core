@@ -9,6 +9,7 @@ internal static class SunderSdkCompatibilityProfile
     private const string SupportedSdkRange = ">=1.1.0 <1.2.0";
     private static readonly HashSet<string> SupportedCapabilities = new(StringComparer.Ordinal)
     {
+        SunderSdkCapabilities.DevelopmentToolchainV1,
         SunderSdkCapabilities.Baseline11V1,
         SunderSdkCapabilities.CoreV1,
         SunderSdkCapabilities.PackagingV1,
@@ -55,6 +56,7 @@ internal static class SunderSdkCompatibilityProfile
     private static readonly IReadOnlyDictionary<string, bool> WorkerV1Capabilities =
         new Dictionary<string, bool>(StringComparer.Ordinal)
         {
+            [SunderSdkCapabilities.DevelopmentToolchainV1] = true,
             [SunderSdkCapabilities.Baseline11V1] = true,
             [SunderSdkCapabilities.CoreV1] = true,
             [SunderSdkCapabilities.PackagingV1] = true,

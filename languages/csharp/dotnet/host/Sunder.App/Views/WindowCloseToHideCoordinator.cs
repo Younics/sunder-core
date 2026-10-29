@@ -15,6 +15,8 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
     private readonly bool _hideOnClose;
     private readonly bool _closeOnEscape;
     private readonly Action _persistWindowState;
+    private readonly Action _closeRequested;
+    private readonly Action _closeCanceled;
     private readonly Action _hiding;
     private readonly Action _closed;
     private readonly Func<bool> _isCloseBlocked;
@@ -37,7 +39,9 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         Action? closed = null,
         INativeFullScreenTransition? fullScreenTransition = null,
         IFullScreenReconciliationScheduler? reconciliationScheduler = null,
-        Func<bool>? isCloseBlocked = null)
+        Func<bool>? isCloseBlocked = null,
+        Action? closeRequested = null,
+        Action? closeCanceled = null)
         : this(
             new AvaloniaCloseToHideWindow(window),
             fullScreenTransition ?? MacOsNativeFullScreenTransition.Create(window),
@@ -46,7 +50,9 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
             hiding,
             closed,
             reconciliationScheduler ?? DispatcherFullScreenReconciliationScheduler.Instance,
-            isCloseBlocked)
+            isCloseBlocked,
+            closeRequested,
+            closeCanceled)
     {
         _avaloniaWindow = window;
         _closeOnEscape = closeOnEscape;
@@ -66,12 +72,16 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         Action? hiding = null,
         Action? closed = null,
         IFullScreenReconciliationScheduler? reconciliationScheduler = null,
-        Func<bool>? isCloseBlocked = null)
+        Func<bool>? isCloseBlocked = null,
+        Action? closeRequested = null,
+        Action? closeCanceled = null)
     {
         _window = window;
         _fullScreenTransition = fullScreenTransition;
         _hideOnClose = hideOnClose;
         _persistWindowState = persistWindowState ?? (static () => { });
+        _closeRequested = closeRequested ?? (static () => { });
+        _closeCanceled = closeCanceled ?? (static () => { });
         _hiding = hiding ?? (static () => { });
         _closed = closed ?? (static () => { });
         _isCloseBlocked = isCloseBlocked ?? (static () => false);
@@ -98,6 +108,7 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
             return true;
         }
 
+        _closeRequested();
         switch (_fullScreenTransition.State)
         {
             case NativeFullScreenState.Windowed:
@@ -141,7 +152,7 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         }
 
         _shutdown = true;
-        CancelDeferredHide();
+        CancelDeferredHide(completed: true);
         _fullScreenTransition.Changed -= FullScreenTransition_OnChanged;
         _fullScreenTransition.Dispose();
         try
@@ -163,7 +174,7 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         }
 
         _disposed = true;
-        CancelDeferredHide();
+        CancelDeferredHide(completed: true);
         _fullScreenTransition.Changed -= FullScreenTransition_OnChanged;
         _fullScreenTransition.Dispose();
         if (_avaloniaWindow is not null)
@@ -248,7 +259,7 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
 
     private void HideNow()
     {
-        CancelDeferredHide();
+        CancelDeferredHide(completed: true);
         try
         {
             _hiding();
@@ -339,12 +350,14 @@ internal sealed class WindowCloseToHideCoordinator : IDisposable
         }
     }
 
-    private void CancelDeferredHide()
+    private void CancelDeferredHide(bool completed = false)
     {
+        var wasPending = _deferredHide;
         _deferredHide = false;
         _exitRequested = false;
         _reconciliationAttempts = 0;
         CancelScheduledReconciliation();
+        if (wasPending && !completed) _closeCanceled();
     }
 
     private void CancelScheduledReconciliation()

@@ -3641,8 +3641,9 @@ public sealed partial class PackageBuildManifestTests
         }
         var processStartedAtValue = processStartedAt.ToUniversalTime().ToString("O");
         var processMarkerToken = Guid.NewGuid().ToString("D");
-        var processMarkerRoot = Path.Combine(Path.GetTempPath(), "sunder-generated-output", "processes");
-        Directory.CreateDirectory(processMarkerRoot);
+        var processMarkerRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sunder", "generated-output", "processes");
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(processMarkerRoot);
+        else Directory.CreateDirectory(processMarkerRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var processMarkerPath = Path.Combine(processMarkerRoot, processMarkerToken + ".json");
         File.WriteAllText(processMarkerPath, JsonSerializer.Serialize(new
         {

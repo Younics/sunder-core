@@ -28,6 +28,10 @@ public sealed class ShellState
 
     public Dictionary<string, RailPlacement> ViewPlacements { get; set; } = [];
 
+    // App view ids are opaque; Runtime's package catalog does not enumerate all
+    // App registrations. Retain ownership to distinguish absence from removal.
+    public Dictionary<string, string> ViewPackageIds { get; set; } = [];
+
     public Dictionary<string, int> ViewOrder { get; set; } = [];
 
     public HashSet<string> HiddenHotbarViewIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
@@ -63,6 +67,8 @@ public sealed class ShellState
     [JsonPropertyName("BackgroundProcessPopoverHeight")]
     public double BackgroundTaskPopoverHeight { get; set; } = DefaultBackgroundTaskPopoverHeight;
 
+    public ShellWindowPlacement? MainWindowPlacement { get; set; }
+
     public ShellWindowPlacement? SettingsWindowPlacement { get; set; }
 
     public ShellWindowPlacement? PackagesWindowPlacement { get; set; }
@@ -89,4 +95,6 @@ public sealed class ShellWindowPlacement
     public double Height { get; set; }
 
     public bool IsMaximized { get; set; }
+
+    public bool IsFullScreen { get; set; }
 }

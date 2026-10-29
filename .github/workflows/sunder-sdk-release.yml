@@ -9,9 +9,9 @@ concurrency:
   group: sunder-release-${{ github.ref_name }}
   cancel-in-progress: false
 env:
-  DOTNET_VERSION: "10.0.100"
-  NODE_VERSION: "24.18.1"
-  NPM_VERSION: "11.19.0"
+  DOTNET_VERSION: "10.0.403"
+  NODE_VERSION: "24.22.1"
+  NPM_VERSION: "11.19.1"
   NPM_REGISTRY: https://registry.npmjs.org
 
 jobs:

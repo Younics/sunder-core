@@ -20,9 +20,20 @@ internal sealed class ShellPanelContentPresenter(
     {
         panel.Lines.Clear();
 
-        if (string.IsNullOrWhiteSpace(viewId) || !viewsById.TryGetValue(viewId, out var packageView))
+        if (string.IsNullOrWhiteSpace(viewId))
         {
             ApplyEmptyPanelState(placement, panel, middleBarItemCount);
+            return;
+        }
+
+        if (!viewsById.TryGetValue(viewId, out var packageView))
+        {
+            panel.ClearActiveView();
+            panel.SetDockVisible(true);
+            panel.Title = "VIEW UNAVAILABLE";
+            panel.Subtitle = viewId;
+            panel.Summary = "The saved package view is unavailable. Its placement and size are preserved.";
+            panel.Lines.Add("It will reopen here when available, unless you select another view.");
             return;
         }
 

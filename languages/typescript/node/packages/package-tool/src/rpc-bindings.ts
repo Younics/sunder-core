@@ -1,22 +1,12 @@
-import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import { lstat, mkdir, readFile, readdir, rmdir, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-import {
-  SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
-  canonicalRpcAbiProjectionBytes,
-  canonicalRpcDescriptorBytes,
-  parseRpcContractDescriptor,
-} from "@sunder/sdk";
-import { generateTypeScriptBindings } from "./generator";
+import { dirname, relative, resolve, sep } from "node:path";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { assertBaselineFreeEvidence } from "./rpc-baseline-store";
 import type { RegistryOriginOptions } from "./rpc-contract-lock";
 import { MODEL_PROJECTION_PATH, projectionDocumentBytes } from "./rpc-model-projection";
 import {
   loadProject,
-  resolveInside,
-  type LoadedContract,
   type LoadedProject,
 } from "./model";
 import {
@@ -135,32 +125,6 @@ export async function generateRpcBindingsForLoadedProjectLocked(project: LoadedP
   for (const [outputFile, source] of project.ownedRpc?.files ?? []) plans.push({ outputFile, source });
   if (!project.ownedRpc && project.contracts.length === 0) plans.push({ outputFile: MODEL_PROJECTION_PATH,
     source: projectionDocumentBytes(project.config.id, project.config.version, []).toString() });
-  for (const [index, binding] of (project.config.rpcBindings ?? []).entries()) {
-    const sourcePath = resolveInside(project.root, binding.path, `rpcBindings[${index}].path`);
-    if (sourcePath === outputRoot || isInside(outputRoot, sourcePath) || isPortableOwnedOutputPath(binding.path)) {
-      throw new Error(`rpcBindings[${index}].path '${binding.path}' must remain outside the owned RPC binding output root.`);
-    }
-    const contract = matchingContractSnapshot(project, sourcePath);
-    const bytes = contract === undefined
-      ? await readProjectDescriptorFile(project.root, sourcePath, `rpcBindings[${index}].path '${binding.path}'`)
-      : contract.canonicalBytes;
-    try {
-      const descriptor = parseRpcContractDescriptor(bytes);
-      const descriptorSha256 = contract?.descriptorSha256 ?? sha256(canonicalRpcDescriptorBytes(descriptor));
-      plans.push({
-        outputFile: binding.outputFile,
-        source: generateTypeScriptBindings(descriptor, {
-          descriptorSha256,
-          abiSha256: contract?.abiSha256 ?? createHash("sha256")
-            .update(SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, "utf8")
-            .update(canonicalRpcAbiProjectionBytes(descriptor))
-            .digest("hex"),
-        }),
-      });
-    } catch (error) {
-      throw new Error(`RPC binding descriptor '${binding.path}' could not be generated: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
-    }
-  }
   plans.sort((left, right) => ordinal(left.outputFile, right.outputFile));
 
   const output = await tryLstat(outputRoot);
@@ -250,35 +214,6 @@ async function tryLstat(path: string): Promise<Stats | undefined> {
   }
 }
 
-function isInside(root: string, path: string): boolean {
-  const traversal = relative(resolve(root), resolve(path));
-  return traversal.length > 0 && traversal !== ".." && !traversal.startsWith(`..${sep}`) && !isAbsolute(traversal);
-}
-
-function matchingContractSnapshot(project: LoadedProject, sourcePath: string): LoadedContract | undefined {
-  const identity = pathIdentity(sourcePath);
-  return project.contracts.find((contract) => pathIdentity(contract.sourcePath) === identity);
-}
-
-function pathIdentity(path: string): string {
-  const normalized = resolve(path);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function isPortableOwnedOutputPath(path: string): boolean {
-  const foldedPath = asciiCaseFold(path);
-  const foldedRoot = asciiCaseFold(RPC_BINDINGS_OUTPUT_PATH);
-  return foldedPath === foldedRoot || foldedPath.startsWith(`${foldedRoot}/`);
-}
-
-function asciiCaseFold(value: string): string {
-  return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 0x20));
-}
-
 function ordinal(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function sha256(value: Uint8Array): string {
-  return createHash("sha256").update(value).digest("hex");
 }

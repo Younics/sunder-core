@@ -71,6 +71,26 @@ An explicit command-line value takes precedence over its environment value. Thes
 
 For startup diagnostics and benchmark evidence, `SUNDER_RUNTIME_TRACE_PATH` enables append-only NDJSON from the Runtime process. Trace schema `2` preserves the canonical `package.session.load.started` to `package.generation.committed` interval and records source discovery, graph planning, projection-cache lookup/build, projection preparation, exact execution-runtime binding, Worker wave boundaries, process start, protocol readiness, candidate readiness, and a terminal commit or failure. Package events include monotonic elapsed time, queue/active duration, byte counters, cache result, activation identity, exact runtime identity, process ID/birth identity, outcome, and generation correlation. The trace contains no package file paths, process arguments, credentials, or environment values.
 
+### Storage activation recovery
+
+Every package storage activation, including development reloads and Worker recovery,
+records intent in `.sunder-storage-activation-<id>.json` beside the package's `data`,
+`workspace`, and `files` directories before moving workspace/file backups. After
+publication commits, the Runtime persists the committed outcome before deleting any
+backups. A cleanup failure is logged and keeps that journal for a later startup to
+retry; it does not turn a committed activation into an unknown transaction or roll
+back published package data. Successful in-process rollback records its terminal
+outcome only after all stores have been restored.
+
+An interrupted activation without a durable outcome, invalid journal, or legacy
+unjournaled backup remains fenced with
+`runtime.storage-activation-recovery-required`. The authenticated Host diagnostic,
+App startup notification, and Host settings include the affected package and recovery
+guidance. State/settings/secret snapshots for these activations are process-local,
+so startup does not infer rollback from a directory backup alone. Preserve the
+current storage and backup, stop the Runtime, and explicitly resolve the evidence
+before retrying. Do not blindly delete/restore backups or reset all Runtime data.
+
 ## Distribution And Removal
 
 - The Windows App release workflow requires Azure Trusted Signing for the Velopack `Setup.exe`.

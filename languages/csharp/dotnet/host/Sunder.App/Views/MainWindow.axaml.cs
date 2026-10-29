@@ -5,6 +5,8 @@ using Avalonia.Interactivity;
 using Avalonia.Media.Imaging;
 using Avalonia.VisualTree;
 using Sunder.App.ViewModels;
+using Sunder.App.Models;
+using Sunder.App.Services;
 
 namespace Sunder.App.Views;
 
@@ -13,6 +15,7 @@ public partial class MainWindow : Window
     internal MainWindowViewModel? ViewModel => DataContext as MainWindowViewModel;
     private readonly MacNativeMenuController _macNativeMenuController;
     private readonly WindowCloseToHideCoordinator _closeCoordinator;
+    private MainWindowStateController? _stateController;
     private RenderTargetBitmap? _packageViewTransitionBitmap;
     private int _packageViewTransitionLeases;
 
@@ -25,6 +28,9 @@ public partial class MainWindow : Window
         _closeCoordinator = new WindowCloseToHideCoordinator(
             this,
             hideOnClose: OperatingSystem.IsMacOS(),
+            closeRequested: () => _stateController?.CaptureForClose(),
+            closeCanceled: () => _stateController?.CancelClose(),
+            persistWindowState: () => _stateController?.SaveImmediately(),
             hiding: () => HidingForClose?.Invoke(this, EventArgs.Empty));
         _macNativeMenuController = new MacNativeMenuController(this, () => ViewModel);
         Activated += OnActivated;
@@ -41,11 +47,22 @@ public partial class MainWindow : Window
 
     internal void CloseForShutdown() => _closeCoordinator.CloseForShutdown();
 
+    internal void ConfigureState(ShellStateService service, ShellState state)
+        => _stateController = new MainWindowStateController(this, state, service, () => ViewModel?.CommitLayoutState());
+
+    internal void EnableStatePersistence() => _stateController?.EnablePersistence();
+
+    internal void RestoreWindowStateForReopen() => _stateController?.RestoreForReopen();
+
+    internal Task FlushShellStateAsync() => _stateController?.FlushAsync()
+        ?? ViewModel?.FlushShellStateAsync() ?? Task.CompletedTask;
+
     private void OnClosed(object? sender, EventArgs e)
     {
         Activated -= OnActivated;
         Deactivated -= OnDeactivated;
         _macNativeMenuController.Dispose();
+        _stateController?.Dispose();
         ClearPackageViewTransitionSnapshot();
     }
 

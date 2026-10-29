@@ -31,6 +31,7 @@
 
   <ItemGroup>
     <Compile Remove="Editor/*.cs" />
+    <None Include="build\Sunder.Toolchains.props" Pack="true" PackagePath="buildTransitive\Sunder.Toolchains.props" />
     <None Include="build\Sunder.Package.Build.props"
           Pack="true"
           PackagePath="buildTransitive\Sunder.Package.Build.props" />

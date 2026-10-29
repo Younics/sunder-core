@@ -145,6 +145,7 @@ public sealed class ShellSession : IAsyncDisposable
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     MainWindowViewModel.CompleteInitialReveal();
+                    MainWindow.EnableStatePersistence();
                     _initialWindowReveal.Reveal(
                         MainWindow,
                         loadingWindow,
@@ -270,6 +271,8 @@ public sealed class ShellSession : IAsyncDisposable
         }
     }
 
+    internal void BeginShutdown() => MainWindowViewModel.StopPackageViewPreloading();
+
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -277,6 +280,13 @@ public sealed class ShellSession : IAsyncDisposable
             return;
         }
 
+        BeginShutdown();
+        // Persist the last visible arrangement before unrelated task/package
+        // cleanup can consume shutdown budgets or tear down view selections.
+        await BoundedCleanup.RunAsync(
+            "saving the shell arrangement",
+            () => _uiDispatcher.InvokeAsync(MainWindow.FlushShellStateAsync),
+            AppShutdownBudgets.UiCleanup).ConfigureAwait(false);
         _packageUiRecoveryCoordinator?.Dispose();
         var ownedTasks = StartCleanup(_tasks.StopAsync);
         if (

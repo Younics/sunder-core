@@ -6,6 +6,7 @@ using System.IO.Pipes;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
@@ -13,6 +14,11 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Threading;
+using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
@@ -22,6 +28,7 @@ internal static class PolicyHeartbeatProcessProbe
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    [STAThread]
     private static int Main(string[] args)
     {
         AssemblyLoadContext.Default.Resolving += (_, name) =>
@@ -37,6 +44,7 @@ internal static class PolicyHeartbeatProcessProbe
     private static int Run(string[] args)
     {
         var mode = args[0];
+        if (mode is "quit" or "quit-timeout") return NativeQuitProbe(mode == "quit-timeout");
         if (mode == "deadline") return DeadlineProbe();
         var seconds = args.Length > 1 ? int.Parse(args[1], System.Globalization.CultureInfo.InvariantCulture) : 7;
         Require(mode is "replacement" or "unavailable", "Unknown scenario.");
@@ -164,8 +172,115 @@ internal static class PolicyHeartbeatProcessProbe
     private static void Require(bool condition, string message)
     { if (!condition) throw new InvalidOperationException(message); }
 
+    private static int NativeQuitProbe(bool timeout)
+    {
+        QuitApplication.TimeoutCleanup = timeout;
+        var exitCode = AppBuilder.Configure<QuitApplication>().UsePlatformDetect().StartWithClassicDesktopLifetime([]);
+        var app = (QuitApplication)Application.Current!;
+        try { app.Verify(exitCode); return exitCode; }
+        finally { app.Servers.Dispose(); }
+    }
+
+    private sealed class QuitApplication : Sunder.App.App
+    {
+        public QuitApplication() { }
+        internal static bool TimeoutCleanup;
+        internal Servers Servers { get; } = new();
+        private readonly ConcurrentQueue<string> _diagnostics = new();
+        private readonly DelayedQuitCleanup _cleanup = new();
+        private Connection? _connection;
+        private long _quitStarted;
+        private int _heartbeatsBefore;
+
+        public override void Initialize() { }
+
+        public override void OnFrameworkInitializationCompleted()
+        {
+            var desktop = (IClassicDesktopStyleApplicationLifetime)ApplicationLifetime!;
+            desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            // Exercise the actual Cmd+Q handler, ordered cleanup and final native
+            // desktop exit without starting a user Runtime, shell or package.
+            var handler = typeof(Sunder.App.App).GetMethod("OnDesktopShutdownRequested", BindingFlags.Instance | BindingFlags.NonPublic)!;
+            desktop.ShutdownRequested += (EventHandler<ShutdownRequestedEventArgs>)handler.CreateDelegate(typeof(EventHandler<ShutdownRequestedEventArgs>), this);
+            var gateway = new RuntimeClientTransport(() => Servers.Gateway);
+            var transport = new AppRuntimeProcessTransport(gateway, _ => Servers.Worker);
+            _connection = new Connection(transport);
+            var supervisor = new AppProcessPolicySupervisor(_connection,
+                runtime => new(Environment.ProcessId, "isolated-quit", new string('b', 64), "probe", Guid.NewGuid(), runtime),
+                () => Dispatcher.UIThread.Post(RequestPolicyShutdown), Environment.FailFast, RuntimeContinuousClock.Read, TimeProvider.System,
+                diagnostic => { _diagnostics.Enqueue(diagnostic); Console.Error.WriteLine(diagnostic); });
+            var policy = new AppProcessPolicyLifetime(gateway, transport, supervisor);
+            var services = new ServiceCollection();
+            services.AddSingleton(_ => _cleanup);
+            services.AddSingleton(_ => policy);
+            var provider = services.BuildServiceProvider();
+            _ = provider.GetRequiredService<DelayedQuitCleanup>();
+            _ = provider.GetRequiredService<AppProcessPolicyLifetime>();
+            Field("_processPolicy").SetValue(this, policy);
+            Field("_serviceProvider").SetValue(this, provider);
+            var tasks = (OwnedTaskObserver)Field("_tasks").GetValue(this)!;
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            tasks.Run(async token =>
+            {
+                var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                using var registration = token.Register(() => canceled.TrySetResult());
+                started.TrySetResult();
+                await canceled.Task;
+                await Task.Delay(2300); // Within the production three-second startup drain.
+            }, "native quit probe startup drain");
+            desktop.Startup += (_, _) => Dispatcher.UIThread.Post(async () =>
+            {
+                try
+                {
+                    await started.Task;
+                    var window = new Window { Title = "Isolated quit regression", Width = 320, Height = 160 };
+                    desktop.MainWindow = window;
+                    window.Show();
+                    await supervisor.RequireLoadAsync(new("probe.package", PackageSourceKind.Dev, 1,
+                        new("app", "osx-arm64", "dotnet", "probe.dll", "net10.0", null, []), new string('a', 64), new string('a', 32), "")
+                        { PolicySubject = new("probe.package", "1.0.0", new string('a', 64)) }, default);
+                    _heartbeatsBefore = Volatile.Read(ref Servers.Heartbeats);
+                    _quitStarted = Stopwatch.GetTimestamp();
+                    Require(!desktop.TryShutdown(), "The first native quit bypassed ordered cleanup.");
+                    Require(!desktop.TryShutdown(), "Repeated native quit bypassed ordered cleanup.");
+                }
+                catch (Exception error) { Console.Error.WriteLine(error); desktop.Shutdown(1); }
+            });
+        }
+
+        internal void Verify(int exitCode)
+        {
+            Require(exitCode == 0, "Native desktop exit did not succeed.");
+            Require(Stopwatch.GetElapsedTime(_quitStarted) >= TimeSpan.FromSeconds(6), "Cleanup did not span the heartbeat grace.");
+            Require(Volatile.Read(ref Servers.Heartbeats) >= _heartbeatsBefore + 5, "Heartbeats stopped during ordinary cleanup.");
+            Require(_connection!.Shutdowns == 1 && _cleanup.Calls == 1, "Repeated Quit replayed finalization or service disposal.");
+            Require(_cleanup.Completed == !TimeoutCleanup, "The service timeout did not preserve bounded cleanup.");
+            Require(_diagnostics.Count(message => message.Contains("event=exit-handoff;", StringComparison.Ordinal)) == 1, "No exact-once final exit handoff.");
+            Require(Servers.Errors.IsEmpty, string.Join("; ", Servers.Errors));
+            Console.WriteLine(JsonSerializer.Serialize(new { mode = TimeoutCleanup ? "quit-timeout" : "quit", nativeDesktopExited = true,
+                heartbeats = Servers.Heartbeats, shutdowns = _connection.Shutdowns, cleanupCompleted = _cleanup.Completed,
+                elapsedMilliseconds = Stopwatch.GetElapsedTime(_quitStarted).TotalMilliseconds,
+                runtime = RuntimeInformation.FrameworkDescription }, Json));
+        }
+
+        private static FieldInfo Field(string name) => typeof(Sunder.App.App).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+    }
+
+    private sealed class DelayedQuitCleanup : IAsyncDisposable
+    {
+        internal int Calls;
+        internal bool Completed;
+        public async ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref Calls);
+            await Task.Delay(QuitApplication.TimeoutCleanup ? 6500 : 4200).ConfigureAwait(false);
+            Completed = true;
+        }
+    }
+
     private sealed class Connection(AppRuntimeProcessTransport transport) : IAppPolicyConnection
     {
+        internal int Shutdowns;
         public string? DiagnosticPhase => transport.HandshakePhase;
         public Task<RuntimeHandshakeResponse> HandshakeAsync(CancellationToken token) => transport.HandshakeAsync(token);
         public RuntimeHandshakeResponse HeartbeatHandshake(CancellationToken token) => transport.HeartbeatHandshake(token);
@@ -175,7 +290,10 @@ internal static class PolicyHeartbeatProcessProbe
         public Task<RuntimeAppPackageLoadPermitResult> PermitAsync(RuntimeAppPackageLoadPermitRequest request, CancellationToken token)
             => Task.FromResult(new RuntimeAppPackageLoadPermitResult(true, null, new string('d', 32), request.Session, request.Package, null) { Development = true });
         public Task<RuntimeAppPolicySessionStatus> ShutdownAsync(RuntimeAppPolicySessionRequest request, CancellationToken token)
-            => Task.FromResult(new RuntimeAppPolicySessionStatus(request.SessionId, "shutdown-requested", null, true, []));
+        {
+            Interlocked.Increment(ref Shutdowns);
+            return Task.FromResult(new RuntimeAppPolicySessionStatus(request.SessionId, "shutdown-requested", null, true, []));
+        }
     }
 
     private sealed class Servers : IDisposable

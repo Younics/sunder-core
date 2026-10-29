@@ -3,7 +3,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, open, readFile, readlink, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
-import { hostname, tmpdir } from "node:os";
+import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { inflateRawSync } from "node:zlib";
@@ -81,7 +81,9 @@ test("dev output uses the canonical runtime-backed Node module shape without lau
     const updatedContract = (await prepareProject(root)).contracts[0]!;
     assert.notEqual(updatedContract.descriptorSha256, contract.descriptorSha256);
     assert.notEqual(updatedContract.abiSha256, contract.abiSha256);
+    await writeFile(metadataPath, "unowned adjacent file", "utf8");
     await buildDevPackage({ projectPath: root, watch: false });
+    assert.equal(await readFile(metadataPath, "utf8"), "unowned adjacent file");
     const updatedBundle = await readFile(bundlePath, "utf8");
     assert.match(updatedBundle, new RegExp(updatedContract.descriptorSha256, "u"));
     assert.doesNotMatch(updatedBundle, new RegExp(contract.descriptorSha256, "u"));
@@ -585,7 +587,7 @@ test("public package tooling contains no embedded Node or SEA production surface
   assert.equal(lock.packages["node_modules/esbuild"]?.version, "0.28.1");
   assert.equal(lock.packages["node_modules/postject"], undefined);
   assert.equal(lock.packages["node_modules/vite"]?.version, "8.2.0");
-  assert.equal((await readFile(resolve(packageRoot, "..", "..", ".nvmrc"), "utf8")).trim(), "24.18.1");
+  assert.equal((await readFile(resolve(packageRoot, "..", "..", ".nvmrc"), "utf8")).trim(), "24.22.1");
   const toolPackage = JSON.parse(await readFile(resolve(packageRoot, "package.json"), "utf8")) as PackageJson;
   assert.equal(toolPackage.dependencies?.postject, undefined);
   assert.equal(toolPackage.files?.includes("node-distributions.json"), false);
@@ -2140,7 +2142,7 @@ test("same-host PID reuse is identified by process start time", async () => {
   }
 });
 
-test("same-host owners without their OS-local process marker time out without reclamation", async () => {
+for (const evidence of ["missing", "temp-root"] as const) test(`same-host owners with ${evidence} process evidence time out without reclamation`, async () => {
   const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
   const outputPath = resolve(root, "shared-output");
   const lockPath = `${outputPath}.sunder-output.lock`;
@@ -2151,9 +2153,24 @@ test("same-host owners without their OS-local process marker time out without re
       ownerHostname: hostname(),
       processStartedAt: "2000-01-01T00:00:00.000Z",
     });
-    await rm(processMarkerPath, { force: true });
+    if (evidence === "missing") await rm(processMarkerPath, { force: true });
+    else {
+      const markerRoot = resolve(tmpdir(), "sunder-generated-output", "processes");
+      await mkdir(markerRoot, { recursive: true });
+      const ownerPath = resolve(lockPath, "owner.json");
+      const owner = JSON.parse(await readFile(ownerPath, "utf8")) as Record<string, unknown>;
+      const moved = resolve(markerRoot, `${String(owner.processMarkerToken)}.json`);
+      await rename(processMarkerPath, moved);
+      processMarkerPath = moved;
+      owner.processMarkerPath = moved;
+      // Keep the token/path relationship valid: the root, not malformed evidence,
+      // must be the reason this obsolete marker is not recovery authority.
+      await writeFile(ownerPath, JSON.stringify(owner), "utf8");
+    }
+    const before = await readFile(resolve(lockPath, "owner.json"));
     await assert.rejects(() => withOutputLocks([outputPath], async () => undefined, 250), /timed out after 250 ms/iu);
     assert.equal(await exists(lockPath), true);
+    assert.deepEqual(await readFile(resolve(lockPath, "owner.json")), before);
   } finally {
     await rm(root, { recursive: true, force: true });
     if (processMarkerPath !== undefined) await rm(processMarkerPath, { force: true });
@@ -2657,7 +2674,7 @@ async function writeLockOwner(
     linuxPidNamespace = owner.linuxPidNamespace ?? await readlink("/proc/self/ns/pid");
   }
   const processMarkerToken = randomUUID();
-  const processMarkerRoot = resolve(tmpdir(), "sunder-generated-output", "processes");
+  const processMarkerRoot = resolve(homedir(), ".sunder", "generated-output", "processes");
   const processMarkerPath = resolve(processMarkerRoot, `${processMarkerToken}.json`);
   await mkdir(processMarkerRoot, { recursive: true, mode: 0o700 });
   await writeFile(processMarkerPath, `${JSON.stringify({

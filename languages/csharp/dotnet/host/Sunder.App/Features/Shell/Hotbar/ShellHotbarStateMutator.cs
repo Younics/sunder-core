@@ -38,7 +38,7 @@ internal static class ShellHotbarStateMutator
         if (sourcePlacement != targetPlacement)
         {
             ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, targetPlacement, targetOrder);
-            ShellSelectionState.ClearSelectedViewId(shellState, sourcePlacement, viewId);
+            ClearSourceSelection(shellState, sourcePlacement, viewId, sourceOrder);
         }
         else
         {
@@ -59,7 +59,8 @@ internal static class ShellHotbarStateMutator
         }
 
         shellState.HiddenHotbarViewIds.Add(viewId);
-        ShellSelectionState.ClearSelectedViewId(shellState, packageView.Placement, viewId);
+        ClearSourceSelection(shellState, packageView.Placement, viewId,
+            ShellViewOrdering.GetOrderedViewsForPlacement(viewsById.Values, shellState, packageView.Placement).Select(view => view.ViewId));
         return true;
     }
 
@@ -103,11 +104,19 @@ internal static class ShellHotbarStateMutator
         shellState.ViewPlacements[viewId] = placement;
         viewsById[viewId] = packageView with { Placement = placement };
 
-        ShellSelectionState.ClearSelectedViewId(shellState, sourcePlacement, viewId);
+        ClearSourceSelection(shellState, sourcePlacement, viewId, sourceOrder);
         ShellSelectionState.SetSelectedViewId(shellState, placement, viewId);
         ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, sourcePlacement, sourceOrder);
         ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, placement, targetOrder);
         return true;
+    }
+
+    private static void ClearSourceSelection(ShellState state, RailPlacement placement, string removedId, IEnumerable<string> remainingIds)
+    {
+        if (!string.Equals(ShellSelectionState.GetSelectedViewId(state, placement), removedId, StringComparison.OrdinalIgnoreCase)) return;
+        // This is an explicit hotbar mutation, not startup reconstruction. Keep
+        // the established middle fallback without reopening intentionally empty regions.
+        ShellSelectionState.SetSelectedViewId(state, placement, placement == RailPlacement.Middle ? remainingIds.FirstOrDefault() : null);
     }
 
     public static void InsertAt(IList<string> orderedViewIds, string viewId, int? targetIndex)

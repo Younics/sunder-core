@@ -31,7 +31,7 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
         get => _selectedFilter;
         set
         {
-            if (_refreshingFilters || !SetProperty(ref _selectedFilter, value))
+            if (_refreshingFilters || value is null || !SetProperty(ref _selectedFilter, value))
             {
                 return;
             }
@@ -60,7 +60,16 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(packageId);
         SearchText = string.Empty;
-        SelectedFilter = DeveloperLogFilterOptionViewModel.ForPackage(packageId);
+        // Select an item that belongs to the bound collection. Assigning a new
+        // equivalent object first can make ComboBox write null before refresh starts.
+        var key = DeveloperLogFilterOptionViewModel.ForPackage(packageId).Key;
+        var selected = FilterOptions.FirstOrDefault(option => option.Key == key);
+        if (selected is null)
+        {
+            selected = DeveloperLogFilterOptionViewModel.ForPackage(packageId);
+            FilterOptions.Add(selected);
+        }
+        SelectedFilter = selected;
         RefreshFilterOptions();
         ApplyFilter();
     }

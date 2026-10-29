@@ -163,10 +163,10 @@ internal static class PackageDotNetWorkerValidator
             return;
         }
         if (!TryGetString(runtimeOptions, "tfm", out var tfm)
-            || !string.Equals(tfm, SunderPackageFormat.DotNetWorkerTargetFramework, StringComparison.Ordinal))
+            || !string.Equals(tfm, target.TargetFramework, StringComparison.Ordinal))
         {
             errors.Add(
-                $"Package .NET Worker target '{target.Role}/{target.Rid}' runtimeconfig tfm must be '{SunderPackageFormat.DotNetWorkerTargetFramework}'.");
+                $"Package .NET Worker target '{target.Role}/{target.Rid}' runtimeconfig tfm must match targetFramework '{target.TargetFramework}'.");
         }
         if (runtimeOptions.TryGetProperty("includedFrameworks", out _))
         {
@@ -229,7 +229,8 @@ internal static class PackageDotNetWorkerValidator
             return DependencyInfo.Empty;
         }
 
-        var expectedRuntimeTarget = $".NETCoreApp,Version=v10.0/{target.Rid}";
+        var frameworkVersion = target.TargetFramework is { Length: > 3 } ? target.TargetFramework[3..] : string.Empty;
+        var expectedRuntimeTarget = $".NETCoreApp,Version=v{frameworkVersion}/{target.Rid}";
         if (!string.Equals(runtimeTargetName, expectedRuntimeTarget, StringComparison.Ordinal))
         {
             errors.Add(
@@ -394,7 +395,7 @@ internal static class PackageDotNetWorkerValidator
     private static bool IsDotNetWorker(SunderPackageTargetManifest target)
         => string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
            && string.Equals(target.Kind, SunderPackageFormat.WorkerTargetKind, StringComparison.Ordinal)
-           && (string.Equals(target.TargetFramework, SunderPackageFormat.DotNetWorkerTargetFramework, StringComparison.Ordinal)
+            && (DotNetWorkerProfile.TryGetRuntimeRange(target.TargetFramework, out _)
                || string.Equals(target.ExecutionRuntime?.Id, SunderPackageFormat.DotNetExecutionRuntimeId, StringComparison.Ordinal)
                || string.Equals(target.ExecutionRuntime?.ModuleAbi, SunderPackageFormat.DotNetWorkerModuleAbi, StringComparison.Ordinal));
 

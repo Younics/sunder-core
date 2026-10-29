@@ -137,7 +137,7 @@ internal sealed class RuntimePackageRecoveryCoordinator : IHostedService, IAsync
         _logger = logger;
         _delayAsync = delayAsync;
         _beforeRecoverySuccess = beforeRecoverySuccess;
-        _rollbackAsync = rollbackAsync ?? (static storage => storage.RollbackAsync());
+        _rollbackAsync = rollbackAsync ?? (storage => storage.RollbackAsync(_logger));
         _requestHostStop = requestHostStop;
         _hostStoppingRegistration = hostStopping.Register(static state =>
             ((CancellationTokenSource)state!).Cancel(), _shutdown);
@@ -409,7 +409,7 @@ internal sealed class RuntimePackageRecoveryCoordinator : IHostedService, IAsync
                     : new RecoveryAuthorityStaleException();
             }
 
-            storage.Complete();
+            await storage.CompleteAsync(_logger).ConfigureAwait(false);
             storage = null;
             var committedReplacement = replacement;
             replacement = null;

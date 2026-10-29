@@ -7,6 +7,7 @@ import { authoringBindingModel, generateTypeScriptBindings } from "./generator";
 import type { ContractUseConfig, LoadedContract, LoadedProject, ProviderConfig, PackageRole } from "./model";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { packageToolCompatibility } from "./compatibility";
+import { NODE_TARGET } from "./toolchains.generated";
 import { captureRpcProducer } from "./rpc-producer";
 import { captureOwnedRuntimeInputs, type OwnedRuntimeInputs } from "./rpc-runtime-inputs";
 import { captureRpcCompilerInputs } from "./rpc-compiler-inputs";
@@ -23,7 +24,7 @@ import { MODEL_PROJECTION_PATH, modelProjectionBytes, modelProjectionOuter, meth
 import { outerBytes, type Outer } from "./rpc-baseline-json";
 
 const resolve = (...paths: string[]): string => nativeResolve(...paths).replaceAll("\\", "/");
-const producer = captureRpcProducer([__filename, require.resolve("@sunder/sdk"), require.resolve("typescript"), ...["./rpc-model-projection", "./rpc-model-projection-cache", "./rpc-contract-acquisition", "./service-source", "./service-bindings", "./model", "./module", "./compatibility", "./package", "./rpc-bindings", "./rpc-authoring-plugin", "./rpc-owned-app", "./output", "./notices", "./rpc-runtime-inputs", "./rpc-baseline", "./rpc-baseline-json", "./rpc-baseline-store", "./rpc-evolution", "./rpc-contracts", "./rpc-contract-lock", "./rpc-contract-cache", "./rpc-contract-cache-gc", "./rpc-contract-candidate", "./rpc-contract-restore", "./rpc-package-imports", "./rpc-package-selection", "./rpc-package-commands", "./rpc-publication", "./rpc-platform-catalogs", "./platform-catalog", "./rpc-platform-cache", "./cli"].map(path => require.resolve(path)), require.resolve("@sunder/package-tool/package.json"), resolve(dirname(require.resolve("@sunder/sdk")), "../package.json"), require.resolve("typescript/package.json")]);
+const producer = captureRpcProducer([__filename, require.resolve("@sunder/sdk"), require.resolve("typescript"), ...["./toolchains.generated", "./rpc-model-projection", "./rpc-model-projection-cache", "./rpc-contract-acquisition", "./service-source", "./service-bindings", "./model", "./module", "./compatibility", "./package", "./rpc-bindings", "./rpc-authoring-plugin", "./rpc-owned-app", "./output", "./notices", "./rpc-runtime-inputs", "./rpc-baseline", "./rpc-baseline-json", "./rpc-baseline-store", "./rpc-evolution", "./rpc-contracts", "./rpc-contract-lock", "./rpc-contract-cache", "./rpc-contract-cache-gc", "./rpc-contract-candidate", "./rpc-contract-restore", "./rpc-package-imports", "./rpc-package-selection", "./rpc-package-commands", "./rpc-publication", "./rpc-platform-catalogs", "./platform-catalog", "./rpc-platform-cache", "./cli"].map(path => require.resolve(path)), require.resolve("@sunder/package-tool/package.json"), resolve(dirname(require.resolve("@sunder/sdk")), "../package.json"), require.resolve("typescript/package.json")]);
 export interface OwnedRpcAnalysis {
   readonly imports: PackageImportAnalysis; readonly producerFiles: readonly string[];
   readonly baselineInput: BaselineInput; readonly baseline?: OwnedBaseline;
@@ -235,7 +236,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   }
   files.set("package-export.v1.json", outerBytes({ schemaVersion: 1,
     producer: { name: "@sunder/package-tool", version: toolVersion, language: modulePath.endsWith(".js") ? "javascript" : "typescript" },
-    projectIdentity: project.config.id, configuration: "Release", targetFramework: "node24", inputFingerprint: fingerprint, lockSha256: lock.sha256,
+    projectIdentity: project.config.id, configuration: "Release", targetFramework: NODE_TARGET, inputFingerprint: fingerprint, lockSha256: lock.sha256,
     packageId: project.config.id, packageVersion: project.config.version,
     contracts: [...contracts].sort((a, b) => ordinal(a.contractKey!, b.contractKey!)).map(contract => ({ contractKey: contract.contractKey!, contractId: contract.descriptor.contractId,
       contractVersion: contract.descriptor.version, exposure: contract.exposure, source: "owned", authorityKind: "package", authorityId: project.config.id,

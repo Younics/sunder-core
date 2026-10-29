@@ -163,6 +163,131 @@ public sealed class ShellCompositionServiceTests
         Assert.Empty(runtimeState.HiddenHotbarViewIds);
     }
 
+    [Fact]
+    public void CompletedCatalogRemovesOwnerlessLegacyEntriesAndUsesSavedMiddleOrder()
+    {
+        var state = CreateSavedState();
+        state.SelectedMiddleViewId = "local.test.default";
+        state.ViewPlacements["local.test.default"] = RailPlacement.Middle;
+        state.ViewOrder["local.test.default"] = 3;
+        state.ViewOrder["tools.z"] = 0;
+        state.ViewOrder["tools.a"] = 1;
+        state.SelectedRightTopViewId = "selection-only";
+        state.ViewOrder["order-only"] = 4;
+        state.ViewPackageIds["owner-only"] = "removed";
+        state.HiddenHotbarViewIds.Add("tools.hidden");
+        state.ViewPlacements["tools.hidden"] = RailPlacement.Middle;
+        state.ViewOrder["tools.hidden"] = -1;
+        new ShellCompositionService().Compose([CreatePackage("tools", "Tools",
+            [CreateView("tools.a", "A", "middle"), CreateView("tools.z", "Z", "middle"),
+                CreateView("tools.hidden", "Hidden", "middle"), CreateView("tools.side", "Side", "right-top")])],
+            state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+        Assert.Equal("tools.z", state.SelectedMiddleViewId);
+        Assert.Null(state.SelectedRightTopViewId);
+        Assert.False(state.ViewPlacements.ContainsKey("local.test.default"));
+        Assert.False(state.ViewOrder.ContainsKey("local.test.default"));
+        Assert.False(state.ViewPlacements.ContainsKey("agent.chat"));
+        Assert.False(state.ViewOrder.ContainsKey("order-only"));
+        Assert.False(state.ViewPackageIds.ContainsKey("owner-only"));
+        Assert.DoesNotContain("agent.hidden", state.HiddenHotbarViewIds);
+        Assert.Contains("tools.hidden", state.HiddenHotbarViewIds);
+    }
+
+    [Fact]
+    public void ActivationFailurePreservesUncertainViewsButNotConfirmedRemovals()
+    {
+        var state = CreateSavedState();
+        state.ViewPackageIds["agent.chat"] = "agent";
+        state.ViewOrder["agent.chat"] = 7;
+        state.SelectedRightTopViewId = "legacy-opaque-view";
+        state.ViewPlacements["legacy-opaque-view"] = RailPlacement.RightTop;
+        state.SelectedLeftBottomViewId = "removed.view";
+        state.ViewPackageIds["removed.view"] = "removed";
+        var tools = CreatePackage("tools", "Tools", [CreateView("tools.home", "Home", "middle")]);
+        var failed = CreatePackage("agent", "Agent", []);
+        var unavailable = ShellCompositionService.GetUnavailablePackageIds([tools], [tools, failed]);
+        var service = new ShellCompositionService();
+        service.Compose([tools], state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot, unavailable);
+        Assert.Equal("agent.chat", state.SelectedMiddleViewId);
+        Assert.Equal("legacy-opaque-view", state.SelectedRightTopViewId);
+        Assert.Equal(7, state.ViewOrder["agent.chat"]);
+        Assert.Null(state.SelectedLeftBottomViewId);
+        Assert.False(state.ViewPackageIds.ContainsKey("removed.view"));
+
+        // A later completed catalog resolves the legacy record without inferring
+        // an owner from its id; the failed package itself is now confirmed absent.
+        service.Compose([tools], state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+        Assert.Equal("tools.home", state.SelectedMiddleViewId);
+        Assert.Null(state.SelectedRightTopViewId);
+        Assert.False(state.ViewPlacements.ContainsKey("legacy-opaque-view"));
+    }
+
+    [Fact]
+    public void UnavailableCatalogIdentifiesFailedAppPackagesNotDisabledOrRuntimeOnlyPackages()
+    {
+        var composed = CreatePackage("composed", "Composed", []);
+        var missingSource = CreatePackage("missing-source", "Missing", []);
+        var disabled = CreatePackage("disabled", "Disabled", []) with { IsEnabled = false };
+        var runtimeOnly = CreatePackage("runtime", "Runtime", []) with { HostRoles = PackageHostRoles.Runtime };
+        var failed = new SessionPackageDescriptor("failed", "Failed", "1.0.0", PackageHostRoles.App, null,
+            true, PackageReadinessState.Failed, [], null, "activation failed", null, 1);
+        var unavailable = ShellCompositionService.GetUnavailablePackageIds([composed, runtimeOnly],
+            [composed, missingSource, disabled, runtimeOnly], [failed]);
+        Assert.Equal(["failed", "missing-source"], unavailable.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RemovedMiddleSelectionWithoutEligibleReplacementUsesTheDefaultMiddle(bool onlyQuarantinedMiddle)
+    {
+        var state = CreateSavedState();
+        state.ViewPackageIds["agent.chat"] = "removed";
+        var snapshot = new ShellCompositionService().Compose(
+            [CreatePackage("tools", "Tools", [CreateView("tools.view", "View", onlyQuarantinedMiddle ? "middle" : "right-top")])],
+            state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot,
+            onlyQuarantinedMiddle ? new HashSet<string>(["tools"], StringComparer.OrdinalIgnoreCase) : null);
+        Assert.Null(snapshot.State.SelectedMiddleViewId);
+        Assert.Null(snapshot.State.SelectedRightTopViewId);
+        Assert.False(state.ViewPlacements.ContainsKey("agent.chat"));
+    }
+
+    [Fact]
+    public void ExplicitPackageRemovalAlsoPrunesSavedViewsAbsentFromTheLiveViewDictionary()
+    {
+        var state = CreateSavedState();
+        state.ViewPackageIds["agent.chat"] = "agent";
+        var views = new ShellCompositionService().Compose(
+            [CreatePackage("tools", "Tools", [CreateView("tools.home", "Home", "middle")])], state,
+            null, [], [], ShellNormalizationPolicy.SafeModePreserveLayout).PackageViews.ToDictionary(view => view.ViewId);
+        Assert.True(ShellPackageRemovalPruner.RemovePackageViews("agent", views, state));
+        Assert.Equal("tools.home", state.SelectedMiddleViewId);
+        Assert.False(state.ViewPlacements.ContainsKey("agent.chat"));
+        Assert.False(state.ViewOrder.ContainsKey("agent.chat"));
+        Assert.False(state.ViewPackageIds.ContainsKey("agent.chat"));
+        Assert.False(ShellPackageRemovalPruner.RemovePackageViews("agent", views, state));
+    }
+
+    [Fact]
+    public void InitializedEmptyMiddleDoesNotSelectFirstAvailableView()
+    {
+        var state = new ShellState { HasInitializedLayout = true };
+        new ShellCompositionService().Compose([CreatePackage("agent", "Agent", [CreateView("agent.chat", "Chat", "middle")])],
+            state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+        Assert.Null(state.SelectedMiddleViewId);
+    }
+
+    [Fact]
+    public void SuccessfullyLoadedPackageWithNoViewsRemovesItsOldRegistrations()
+    {
+        var state = CreateSavedState();
+        state.ViewPackageIds["agent.chat"] = "agent";
+        new ShellCompositionService().Compose([CreatePackage("agent", "Agent", [])], state,
+            null, [], [], ShellNormalizationPolicy.SafeModePreserveLayout);
+        Assert.Null(state.SelectedMiddleViewId);
+        Assert.False(state.ViewPlacements.ContainsKey("agent.chat"));
+    }
+
     private static ShellState CreateSavedState()
         => new()
         {
@@ -177,7 +302,8 @@ public sealed class ShellCompositionServiceTests
         string packageId,
         string displayName,
         IReadOnlyList<PackageViewDescriptor> views)
-        => new(packageId, displayName, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, Icon: null, IsEnabled: true, PackageReadinessState.Ready, views);
+        => new(packageId, displayName, "1.0.0", PackageHostRoles.App | PackageHostRoles.Runtime, Icon: null, IsEnabled: true,
+            PackageReadinessState.Ready, views.Select(view => view with { PackageId = packageId }).ToArray());
 
     private static PackageViewDescriptor CreateView(
         string viewId,

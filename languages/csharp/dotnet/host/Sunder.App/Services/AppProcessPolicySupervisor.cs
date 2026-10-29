@@ -64,6 +64,9 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
     private bool _armed;
     private int _failed;
     private int _shutdownRequested;
+    private bool _admissionClosed;
+    private readonly object _disposeGate = new();
+    private Task? _disposeTask;
     private readonly object _retirementGate = new();
     private Func<IReadOnlyList<RuntimeAppActivationRetirementRequirement>, CancellationToken, Task>? _retirementHandler;
     private Task _retirements = Task.CompletedTask;
@@ -140,7 +143,7 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
         try
         {
             SetLoadPhase("checking", snapshot.SessionGeneration);
-            if (_failed != 0 || _shutdownRequested != 0 || _stopping.IsCancellationRequested) throw new InvalidOperationException(PackagePolicyErrorCodes.AppProcessTerminationRequired);
+            lock (_proofGate) ThrowIfAdmissionClosed();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token, _stopping.Token);
             timeout.CancelAfter(TimeSpan.FromSeconds(5));
             if (_session is null)
@@ -153,8 +156,12 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
                 var opened = await _connection.OpenAsync(new(identity), timeout.Token).ConfigureAwait(false);
                 if (opened.Process != identity || opened.State != RuntimeAppPolicySessionStates.Active
                     || !Guid.TryParseExact(opened.SessionId, "N", out _)) throw new InvalidDataException("App supervision identity differs.");
-                _session = new(opened.SessionId, identity.AppGenerationId, identity.RuntimeInstanceId);
-                StartSupervision();
+                lock (_proofGate)
+                {
+                    ThrowIfAdmissionClosed();
+                    _session = new(opened.SessionId, identity.AppGenerationId, identity.RuntimeInstanceId);
+                    StartSupervision();
+                }
             }
             SetLoadPhase("permit", snapshot.SessionGeneration);
             var permit = await _connection.PermitAsync(new(_session, snapshot.PolicySubject)
@@ -171,7 +178,7 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
             if (permit.Lease is not null) ValidateLease(permit.Lease);
             lock (_proofGate)
             {
-                if (_failed != 0 || _shutdownRequested != 0) throw new InvalidOperationException(PackagePolicyErrorCodes.AppProcessTerminationRequired);
+                ThrowIfAdmissionClosed();
                 UpdateProof();
                 _armed = true;
             }
@@ -182,6 +189,24 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
             SetLoadPhase("idle", snapshot.SessionGeneration);
             _openGate.Release();
         }
+    }
+
+    internal void BeginShutdown()
+    {
+        lock (_proofGate)
+        {
+            if (_admissionClosed) return;
+            _admissionClosed = true;
+        }
+        // Closing admission is not policy denial: ordinary cleanup may continue
+        // renewing valid proof. Actual policy shutdown still fixes the deadline.
+        WriteDiagnostic("cleanup-started");
+    }
+
+    private void ThrowIfAdmissionClosed()
+    {
+        if (_admissionClosed || _failed != 0 || _shutdownRequested != 0 || _stopping.IsCancellationRequested)
+            throw new InvalidOperationException(PackagePolicyErrorCodes.AppProcessTerminationRequired);
     }
 
     internal static IReadOnlyList<string>? GetImplementedObservationCapabilities(PackageTargetDescriptor target)
@@ -379,17 +404,28 @@ internal sealed partial class AppProcessPolicySupervisor : IAppPackagePolicy, IA
             throw new InvalidOperationException(PackagePolicyErrorCodes.AppProcessSupervisionRequired);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
+        lock (_disposeGate) return new(_disposeTask ??= StopForExitAsync());
+    }
+
+    private async Task StopForExitAsync()
+    {
+        BeginShutdown();
+        // Only the final exit handoff stops proof. Never let a racing active reply
+        // restart its grace after Runtime has been told the process is exiting.
+        lock (_proofGate) Interlocked.Exchange(ref _shutdownRequested, 1);
+        WriteDiagnostic("exit-handoff");
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         if (_session is not null)
         {
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            try { await _connection.ShutdownAsync(_session, timeout.Token).ConfigureAwait(false); }
+            try { await _connection.ShutdownAsync(_session, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false); }
             catch (Exception error) { RecordHeartbeatFailure(error, "shutdown", "shutdown-request-failed"); }
         }
         _stopping.Cancel();
-        try { await _heartbeats.ConfigureAwait(false); } catch (OperationCanceledException) { }
-        SetHeartbeatPhase("stopped");
+        try { await _heartbeats.WaitAsync(timeout.Token).ConfigureAwait(false); }
+        catch (Exception error) { RecordHeartbeatFailure(error, "shutdown", "heartbeat-stop-failed"); }
+        SetHeartbeatPhase(_heartbeats.IsCompleted ? "stopped" : "stop-pending");
         // Once package code was permitted, disposal cannot disable the watchdog.
         // The process exits normally, or the fixed grace still ends in fail-fast.
     }

@@ -405,6 +405,8 @@ public sealed class PresentationLifecycleArchitectureTests
 
         stale.SelectedMiddleViewId = "stale";
         service.Save(stale);
+        Assert.Equal(0, stale.Revision);
+        service.Save(stale);
 
         Assert.Equal("newer", service.Load().SelectedMiddleViewId);
     }

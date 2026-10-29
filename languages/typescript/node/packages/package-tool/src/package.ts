@@ -33,6 +33,7 @@ import type { BuildOptions, Metafile } from "esbuild";
 import { build as buildEsbuild, context, type BuildContext } from "esbuild";
 import type { Plugin as VitePlugin } from "vite" with { "resolution-mode": "import" };
 import { packageToolCompatibility } from "./compatibility";
+import { NODE_TARGET, NODE_RUNTIME_RANGE, NODE_RUNTIME_RANGES, SUPPORTED_NODE_TARGETS } from "./toolchains.generated";
 import type { RegistryOriginOptions } from "./rpc-contract-lock";
 import { validateDependencyVersionRange } from "./dependency-range";
 import { readProjectDescriptorFile } from "./descriptor-files";
@@ -98,7 +99,7 @@ let activeNodeExecutableMetadataPromise: Promise<ActiveNodeExecutableMetadata> |
 let activeNodeExecutableHashesPromise: Promise<ActiveNodeExecutableHashes> | undefined;
 export const NODE_EXECUTION_RUNTIME = {
   id: "sunder.runtime.node",
-  versionRange: ">=24.18.1 <25.0.0",
+  versionRange: NODE_RUNTIME_RANGE,
   moduleAbi: "sunder.node-worker-module.v1",
 } as const;
 const NODE_WORKER_ENTRY_POINT = "bin/worker.cjs";
@@ -245,7 +246,7 @@ function devBuildOptions(project: PreparedProject, bundlePath: string): BuildOpt
     bundle: true,
     platform: "node",
     format: "cjs",
-    target: "node24",
+    target: NODE_TARGET,
     sourcemap: false,
     metafile: true,
     logLevel: "info",
@@ -354,7 +355,6 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
     const structuralPaths = new Set([
       project.configPath, resolve(project.root, "sunder-contracts.lock.json"), resolve(project.root, "sunder-contracts.owned.json"),
       ...(project.ownedRpc === undefined ? project.contracts.map(contract => contract.sourcePath) : []),
-      ...(project.config.rpcBindings ?? []).map(binding => resolveInside(project.root, binding.path, "RPC binding")),
       ...Object.values(project.config.nativeAssets ?? {}).flatMap(assets => assets.map(asset => resolveInside(project.root, asset.sourcePath, "native asset source"))),
     ].map(inputIdentity));
     const affects = (paths: Iterable<string>, changed: string): boolean => [...paths].some(path => path === changed || isInside(changed, path));
@@ -539,7 +539,7 @@ export async function bundleProductionWithGeneratedRpcBindings(project: Prepared
     bundle: true,
     platform: "node",
     format: "cjs",
-    target: "node24",
+    target: NODE_TARGET,
     sourcemap: false,
     metafile: true,
     minify: true,
@@ -582,7 +582,7 @@ export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {
     rid: input.rid,
     kind: "worker",
     entryPoint: NODE_WORKER_ENTRY_POINT,
-    targetFramework: "node24",
+    targetFramework: NODE_TARGET,
     sdkVersion: compatibility.sdkVersion,
     requiredHostCapabilities: workerTargetCapabilities(input.project.config),
     executionRuntime: NODE_EXECUTION_RUNTIME,
@@ -731,7 +731,7 @@ export async function aggregateAndPack(
         // Prebuilt leaves are not source evidence. Compile fresh ordinary source
         // and compare the production module too, even for metadata-identical edits.
         const fresh = await buildEsbuild({ absWorkingDir: project.root, entryPoints: [resolveInside(project.root, project.config.entry, "entry")],
-          bundle: true, platform: "node", format: "cjs", target: "node24", sourcemap: false, minify: true, legalComments: "none", logLevel: "silent",
+          bundle: true, platform: "node", format: "cjs", target: NODE_TARGET, sourcemap: false, minify: true, legalComments: "none", logLevel: "silent",
           ...workerResolutionOptions, tsconfigRaw: {}, write: false, plugins: ownedRpcPlugins(project) });
         const expectedHash = sha256(fresh.outputFiles![0]!.contents);
         for (const leaf of leaves) if (leaf.manifest.targets[0]!.role === "runtime" && leaf.files.get(NODE_WORKER_ENTRY_POINT)?.sha256 !== expectedHash) throw new Error("Prebuilt Worker module differs from fresh full ordinary source; rebuild before release packing.");
@@ -845,23 +845,21 @@ async function emitDevTree(
   beforeCommit?: () => void,
 ): Promise<void> {
   const root = resolve(project.outputRoot, "sunder-dev");
-  const obsoleteSidecarPath = `${root}.sunder-node-dev.json`;
   const compatibility = packageToolCompatibility();
   const targets: TargetManifest[] = [{
     role: "runtime",
     rid,
     kind: "worker",
     entryPoint: NODE_WORKER_ENTRY_POINT,
-    targetFramework: "node24",
+    targetFramework: NODE_TARGET,
     sdkVersion: compatibility.sdkVersion,
     requiredHostCapabilities: workerTargetCapabilities(project.config),
     executionRuntime: NODE_EXECUTION_RUNTIME,
   }];
   if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid,project.config));
   const manifest = createManifest(project, targets);
-  await withOutputLocks([root, obsoleteSidecarPath], async () => {
+  await withOutputLocks([root], async () => {
     await assertReplaceableGeneratedDirectory(root);
-    await assertReplaceableGeneratedFile(obsoleteSidecarPath, "legacy Node dev sidecar");
     const stagedDirectory = await stageGeneratedDirectory(
       root,
       "Sunder Node dev generated output v1\n",
@@ -885,7 +883,6 @@ async function emitDevTree(
       await revalidateOwnedRpc(project);
       beforeCommit?.();
       await commitStagedOutputs(stagedOutputs);
-      await rm(obsoleteSidecarPath, { force: true });
     } finally {
       await cleanupStagedOutputs(stagedOutputs);
     }
@@ -1683,9 +1680,9 @@ function validateTarget(
   const workerTarget = target.role === "runtime"
     && target.kind === "worker"
     && target.entryPoint === NODE_WORKER_ENTRY_POINT
-    && target.targetFramework === "node24"
+    && typeof target.targetFramework === "string" && SUPPORTED_NODE_TARGETS.includes(target.targetFramework)
     && target.views === undefined
-    && executionRuntimeMatches(target.executionRuntime);
+    && executionRuntimeMatches(target.executionRuntime, target.targetFramework);
   const webTarget = target.role === "app"
     && target.kind === "web"
     && target.targetFramework === "web"
@@ -1705,9 +1702,9 @@ function validateTarget(
   }
 }
 
-function executionRuntimeMatches(value: ExecutionRuntimeRequirement | undefined): boolean {
+function executionRuntimeMatches(value: ExecutionRuntimeRequirement | undefined, targetFramework: string): boolean {
   return value?.id === NODE_EXECUTION_RUNTIME.id
-    && value.versionRange === NODE_EXECUTION_RUNTIME.versionRange
+    && NODE_RUNTIME_RANGES[targetFramework] === value.versionRange
     && value.moduleAbi === NODE_EXECUTION_RUNTIME.moduleAbi;
 }
 

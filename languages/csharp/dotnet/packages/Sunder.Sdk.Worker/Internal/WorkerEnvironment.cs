@@ -1,4 +1,6 @@
 using Sunder.Sdk.Packaging;
+using Sunder.Sdk.Abstractions;
+using System.Text.Json;
 
 namespace Sunder.Sdk.Worker.Internal;
 
@@ -15,6 +17,7 @@ internal sealed record WorkerEnvironment(
     bool OperationalOutcomesV1)
 {
     private const string RpcExtendedDeadlineEnvironmentVariable = "SUNDER_RPC_EXTENDED_DEADLINE_V1";
+    internal SunderDevelopmentToolchain? DevelopmentToolchain { get; init; }
 
     public static WorkerEnvironment Capture(Func<string, string?> getEnvironmentVariable)
     {
@@ -70,7 +73,22 @@ internal sealed record WorkerEnvironment(
             contentPath,
             temporaryPath,
             rpcExtendedDeadlineV1,
-            OptionalFlag(getEnvironmentVariable, "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"));
+            OptionalFlag(getEnvironmentVariable, "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"))
+        {
+            DevelopmentToolchain = ReadToolchain(getEnvironmentVariable("SUNDER_DEVELOPMENT_TOOLCHAIN")),
+        };
+    }
+
+    private static SunderDevelopmentToolchain? ReadToolchain(string? json)
+    {
+        if (json is null) return null;
+        if (json.Length > 512) throw new InvalidOperationException("SUNDER_DEVELOPMENT_TOOLCHAIN exceeds its size limit.");
+        var value = JsonSerializer.Deserialize<SunderDevelopmentToolchain>(json)
+            ?? throw new InvalidOperationException("SUNDER_DEVELOPMENT_TOOLCHAIN is invalid.");
+        foreach (var version in new[] { value.DotnetSdkVersion, value.NodeVersion, value.NpmVersion })
+            if (!SemanticVersion.TryParse(version, out var parsed) || parsed.Prerelease is not null || parsed.BuildMetadata is not null)
+                throw new InvalidOperationException("SUNDER_DEVELOPMENT_TOOLCHAIN requires exact stable versions.");
+        return value;
     }
 
     private static bool OptionalFlag(

@@ -9,7 +9,7 @@
               Command="{Binding CheckUpdatesCommand}" IsEnabled="{Binding CanAct}" VerticalAlignment="Center" />
       <TextBlock Grid.Row="1" Classes="caption" Text="{Binding LastCheckedText}" Margin="0,2,0,0" TextWrapping="Wrap" />
     </Grid>
-    <TextBlock Classes="caption" Text="Sunder selects the latest supported LTS release. Downloaded updates apply when packages stop."
+    <TextBlock Classes="caption" Text="Packages use a compatible supported runtime major. Older required majors are retained; updates stay within that major and apply when packages stop."
                TextWrapping="Wrap" />
 
     <ItemsControl ItemsSource="{Binding Families}">

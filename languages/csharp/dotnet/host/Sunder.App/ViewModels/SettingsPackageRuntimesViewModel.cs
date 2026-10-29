@@ -230,13 +230,19 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
     {
         foreach (var family in Families)
         {
-            var installed = Installed.Where(item => item.Runtime.Identity.SourceId == family.Source)
+            var major = family.Source == ConfiguredOfficialSourceId.DotNet
+                ? Sunder.Package.Format.SunderToolchainPolicy.DotNetRuntimeMajor : Sunder.Package.Format.SunderToolchainPolicy.NodeRuntimeMajor;
+            var familyRuntimes = Installed.Where(item => item.Runtime.Identity.SourceId == family.Source).ToArray();
+            var installed = familyRuntimes.Where(item => Version.TryParse(item.Runtime.Identity.VendorVersion, out var version) && version.Major == major)
                 .OrderByDescending(item => item.Runtime.Identity.VendorVersion, Comparer<string>.Create(PackageRuntimeFamilyViewModel.CompareVersions)).FirstOrDefault();
-            var prepared = Prepared.Where(item => item.Update.Runtimes.Any(runtime => runtime.CurrentRuntime.SourceId == family.Source))
+            var prepared = Prepared.Where(item => item.Update.Runtimes.Any(runtime => runtime.CurrentRuntime.SourceId == family.Source
+                    && Version.TryParse(runtime.CurrentRuntime.VendorVersion, out var version) && version.Major == major))
                 .OrderByDescending(item => item.CanApply || item.Update.State == RuntimeExecutionRuntimeUpdateState.ReconciliationPending)
                 .ThenByDescending(item => item.Update.PreparedAtUtc).FirstOrDefault();
             family.Apply(installed, Available.FirstOrDefault(item => item.Entry.Artifact.Identity.SourceId == family.Source),
-                prepared, _inventoryLoaded, _catalogErrors.GetValueOrDefault(family.Source));
+                prepared, _inventoryLoaded, _catalogErrors.GetValueOrDefault(family.Source), familyRuntimes
+                    .Where(item => Version.TryParse(item.Runtime.Identity.VendorVersion, out var version) && version.Major != major)
+                    .Select(item => item.Runtime.Identity.VendorVersion).Distinct().ToArray());
         }
     }
 

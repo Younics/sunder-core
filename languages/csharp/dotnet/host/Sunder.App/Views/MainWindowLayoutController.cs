@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
+using Sunder.App.Views.Controls;
 
 namespace Sunder.App.Views;
 
@@ -206,6 +207,7 @@ internal sealed class MainWindowLayoutController
 
     private void LayoutBottomSplitter_OnDragDelta(object? sender, VectorEventArgs e)
     {
+        var delta = sender is ShellGridSplitter splitter ? splitter.GetWorkspaceDelta(e.Vector) : e.Vector;
         var viewModel = _viewModelAccessor();
         if (viewModel is null)
         {
@@ -222,7 +224,7 @@ internal sealed class MainWindowLayoutController
                 return;
             }
 
-            viewModel.AdjustLiveTopRowHeightRatio(e.Vector.Y / resizableHeight);
+            viewModel.AdjustLiveTopRowHeightRatio(delta.Y / resizableHeight);
         }
         else if (ReferenceEquals(sender, _bottomColumnGridSplitter))
         {
@@ -234,7 +236,7 @@ internal sealed class MainWindowLayoutController
                 return;
             }
 
-            viewModel.AdjustLiveBottomSplitRatio(e.Vector.X / resizableWidth);
+            viewModel.AdjustLiveBottomSplitRatio(delta.X / resizableWidth);
         }
 
         ApplyAdaptiveLayout();
@@ -242,44 +244,33 @@ internal sealed class MainWindowLayoutController
 
     private void LayoutTopColumnSplitter_OnDragDelta(object? sender, VectorEventArgs e)
     {
+        var delta = sender is ShellGridSplitter splitter ? splitter.GetWorkspaceDelta(e.Vector) : e.Vector;
         var viewModel = _viewModelAccessor();
         if (viewModel is null || GetTopContentWidth() <= 0)
         {
             return;
         }
 
-        if (ReferenceEquals(sender, _leftColumnGridSplitter))
-        {
-            viewModel.AdjustLiveLeftPanelWidth(e.Vector.X, GetMaximumLeftPanelWidth(viewModel));
-        }
-        else if (ReferenceEquals(sender, _rightColumnGridSplitter))
-        {
-            viewModel.AdjustLiveRightPanelWidth(-e.Vector.X, GetMaximumRightPanelWidth(viewModel));
-        }
+        var resizeLeft = ReferenceEquals(sender, _leftColumnGridSplitter);
+        if (!resizeLeft && !ReferenceEquals(sender, _rightColumnGridSplitter)) return;
+        if (delta.X == 0) return;
+        var hasLeft = viewModel.LeftTopPanel.IsDockLayoutVisible;
+        var hasRight = viewModel.RightTopPanel.IsDockLayoutVisible;
+        var before = ShellLayoutCalculator.CalculateTopColumnWidths(
+            GetTopContentWidth(), viewModel.LeftPanelWidth, viewModel.RightPanelWidth, hasLeft, hasRight);
+        var widths = ShellLayoutCalculator.ResizeTopColumn(
+            GetTopContentWidth(), viewModel.LeftPanelWidth, viewModel.RightPanelWidth,
+            hasLeft, hasRight, resizeLeft, resizeLeft ? delta.X : -delta.X);
+        if (widths == before) return;
+        viewModel.SetLiveTopColumnWidths(
+            hasLeft ? widths.LeftWidth : viewModel.LeftPanelWidth,
+            hasRight ? widths.RightWidth : viewModel.RightPanelWidth);
 
         ApplyAdaptiveLayout();
     }
 
     private double GetTopContentWidth()
         => _topContentGrid.Bounds.Width > 0 ? _topContentGrid.Bounds.Width : _shellContentGrid.Bounds.Width;
-
-    private double GetMaximumLeftPanelWidth(MainWindowViewModel viewModel)
-    {
-        var resizableWidth = CalculateResizableExtent(
-            GetTopContentWidth(),
-            viewModel.LeftTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0,
-            viewModel.RightTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0);
-        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.RightTopPanel.IsDockLayoutVisible ? viewModel.RightPanelWidth : 0);
-    }
-
-    private double GetMaximumRightPanelWidth(MainWindowViewModel viewModel)
-    {
-        var resizableWidth = CalculateResizableExtent(
-            GetTopContentWidth(),
-            viewModel.LeftTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0,
-            viewModel.RightTopPanel.IsDockLayoutVisible ? ShellLayoutCalculator.SplitterThickness : 0);
-        return resizableWidth - ShellLayoutCalculator.MinimumMiddleContentWidth - (viewModel.LeftTopPanel.IsDockLayoutVisible ? viewModel.LeftPanelWidth : 0);
-    }
 
     private sealed record LayoutGeometryState(
         GridLength TopRowHeight,

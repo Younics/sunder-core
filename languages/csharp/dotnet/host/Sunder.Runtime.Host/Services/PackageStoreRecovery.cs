@@ -6,7 +6,8 @@ namespace Sunder.Runtime.Host.Services;
 internal sealed class PackageStoreRecovery(
     RuntimePackagePaths paths,
     InstalledPackageStore store,
-    PackageStoreTransactionManager transactions)
+    PackageStoreTransactionManager transactions,
+    ILogger? logger = null)
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> RootGates = new(PathComparer);
 
@@ -249,6 +250,10 @@ internal sealed class PackageStoreRecovery(
         {
             cancellationToken.ThrowIfCancellationRequested();
             PackageStorePathGuard.EnsureSafe(packageDataDirectory, paths.PackageDataRootPath);
+            var committedBackups = await PackageStorageActivationJournal.RecoverAsync(
+                packageDataDirectory,
+                logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                cancellationToken).ConfigureAwait(false);
             var activationBackups = new[]
             {
                 ".workspace.sunder-activation-*",
@@ -256,16 +261,18 @@ internal sealed class PackageStoreRecovery(
             }.SelectMany(pattern => Directory.EnumerateDirectories(
                 packageDataDirectory,
                 pattern,
-                SearchOption.TopDirectoryOnly)).ToArray();
+                SearchOption.TopDirectoryOnly)).Where(path => !committedBackups.Contains(path)).ToArray();
             if (activationBackups.Length > 0)
             {
                 foreach (var backupPath in activationBackups)
                 {
                     PackageStorePathGuard.EnsureSafe(backupPath, paths.PackageDataRootPath);
                 }
-                throw new InvalidDataException(
+                throw new PackageStorageActivationRecoveryException(
+                    Path.GetFileName(packageDataDirectory),
                     $"Package data directory '{packageDataDirectory}' contains an unjournaled storage activation backup. " +
-                    "The backup was preserved because startup cannot determine whether activation committed or requires rollback.");
+                    "The backup was preserved because startup cannot determine whether activation committed or requires rollback. " +
+                    "Explicit storage recovery is required before retrying startup; do not delete or restore the backup blindly.");
             }
         }
 

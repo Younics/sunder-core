@@ -21,7 +21,6 @@ internal sealed record HostLifecyclePersistentState(
 internal sealed class HostLifecycleStore : IDisposable
 {
     private const int FormatVersion = 2;
-    private const int LegacyFormatVersion = 1;
     private const int MaximumTextLength = 2048;
     private const UnixFileMode PrivateDirectoryMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
@@ -81,11 +80,11 @@ internal sealed class HostLifecycleStore : IDisposable
                 File.ReadAllText(_statePath),
                 JsonOptions);
             if (document is null
-                || document.Version is not (LegacyFormatVersion or FormatVersion)
+                || document.Version != FormatVersion
                 || document.DesiredState is null
                 || document.DeploymentGeneration is null
                 || document.Operations is null
-                || document.Version == FormatVersion && document.ResetRequired is null)
+                || document.ResetRequired is null)
             {
                 throw new InvalidDataException("Sunder Host lifecycle state has an unsupported format.");
             }
@@ -95,7 +94,7 @@ internal sealed class HostLifecycleStore : IDisposable
                 document.DeploymentGeneration.Value,
                 document.ActiveOperationId,
                 Array.AsReadOnly(document.Operations),
-                document.Version == FormatVersion && document.ResetRequired!.Value);
+                document.ResetRequired.Value);
             Validate(state);
             return state;
         }

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json.Nodes;
 using Sunder.Core.TestSupport;
 using Sunder.Host.Contracts;
 using Sunder.Host.Supervisor;
@@ -49,7 +50,19 @@ public sealed partial class HostSupervisorFoundationTests
                 Assert.True(actual.ResetRequired);
             }
 
-            File.WriteAllText(Path.Combine(root, "runtime", "v1", "lifecycle.json"), "{\"version\":1}");
+            var path = Path.Combine(root, "runtime", "v1", "lifecycle.json");
+            var previousFormat = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
+            previousFormat["version"] = 1;
+            previousFormat.Remove("resetRequired");
+            var unsupported = previousFormat.ToJsonString();
+            File.WriteAllText(path, unsupported);
+            using (var store = new HostLifecycleStore(root))
+            {
+                Assert.Throws<InvalidDataException>(() => store.LoadOrCreate());
+                Assert.Equal(unsupported, File.ReadAllText(path));
+            }
+
+            File.WriteAllText(path, "{broken");
             using var corrupted = new HostLifecycleStore(root);
             Assert.Throws<InvalidDataException>(() => corrupted.LoadOrCreate());
         }
@@ -550,13 +563,24 @@ public sealed partial class HostSupervisorFoundationTests
         }
     }
 
-    [Fact]
-    public async Task RuntimeWorkerCoordinator_ReportsTypedPreListenRuntimeFailure()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RuntimeWorkerCoordinator_ReportsTypedPreListenRuntimeFailure(bool storageActivationFailure)
     {
         var root = CreateTempDirectory();
         var runtimeStateRoot = Path.Combine(root, "runtime");
         Directory.CreateDirectory(runtimeStateRoot);
-        await File.WriteAllTextAsync(Path.Combine(runtimeStateRoot, "unexpected-state"), "legacy");
+        var evidencePath = Path.Combine(runtimeStateRoot, "unexpected-state");
+        if (storageActivationFailure)
+        {
+            RuntimeLocalState.EnsureInitialized(runtimeStateRoot);
+            var backup = Path.Combine(runtimeStateRoot, "package-data", "test.package",
+                ".workspace.sunder-activation-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(backup);
+            evidencePath = Path.Combine(backup, "preserved.txt");
+        }
+        await File.WriteAllTextAsync(evidencePath, "preserve");
         try
         {
             using var store = new HostLifecycleStore(Path.Combine(root, "host"));
@@ -571,12 +595,21 @@ public sealed partial class HostSupervisorFoundationTests
             var exception = await Assert.ThrowsAsync<RuntimeWorkerStartupException>(() =>
                 coordinator.ReconcileStartupAsync(CancellationToken.None));
 
-            Assert.Equal("runtime.v1.internal", exception.Code);
-            Assert.Equal(
-                "The Runtime V1 state root has no schema metadata and cannot be reset safely.",
-                exception.Message);
-            Assert.Equal("runtime.v1.internal", coordinator.GetStatus().FailureCode);
+            Assert.Equal(storageActivationFailure
+                ? "runtime.storage-activation-recovery-required" : "runtime.v1.internal", exception.Code);
+            if (storageActivationFailure)
+            {
+                Assert.Contains("test.package", exception.Message, StringComparison.Ordinal);
+                Assert.Contains("Explicit storage recovery", exception.Message, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Equal("The Runtime V1 state root has no schema metadata and cannot be reset safely.",
+                    exception.Message);
+            }
+            Assert.Equal(exception.Code, coordinator.GetStatus().FailureCode);
             Assert.Equal(exception.Message, coordinator.GetStatus().FailureMessage);
+            Assert.Equal("preserve", await File.ReadAllTextAsync(evidencePath));
         }
         finally
         {

@@ -119,15 +119,17 @@ public sealed class RuntimeStatusViewModelTests
         await Task.WhenAll(firstRefresh, secondRefresh);
     }
 
-    [Fact]
-    public async Task StartRuntimeAsync_WhenStartFails_ClearsBusyStateAndReportsError()
+    [Theory]
+    [InlineData("start failed")]
+    [InlineData("runtime.storage-activation-recovery-required: Package 'test.package' requires explicit storage recovery; backups were preserved.")]
+    public async Task StartRuntimeAsync_WhenStartFails_ClearsBusyStateAndReportsError(string diagnostic)
     {
         var runtimeApiClientFactory = new FakeRuntimeApiClientFactory();
         var persistedRuntimeUrls = new List<Uri>();
         var viewModel = CreateViewModel(
             runtimeApiClientFactory,
             persistPreferredRuntimeUrl: persistedRuntimeUrls.Add,
-            startRuntimeAsync: (_, _) => throw new InvalidOperationException("start failed"));
+            startRuntimeAsync: (_, _) => throw new InvalidOperationException(diagnostic));
         viewModel.RuntimeAddressText = "http://localhost:6000";
 
         await viewModel.StartRuntimeAsync();
@@ -140,7 +142,7 @@ public sealed class RuntimeStatusViewModelTests
         Assert.False(viewModel.IsRuntimeReady);
         Assert.Equal("Runtime unavailable", viewModel.RuntimeStatusText);
         Assert.Equal("Runtime unavailable", viewModel.SystemStatusText);
-        Assert.Equal("start failed", viewModel.RuntimeLastError);
+        Assert.Equal(diagnostic, viewModel.RuntimeLastError);
     }
 
     private static RuntimeStatusViewModel CreateViewModel(

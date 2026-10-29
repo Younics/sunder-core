@@ -51,6 +51,7 @@ public sealed class MainWindowFactory(
             uiDispatcher: uiDispatcher);
 
         var window = new MainWindow { DataContext = viewModel };
+        window.ConfigureState(shellStateService, shellSnapshot.State);
         viewModel.ConfigurePackageViewStagingSurface(
             window.StagePackageView,
             window.DetachStagedPackageViews,

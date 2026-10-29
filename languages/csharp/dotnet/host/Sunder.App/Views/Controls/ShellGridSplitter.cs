@@ -1,3 +1,4 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.Primitives;
 using Avalonia.Input;
@@ -8,13 +9,39 @@ namespace Sunder.App.Views.Controls;
 // native GridSplitter must not also write definitions behind that model's back.
 public sealed class ShellGridSplitter : GridSplitter
 {
+    private TopLevel? _dragRoot;
+    private Point? _lastPointerPosition;
+    private Vector? _pointerDelta;
+
     protected override Type StyleKeyOverride => typeof(GridSplitter);
 
-    protected override void OnDragStarted(VectorEventArgs e) { }
+    protected override void OnDragStarted(VectorEventArgs e)
+    {
+        _dragRoot = TopLevel.GetTopLevel(this);
+        _lastPointerPosition = _dragRoot is null ? null : this.TranslatePoint(new Point(e.Vector.X, e.Vector.Y), _dragRoot);
+    }
 
     protected override void OnDragDelta(VectorEventArgs e) { }
 
-    protected override void OnDragCompleted(VectorEventArgs e) { }
+    internal Vector GetWorkspaceDelta(Vector fallback) => _pointerDelta ?? fallback;
+
+    protected override void OnDragCompleted(VectorEventArgs e)
+    {
+        _dragRoot = null;
+        _lastPointerPosition = null;
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        if (_dragRoot is { } root && _lastPointerPosition is { } previous)
+        {
+            var position = e.GetPosition(root);
+            _pointerDelta = position - previous;
+            _lastPointerPosition = position;
+        }
+        try { base.OnPointerMoved(e); }
+        finally { _pointerDelta = null; }
+    }
 
     protected override void OnKeyDown(KeyEventArgs e)
     {

@@ -1131,10 +1131,14 @@ public sealed class PackageStoreCoordinatorTests
         await File.WriteAllTextAsync(Path.Combine(workspaceBackup, "workspace.txt"), "preserve-workspace");
         await File.WriteAllTextAsync(Path.Combine(filesBackup, "files.txt"), "preserve-files");
 
-        var failure = await Assert.ThrowsAsync<InvalidDataException>(
+        var failure = await Assert.ThrowsAsync<PackageStorageActivationRecoveryException>(
             () => CreateCoordinator(paths, new InstalledPackageStore(paths)).InitializeAsync());
 
         Assert.Contains("unjournaled storage activation backup", failure.Message, StringComparison.Ordinal);
+        var diagnostic = RuntimeStartupDiagnosticReporter.CreateDiagnostic(failure);
+        Assert.Equal(PackageStorageActivationRecoveryException.Code, diagnostic.Code);
+        Assert.Contains("test.package", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("Explicit storage recovery", diagnostic.Message, StringComparison.Ordinal);
         Assert.Equal("preserve-workspace", await File.ReadAllTextAsync(Path.Combine(workspaceBackup, "workspace.txt")));
         Assert.Equal("preserve-files", await File.ReadAllTextAsync(Path.Combine(filesBackup, "files.txt")));
     }

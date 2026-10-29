@@ -10,6 +10,19 @@ namespace Sunder.App.Tests;
 public sealed class SettingsPackageRuntimesViewModelTests
 {
     [Fact]
+    public void ANewRuntimeMajorIsNotPresentedAsAnUpdateToAnOlderPackageRuntime()
+    {
+        var family = new PackageRuntimeFamilyViewModel(ConfiguredOfficialSourceId.DotNet, ".NET", "Package runtime");
+        var installed = new InstalledPackageRuntimeItem(Installed(), null);
+        var available = new AvailablePackageRuntimeItem(new("Future major", Resolution().Artifact with
+            { Identity = Identity with { VendorVersion = "11.0.0" } }, false));
+        family.Apply(installed, available, null, true, null, ["10.0.9"]);
+        Assert.Equal("Installed", family.Status);
+        Assert.False(family.HasPrimaryAction);
+        Assert.Contains("Retained package runtimes: 10.0.9", family.Details);
+    }
+
+    [Fact]
     public async Task RuntimeFamilies_ShowTwoStableCardsAndOnlyTheLatestReleaseOfEachSource()
     {
         var current = Installed() with { Identity = Identity with { VendorVersion = "10.0.12" } };

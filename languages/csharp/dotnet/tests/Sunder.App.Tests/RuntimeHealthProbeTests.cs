@@ -292,6 +292,72 @@ public sealed class RuntimeHealthProbeTests
         Assert.Contains((HttpMethod.Get, $"/api/host/v1/operations/{requestedOperationId}"), requests);
     }
 
+    [Fact]
+    public async Task RuntimeHealthProbe_FailedStartExposesAuthenticatedDiagnosticWithoutRetryingMutation()
+    {
+        var runtimeUrl = new Uri("http://127.0.0.1:54321/");
+        var connectionState = new RuntimeConnectionState(runtimeUrl);
+        connectionState.SetConnection(new RuntimeConnectionInfo(runtimeUrl, "host-token"));
+        var now = DateTimeOffset.UtcNow;
+        var accepted = new HostOperationDescriptor(Guid.NewGuid().ToString("N"), Guid.NewGuid(),
+            HostOperationKinds.RuntimeStart, 4, HostOperationState.Accepted, now, now, null, null);
+        const string code = "runtime.storage-activation-recovery-required";
+        const string message = "Package 'test.package' requires storage activation recovery. Backups were preserved; explicit recovery is required.";
+        var submissions = 0;
+        var handler = new RecordingHttpMessageHandler(request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path == "/api/host/handshake")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new HostHandshakeResponse(
+                        HostProtocol.Identity, HostProtocol.CurrentRevision, HostProtocol.MinimumSupportedRevision,
+                        HostProtocol.MaximumSupportedRevision, Guid.NewGuid(), Guid.NewGuid(),
+                        [HostProtocolFeatures.RuntimeGatewayV1, HostProtocolFeatures.RuntimeLifecycleV1,
+                            HostProtocolFeatures.DurableOperationsV1, HostProtocolFeatures.RuntimeStartupDiagnosticsV1],
+                        new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "1.0.0", "test"))),
+                };
+            }
+            if (path == "/api/host/v1/status")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new HostRuntimeStatus(HostRuntimeDesiredState.Stopped,
+                        HostRuntimeState.Stopped, 4, null, null, null, null)),
+                };
+            }
+            if (request.Method == HttpMethod.Post)
+            {
+                submissions++;
+                var intent = request.Content!.ReadFromJsonAsync<HostLifecycleRequest>().GetAwaiter().GetResult()!;
+                accepted = accepted with { MutationId = intent.MutationId };
+                var response = new HttpResponseMessage(HttpStatusCode.Accepted)
+                {
+                    Content = JsonContent.Create(new HostLifecycleSubmission(accepted)),
+                };
+                response.Headers.Location = new Uri($"/api/host/v1/operations/{accepted.OperationId}", UriKind.Relative);
+                return response;
+            }
+            Assert.Equal($"/api/host/v1/operations/{accepted.OperationId}", path);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(accepted with
+                {
+                    State = HostOperationState.Failed, FailureCode = code, Message = message,
+                }),
+            };
+        });
+        using var probe = new RuntimeHealthProbe(connectionState, hostHandler: handler);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            probe.TryEnsureSupervisedRuntimeStartedAsync(runtimeUrl, CancellationToken.None));
+
+        Assert.Contains(code, error.Message, StringComparison.Ordinal);
+        Assert.Contains(message, error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, submissions);
+    }
+
     private sealed class RecordingHttpMessageHandler(
         Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
     {

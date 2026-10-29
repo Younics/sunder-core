@@ -163,6 +163,7 @@ internal sealed class LocalExecutionRuntimeBindingResolver(
     {
         var candidates = receipts
             .Where(receipt => string.Equals(receipt.Identity.RuntimeId, requirement.RuntimeId, StringComparison.Ordinal)
+                              && OfficialRuntimeSourcePolicy.EligibleVersion(receipt.Identity.SourceId, receipt.Identity.VendorVersion)
                               && string.Equals(receipt.Identity.Rid, rid, StringComparison.Ordinal)
                               && string.Equals(receipt.Identity.ModuleAbi, requirement.ModuleAbi, StringComparison.Ordinal)
                               && PackageVersionRange.IsSatisfiedBy(receipt.Identity.VendorVersion, requirement.VersionRange))

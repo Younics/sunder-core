@@ -48,12 +48,19 @@ public sealed partial class GeneratedOutputLockRecoveryTests : IDisposable
     [InlineData("arbitrary-path")]
     [InlineData("symlink")]
     [InlineData("foreign-host")]
+    [InlineData("temp-root")]
     public void UnverifiableEvidenceFailsPromptlyWithoutChangingLockOrOutput(string damage)
     {
         var output = Path.Combine(_root, "output");
         var owner = OwnerTemplate();
         owner["pid"] = int.MaxValue;
         if (damage == "foreign-host") owner["hostname"] = "foreign.invalid";
+        if (damage == "temp-root")
+        {
+            var root = Path.Combine(Path.GetTempPath(), "sunder-generated-output", "processes");
+            Directory.CreateDirectory(root);
+            owner["processMarkerPath"] = Path.Combine(root, "marker.json");
+        }
         var lockPath = output + GeneratedOutputLock.LockSuffix;
         var markerPath = PublishOwner(lockPath, owner);
         if (damage == "missing") File.Delete(markerPath);

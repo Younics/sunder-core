@@ -482,7 +482,9 @@ public sealed class ShellStartupCoordinator
                 errors,
                 runtimePackageSnapshot is null
                     ? ShellNormalizationPolicy.SafeModePreserveLayout
-                    : ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot
+                    : ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot,
+                runtimePackageSnapshot is null ? null : ShellCompositionService.GetUnavailablePackageIds(
+                    activePackages, runtimePackageSnapshot.ActivePackages, runtimePackageSnapshot.SessionPackages)
             );
             cancellationToken.ThrowIfCancellationRequested();
             if (runtimePackageSnapshot is not null)

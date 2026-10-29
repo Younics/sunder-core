@@ -11,7 +11,6 @@ internal sealed class GeneratedOutputLock : IDisposable
     internal const string TargetLeafDiscoverySuffix = ".sunder-target-leaf-container";
 
     private const string TransitionSuffix = ".transition";
-    private const string ProcessMarkerDirectory = "sunder-generated-output/processes";
     private static readonly TimeSpan UnverifiableOwnerTimeout = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan DefaultWaitTimeout = TimeSpan.FromMinutes(5);
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -562,13 +561,12 @@ internal sealed class GeneratedOutputLock : IDisposable
     {
         try
         {
-            // Never follow a path supplied by owner.json. Legacy evidence is accepted
-            // only beneath this process's own temp root, not a removed Worker's root.
-            var markerRoot = new[] { ProcessMarkerRoot(), LegacyProcessMarkerRoot() }
-                .FirstOrDefault(root => PathsEqual(owner.ProcessMarkerPath, Path.Combine(root, owner.ProcessMarkerToken + ".json")));
-            if (markerRoot is null) return false;
+            // Never follow a path supplied by owner.json. Only the private,
+            // stable process-marker root can establish ownership.
+            var markerRoot = ProcessMarkerRoot();
+            if (!PathsEqual(owner.ProcessMarkerPath, Path.Combine(markerRoot, owner.ProcessMarkerToken + ".json"))) return false;
             EnsureMarkerAncestors(markerRoot);
-            if (PathsEqual(markerRoot, ProcessMarkerRoot())) EnsurePrivateMarkerRoot(markerRoot);
+            EnsurePrivateMarkerRoot(markerRoot);
             var rootAttributes = File.GetAttributes(markerRoot);
             if ((rootAttributes & FileAttributes.Directory) == 0 || (rootAttributes & FileAttributes.ReparsePoint) != 0) return false;
             var expectedPath = Path.Combine(markerRoot, owner.ProcessMarkerToken + ".json");
@@ -609,9 +607,6 @@ internal sealed class GeneratedOutputLock : IDisposable
             throw new IOException("Could not establish a private user profile for generated output locking.");
         return NormalizePath(Path.Combine(home, ".sunder", "generated-output", "processes"));
     }
-
-    private static string LegacyProcessMarkerRoot()
-        => NormalizePath(Path.Combine(Path.GetTempPath(), ProcessMarkerDirectory));
 
     private static void EnsureMarkerAncestors(string path)
     {

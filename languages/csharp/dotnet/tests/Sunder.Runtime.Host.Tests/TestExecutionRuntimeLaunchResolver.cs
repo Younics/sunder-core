@@ -40,7 +40,7 @@ internal sealed class TestExecutionRuntimeLaunchResolver :
         var now = DateTimeOffset.UtcNow;
         var requirement = new RuntimeExecutionRuntimeRequirement(
             SunderPackageFormat.DotNetExecutionRuntimeId,
-            SunderPackageFormat.DotNetExecutionRuntimeVersionRange,
+            ">=10.0.0 <11.0.0",
             SunderPackageFormat.DotNetWorkerModuleAbi);
         var identity = new RuntimeExecutionRuntimeIdentity(
             ConfiguredOfficialSourceId.DotNet,

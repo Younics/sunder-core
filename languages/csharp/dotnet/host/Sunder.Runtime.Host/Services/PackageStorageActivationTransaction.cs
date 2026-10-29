@@ -16,8 +16,10 @@ internal sealed class PackageStorageActivationTransaction
 
     public static async Task<PackageStorageActivationTransaction> BeginAsync(
         IReadOnlyList<ActiveLoadedPackage> packages,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        PackageStorageActivationFileSystem? fileSystem = null)
     {
+        fileSystem ??= new PackageStorageActivationFileSystem();
         var snapshots = new List<PackageSnapshot>(packages.Count);
         try
         {
@@ -34,6 +36,20 @@ internal sealed class PackageStorageActivationTransaction
                     throw new InvalidOperationException(
                         $"Package '{package.Descriptor.PackageId}' does not use Host-authoritative settings storage.");
                 }
+                if (package.FileStore is not LocalPackageFileStore files)
+                {
+                    throw new InvalidOperationException(
+                        $"Package '{package.Descriptor.PackageId}' does not use Host-authoritative file storage.");
+                }
+                var packageRoot = Path.GetDirectoryName(files.RootPath)!;
+                var workspacePath = package.Worker.WorkspaceRootPath;
+                if (!PathEquals(files.RootPath, Path.Combine(packageRoot, "files"))
+                    || !string.IsNullOrWhiteSpace(workspacePath)
+                    && !PathEquals(workspacePath, Path.Combine(packageRoot, "workspace")))
+                {
+                    throw new InvalidOperationException(
+                        $"Package '{package.Descriptor.PackageId}' storage does not use canonical workspace/files paths.");
+                }
                 AtomicFileSnapshot? secretsSnapshot = null;
                 try
                 {
@@ -47,7 +63,16 @@ internal sealed class PackageStorageActivationTransaction
                     var journalSnapshot = journal is null
                         ? null
                         : await journal.CaptureSnapshotAsync(cancellationToken).ConfigureAwait(false);
-                    var workspaceSnapshot = CaptureWorkspaceSnapshot(package);
+                    var activationJournal = await PackageStorageActivationJournal.CreateAsync(
+                        package.Descriptor.PackageId,
+                        packageRoot,
+                        !string.IsNullOrWhiteSpace(workspacePath),
+                        fileSystem,
+                        cancellationToken).ConfigureAwait(false);
+                    var workspaceSnapshot = string.IsNullOrWhiteSpace(workspacePath)
+                        ? null
+                        : new WorkspaceSnapshot(workspacePath, activationJournal.GetBackupPath("workspace"));
+                    var fileStoreSnapshot = new WorkspaceSnapshot(files.RootPath, activationJournal.GetBackupPath("files"));
                     var packageSnapshot = new PackageSnapshot(
                         package,
                         state,
@@ -57,11 +82,15 @@ internal sealed class PackageStorageActivationTransaction
                         secretsSnapshot,
                         journalSnapshot,
                         workspaceSnapshot,
-                        FileStoreSnapshot: null);
+                        fileStoreSnapshot,
+                        activationJournal);
                     snapshots.Add(packageSnapshot);
                     secretsSnapshot = null;
-                    var fileStoreSnapshot = CaptureFileStoreSnapshot(package);
-                    snapshots[^1] = packageSnapshot with { FileStoreSnapshot = fileStoreSnapshot };
+                    if (workspaceSnapshot is not null)
+                    {
+                        CaptureDirectorySnapshot(workspaceSnapshot);
+                    }
+                    CaptureDirectorySnapshot(fileStoreSnapshot);
                 }
                 finally
                 {
@@ -134,22 +163,39 @@ internal sealed class PackageStorageActivationTransaction
         }
     }
 
-    public void Complete()
+    public async Task CompleteAsync(ILogger logger)
     {
         if (_completed)
         {
             return;
         }
         _completed = true;
-        foreach (var package in _packages)
+        try
         {
-            TryDeleteWorkspaceBackup(package.WorkspaceSnapshot);
-            TryDeleteWorkspaceBackup(package.FileStoreSnapshot);
+            // Publication already committed. Never roll it back on a marker/cleanup
+            // failure, and never delete backups before their outcome is durable.
+            foreach (var package in _packages)
+            {
+                await package.ActivationJournal.RecordOutcomeAsync(PackageStorageActivationOutcome.Committed)
+                    .ConfigureAwait(false);
+            }
+            foreach (var package in _packages)
+            {
+                package.ActivationJournal.TryCleanup(logger);
+            }
         }
-        ZeroSnapshots(_packages);
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            logger.LogError(exception,
+                "Committed package storage activation outcome could not be persisted; backups were preserved and explicit recovery may be required at startup");
+        }
+        finally
+        {
+            ZeroSnapshots(_packages);
+        }
     }
 
-    public async Task RollbackAsync()
+    public async Task RollbackAsync(ILogger? logger = null)
     {
         if (_completed)
         {
@@ -235,6 +281,12 @@ internal sealed class PackageStorageActivationTransaction
         {
             throw new AggregateException("Package storage migration rollback failed.", failures);
         }
+        foreach (var package in _packages)
+        {
+            await package.ActivationJournal.RecordOutcomeAsync(PackageStorageActivationOutcome.RolledBack)
+                .ConfigureAwait(false);
+            package.ActivationJournal.TryCleanup(logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+        }
     }
 
     private static void ZeroSnapshots(IEnumerable<PackageSnapshot> packages)
@@ -251,65 +303,31 @@ internal sealed class PackageStorageActivationTransaction
     private static PackageStorageMigrationJournal? GetJournal(ActiveLoadedPackage package)
         => package.MigrationJournal ?? package.Worker.StorageMigrationJournal;
 
-    private static WorkspaceSnapshot? CaptureWorkspaceSnapshot(ActiveLoadedPackage package)
+    private static void CaptureDirectorySnapshot(WorkspaceSnapshot snapshot)
     {
-        if (string.IsNullOrWhiteSpace(package.Worker.WorkspaceRootPath))
-        {
-            return null;
-        }
-        return CaptureDirectorySnapshot(
-            package.Descriptor.PackageId,
-            package.Worker.WorkspaceRootPath,
-            "workspace");
-    }
-
-    private static WorkspaceSnapshot CaptureFileStoreSnapshot(ActiveLoadedPackage package)
-    {
-        if (package.FileStore is not LocalPackageFileStore files)
-        {
-            throw new InvalidOperationException(
-                $"Package '{package.Descriptor.PackageId}' does not use Host-authoritative file storage.");
-        }
-        return CaptureDirectorySnapshot(package.Descriptor.PackageId, files.RootPath, "file-store");
-    }
-
-    private static WorkspaceSnapshot CaptureDirectorySnapshot(
-        string packageId,
-        string directoryPath,
-        string storageName)
-    {
-        var workspacePath = Path.GetFullPath(directoryPath);
+        var workspacePath = Path.GetFullPath(snapshot.WorkspacePath);
         var workspace = new DirectoryInfo(workspacePath);
         if (workspace.LinkTarget is not null)
         {
             throw new IOException(
-                $"Package '{packageId}' {storageName} root must not be a symbolic link or reparse point.");
+                $"Package storage root '{workspacePath}' must not be a symbolic link or reparse point.");
         }
         Directory.CreateDirectory(workspacePath);
         var parent = Path.GetDirectoryName(workspacePath)
                      ?? throw new IOException("The package workspace has no parent directory.");
-        var backupPath = Path.Combine(
-            parent,
-            $".{Path.GetFileName(workspacePath)}.sunder-activation-{Guid.NewGuid():N}");
-        Directory.Move(workspacePath, backupPath);
-        try
-        {
-            CopyDirectory(backupPath, workspacePath);
-            return new WorkspaceSnapshot(workspacePath, backupPath);
-        }
-        catch
-        {
-            if (Directory.Exists(workspacePath))
-            {
-                Directory.Delete(workspacePath, recursive: true);
-            }
-            Directory.Move(backupPath, workspacePath);
-            throw;
-        }
+        PackageStorePathGuard.EnsureSafe(snapshot.BackupPath, parent);
+        DurableJsonDocument.MoveDirectory(workspacePath, snapshot.BackupPath);
+        snapshot.BackupMoved = true;
+        DurableJsonDocument.SyncDirectory(parent);
+        CopyDirectory(snapshot.BackupPath, workspacePath);
     }
 
     private static void RestoreWorkspaceSnapshot(WorkspaceSnapshot snapshot)
     {
+        if (!snapshot.BackupMoved)
+        {
+            return;
+        }
         if (!Directory.Exists(snapshot.BackupPath))
         {
             throw new DirectoryNotFoundException(
@@ -319,25 +337,8 @@ internal sealed class PackageStorageActivationTransaction
         {
             Directory.Delete(snapshot.WorkspacePath, recursive: true);
         }
-        Directory.Move(snapshot.BackupPath, snapshot.WorkspacePath);
-    }
-
-    private static void TryDeleteWorkspaceBackup(WorkspaceSnapshot? snapshot)
-    {
-        if (snapshot is null || !Directory.Exists(snapshot.BackupPath))
-        {
-            return;
-        }
-        try
-        {
-            Directory.Delete(snapshot.BackupPath, recursive: true);
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        DurableJsonDocument.MoveDirectory(snapshot.BackupPath, snapshot.WorkspacePath);
+        DurableJsonDocument.SyncDirectory(Path.GetDirectoryName(snapshot.WorkspacePath)!);
     }
 
     private static void CopyDirectory(string sourcePath, string destinationPath)
@@ -384,9 +385,17 @@ internal sealed class PackageStorageActivationTransaction
         AtomicFileSnapshot SecretsSnapshot,
         AtomicFileSnapshot? JournalSnapshot,
         WorkspaceSnapshot? WorkspaceSnapshot,
-        WorkspaceSnapshot? FileStoreSnapshot);
+        WorkspaceSnapshot? FileStoreSnapshot,
+        PackageStorageActivationJournal ActivationJournal);
 
-    private sealed record WorkspaceSnapshot(string WorkspacePath, string BackupPath);
+    private sealed record WorkspaceSnapshot(string WorkspacePath, string BackupPath)
+    {
+        internal bool BackupMoved { get; set; }
+    }
+
+    private static bool PathEquals(string left, string right)
+        => string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }
 
 internal sealed class PackageStorageRollbackException(

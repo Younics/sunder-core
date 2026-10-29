@@ -54,6 +54,8 @@ type public sealed class Sunder.Sdk.Worker.SunderWorkerContext : Sunder.Sdk.Abst
   property Sunder.Sdk.Abstractions.IPackageSettings Settings { public final virtual get; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("storage.v1")
   property Sunder.Sdk.Abstractions.IPackageStorageContext Storage { public final virtual get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("development-toolchain.v1")
+  property Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? DevelopmentToolchain { public final virtual get; }
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("logging.v1")
   property Sunder.Sdk.Logging.IPackageLogging Logging { public final virtual get; }
   property Sunder.Sdk.Rpc.ISunderRpcClient Rpc { public get; }

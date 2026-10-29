@@ -557,18 +557,21 @@ internal sealed partial class ActivePackageSession
             .ConfigureAwait(false);
     }
 
-    public void CompleteStorageMigrations()
-    {
-        var transaction = Interlocked.Exchange(ref _storageActivationTransaction, null);
-        transaction?.Complete();
-    }
-
-    public async Task RollbackStorageMigrationsAsync()
+    public async Task CompleteStorageMigrationsAsync(ILogger logger)
     {
         var transaction = Interlocked.Exchange(ref _storageActivationTransaction, null);
         if (transaction is not null)
         {
-            await transaction.RollbackAsync().ConfigureAwait(false);
+            await transaction.CompleteAsync(logger).ConfigureAwait(false);
+        }
+    }
+
+    public async Task RollbackStorageMigrationsAsync(ILogger logger)
+    {
+        var transaction = Interlocked.Exchange(ref _storageActivationTransaction, null);
+        if (transaction is not null)
+        {
+            await transaction.RollbackAsync(logger).ConfigureAwait(false);
         }
     }
 

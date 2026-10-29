@@ -30,6 +30,10 @@ public static class ShellWindowPlacementService
                 screen.WorkingArea.Width,
                 screen.WorkingArea.Height,
                 screen.Scaling);
+        // A saved window may move from a larger screen to a working area below
+        // its old minimum. The minimum must not undo the visible-screen clamp.
+        window.MinWidth = Math.Min(window.MinWidth, size.Width);
+        window.MinHeight = Math.Min(window.MinHeight, size.Height);
         window.Width = size.Width;
         window.Height = size.Height;
 
@@ -43,10 +47,8 @@ public static class ShellWindowPlacementService
                 size.Height);
         }
 
-        if (placement.IsMaximized)
-        {
-            window.WindowState = WindowState.Maximized;
-        }
+        window.WindowState = placement.IsFullScreen ? WindowState.FullScreen
+            : placement.IsMaximized ? WindowState.Maximized : WindowState.Normal;
     }
 
     public static ShellWindowPlacement? Capture(Window window, ShellWindowPlacement? previousPlacement = null)
@@ -69,9 +71,16 @@ public static class ShellWindowPlacementService
         ShellWindowPlacementSnapshot window,
         ShellWindowPlacement? previousPlacement = null)
     {
-        if (window.State == WindowState.FullScreen)
+        if (window.State is WindowState.FullScreen or WindowState.Maximized)
         {
-            return previousPlacement;
+            // Non-normal dimensions are never normal restore bounds.
+            return previousPlacement is null ? null : new ShellWindowPlacement
+            {
+                X = previousPlacement.X, Y = previousPlacement.Y,
+                Width = previousPlacement.Width, Height = previousPlacement.Height,
+                IsMaximized = window.State == WindowState.Maximized,
+                IsFullScreen = window.State == WindowState.FullScreen,
+            };
         }
 
         if (window.State == WindowState.Minimized && previousPlacement is not null)
@@ -134,17 +143,19 @@ internal readonly record struct ShellWindowPlacementSnapshot(
     double MinHeight,
     WindowState State);
 
-internal sealed class ShellWindowPlacementTracker
+internal sealed class ShellWindowPlacementTracker : IDisposable
 {
     private readonly Window _window;
     private ShellWindowPlacement? _lastWindowedPlacement;
+    private bool _awaitingNormalResize;
 
     public ShellWindowPlacementTracker(Window window, ShellWindowPlacement? initialPlacement)
     {
         _window = window;
-        _lastWindowedPlacement = initialPlacement;
-        _window.PositionChanged += (_, _) => RecordWindowedPlacement();
-        _window.Resized += (_, _) => RecordWindowedPlacement();
+        _lastWindowedPlacement = initialPlacement ?? ShellWindowPlacementService.Capture(window);
+        _window.PositionChanged += OnPositionChanged;
+        _window.Resized += OnResized;
+        _window.PropertyChanged += OnPropertyChanged;
     }
 
     public ShellWindowPlacement? Capture()
@@ -155,16 +166,49 @@ internal sealed class ShellWindowPlacementTracker
 
     public void RecordWindowedPlacement()
     {
-        if (
-            _window.WindowState == WindowState.FullScreen
-            || (_window.WindowState == WindowState.Minimized && _lastWindowedPlacement is not null)
-        )
-        {
-            return;
-        }
-
+        if (_awaitingNormalResize) return;
         _lastWindowedPlacement = ShellWindowPlacementService.Capture(
             _window,
             _lastWindowedPlacement);
+    }
+
+    internal void Reset(ShellWindowPlacement? placement)
+    {
+        _lastWindowedPlacement = placement;
+        _awaitingNormalResize = false;
+    }
+
+    private void OnPositionChanged(object? sender, PixelPointEventArgs e) => RecordWindowedPlacement();
+    private void OnResized(object? sender, WindowResizedEventArgs e)
+    {
+        _awaitingNormalResize = false;
+        RecordWindowedPlacement();
+    }
+    private void OnPropertyChanged(object? sender, AvaloniaPropertyChangedEventArgs e)
+    {
+        if (e.Property == Window.BoundsProperty && _window.WindowState == WindowState.Normal)
+        {
+            _awaitingNormalResize = false;
+            RecordWindowedPlacement();
+            return;
+        }
+        if (e.Property != Window.WindowStateProperty) return;
+        _awaitingNormalResize = _window.WindowState == WindowState.Normal;
+        if (_awaitingNormalResize && _lastWindowedPlacement is { } previous)
+        {
+            // WindowState can change before the native normal-bounds resize arrives.
+            _lastWindowedPlacement = new ShellWindowPlacement
+            {
+                X = previous.X, Y = previous.Y, Width = previous.Width, Height = previous.Height,
+            };
+        }
+        RecordWindowedPlacement();
+    }
+
+    public void Dispose()
+    {
+        _window.PositionChanged -= OnPositionChanged;
+        _window.Resized -= OnResized;
+        _window.PropertyChanged -= OnPropertyChanged;
     }
 }

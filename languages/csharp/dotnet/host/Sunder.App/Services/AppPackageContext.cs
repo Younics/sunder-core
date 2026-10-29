@@ -83,6 +83,8 @@ internal sealed class AppPackageContext : IPackageContext, IAsyncDisposable
 
     public string ContentRootPath { get; }
 
+    public SunderDevelopmentToolchain DevelopmentToolchain => Sunder.Package.Format.SunderToolchainPolicy.Development;
+
     public IPackageStorageContext Storage { get; }
 
     public IPackageSettings Settings { get; }

@@ -23,6 +23,16 @@ App-to-Runtime HTTP endpoints are versioned under `/api/v1` and reached through 
 
 The App stages the bundled Supervisor and Runtime worker under current-user application data and starts the Supervisor independently from the App UI. It uses a transient `launchctl` job on macOS, a user `systemd` transient service with a detached fallback on Linux, and an independent breakaway process on Windows. Closing App does not stop the Host. A later App invocation reconnects to the warm Host; after logout or reboot, opening Sunder starts it again. An unoccupied custom loopback URL can host the managed Runtime during development; non-loopback URLs are connect-only and require matching authenticated connection information.
 
+Quitting fences new App package loads and stops view preloading before ordered
+cleanup. Process-policy supervision and its private transport remain alive while
+shell state is saved, views retire, development owners release, ordinary services
+dispose, logs flush, and the dispatcher reaches the final exit callback. Only that
+callback requests policy-session shutdown and stops heartbeats, immediately before
+desktop shutdown. This process owner is not disposed by the service container.
+Cleanup stages record bounded phase/duration diagnostics. An actual policy denial
+or loss of proof still enforces the original fixed five-second watchdog deadline;
+neither normal cleanup nor repeated Quit requests renew a denied session's grace.
+
 ## Local State V1
 
 Persistent local state uses explicit, destructive V1 boundaries under the current user's local application data directory:
@@ -34,6 +44,44 @@ Persistent local state uses explicit, destructive V1 boundaries under the curren
 Each persistent V1 root contains `schema.json` with product identity `Sunder`, schema version `1`, and its Runtime or App local-state API identity. A fresh empty root is initialized with an atomic create. A non-empty V1 root with missing, malformed, or incompatible metadata is rejected; no legacy root is inferred, scanned, or migrated.
 
 Package and Registry secrets use Runtime-V1-specific DPAPI entropy and macOS Keychain/Linux Secret Service namespaces. Existing unversioned filesystem data and old credential items remain untouched.
+
+### Workspace restoration
+
+`shell-state.json` remembers the selected view (or intentionally closed state) in
+all five regions, hotbar placement/order, top side widths in device-independent
+pixels, top/bottom row ratio, and bottom-column ratio. The middle width is the
+remaining space, not an independently persisted constraint. Main-window normal
+bounds and maximized/fullscreen mode are recorded separately. A changed or removed
+monitor can clamp the restored window to a visible working area.
+
+Side widths have no fixed upper cap: the available workspace and adjacent panes
+limit dragging. The middle minimum is 320 DIPs and each visible top side minimum is
+180 DIPs. Automatic window compression consumes preferred space above those minima
+first; if even the minima cannot fit, they scale together. Window resizing never
+overwrites preferred widths. The row ratio is bounded to 10–90%, and the bottom
+split to 1–99%, consistently for input, rendering and loading.
+
+Startup and committed package changes reconcile saved views against the completed
+App registration catalog. Removed views lose their placement, order, ownership,
+hidden-hotbar entries and selections. Their side/bottom regions close, retaining
+preferred dimensions. If the selected middle view was removed, the first eligible
+remaining middle view in saved bar order opens; otherwise the default welcome panel
+is shown. An intentionally empty initialized middle region is not auto-selected.
+
+Core Shell mode and explicitly failed App packages do not establish view removal:
+their selections and preferences are preserved with availability placeholders.
+Runtime identifies those packages but its incomplete App view list is never used
+as the view catalog. Legacy version-2 records without ownership are pruned after a
+completed catalog without unavailable packages; no package is guessed from a view
+id. Maker owner release uses the reconciled catalog, so another owner or an
+installed package may continue to supply the same view.
+
+All shell/window writes use one ordered snapshot writer per App session. Debounced
+snapshots are captured on the UI thread; workers neither read nor mutate live UI
+state. Close-to-hide captures before macOS exits fullscreen, and actual shutdown
+flushes the final arrangement before package cleanup. Atomic file replacement
+protects against incomplete writes; abrupt process termination is not equivalent
+to a completed graceful close.
 
 The V1 boundary does not assume a shared filesystem. Runtime package UI is exposed as bounded, generation-scoped snapshot descriptors and authenticated ZIP streams. Runtime aliases share persistent deterministic archive objects keyed by a source fingerprint and format revision. The App verifies each immutable SHA-256 revision, atomically fills a validated content-addressed cache, and copies it into a generation-owned tree; cache files are never loaded directly. Old generation directories are deleted only after views, services, assembly probes, and load contexts detach. Package and Stack mutations upload bytes to Runtime-owned temporary storage and use opaque handles. Runtime install, dev, staging, workspace, and transfer paths are never returned in API JSON.
 

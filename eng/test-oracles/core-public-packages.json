@@ -61,6 +61,7 @@
         "buildTransitive/Sunder.Package.Build.Authoring.References.targets",
         "buildTransitive/Sunder.Package.Build.Authoring.RoleInputs.targets",
         "buildTransitive/Sunder.Package.Build.Authoring.CrossTargeting.targets",
+        "buildTransitive/Sunder.Toolchains.props",
         "analyzers/dotnet/cs/Sunder.Package.Build.Editor.dll",
         "tasks/net10.0/Sunder.Package.Build.dll",
         "tasks/net10.0/Sunder.Package.Format.dll",
@@ -82,6 +83,7 @@
         "lib/net10.0/Sunder.Package.Templates.dll",
         "content/sunder-package/.template.config/template.json",
         "content/sunder-package/Sunder.Package.Template/Assets/icon.png",
+        "content/sunder-package/Sunder.Package.Template/global.json",
         "content/sunder-package/Sunder.Package.Template/PackageMetadata.dependency.cs",
         "content/sunder-package/Sunder.Package.Template/PackageMetadata.standalone.cs",
         "content/sunder-package/Sunder.Package.Template/README.md",
@@ -321,7 +323,10 @@
         "dist/service-bindings.js.map",
         "dist/service-source.d.ts",
         "dist/service-source.js",
-        "dist/service-source.js.map"
+        "dist/service-source.js.map",
+        "dist/toolchains.generated.d.ts",
+        "dist/toolchains.generated.js",
+        "dist/toolchains.generated.js.map"
       ]
     },
     {
@@ -333,6 +338,7 @@
         "dist/cli.d.ts",
         "dist/cli.js",
         "dist/cli.js.map",
+        "template-react-node/.node-version",
         "template-react-node/app/index.html",
         "template-react-node/app/src/App.jsx",
         "template-react-node/app/src/App.tsx",
@@ -351,6 +357,7 @@
         "template-react-node/test/package.test.cjs",
         "template-react-node/tsconfig.browser.json",
         "template-react-node/tsconfig.worker.json",
+        "template/.node-version",
         "template/gitignore",
         "template/package.json",
         "template/README.md",

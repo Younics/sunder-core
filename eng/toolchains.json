@@ -1,0 +1,12 @@
+{
+  "dotnetSdk": "10.0.403",
+  "dotnetRuntime": "10.0.14",
+  "dotnetRuntimeMajor": 10,
+  "supportedDotnetRuntimeMajors": [10],
+  "node": "24.22.1",
+  "npm": "11.19.1",
+  "nodeRuntimeMajor": 24,
+  "supportedNodeRuntimeMajors": [24],
+  "nodeRuntimeMinimumVersions": { "24": "24.18.1" },
+  "nodeRuntimeEndOfLife": { "24": "2028-04-30" }
+}

@@ -80,7 +80,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
         var baseline = GeneratedOutputPathSafety.PathExists(baselinePath) ? SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath) : null;
         if (baseline is null) GenerateSunderRpcBindingsTask.VerifyNoLostPublicBaseline(project, Path.Combine(project, "obj", GenerateSunderRpcBindingsTask.GeneratedDirectoryName));
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, AllowDevelopmentRegistryOrigin);
-        if (!Rids.Contains(RuntimeIdentifier) || TargetFramework != "net10.0" || string.IsNullOrWhiteSpace(ProjectIdentity)
+        if (!Rids.Contains(RuntimeIdentifier) || !DotNetWorkerProfile.IsSupported(TargetFramework) || string.IsNullOrWhiteSpace(ProjectIdentity)
             || string.IsNullOrWhiteSpace(AssemblyName) || string.IsNullOrWhiteSpace(Configuration)) throw Invalid("An exact project/configuration/framework/RID is required.");
         var sourceTree = Tree(sourceRoot, source: true, _cancellation.Token);
         var external = new SortedDictionary<string, SunderPrebuiltFile>(StringComparer.Ordinal);

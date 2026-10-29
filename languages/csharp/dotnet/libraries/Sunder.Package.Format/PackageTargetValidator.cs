@@ -301,25 +301,22 @@ internal static class PackageTargetValidator
                 $"{prefix} Worker target '{DisplayKey(target)}' executionRuntime.versionRange must be a nonempty stable SemVer range bounded to one major line.");
         }
 
-        var isDotNetProfile = string.Equals(
-                                  target.TargetFramework,
-                                  SunderPackageFormat.DotNetWorkerTargetFramework,
-                                  StringComparison.Ordinal)
+        var isDotNetProfile = DotNetWorkerProfile.TryGetRuntimeRange(target.TargetFramework, out var runtimeRange)
                               || string.Equals(requirement.Id, SunderPackageFormat.DotNetExecutionRuntimeId, StringComparison.Ordinal)
                               || string.Equals(requirement.ModuleAbi, SunderPackageFormat.DotNetWorkerModuleAbi, StringComparison.Ordinal);
         if (!isDotNetProfile) return;
-        if (!string.Equals(target.TargetFramework, SunderPackageFormat.DotNetWorkerTargetFramework, StringComparison.Ordinal))
+        if (runtimeRange.Length == 0)
         {
             errors.Add(
-                $"{prefix} .NET Worker target '{DisplayKey(target)}' targetFramework must be '{SunderPackageFormat.DotNetWorkerTargetFramework}'.");
+                $"{prefix} .NET Worker target '{DisplayKey(target)}' targetFramework must be a recognized net<major>.0 Worker profile.");
         }
         if (!string.Equals(requirement.Id, SunderPackageFormat.DotNetExecutionRuntimeId, StringComparison.Ordinal)
-            || !string.Equals(requirement.VersionRange, SunderPackageFormat.DotNetExecutionRuntimeVersionRange, StringComparison.Ordinal)
+            || !string.Equals(requirement.VersionRange, runtimeRange, StringComparison.Ordinal)
             || !string.Equals(requirement.ModuleAbi, SunderPackageFormat.DotNetWorkerModuleAbi, StringComparison.Ordinal))
         {
             errors.Add(
                 $"{prefix} .NET Worker target '{DisplayKey(target)}' must require "
-                + $"'{SunderPackageFormat.DotNetExecutionRuntimeId} {SunderPackageFormat.DotNetExecutionRuntimeVersionRange} {SunderPackageFormat.DotNetWorkerModuleAbi}'.");
+                + $"'{SunderPackageFormat.DotNetExecutionRuntimeId} {runtimeRange} {SunderPackageFormat.DotNetWorkerModuleAbi}'.");
         }
     }
 
@@ -409,6 +406,15 @@ internal static class PackageTargetValidator
                 $"{lower.Value.Version.Major}.{lower.Value.Version.Minor}.{BigInteger.Parse(lower.Value.Version.Patch, System.Globalization.CultureInfo.InvariantCulture) + BigInteger.One}")
             : lower.Value.Version;
         return parsed.All(constraint => constraint.IsSatisfiedBy(candidate));
+    }
+
+    internal static int RuntimeMajor(string range)
+    {
+        if (!IsBoundedStableMajorRange(range)) return -1;
+        var lower = range.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Select(part => RangeConstraint.TryParse(part, out var constraint) ? constraint : default)
+            .First(value => value.Operator is RangeOperator.Exact or RangeOperator.Equal or RangeOperator.GreaterThan or RangeOperator.GreaterThanOrEqual);
+        return int.TryParse(lower.Version.Major, out var major) ? major : -1;
     }
 
     private static void RequireRuntimeCapability(

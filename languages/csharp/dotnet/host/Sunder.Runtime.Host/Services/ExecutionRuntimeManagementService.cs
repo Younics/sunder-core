@@ -213,7 +213,9 @@ internal sealed class ExecutionRuntimeManagementService(
                 {
                     var support = receipt?.Support ?? new RuntimeExecutionRuntimeSupportStatus(
                         RuntimeExecutionRuntimeSupportState.Unknown,
-                        identity.SourceId == ConfiguredOfficialSourceId.DotNet ? "10.0 LTS" : "24 LTS",
+                        identity.SourceId == ConfiguredOfficialSourceId.DotNet
+                            ? $"{OfficialRuntimeSourcePolicy.Major(identity.VendorVersion)}.0 {(OfficialRuntimeSourcePolicy.Major(identity.VendorVersion) % 2 == 0 ? "LTS" : "STS")}"
+                            : $"{OfficialRuntimeSourcePolicy.Major(identity.VendorVersion)} LTS",
                         clock.GetUtcNow(), null, "Support information was not refreshed during offline recovery.");
                     var cachedArtifact = new RuntimeExecutionRuntimeVendorArtifact(identity, expected.Provenance.Distribution, support);
                     try

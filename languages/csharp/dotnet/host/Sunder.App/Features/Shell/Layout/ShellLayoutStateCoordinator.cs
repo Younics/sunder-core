@@ -23,18 +23,6 @@ internal sealed class ShellLayoutStateCoordinator : IDisposable
         _persistenceEnabled = persistenceEnabled;
     }
 
-    public double AdjustLeftPanelWidth(double currentWidth, double delta, double maximumWidth)
-        => ShellPanelSizing.ClampPanelWidth(currentWidth + delta, maximumWidth);
-
-    public double AdjustRightPanelWidth(double currentWidth, double delta, double maximumWidth)
-        => ShellPanelSizing.ClampPanelWidth(currentWidth + delta, maximumWidth);
-
-    public double AdjustTopRowHeightRatio(double currentRatio, double deltaRatio)
-        => ShellPanelSizing.ClampTopRowRatio(currentRatio + deltaRatio);
-
-    public double AdjustBottomSplitRatio(double currentRatio, double deltaRatio)
-        => ShellPanelSizing.ClampBottomSplitRatio(currentRatio + deltaRatio);
-
     public void PersistShellLayout(
         double leftPanelWidth,
         double rightPanelWidth,
@@ -65,6 +53,9 @@ internal sealed class ShellLayoutStateCoordinator : IDisposable
 
     public void EnablePersistence()
         => _persistenceEnabled = true;
+
+    public Task FlushAsync()
+        => _persistenceEnabled ? _shellStatePersistenceQueue.FlushAsync() : Task.CompletedTask;
 
     public void Dispose()
     {

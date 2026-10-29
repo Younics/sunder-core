@@ -2,15 +2,18 @@ using System.Text.Json;
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Themes;
+using Sunder.App.Views;
 
 namespace Sunder.App.Services;
 
-public sealed class ShellStateService
+public sealed class ShellStateService : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly string _stateFilePath;
     private readonly object _syncRoot = new();
+    private readonly object _admissionGate = new();
+    private readonly ShellStateWriter _writer = new();
 
     public ShellStateService(string? stateFilePath = null)
     {
@@ -29,8 +32,9 @@ public sealed class ShellStateService
             try
             {
                 var state = JsonSerializer.Deserialize<ShellState>(File.ReadAllText(_stateFilePath), JsonOptions) ?? new ShellState();
-                state.ViewPlacements ??= [];
-                state.ViewOrder ??= [];
+                state.ViewPlacements = new Dictionary<string, RailPlacement>(state.ViewPlacements ?? [], StringComparer.OrdinalIgnoreCase);
+                state.ViewPackageIds = new Dictionary<string, string>(state.ViewPackageIds ?? [], StringComparer.OrdinalIgnoreCase);
+                state.ViewOrder = new Dictionary<string, int>(state.ViewOrder ?? [], StringComparer.OrdinalIgnoreCase);
                 state.HiddenHotbarViewIds = new HashSet<string>(state.HiddenHotbarViewIds ?? [], StringComparer.OrdinalIgnoreCase);
                 state.ThemeId = string.IsNullOrWhiteSpace(state.ThemeId) ? SunderThemeDefinition.GraphiteDark.Id : state.ThemeId;
 
@@ -39,10 +43,10 @@ public sealed class ShellStateService
                     return new ShellState { ThemeId = state.ThemeId, PreferredRuntimeUrl = state.PreferredRuntimeUrl };
                 }
 
-                state.LeftPanelWidth = ClampPanelWidth(state.LeftPanelWidth, ShellState.DefaultLeftPanelWidth);
-                state.RightPanelWidth = ClampPanelWidth(state.RightPanelWidth, ShellState.DefaultRightPanelWidth);
-                state.TopRowHeightRatio = ClampRatio(state.TopRowHeightRatio, ShellState.DefaultTopRowHeightRatio);
-                state.BottomSplitRatio = ClampRatio(state.BottomSplitRatio, ShellState.DefaultBottomSplitRatio);
+                state.LeftPanelWidth = ShellLayoutCalculator.NormalizePanelWidth(state.LeftPanelWidth, ShellState.DefaultLeftPanelWidth);
+                state.RightPanelWidth = ShellLayoutCalculator.NormalizePanelWidth(state.RightPanelWidth, ShellState.DefaultRightPanelWidth);
+                state.TopRowHeightRatio = ShellLayoutCalculator.ClampTopRowRatio(state.TopRowHeightRatio);
+                state.BottomSplitRatio = ShellLayoutCalculator.ClampBottomSplitRatio(state.BottomSplitRatio);
                 state.SettingsSidebarWidth = ClampSecondarySidebarWidth(state.SettingsSidebarWidth, ShellState.DefaultSettingsSidebarWidth);
                 state.PackagesSidebarWidth = ClampSecondarySidebarWidth(state.PackagesSidebarWidth, ShellState.DefaultPackagesSidebarWidth);
                 state.StacksSidebarWidth = ClampSecondarySidebarWidth(state.StacksSidebarWidth, ShellState.DefaultStacksSidebarWidth);
@@ -59,18 +63,23 @@ public sealed class ShellStateService
     }
 
     public void Save(ShellState state)
-        => SaveWithRevision(state);
+    {
+        var snapshot = ShellStateSnapshotFactory.Clone(state);
+        EnqueuePublicSnapshot(snapshot).GetAwaiter().GetResult();
+        // Rejected stale snapshots retain their old revision; rejection must not
+        // grant that same stale content permission to overwrite on its next save.
+        state.Revision = snapshot.Revision;
+    }
 
-    internal long SaveWithRevision(ShellState state)
+    private long WriteSnapshot(ShellState state, bool allowStale = false)
     {
         lock (_syncRoot)
         {
             var persisted = Load();
-            if (state.Revision < persisted.Revision)
-            {
-                return persisted.Revision;
-            }
-
+            // Public whole-state saves from independent stale readers still fail
+            // closed. The session queue/flush is explicitly ordered and may carry
+            // an old disk revision without carrying old UI preferences.
+            if (!allowStale && state.Revision < persisted.Revision) return persisted.Revision;
             state.Revision = Math.Max(state.Revision, persisted.Revision) + 1;
             WriteCore(state);
             return state.Revision;
@@ -79,26 +88,52 @@ public sealed class ShellStateService
 
     public void Update(ShellState liveState, Action<ShellState> update)
     {
-        lock (_syncRoot)
+        lock (_admissionGate)
         {
+            try { _writer.DrainAsync().GetAwaiter().GetResult(); }
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex)) { }
             var persisted = Load();
             update(persisted);
-            persisted.Revision = Math.Max(persisted.Revision, liveState.Revision) + 1;
-            WriteCore(persisted);
+            var snapshot = ShellStateSnapshotFactory.Clone(persisted);
+            var revision = _writer.Enqueue(() => WriteSnapshot(snapshot, allowStale: true)).GetAwaiter().GetResult();
             update(liveState);
-            liveState.Revision = persisted.Revision;
+            liveState.Revision = revision;
         }
     }
 
-    public async Task SaveAsync(ShellState state, CancellationToken cancellationToken = default)
-        => await SaveWithRevisionAsync(state, cancellationToken);
+    public Task SaveAsync(ShellState state, CancellationToken cancellationToken = default)
+        => EnqueuePublicSnapshot(ShellStateSnapshotFactory.Clone(state), cancellationToken);
 
-    internal Task<long> SaveWithRevisionAsync(ShellState state, CancellationToken cancellationToken = default)
+    private Task<long> EnqueuePublicSnapshot(ShellState snapshot, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var snapshot = ShellStateSnapshotFactory.Clone(state);
-        return Task.Run(() => SaveWithRevision(snapshot), cancellationToken);
+        lock (_admissionGate)
+        {
+            return _writer.Enqueue(() => WriteSnapshot(snapshot), cancellationToken: cancellationToken, supersedePending: false);
+        }
     }
+
+    internal Task QueueSave(ShellState liveState, Func<CancellationToken, Task> wait)
+    {
+        lock (_admissionGate)
+        {
+            var snapshot = ShellStateSnapshotFactory.Clone(liveState);
+            return _writer.Enqueue(() => WriteSnapshot(snapshot, allowStale: true), wait);
+        }
+    }
+
+    public Task FlushAsync(ShellState liveState)
+    {
+        lock (_admissionGate)
+        {
+            var snapshot = ShellStateSnapshotFactory.Clone(liveState);
+            return _writer.Enqueue(() => WriteSnapshot(snapshot, allowStale: true));
+        }
+    }
+
+    internal void Flush(ShellState liveState) => FlushAsync(liveState).GetAwaiter().GetResult();
+
+    public void Dispose() => _writer.Dispose();
 
     private void WriteCore(ShellState state)
     {
@@ -133,26 +168,6 @@ public sealed class ShellStateService
         {
             AppSessionLog.WriteError("Failed to delete a temporary shell state file.", ex);
         }
-    }
-
-    private static double ClampRatio(double value, double fallback)
-    {
-        if (double.IsNaN(value) || double.IsInfinity(value))
-        {
-            return fallback;
-        }
-
-        return Math.Clamp(value, 0.01, 0.99);
-    }
-
-    private static double ClampPanelWidth(double value, double fallback)
-    {
-        if (double.IsNaN(value) || double.IsInfinity(value) || value <= 0)
-        {
-            return fallback;
-        }
-
-        return Math.Clamp(value, 180, 1200);
     }
 
     private static double ClampSecondarySidebarWidth(double value, double fallback)

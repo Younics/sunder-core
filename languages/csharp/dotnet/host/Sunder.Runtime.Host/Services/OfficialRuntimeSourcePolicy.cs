@@ -8,7 +8,7 @@ namespace Sunder.Runtime.Host.Services;
 // This is Host configuration, not an extensible URL/trust input supplied by a caller.
 internal static class OfficialRuntimeSourcePolicy
 {
-    internal const string DotNetMetadata = "https://builds.dotnet.microsoft.com/dotnet/release-metadata/10.0/releases.json";
+    internal static string DotNetMetadata => MetadataUri(ConfiguredOfficialSourceId.DotNet).AbsoluteUri;
     internal const string NodeMetadata = "https://nodejs.org/dist/index.json";
     internal const int MaxMetadataBytes = 8 * 1024 * 1024;
     internal const int MaxChecksumBytes = 256 * 1024;
@@ -26,10 +26,10 @@ internal static class OfficialRuntimeSourcePolicy
         _ => throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Unsupported),
     };
 
-    internal static string Profile(ConfiguredOfficialSourceId source) => source switch
+    internal static string Profile(ConfiguredOfficialSourceId source, string? version = null) => source switch
     {
-        ConfiguredOfficialSourceId.DotNet => "dotnet-runtime-10.v1",
-        ConfiguredOfficialSourceId.Node => "node-runtime-24.v1",
+        ConfiguredOfficialSourceId.DotNet => $"dotnet-runtime-{(version is null ? SunderToolchainPolicy.DotNetRuntimeMajor : Major(version))}.v1",
+        ConfiguredOfficialSourceId.Node => $"node-runtime-{(version is null ? SunderToolchainPolicy.NodeRuntimeMajor : Major(version))}.v1",
         _ => throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.SourceNotAllowed),
     };
 
@@ -40,17 +40,42 @@ internal static class OfficialRuntimeSourcePolicy
         _ = Source(requirement.RuntimeId, requirement.ModuleAbi);
     }
 
-    internal static bool EligibleVersion(ConfiguredOfficialSourceId source, string? text)
+    internal static int RequirementMajor(RuntimeExecutionRuntimeRequirement requirement)
+    {
+        ValidateRequirement(requirement);
+        return PackageTargetValidator.RuntimeMajor(requirement.VersionRange);
+    }
+
+    internal static bool EligibleVersion(ConfiguredOfficialSourceId source, string? text, IReadOnlyList<int>? supportedMajors = null)
+        => ValidStoredVersion(source, text) && (supportedMajors ?? SupportedMajors(source)).Contains(Major(text!));
+
+    internal static IReadOnlyList<int> SupportedMajors(ConfiguredOfficialSourceId source) => source switch
+    {
+        ConfiguredOfficialSourceId.DotNet => SunderToolchainPolicy.DotNetRuntimeMajors,
+        ConfiguredOfficialSourceId.Node => SunderToolchainPolicy.NodeRuntimeMajors,
+        _ => throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.SourceNotAllowed),
+    };
+
+    // Receipt validity is independent of the current supported range. These original
+    // floors remain part of the V1 materialization profiles, including after retirement.
+    private static bool ValidStoredVersion(ConfiguredOfficialSourceId source, string? text)
         => text is { Length: <= 32 } && SemanticVersion.TryParse(text, out var version)
             && version.Prerelease is null && version.BuildMetadata is null
-            && (source == ConfiguredOfficialSourceId.DotNet && version.Major == "10"
-                || source == ConfiguredOfficialSourceId.Node && version.Major == "24"
-                    && version.ComparePrecedenceTo(SemanticVersion.Parse("24.18.1")) >= 0);
+            && int.TryParse(version.Major, out var major) && major <= 99
+            && (source == ConfiguredOfficialSourceId.DotNet && major >= 10 && version.Minor == "0"
+                || source == ConfiguredOfficialSourceId.Node && major >= 24
+                    && (major != 24 || version.ComparePrecedenceTo(SemanticVersion.Parse("24.18.1")) >= 0));
+
+    internal static int Major(string version) => int.Parse(SemanticVersion.Parse(version).Major, System.Globalization.CultureInfo.InvariantCulture);
+
+    internal static bool ValidSupportLine(RuntimeExecutionRuntimeIdentity identity, string line)
+        => identity.SourceId == ConfiguredOfficialSourceId.Node ? line == $"{Major(identity.VendorVersion)} LTS"
+            : line == $"{Major(identity.VendorVersion)}.0 LTS" || line == $"{Major(identity.VendorVersion)}.0 STS";
 
     internal static void ValidateIdentity(RuntimeExecutionRuntimeIdentity identity)
     {
         if (identity is null || Source(identity.RuntimeId, identity.ModuleAbi) != identity.SourceId
-            || !EligibleVersion(identity.SourceId, identity.VendorVersion)
+            || !ValidStoredVersion(identity.SourceId, identity.VendorVersion)
             || !SunderPackageFormat.IsRuntimeIdentifier(identity.Rid)
             || identity.VendorChecksumAlgorithm != (identity.SourceId == ConfiguredOfficialSourceId.DotNet
                 ? RuntimeExecutionRuntimeChecksumAlgorithm.Sha512 : RuntimeExecutionRuntimeChecksumAlgorithm.Sha256)
@@ -71,23 +96,24 @@ internal static class OfficialRuntimeSourcePolicy
 
     internal static string ArchiveName(ConfiguredOfficialSourceId source, string version, string rid)
     {
-        if (!EligibleVersion(source, version) || !SunderPackageFormat.IsRuntimeIdentifier(rid))
+        if (!ValidStoredVersion(source, version) || !SunderPackageFormat.IsRuntimeIdentifier(rid))
             throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Unsupported);
         var extension = rid.StartsWith("win-", StringComparison.Ordinal) ? ".zip" : ".tar.gz";
         return source == ConfiguredOfficialSourceId.DotNet
             ? $"dotnet-runtime-{version}-{rid}{extension}" : $"node-v{version}-{NodePlatform(rid)}{extension}";
     }
 
-    internal static Uri MetadataUri(ConfiguredOfficialSourceId source) => new(source switch
+    internal static Uri MetadataUri(ConfiguredOfficialSourceId source, int? major = null) => new(source switch
     {
-        ConfiguredOfficialSourceId.DotNet => DotNetMetadata,
+        ConfiguredOfficialSourceId.DotNet when (major ?? SunderToolchainPolicy.DotNetRuntimeMajor) is >= 10 and <= 99
+            => $"https://builds.dotnet.microsoft.com/dotnet/release-metadata/{major ?? SunderToolchainPolicy.DotNetRuntimeMajor}.0/releases.json",
         ConfiguredOfficialSourceId.Node => NodeMetadata,
         _ => throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.SourceNotAllowed),
     });
 
     internal static Uri ChecksumUri(string version)
     {
-        if (!EligibleVersion(ConfiguredOfficialSourceId.Node, version))
+        if (!ValidStoredVersion(ConfiguredOfficialSourceId.Node, version))
             throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Unsupported);
         return new($"https://nodejs.org/dist/v{version}/SHASUMS256.txt");
     }
@@ -102,7 +128,8 @@ internal static class OfficialRuntimeSourcePolicy
             throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.SourceNotAllowed);
         bool allowed;
         if (version is null)
-            allowed = uri == MetadataUri(source);
+            allowed = uri == MetadataUri(source) || source == ConfiguredOfficialSourceId.DotNet
+                && Enumerable.Range(10, 90).Any(major => uri == MetadataUri(source, major));
         else if (checksum)
             allowed = source == ConfiguredOfficialSourceId.Node && uri == ChecksumUri(version);
         else
@@ -135,16 +162,17 @@ internal static class OfficialRuntimeSourcePolicy
         ValidateIdentity(artifact.Identity);
         ValidateDistribution(artifact.Identity, artifact.Distribution);
         if (artifact.Support is null || !Enum.IsDefined(artifact.Support.State) || artifact.Support.ObservedAtUtc == default
-            || artifact.Support.SupportLine != (artifact.Identity.SourceId == ConfiguredOfficialSourceId.DotNet ? "10.0 LTS" : "24 LTS"))
+            || !ValidSupportLine(artifact.Identity, artifact.Support.SupportLine))
             throw new InvalidDataException("Invalid vendor support observation.");
     }
 
     private static void ValidateDistribution(RuntimeExecutionRuntimeIdentity identity, RuntimeExecutionRuntimeDistribution distribution)
     {
         if (distribution is null) throw new InvalidDataException("Missing official distribution evidence.");
-        ValidateUri(new(distribution.MetadataUrl), identity.SourceId);
+        if (distribution.MetadataUrl != MetadataUri(identity.SourceId, Major(identity.VendorVersion)).AbsoluteUri)
+            throw new InvalidDataException("Runtime metadata does not match its major line.");
         ValidateUri(new(distribution.DownloadUrl), identity.SourceId, identity.VendorVersion, identity.Rid);
-        if (!IsDigest(distribution.MetadataSha256, 64) || distribution.MaterializationProfile != Profile(identity.SourceId)
+        if (!IsDigest(distribution.MetadataSha256, 64) || distribution.MaterializationProfile != Profile(identity.SourceId, identity.VendorVersion)
             || distribution.DownloadSize is <= 0 or > MaxArchiveBytes
             || distribution.ArchiveFormat != (identity.Rid.StartsWith("win-", StringComparison.Ordinal)
                 ? RuntimeExecutionRuntimeArchiveFormat.Zip : RuntimeExecutionRuntimeArchiveFormat.TarGzip))

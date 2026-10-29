@@ -61,5 +61,6 @@
       <_WindowDelegateProbeNative Include="$(TargetDir)runtimes/osx/native/*.dylib" />
     </ItemGroup>
     <Copy SourceFiles="@(_WindowDelegateProbeNative)" DestinationFolder="$(TargetDir)window-delegate-probe" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_WindowDelegateProbeNative)" DestinationFolder="$(TargetDir)policy-heartbeat-probe" SkipUnchangedFiles="true" />
   </Target>
 </Project>

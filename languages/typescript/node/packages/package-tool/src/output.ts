@@ -13,7 +13,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir, hostname, tmpdir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 
@@ -25,7 +25,6 @@ const LOCK_SUFFIX = ".sunder-output.lock";
 const LOCK_OWNER_FILE = "owner.json";
 const LOCK_TRANSITION_SUFFIX = ".transition";
 const TARGET_LEAF_DISCOVERY_SUFFIX = ".sunder-target-leaf-container";
-const PROCESS_MARKER_DIRECTORY = "sunder-generated-output/processes";
 const DEFAULT_LOCK_WAIT_MILLISECONDS = 5 * 60_000;
 const UNVERIFIABLE_OWNER_WAIT_MILLISECONDS = 1_000;
 const TRANSACTION_SUFFIX = ".sunder-output-transaction.json";
@@ -643,13 +642,12 @@ async function readCurrentHostIdentity(): Promise<Pick<ProcessMarker, "hostname"
 
 async function hasValidLocalProcessMarker(owner: LockOwner): Promise<boolean> {
   try {
-    // Do not follow a path supplied by owner.json. Only our computed stable root
-    // and this process's own legacy temp root are eligible ownership authorities.
-    const markerRoot = [processMarkerRoot(), legacyProcessMarkerRoot()].find((root) =>
-      pathOrder(normalizeMarkerPath(owner.processMarkerPath), resolve(root, `${owner.processMarkerToken}.json`)) === 0);
-    if (markerRoot === undefined) return false;
+    // Do not follow a path supplied by owner.json. Only the private, stable
+    // process-marker root can establish ownership.
+    const markerRoot = processMarkerRoot();
+    if (pathOrder(normalizeMarkerPath(owner.processMarkerPath), resolve(markerRoot, `${owner.processMarkerToken}.json`)) !== 0) return false;
     await ensureMarkerAncestors(markerRoot);
-    if (pathOrder(markerRoot, processMarkerRoot()) === 0) await ensurePrivateMarkerRoot(markerRoot);
+    await ensurePrivateMarkerRoot(markerRoot);
     const rootEntry = await tryLstat(markerRoot);
     if (rootEntry === undefined || !rootEntry.isDirectory() || rootEntry.isSymbolicLink()) return false;
     const expectedMarkerPath = resolve(markerRoot, `${owner.processMarkerToken}.json`);
@@ -700,10 +698,6 @@ function processMarkerRoot(): string {
   const home = homedir();
   if (!isAbsolute(home)) throw new Error("Could not establish a private user profile for generated output locking.");
   return normalizeMarkerPath(resolve(home, ".sunder", "generated-output", "processes"));
-}
-
-function legacyProcessMarkerRoot(): string {
-  return normalizeMarkerPath(resolve(tmpdir(), ...PROCESS_MARKER_DIRECTORY.split("/")));
 }
 
 function normalizeMarkerPath(path: string): string {

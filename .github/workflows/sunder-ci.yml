@@ -12,9 +12,9 @@ on:
 permissions:
   contents: read
 env:
-  DOTNET_VERSION: "10.0.100"
-  NODE_VERSION: "24.18.1"
-  NPM_VERSION: "11.19.0"
+  DOTNET_VERSION: "10.0.403"
+  NODE_VERSION: "24.22.1"
+  NPM_VERSION: "11.19.1"
   SUNDER_REQUIRE_APP_WEB_BRIDGE_VM: "1"
 
 jobs:
@@ -47,6 +47,7 @@ jobs:
           node scripts/compatibility/check-supported-releases.mjs --base-ref "$base"
       - name: Verify toolchain and restore Node dependencies
         run: |
+          node scripts/toolchains.mjs
           npm install --global "npm@$NPM_VERSION" --registry=https://registry.npmjs.org
           node scripts/release/check-sdk-version.mjs
           npm ci --prefix languages/typescript/node

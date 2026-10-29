@@ -26,7 +26,7 @@ using static Sunder.App.Tests.TestSupport.TestPaths;
 namespace Sunder.App.Tests;
 
 [Collection(HeadlessAppCollection.Name)]
-public sealed class MainWindowViewModelShellViewTests
+public sealed partial class MainWindowViewModelShellViewTests
 {
     [Fact]
     public async Task InitialHostedViewNavigation_CompletesBeforeRevealAndShellPersistence()
@@ -781,6 +781,36 @@ public sealed class MainWindowViewModelShellViewTests
         await preloadCompleted.Task.WaitAsync(TimeSpan.FromSeconds(2));
         Assert.Equal(3, preloadWaitCount);
         Assert.False(firstPreloadCancellation.IsCancellationRequested);
+    }
+
+    [Fact]
+    public async Task QuitStopsPreloadingWithoutDisposingPresentationOrAllowingAnotherPass()
+    {
+        var host = CreateRegisteredPackageViewHostService(("agent", "agent.workspaces"));
+        using var harness = CreateHarness(CreateTempDirectory(), new ThrowingRuntimeApiClientFactory(), host, host);
+        var started = new TaskCompletionSource<CancellationToken>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var canceled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        harness.ViewModel.StartPackageViewPreloading(async (_, token) =>
+        {
+            started.TrySetResult(token);
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+            finally { canceled.TrySetResult(); }
+        }, static (work, token) => work(token));
+        var token = await started.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var panel = harness.ViewModel.RightTopPanel;
+        harness.ViewModel.StopPackageViewPreloading();
+        harness.ViewModel.StopPackageViewPreloading();
+        Assert.True(token.IsCancellationRequested);
+        await canceled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var attempts = 0;
+        harness.ViewModel.StartPackageViewPreloading((_, _) =>
+        {
+            Interlocked.Increment(ref attempts);
+            return Task.CompletedTask;
+        }, static (work, cancellation) => work(cancellation));
+        Assert.True(await harness.ViewModel.ReloadPackageViewAsync("agent.workspaces"));
+        Assert.Same(panel, harness.ViewModel.RightTopPanel);
+        Assert.Equal(0, attempts);
     }
 
     [Fact]
@@ -1694,13 +1724,20 @@ public sealed class MainWindowViewModelShellViewTests
             ActivePackageDescriptor activePackage,
             PackageUiSnapshotDescriptor source,
             long generation,
-            IReadOnlyCollection<string>? retryPackageIds = null)
+            IReadOnlyCollection<string>? retryPackageIds = null,
+            bool openAfterInstall = false)
         {
             var expectedInvocations = runtimeHandler.RpcRequestCount + 1;
             await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([activePackage], [source], generation),
                 [source],
                 retryPackageIds).WaitAsync(TimeSpan.FromSeconds(5));
+            if (openAfterInstall)
+            {
+                // Installing into an initialized empty workspace does not silently
+                // reopen a view. Explicit navigation still must prepare Runtime RPC.
+                Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
+            }
             Assert.Equal(expectedInvocations, runtimeHandler.RpcRequestCount);
             Assert.True(harness.ViewModel.HasMiddleSelection);
             Assert.Equal("agent.chat", harness.ViewModel.MiddlePanel.ActiveViewId);
@@ -1736,7 +1773,7 @@ public sealed class MainWindowViewModelShellViewTests
         Assert.Equal(requestsBeforeRemove, runtimeHandler.RpcRequestCount);
         Assert.False(harness.ViewModel.HasMiddleSelection);
 
-        await ApplyAsync(updatedPackage, updateSource, generation: 5, ["agent"]);
+        await ApplyAsync(updatedPackage, updateSource, generation: 5, ["agent"], openAfterInstall: true);
 
         File.WriteAllText(
             Path.Combine(
@@ -2809,10 +2846,13 @@ public sealed class MainWindowViewModelShellViewTests
         bool deferInitialHostedViews = false,
         IUiDispatcher? uiDispatcher = null,
         string? initialRightTopViewId = null,
-        IReadOnlyList<PackageUiSnapshotDescriptor>? runtimePackageSources = null
+        IReadOnlyList<PackageUiSnapshotDescriptor>? runtimePackageSources = null,
+        ShellState? initialState = null,
+        IReadOnlyList<ShellPackageView>? initialViews = null,
+        bool preserveStateForRestart = false
     )
     {
-        var state = new ShellState
+        var state = initialState ?? new ShellState
         {
             HasInitializedLayout = true,
             ViewPlacements = new Dictionary<string, RailPlacement>
@@ -2828,7 +2868,7 @@ public sealed class MainWindowViewModelShellViewTests
             SelectedRightTopViewId = initialRightTopViewId,
         };
         var snapshot = new ShellSnapshot(
-            [
+            initialViews ?? [
                 new ShellPackageView(
                     "agent.chat",
                     "agent",
@@ -2900,7 +2940,8 @@ public sealed class MainWindowViewModelShellViewTests
             stagingSurface,
             disposablePackageViewHostService,
             runtimeSnapshot,
-            runtimePackageSources
+            runtimePackageSources,
+            preserveStateForRestart
         );
     }
 
@@ -3128,7 +3169,8 @@ public sealed class MainWindowViewModelShellViewTests
         TestPackageViewStagingSurface stagingSurface,
         PackageViewHostService? packageViewHostService = null,
         RuntimePackageSnapshot? runtimeSnapshot = null,
-        IReadOnlyList<PackageUiSnapshotDescriptor>? packageSources = null
+        IReadOnlyList<PackageUiSnapshotDescriptor>? packageSources = null,
+        bool preserveStateForRestart = false
     ) : IDisposable
     {
         public MainWindowViewModel ViewModel { get; } = viewModel;
@@ -3147,7 +3189,7 @@ public sealed class MainWindowViewModelShellViewTests
             packageViewHostService?.DisposeAsync().AsTask().GetAwaiter().GetResult();
             try
             {
-                if (Directory.Exists(rootPath))
+                if (!preserveStateForRestart && Directory.Exists(rootPath))
                 {
                     Directory.Delete(rootPath, recursive: true);
                 }

@@ -61,7 +61,7 @@
             <TextBlock Grid.Column="4" Classes="caption" Text="Message" />
           </Grid>
 
-          <ListBox Grid.Row="2"
+          <ListBox x:Name="LogEntries" Grid.Row="2"
                    ItemsSource="{Binding FilteredEntries}"
                    ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                    ScrollViewer.VerticalScrollBarVisibility="Auto">

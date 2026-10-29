@@ -1,6 +1,8 @@
 ﻿<Project>
+    <Import Project="$(MSBuildThisFileDirectory)packages/Sunder.Package.Build/build/Sunder.Toolchains.props" />
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>$(SunderCurrentTargetFramework)</TargetFramework>
+        <RuntimeFrameworkVersion Condition="'$(MSBuildProjectName)' == 'Sunder.App' or '$(MSBuildProjectName)' == 'Sunder.Runtime.Host' or '$(MSBuildProjectName)' == 'Sunder.Host.Supervisor' or '$(MSBuildProjectName)' == 'Sunder.Cli'">$(SunderHostRuntimeFrameworkVersion)</RuntimeFrameworkVersion>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AnalysisLevel>latest</AnalysisLevel>

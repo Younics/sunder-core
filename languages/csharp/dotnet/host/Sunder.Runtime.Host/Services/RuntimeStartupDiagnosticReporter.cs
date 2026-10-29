@@ -50,13 +50,7 @@ internal sealed class RuntimeStartupDiagnosticReporter
 
             try
             {
-                var message = exception.Message;
-                if (message.Length > 2048)
-                {
-                    message = message[..2048];
-                }
-                var payload = JsonSerializer.SerializeToUtf8Bytes(
-                    new RuntimeStartupDiagnostic("runtime.v1.internal", message));
+                var payload = JsonSerializer.SerializeToUtf8Bytes(CreateDiagnostic(exception));
                 if (payload.Length <= MaximumPayloadBytes)
                 {
                     _pipe.Write(payload);
@@ -73,4 +67,10 @@ internal sealed class RuntimeStartupDiagnosticReporter
             }
         }
     }
+
+    internal static RuntimeStartupDiagnostic CreateDiagnostic(Exception exception)
+        => new(exception is PackageStorageActivationRecoveryException
+                ? PackageStorageActivationRecoveryException.Code
+                : "runtime.v1.internal",
+            exception.Message.Length > 2048 ? exception.Message[..2048] : exception.Message);
 }

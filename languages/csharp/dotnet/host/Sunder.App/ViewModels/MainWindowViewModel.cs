@@ -52,6 +52,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     private bool _shellPersistencePending;
     private bool _disposed;
     private int _viewPreloadSuspensionCount;
+    private bool _viewPreloadingStopped;
 
     internal event Action? ShellViewStateChanged;
 
@@ -319,41 +320,29 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
     [RelayCommand]
     private void OpenSettings() => _windowLauncher.ShowSettings();
 
-    public void AdjustLiveLeftPanelWidth(double delta, double maximumWidth)
+    internal void SetLiveTopColumnWidths(double leftWidth, double rightWidth)
     {
-        LeftPanelWidth = _layoutStateCoordinator.AdjustLeftPanelWidth(
-            LeftPanelWidth,
-            delta,
-            maximumWidth
-        );
-    }
-
-    public void AdjustLiveRightPanelWidth(double delta, double maximumWidth)
-    {
-        RightPanelWidth = _layoutStateCoordinator.AdjustRightPanelWidth(
-            RightPanelWidth,
-            delta,
-            maximumWidth
-        );
+        LeftPanelWidth = leftWidth;
+        RightPanelWidth = rightWidth;
     }
 
     public void AdjustLiveTopRowHeightRatio(double deltaRatio)
     {
-        TopRowHeightRatio = _layoutStateCoordinator.AdjustTopRowHeightRatio(
-            TopRowHeightRatio,
-            deltaRatio
-        );
+        TopRowHeightRatio = Views.ShellLayoutCalculator.ClampTopRowRatio(TopRowHeightRatio + deltaRatio);
     }
 
     public void AdjustLiveBottomSplitRatio(double deltaRatio)
     {
-        BottomSplitRatio = _layoutStateCoordinator.AdjustBottomSplitRatio(
-            BottomSplitRatio,
-            deltaRatio
-        );
+        BottomSplitRatio = Views.ShellLayoutCalculator.ClampBottomSplitRatio(BottomSplitRatio + deltaRatio);
     }
 
     public void CommitLayoutState() => PersistShellState();
+
+    internal Task FlushShellStateAsync()
+    {
+        PersistShellState();
+        return _layoutStateCoordinator.FlushAsync();
+    }
 
     private void RunOnUiThread(Action action)
     {
@@ -378,6 +367,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             return;
         }
 
+        // Capture live drag preferences before the persistence owner is disposed.
+        PersistShellState();
         _disposed = true;
         CancelPackageViewPreloading();
         _packageViewPresentationCoordinator.Dispose();
@@ -527,7 +518,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         CancellationTokenSource preloadCancellation;
         lock (_viewPreloadSyncRoot)
         {
-            if (_disposed || _viewPreloadSuspensionCount > 0)
+            if (_disposed || _viewPreloadingStopped || _viewPreloadSuspensionCount > 0)
             {
                 return;
             }
@@ -571,6 +562,12 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             }
             preloadCancellation.Dispose();
         }
+    }
+
+    internal void StopPackageViewPreloading()
+    {
+        lock (_viewPreloadSyncRoot) _viewPreloadingStopped = true;
+        CancelPackageViewPreloading();
     }
 
     private void CancelPackageViewPreloading()
@@ -834,6 +831,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         string viewId,
         CancellationToken cancellationToken)
     {
+        if (!_viewsById.ContainsKey(viewId)) return false;
         var generationId = _packageViewHostService.CurrentGenerationId;
         return await _packageViewHostService.PrepareViewForPresentationAsync(
             viewId,

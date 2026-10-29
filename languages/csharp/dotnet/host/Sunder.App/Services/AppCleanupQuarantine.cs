@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 
 namespace Sunder.App.Services;
 
@@ -66,6 +67,9 @@ internal static class BoundedCleanup
         ArgumentNullException.ThrowIfNull(cleanup);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(budget, TimeSpan.Zero);
 
+        var started = Stopwatch.GetTimestamp();
+        var outcome = "failed";
+        AppSessionLog.WritePolicySupervisionDiagnostic($"App cleanup operation={operation}; phase=started.");
         Task cleanupTask;
         try
         {
@@ -74,16 +78,19 @@ internal static class BoundedCleanup
         catch (Exception ex)
         {
             AppSessionLog.WriteError($"Failed while {operation}.", ex);
+            ReportCompletion();
             return false;
         }
 
         try
         {
             await cleanupTask.WaitAsync(budget).ConfigureAwait(false);
+            outcome = "completed";
             return true;
         }
         catch (TimeoutException ex)
         {
+            outcome = "timed-out";
             AppSessionLog.WriteError(
                 $"Cleanup exceeded its {budget.TotalSeconds:0.###} second budget while {operation}; it was quarantined.",
                 ex);
@@ -95,5 +102,9 @@ internal static class BoundedCleanup
             AppSessionLog.WriteError($"Failed while {operation}.", ex);
             return false;
         }
+        finally { ReportCompletion(); }
+
+        void ReportCompletion() => AppSessionLog.WritePolicySupervisionDiagnostic(
+            $"App cleanup operation={operation}; phase={outcome}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0}.");
     }
 }

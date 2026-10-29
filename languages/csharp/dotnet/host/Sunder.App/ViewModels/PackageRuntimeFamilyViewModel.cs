@@ -27,6 +27,7 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
     private string? _catalogError;
     private string? _operationText;
     private string? _operationError;
+    private string _retainedVersions = string.Empty;
 
     [ObservableProperty] private string _status = "Checking…";
     [ObservableProperty] private string _versionText = string.Empty;
@@ -56,13 +57,15 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
     }
 
     internal void Apply(InstalledPackageRuntimeItem? installed, AvailablePackageRuntimeItem? available,
-        PreparedPackageRuntimeItem? prepared, bool inventoryLoaded, string? catalogError)
+        PreparedPackageRuntimeItem? prepared, bool inventoryLoaded, string? catalogError, IReadOnlyList<string>? retainedVersions = null)
     {
         Installed = installed;
         Available = available;
         Prepared = prepared;
         _inventoryLoaded = inventoryLoaded;
         _catalogError = catalogError;
+        _retainedVersions = retainedVersions is { Count: > 0 }
+            ? "Retained package runtimes: " + string.Join(", ", retainedVersions) + "." : string.Empty;
         RefreshPresentation();
     }
 
@@ -82,9 +85,10 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
         HasPreparedUpdate = Prepared?.CanApply == true && !IsWorking;
         VersionText = Installed is { } installed
             ? $"Version {installed.Runtime.Identity.VendorVersion} · {installed.Runtime.Support.SupportLine}"
-            : Available is { } available ? $"Latest LTS · {available.Entry.Artifact.Identity.VendorVersion}" : "Latest supported LTS";
+            : Available is { } available ? $"{available.Entry.Artifact.Support.SupportLine} · {available.Entry.Artifact.Identity.VendorVersion}" : "Current Sunder runtime";
         UsageText = Installed is null ? Description : string.Empty;
-        Details = Installed?.Details ?? Available?.Details ?? string.Empty;
+        Details = string.Join(Environment.NewLine, new[] { Installed?.Details ?? Available?.Details, _retainedVersions }
+            .Where(value => !string.IsNullOrWhiteSpace(value)));
         IssueText = _operationError ?? _catalogError ?? string.Empty;
         Action = PackageRuntimeFamilyAction.None;
 
@@ -113,13 +117,15 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
             UsageText = "Runtime changes are waiting for the running session to catch up.";
         }
         else if (Available is { } latest && latest.Entry.Artifact.Support.State == RuntimeExecutionRuntimeSupportState.Supported
+            && SameMajor(latest.Entry.Artifact.Identity.VendorVersion, Installed.Runtime.Identity.VendorVersion)
             && CompareVersions(latest.Entry.Artifact.Identity.VendorVersion, Installed.Runtime.Identity.VendorVersion) > 0)
         {
             Status = "Update available";
-            VersionText = $"{Installed.Runtime.Identity.VendorVersion} → {latest.Entry.Artifact.Identity.VendorVersion} · LTS";
+            VersionText = $"{Installed.Runtime.Identity.VendorVersion} → {latest.Entry.Artifact.Identity.VendorVersion} · {latest.Entry.Artifact.Support.SupportLine}";
             Action = PackageRuntimeFamilyAction.Update;
         }
         else Status = Available?.Entry.Artifact.Support.State == RuntimeExecutionRuntimeSupportState.Supported
+            && SameMajor(Available.Entry.Artifact.Identity.VendorVersion, Installed.Runtime.Identity.VendorVersion)
             && _catalogError is null ? "Up to date" : "Installed";
 
         if (Prepared?.Update.State is RuntimeExecutionRuntimeUpdateState.Error or RuntimeExecutionRuntimeUpdateState.Blocked or RuntimeExecutionRuntimeUpdateState.Stale)
@@ -136,4 +142,7 @@ public sealed partial class PackageRuntimeFamilyViewModel : ViewModelBase
 
     internal static int CompareVersions(string left, string right)
         => Version.TryParse(left, out var first) && Version.TryParse(right, out var second) ? first.CompareTo(second) : 0;
+
+    private static bool SameMajor(string left, string right)
+        => Version.TryParse(left, out var first) && Version.TryParse(right, out var second) && first.Major == second.Major;
 }

@@ -20,16 +20,20 @@ internal sealed class ShellPackageLifecyclePresenter(
 {
     public ShellPackageLifecyclePresentation PrepareLifecycleChanges(
         IReadOnlyList<ActivePackageDescriptor> activePackages,
-        IReadOnlyList<ActivePackageDescriptor>? runtimeActivePackages = null)
+        IReadOnlyList<ActivePackageDescriptor>? runtimeActivePackages = null,
+        IReadOnlyList<SessionPackageDescriptor>? sessionPackages = null)
     {
         var projectedState = CloneProjectionState(shellState);
+        foreach (var view in viewsById.Values) projectedState.ViewPackageIds[view.ViewId] = view.PackageId;
         var shellSnapshot = shellCompositionService.Compose(
             IncludeQuarantinedPackages(activePackages, runtimeActivePackages),
             projectedState,
             systemStatus: null,
             startupWarnings,
             startupErrors,
-            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
+            ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot,
+            runtimeActivePackages is null ? null : ShellCompositionService.GetUnavailablePackageIds(
+                activePackages, runtimeActivePackages, sessionPackages));
         var stabilizableViewIds = activePackages
             .SelectMany(package => package.Views)
             .Select(view => view.ViewId)
@@ -137,6 +141,7 @@ internal sealed class ShellPackageLifecyclePresenter(
         {
             HasInitializedLayout = source.HasInitializedLayout,
             ViewPlacements = new Dictionary<string, RailPlacement>(source.ViewPlacements, StringComparer.OrdinalIgnoreCase),
+            ViewPackageIds = new Dictionary<string, string>(source.ViewPackageIds, StringComparer.OrdinalIgnoreCase),
             ViewOrder = new Dictionary<string, int>(source.ViewOrder, StringComparer.OrdinalIgnoreCase),
             HiddenHotbarViewIds = new HashSet<string>(source.HiddenHotbarViewIds, StringComparer.OrdinalIgnoreCase),
             SelectedLeftTopViewId = source.SelectedLeftTopViewId,
@@ -161,6 +166,7 @@ internal sealed class ShellPackageLifecyclePresenter(
     private static void ApplyProjectionState(ShellState projection, ShellState target)
     {
         target.ViewPlacements = projection.ViewPlacements;
+        target.ViewPackageIds = projection.ViewPackageIds;
         target.ViewOrder = projection.ViewOrder;
         target.HiddenHotbarViewIds = projection.HiddenHotbarViewIds;
         target.SelectedLeftTopViewId = projection.SelectedLeftTopViewId;

@@ -22,6 +22,7 @@ public sealed class SunderWorkerContext : IPackageContext
         Storage = new Internal.WorkerPackageStorageContext(client);
         Secrets = new Internal.WorkerPackageSecrets(client);
         Logging = new Internal.WorkerPackageLogging(client);
+        DevelopmentToolchain = environment.DevelopmentToolchain;
     }
 
     /// <summary>Gets the immutable canonical package identifier stamped by the Host.</summary>
@@ -32,6 +33,10 @@ public sealed class SunderWorkerContext : IPackageContext
 
     /// <summary>Gets the read-only package content root for this activation.</summary>
     public string ContentRootPath { get; }
+
+    /// <summary>Gets the exact development tools selected by the running Host.</summary>
+    [SunderSdkCapability(SunderSdkCapabilities.DevelopmentToolchainV1)]
+    public SunderDevelopmentToolchain? DevelopmentToolchain { get; }
 
     /// <summary>Gets the activation-owned temporary root removed when this worker exits.</summary>
     public string TemporaryRootPath { get; }

@@ -194,8 +194,11 @@ internal sealed class RuntimeHealthProbe : IDisposable
         }
         catch (Exception exception)
         {
+            var diagnostic = exception is HostOperationFailedException failure
+                ? $" ({failure.Operation.FailureCode ?? "host.lifecycle-operation-failed"}): {failure.Operation.Message ?? failure.Operation.State.ToString()}"
+                : ".";
             throw new InvalidOperationException(
-                $"Sunder Host at '{runtimeUrl}' could not {operationName} its Runtime worker.",
+                $"Sunder Host at '{runtimeUrl}' could not {operationName} its Runtime worker{diagnostic}",
                 exception);
         }
     }
@@ -279,11 +282,16 @@ internal sealed class RuntimeHealthProbe : IDisposable
         operation = await _hostManagement.WaitForOperationAsync(operation, cancellationToken).ConfigureAwait(false);
         if (operation.State != HostOperationState.Succeeded)
         {
-            throw new InvalidOperationException(
-                $"Host lifecycle operation '{operation.OperationId}' failed"
-                + (operation.FailureCode is null ? string.Empty : $" ({operation.FailureCode})")
-                + $": {operation.Message ?? operation.State.ToString()}.");
+            throw new HostOperationFailedException(operation);
         }
+    }
+
+    private sealed class HostOperationFailedException(HostOperationDescriptor operation)
+        : InvalidOperationException($"Host lifecycle operation '{operation.OperationId}' failed"
+            + (operation.FailureCode is null ? string.Empty : $" ({operation.FailureCode})")
+            + $": {operation.Message ?? operation.State.ToString()}")
+    {
+        internal HostOperationDescriptor Operation { get; } = operation;
     }
 
     public void Dispose()

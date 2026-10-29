@@ -22,8 +22,6 @@ public static class SunderPackageFormat
     public const string NodeExecutionRuntimeId = "sunder.runtime.node";
     public const string DotNetWorkerModuleAbi = "sunder.dotnet-worker-module.v1";
     public const string NodeWorkerModuleAbi = "sunder.node-worker-module.v1";
-    internal const string DotNetWorkerTargetFramework = "net10.0";
-    internal const string DotNetExecutionRuntimeVersionRange = ">=10.0.0 <11.0.0";
     internal const string DotNetFrameworkName = "Microsoft.NETCore.App";
     public const string DiscoverContractAction = "discover";
     public const string InvokeContractAction = "invoke";

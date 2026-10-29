@@ -41,7 +41,6 @@ internal sealed class ShellRailCollectionPresenter(
         foreach (var slot in slots)
         {
             slot.Bar.SetItems(CreateItemsForPlacement(slot.Placement, slot.OnSelect));
-            ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, slot.Placement, slot.Bar.Items.Select(item => item.Id).ToArray());
             PruneRetainedHostedViews(slot);
         }
 
@@ -95,7 +94,6 @@ internal sealed class ShellRailCollectionPresenter(
         foreach (var slot in affectedSlots)
         {
             slot.Bar.SetItemsPreservingExisting(CreateItemsForPlacement(slot.Placement, slot.OnSelect, slot.Bar, impactedPackageIds));
-            ShellViewOrderState.SetOrderForPlacement(viewsById.Values, shellState, slot.Placement, slot.Bar.Items.Select(item => item.Id).ToArray());
             PruneRetainedHostedViews(slot);
         }
 
@@ -105,8 +103,8 @@ internal sealed class ShellRailCollectionPresenter(
         foreach (var slot in affectedSlots)
         {
             var selectedViewIdBeforeUpdate = selectedViewIdsBeforeUpdate[slot.Placement];
-            var selectedItem = RestoreSelection(slot, selectedViewIdBeforeUpdate);
-            selectedViewIdsAfterUpdate[slot.Placement] = selectedItem?.Id;
+            RestoreSelection(slot, selectedViewIdBeforeUpdate);
+            selectedViewIdsAfterUpdate[slot.Placement] = ShellSelectionState.GetSelectedViewId(shellState, slot.Placement);
         }
 
         foreach (var slot in affectedSlots)
@@ -208,7 +206,8 @@ internal sealed class ShellRailCollectionPresenter(
             ? null
             : items.FirstOrDefault(item => string.Equals(item.Id, selectedId, StringComparison.OrdinalIgnoreCase));
 
-        if (selected is null && slot.Placement == RailPlacement.Middle && items.Count > 0)
+        if (selected is null && string.IsNullOrWhiteSpace(selectedId)
+            && !shellState.HasInitializedLayout && slot.Placement == RailPlacement.Middle && items.Count > 0)
         {
             selected = items[0];
             ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, selected.Id);
@@ -217,7 +216,6 @@ internal sealed class ShellRailCollectionPresenter(
         if (selected is null)
         {
             selectionPresenter.Clear(slot.Bar, slot.Placement);
-            ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, null);
             return null;
         }
 

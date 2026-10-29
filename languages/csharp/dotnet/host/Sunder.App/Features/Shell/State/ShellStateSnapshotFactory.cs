@@ -11,6 +11,7 @@ internal static class ShellStateSnapshotFactory
             LayoutVersion = state.LayoutVersion,
             HasInitializedLayout = state.HasInitializedLayout,
             ViewPlacements = new Dictionary<string, RailPlacement>(state.ViewPlacements, StringComparer.OrdinalIgnoreCase),
+            ViewPackageIds = new Dictionary<string, string>(state.ViewPackageIds, StringComparer.OrdinalIgnoreCase),
             ViewOrder = new Dictionary<string, int>(state.ViewOrder, StringComparer.OrdinalIgnoreCase),
             HiddenHotbarViewIds = new HashSet<string>(state.HiddenHotbarViewIds, StringComparer.OrdinalIgnoreCase),
             SelectedLeftTopViewId = state.SelectedLeftTopViewId,
@@ -27,6 +28,7 @@ internal static class ShellStateSnapshotFactory
             StacksSidebarWidth = state.StacksSidebarWidth,
             BackgroundTaskPopoverWidth = state.BackgroundTaskPopoverWidth,
             BackgroundTaskPopoverHeight = state.BackgroundTaskPopoverHeight,
+            MainWindowPlacement = ClonePlacement(state.MainWindowPlacement),
             SettingsWindowPlacement = ClonePlacement(state.SettingsWindowPlacement),
             PackagesWindowPlacement = ClonePlacement(state.PackagesWindowPlacement),
             StacksWindowPlacement = ClonePlacement(state.StacksWindowPlacement),
@@ -46,5 +48,6 @@ internal static class ShellStateSnapshotFactory
                 Width = placement.Width,
                 Height = placement.Height,
                 IsMaximized = placement.IsMaximized,
+                IsFullScreen = placement.IsFullScreen,
             };
 }

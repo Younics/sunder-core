@@ -9,12 +9,16 @@ namespace Sunder.Runtime.Host.Services;
 
 internal sealed record OfficialRuntimeCatalogResult(int TotalCount, IReadOnlyList<RuntimeExecutionRuntimeVendorArtifact> Items);
 
-internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, TimeProvider clock)
+internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, TimeProvider clock,
+    IReadOnlyList<int>? dotnetMajors = null, IReadOnlyList<int>? nodeMajors = null,
+    IReadOnlyDictionary<int, DateTimeOffset>? nodeEndOfLife = null)
 {
+    private IReadOnlyList<int> Majors(ConfiguredOfficialSourceId source)
+        => (source == ConfiguredOfficialSourceId.DotNet ? dotnetMajors : nodeMajors) ?? SupportedMajors(source);
     internal async Task<RuntimeExecutionRuntimeVendorArtifact> ResolveExactAsync(RuntimeExecutionRuntimeIdentity identity, CancellationToken token)
     {
         ValidateIdentity(identity);
-        var candidates = await ReadCandidatesAsync(identity.SourceId, identity.Rid, token).ConfigureAwait(false);
+        var candidates = await ReadCandidatesAsync(identity.SourceId, identity.Rid, token, Major(identity.VendorVersion)).ConfigureAwait(false);
         var candidate = candidates.SingleOrDefault(value => value.Identity.VendorVersion == identity.VendorVersion)
             ?? throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Missing, "The exact official runtime version is absent from vendor metadata.");
         var artifact = await CompleteAsync(candidate, token).ConfigureAwait(false);
@@ -27,7 +31,10 @@ internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, Ti
     {
         ValidateRequirement(requirement);
         var source = Source(requirement.RuntimeId, requirement.ModuleAbi);
-        var artifacts = await ReadCandidatesAsync(source, rid, token).ConfigureAwait(false);
+        var major = RequirementMajor(requirement);
+        if (!Majors(source).Contains(major))
+            throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Unsupported, "The package runtime major is outside Sunder's supported range.");
+        var artifacts = await ReadCandidatesAsync(source, rid, token, major).ConfigureAwait(false);
         var selected = artifacts.Where(value => PackageVersionRange.IsSatisfiedBy(value.Identity.VendorVersion, requirement.VersionRange)
                 && (exactVersion is null || value.Identity.VendorVersion == exactVersion)
                 && value.Support.State == RuntimeExecutionRuntimeSupportState.Supported)
@@ -50,17 +57,27 @@ internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, Ti
     }
 
     private async Task<IReadOnlyList<RuntimeExecutionRuntimeVendorArtifact>> ReadCandidatesAsync(ConfiguredOfficialSourceId source,
-        string rid, CancellationToken token)
+        string rid, CancellationToken token, int? selectedMajor = null)
     {
         _ = NodePlatform(rid); // Exactly the six package RIDs, never a musl alias.
-        var (bytes, hash) = await http.ReadAsync(MetadataUri(source), source, MaxMetadataBytes, token).ConfigureAwait(false);
+        var majors = Majors(source).Where(major => selectedMajor is null || major == selectedMajor).ToArray();
+        if (source == ConfiguredOfficialSourceId.DotNet && majors.Length > 1)
+        {
+            var all = new List<RuntimeExecutionRuntimeVendorArtifact>();
+            foreach (var major in majors) all.AddRange(await ReadCandidatesAsync(source, rid, token, major).ConfigureAwait(false));
+            return all;
+        }
+        if (majors.Length == 0) return [];
+        var metadataUri = MetadataUri(source, majors[0]);
+        var (bytes, hash) = await http.ReadAsync(metadataUri, source, MaxMetadataBytes, token).ConfigureAwait(false);
         using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions { MaxDepth = 32 });
         ValidateUniqueProperties(document.RootElement);
         var result = new List<RuntimeExecutionRuntimeVendorArtifact>();
         if (source == ConfiguredOfficialSourceId.DotNet)
         {
             var root = document.RootElement;
-            if (Text(root, "channel-version") != "10.0" || Text(root, "release-type") != "lts")
+            var releaseType = Text(root, "release-type");
+            if (Text(root, "channel-version") != $"{majors[0]}.0" || releaseType is not ("lts" or "sts"))
                 throw new InvalidDataException("Unexpected .NET Runtime channel.");
             var eol = DateTimeOffset.ParseExact(Text(root, "eol-date"), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal);
             var supported = Text(root, "support-phase") is "active" or "maintenance" && eol > clock.GetUtcNow();
@@ -68,7 +85,7 @@ internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, Ti
             {
                 if (!release.TryGetProperty("runtime", out var runtime)) continue;
                 var version = Text(runtime, "version");
-                if (!EligibleVersion(source, version)) continue;
+                if (!EligibleVersion(source, version, majors)) continue;
                 foreach (var file in runtime.GetProperty("files").EnumerateArray())
                 {
                     if (Text(file, "rid") != rid) continue;
@@ -78,30 +95,31 @@ internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, Ti
                     var url = Text(file, "url");
                     var identity = new RuntimeExecutionRuntimeIdentity(source, "sunder.runtime.dotnet", version, rid,
                         "sunder.dotnet-worker-module.v1", RuntimeExecutionRuntimeChecksumAlgorithm.Sha512, digest);
-                    result.Add(new(identity, Distribution(url, hash, rid, source), new(
+                    result.Add(new(identity, Distribution(url, hash, rid, source, version), new(
                         supported ? RuntimeExecutionRuntimeSupportState.Supported : RuntimeExecutionRuntimeSupportState.EndOfLife,
-                        "10.0 LTS", clock.GetUtcNow(), eol, null)));
+                        $"{majors[0]}.0 {releaseType.ToUpperInvariant()}", clock.GetUtcNow(), eol, null)));
                 }
             }
         }
         else
         {
-            var eol = new DateTimeOffset(2028, 4, 30, 0, 0, 0, TimeSpan.Zero); // Node's published 24.x LTS schedule.
             foreach (var release in document.RootElement.EnumerateArray())
             {
                 var vendor = Text(release, "version");
                 if (!vendor.StartsWith('v')) continue;
                 var version = vendor[1..];
-                if (!EligibleVersion(source, version) || release.GetProperty("lts").ValueKind != JsonValueKind.String) continue;
+                if (!EligibleVersion(source, version, majors) || release.GetProperty("lts").ValueKind != JsonValueKind.String) continue;
+                if (!(nodeEndOfLife ?? Sunder.Package.Format.SunderToolchainPolicy.NodeRuntimeEndOfLife).TryGetValue(Major(version), out var eol))
+                    throw new InvalidDataException("The supported Node major has no configured support end date.");
                 var fileTag = rid.StartsWith("win-", StringComparison.Ordinal) ? rid + "-zip"
                     : rid.StartsWith("osx-", StringComparison.Ordinal) ? rid + "-tar" : rid;
                 if (!release.GetProperty("files").EnumerateArray().Any(value => value.GetString() == fileTag)) continue;
                 var url = $"https://nodejs.org/dist/v{version}/{ArchiveName(source, version, rid)}";
                 // Internal incomplete candidate; it is never returned before checksum completion.
                 result.Add(new(new(source, "sunder.runtime.node", version, rid, "sunder.node-worker-module.v1",
-                    RuntimeExecutionRuntimeChecksumAlgorithm.Sha256, ""), Distribution(url, hash, rid, source),
+                    RuntimeExecutionRuntimeChecksumAlgorithm.Sha256, ""), Distribution(url, hash, rid, source, version),
                     new(eol > clock.GetUtcNow() ? RuntimeExecutionRuntimeSupportState.Supported : RuntimeExecutionRuntimeSupportState.EndOfLife,
-                        "24 LTS", clock.GetUtcNow(), eol, null)));
+                         $"{Major(version)} LTS", clock.GetUtcNow(), eol, null)));
             }
         }
         if (result.Count > 1024 || result.GroupBy(value => value.Identity.VendorVersion, StringComparer.Ordinal).Any(group => group.Count() != 1))
@@ -137,10 +155,10 @@ internal sealed class OfficialRuntimeResolver(OfficialRuntimeHttpClient http, Ti
         return value;
     }
 
-    private static RuntimeExecutionRuntimeDistribution Distribution(string url, string metadataHash, string rid, ConfiguredOfficialSourceId source)
-        => new(url, MetadataUri(source).AbsoluteUri, metadataHash, null, null,
+    private static RuntimeExecutionRuntimeDistribution Distribution(string url, string metadataHash, string rid, ConfiguredOfficialSourceId source, string version)
+        => new(url, MetadataUri(source, Major(version)).AbsoluteUri, metadataHash, null, null,
             rid.StartsWith("win-", StringComparison.Ordinal) ? RuntimeExecutionRuntimeArchiveFormat.Zip : RuntimeExecutionRuntimeArchiveFormat.TarGzip,
-            Profile(source), null);
+            Profile(source, version), null);
 
     private static string Text(JsonElement element, string name)
         => element.GetProperty(name).GetString() is { Length: > 0 and <= 2048 } value ? value

@@ -32,6 +32,9 @@ public partial class ShellWorkspace : UserControl
         AttachedToVisualTree += (_, _) => ApplyAdaptiveLayout();
         DetachedFromVisualTree += (_, _) => DetachViewModel();
         SizeChanged += (_, _) => ApplyAdaptiveLayout();
+        // Parent SizeChanged runs before its children are arranged. Resolve again
+        // from the content grid's current bounds, not the previous window size.
+        TopContentGrid.SizeChanged += (_, _) => ApplyAdaptiveLayout();
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)

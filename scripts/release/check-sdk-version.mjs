@@ -3,6 +3,7 @@
 import { appendFile, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { policy, synchronize } from "../toolchains.mjs";
 
 const expectedVersion = process.argv[2];
 if (process.argv.length > 3) {
@@ -10,6 +11,7 @@ if (process.argv.length > 3) {
 }
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+await synchronize(true);
 const readText = (path) => readFile(resolve(root, path), "utf8");
 const readJson = async (path) => JSON.parse(await readText(path));
 
@@ -98,8 +100,8 @@ if (packageManagerMatch === null) {
   throw new Error("languages/typescript/node/package.json must pin packageManager to an exact npm version.");
 }
 const npmVersion = packageManagerMatch[1];
-if (npmVersion !== "11.19.0") {
-  throw new Error(`languages/typescript/node/package.json packageManager must be 'npm@11.19.0', not '${packageManager}'.`);
+if (npmVersion !== policy.npm) {
+  throw new Error(`languages/typescript/node/package.json packageManager must be 'npm@${policy.npm}', not '${packageManager}'.`);
 }
 const viteVersion = rootPackage.devDependencies?.vite;
 if (viteVersion !== "8.2.0") {

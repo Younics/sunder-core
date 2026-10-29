@@ -36,25 +36,17 @@ export type ProviderAudience = "owner" | "public";
 
 const RPC_BINDINGS_OUTPUT_PATH = ".sunder/generated/rpc";
 
-const MAXIMUM_CONTRACTS = 128;
-const MAXIMUM_CONTRACT_USES = 128;
 const MAXIMUM_DEPENDENCIES = 128;
 const MAXIMUM_NATIVE_ASSETS = 256;
-const MAXIMUM_PROVIDERS = 128;
-const MAXIMUM_RPC_BINDINGS = 128;
 
 export type SunderNodePackageConfig =
-  Omit<ResolvedNodePackageConfig, "schemaVersion" | "entry" | "services" | "contracts" | "providers" | "usesContracts" | "rpcBindings"> & {
+  Omit<ResolvedNodePackageConfig, "schemaVersion" | "entry" | "services" | "contracts" | "providers" | "usesContracts"> & {
     readonly schemaVersion: 3;
-    readonly contracts?: never;
-    readonly providers?: never;
-    readonly usesContracts?: never;
-    readonly rpcBindings?: never;
   } & ({ readonly services: { readonly module: string }; readonly entry?: never } | { readonly services?: never; readonly entry: string });
 
 /** Validated build projection; V3 RPC declarations are derived, never authored. */
 export interface ResolvedNodePackageConfig {
-  readonly schemaVersion: 2 | 3;
+  readonly schemaVersion: 3;
   readonly services?: { readonly module: string };
   readonly id: string;
   readonly name: string;
@@ -69,7 +61,6 @@ export interface ResolvedNodePackageConfig {
   readonly outputDirectory?: string;
   readonly maximumPackageBytes?: number;
   readonly app?: AppConfig;
-  readonly rpcBindings?: readonly RpcBindingConfig[];
   readonly nativeAssets?: NativeAssetsConfig;
 }
 
@@ -78,11 +69,6 @@ export type NativeAssetsConfig = Readonly<Partial<Record<SunderRid, readonly Nat
 export interface NativeAssetConfig {
   readonly sourcePath: string;
   readonly targetPath: string;
-}
-
-export interface RpcBindingConfig {
-  readonly path: string;
-  readonly outputFile: string;
 }
 
 export interface AppConfig {
@@ -166,7 +152,7 @@ export async function loadProjectWithOwnedFrame(projectPath: string, analysisOpt
   if (config.services === undefined) {
     for (const name of [BASELINE_FILE, `${BASELINE_FILE}.sunder-output.lock`, "sunder-contracts.lock.json",
       ".sunder/generated/rpc/authoring-receipt.v1.json", ".sunder/generated/rpc/package-export.v1.json", ".sunder/generated/rpc/owned-baseline.sha256"]) {
-      if (await exists(resolve(root, name))) throw new Error("Existing V3 authoring source/baseline/lock evidence cannot be consumed through descriptor-first or non-RPC fallback.");
+      if (await exists(resolve(root, name))) throw new Error("Existing owned RPC authoring evidence cannot be consumed through a non-RPC fallback.");
     }
     if (analysisOptions.requireBaseline || analysisOptions.allowDrift) throw new Error("contracts commands require a configured V3 owned RPC source module.");
     return project;
@@ -236,14 +222,10 @@ export function currentRid(): SunderRid {
 function validateConfig(value: unknown): ResolvedNodePackageConfig {
   const config = record(value, "sunder.package.json");
   if (config.schemaVersion !== 3) throw new Error("sunder.package.json schemaVersion must be 3. Migrate descriptor/router authoring to defineService and services.module; legacy authoring modes are retired.");
-  const allowed = new Set(["schemaVersion", "id", "name", "summary", "version", "entry", "workerCapabilities", "contracts", "providers", "usesContracts", "dependencies", "outputDirectory", "maximumPackageBytes", "app", "rpcBindings", "nativeAssets"]);
-  if (config.schemaVersion === 3) {
-    for (const key of ["contracts", "providers", "usesContracts", "rpcBindings"]) allowed.delete(key);
-    allowed.add("services");
-  }
+  const allowed = new Set(["schemaVersion", "id", "name", "summary", "version", "entry", "workerCapabilities", "services", "dependencies", "outputDirectory", "maximumPackageBytes", "app", "nativeAssets"]);
   for (const key of Object.keys(config)) if (!allowed.has(key)) throw new Error(`sunder.package.json contains unknown property '${key}'.`);
   let services: ResolvedNodePackageConfig["services"];
-  if (config.schemaVersion === 3 && config.services !== undefined) {
+  if (config.services !== undefined) {
     const input = record(config.services, "services"); only(input, "module");
     const module = projectPath(input.module, "services.module", 240, 32);
     if (!/\.(ts|js)$/u.test(module) || module.toLowerCase().endsWith(".d.ts") || module.toLowerCase().startsWith(".sunder/") || module.toLowerCase().startsWith("node_modules/")) throw new Error("services.module must be authored .ts or .js source outside generated output.");
@@ -275,57 +257,9 @@ function validateConfig(value: unknown): ResolvedNodePackageConfig {
     workerCapabilities.push("storage.v1");
   }
   workerCapabilities.sort();
-  const contracts = boundedArray(config.schemaVersion === 3 ? [] : config.contracts, "contracts", MAXIMUM_CONTRACTS).map((item, index) => {
-    const contract = record(item, `contracts[${index}]`);
-    only(contract, "path", "descriptorPath", "exposure");
-    if (typeof contract.path === "string" && contract.path.toLowerCase().startsWith(".sunder/")) throw new Error("Generated descriptor snapshots are not descriptor-first authoring inputs.");
-    return {
-      path: projectPath(contract.path, `contracts[${index}].path`, 240, 32),
-      descriptorPath: contract.descriptorPath === undefined
-        ? undefined
-        : logicalPath(contract.descriptorPath, `contracts[${index}].descriptorPath`),
-      exposure: oneOf(contract.exposure, `contracts[${index}].exposure`, "package", "public"),
-    };
-  });
-  const providers = boundedArray(config.schemaVersion === 3 ? [] : config.providers, "providers", MAXIMUM_PROVIDERS).map((item, index) => {
-    const provider = record(item, `providers[${index}]`);
-    only(provider, "providerId", "role", "contractId", "contractVersion", "audience");
-    const providerId = text(provider.providerId, `providers[${index}].providerId`, 128);
-    const contractId = text(provider.contractId, `providers[${index}].contractId`, 128);
-    const contractVersion = text(provider.contractVersion, `providers[${index}].contractVersion`, 256);
-    const role = oneOf(provider.role, `providers[${index}].role`, "app", "runtime");
-    if (!isPackageId(providerId)) throw new Error(`providers[${index}].providerId must be a canonical package id.`);
-    if (!isPackageId(contractId)) throw new Error(`providers[${index}].contractId must be a canonical package id.`);
-    if (!isSemanticVersion(contractVersion)) throw new Error(`providers[${index}].contractVersion must be strict SemVer 2.0.`);
-    if (role === "app") {
-      throw new Error(`providers[${index}] declares role 'app'. App-role providers are not supported because App provider registration and serving are not available.`);
-    }
-    return {
-      providerId,
-      role,
-      contractId,
-      contractVersion,
-      audience: oneOf(provider.audience, `providers[${index}].audience`, "owner", "public"),
-    };
-  });
-  const usesContracts = config.usesContracts === undefined ? [] : boundedArray(config.usesContracts, "usesContracts", MAXIMUM_CONTRACT_USES).map((item, index) => {
-    const use = record(item, `usesContracts[${index}]`);
-    only(use, "role", "contractId", "contractVersion", "required", "actions");
-    const contractId = text(use.contractId, `usesContracts[${index}].contractId`, 128);
-    const contractVersion = text(use.contractVersion, `usesContracts[${index}].contractVersion`, 256);
-    if (!isPackageId(contractId)) throw new Error(`usesContracts[${index}].contractId must be a canonical package id.`);
-    if (!isSemanticVersion(contractVersion)) throw new Error(`usesContracts[${index}].contractVersion must be strict SemVer 2.0.`);
-    const actions = boundedArray(use.actions, `usesContracts[${index}].actions`, 3).map((action) => text(action, "action", 32));
-    if (actions.length === 0 || new Set(actions).size !== actions.length) throw new Error("Contract use actions must be non-empty and unique.");
-    if (actions.some((action) => action !== "discover" && action !== "invoke" && action !== "subscribe")) throw new Error("Contract use actions are invalid.");
-    return {
-      role: oneOf(use.role, `usesContracts[${index}].role`, "app", "runtime"),
-      contractId,
-      contractVersion,
-      required: boolean(use.required, `usesContracts[${index}].required`),
-      actions: actions as ContractUseConfig["actions"],
-    };
-  });
+  // Authoring configuration never supplies RPC declarations. Service analysis
+  // populates the validated projection after loading this current-only document.
+  const contracts: readonly ContractConfig[] = [];
   const dependencies = config.dependencies === undefined ? [] : boundedArray(config.dependencies, "dependencies", MAXIMUM_DEPENDENCIES).map((item, index) => {
     const dependency = record(item, `dependencies[${index}]`);
     only(dependency, "packageId", "versionRange");
@@ -335,23 +269,10 @@ function validateConfig(value: unknown): ResolvedNodePackageConfig {
     validateDependencyVersionRange(versionRange, `dependencies[${index}].versionRange`);
     return { packageId, versionRange };
   });
-  const rpcBindings = config.rpcBindings === undefined ? undefined : boundedArray(config.rpcBindings, "rpcBindings", MAXIMUM_RPC_BINDINGS).map((item, index) => {
-    const binding = record(item, `rpcBindings[${index}]`);
-    only(binding, "path", "outputFile");
-    return {
-      path: projectPath(binding.path, `rpcBindings[${index}].path`, 240, 32),
-      outputFile: rpcBindingOutputFile(binding.outputFile, `rpcBindings[${index}].outputFile`),
-    };
-  });
   const nativeAssets = config.nativeAssets === undefined
     ? undefined
     : validateNativeAssets(config.nativeAssets, contracts);
-  requireUnique(contracts.map((contract) => contract.path), "Contract path");
-  requireUnique(providers.map((provider) => `${provider.role}/${provider.providerId}`), "Provider role/id");
-  requireUnique(usesContracts.map((use) => `${use.role}/${use.contractId}`), "Contract use role/id");
   requireUnique(dependencies.map((dependency) => dependency.packageId), "Dependency package id");
-  requireUnique((rpcBindings ?? []).map((binding) => binding.path), "RPC binding input path");
-  validateRpcBindingOutputPaths(rpcBindings ?? []);
   const result: ResolvedNodePackageConfig = {
     schemaVersion: config.schemaVersion,
     ...(services === undefined ? {} : { services }),
@@ -361,18 +282,12 @@ function validateConfig(value: unknown): ResolvedNodePackageConfig {
     entry: services ? ".sunder/generated/rpc/worker.ts" : projectPath(config.entry, "entry", 240, 32),
     workerCapabilities,
     contracts,
-    providers,
-    usesContracts,
+    providers: [],
+    usesContracts: [],
     dependencies,
-    ...(rpcBindings === undefined ? {} : { rpcBindings }),
     ...(nativeAssets === undefined ? {} : { nativeAssets }),
   };
   const app = config.app === undefined ? undefined : validateApp(config.app, id);
-  for (const use of usesContracts) {
-    if (use.role === "app" && app === undefined) {
-      throw new Error(`Contract use '${use.contractId}' declares role 'app', but the package has no App target.`);
-    }
-  }
   return {
     ...result,
     ...(config.summary === undefined ? {} : { summary: displayText(config.summary, "summary", 2048) }),
@@ -571,32 +486,6 @@ function projectPath(value: unknown, label: string, maximumLength: number, maxim
   return path;
 }
 
-function rpcBindingOutputFile(value: unknown, label: string): string {
-  const path = projectPath(value, label, 240, 32);
-  const fileName = path.split("/").at(-1)!;
-  if (!fileName.endsWith(".ts") || fileName.length === ".ts".length || asciiCaseFold(fileName).endsWith(".d.ts")) {
-    throw new Error(`${label} must identify a .ts file and must not be a .d.ts declaration file.`);
-  }
-  return path;
-}
-
-function validateRpcBindingOutputPaths(bindings: readonly RpcBindingConfig[]): void {
-  const entries = new Map<string, { readonly path: string; readonly kind: "directory" | "file" }>();
-  for (const binding of bindings) {
-    const segments = binding.outputFile.split("/");
-    for (let index = 1; index <= segments.length; index++) {
-      const candidate = segments.slice(0, index).join("/");
-      const kind = index === segments.length ? "file" : "directory";
-      const folded = asciiCaseFold(candidate);
-      const existing = entries.get(folded);
-      if (existing !== undefined && (kind === "file" || existing.path !== candidate || existing.kind !== kind)) {
-        throw new Error(`RPC binding output paths '${existing.path}' and '${candidate}' collide on portable filesystems.`);
-      }
-      entries.set(folded, { path: candidate, kind });
-    }
-  }
-}
-
 function asciiCaseFold(value: string): string {
   return value.replace(/[A-Z]/gu, (character) => String.fromCharCode(character.charCodeAt(0) + 0x20));
 }
@@ -617,13 +506,6 @@ function webRoute(value: string): boolean {
 function boolean(value: unknown, label: string): boolean {
   if (typeof value !== "boolean") throw new Error(`${label} must be boolean.`);
   return value;
-}
-
-function oneOf<T extends string>(value: unknown, label: string, ...values: readonly T[]): T {
-  if (typeof value !== "string" || !values.includes(value as T)) {
-    throw new Error(`${label} must be one of ${values.map((item) => `'${item}'`).join(", ")}.`);
-  }
-  return value as T;
 }
 
 function positiveInteger(value: unknown, label: string): number {

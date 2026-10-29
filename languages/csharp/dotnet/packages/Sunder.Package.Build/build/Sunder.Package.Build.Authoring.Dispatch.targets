@@ -1,4 +1,5 @@
 <Project>
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Toolchains.props" Condition="'$(SunderSupportedTargetFrameworks)' == ''" />
   <Target Name="Build" DependsOnTargets="_BuildSunderSelectedRid" Returns="@(_SunderBuiltRid)" />
   <Target Name="Compile" DependsOnTargets="_BuildSunderSelectedRid" />
   <Target Name="CoreCompile" DependsOnTargets="_BuildSunderSelectedRid" />
@@ -41,7 +42,10 @@
   </Target>
 
   <Target Name="_ValidateSunderPackageBuildFramework">
-    <Error Condition="'$(TargetFramework)' != 'net10.0'" Text="package-authoring.framework-unsupported: Worker V1 requires TargetFramework net10.0; select it explicitly for this package build." />
+    <ItemGroup>
+      <_SunderUnsupportedFramework Include="$(TargetFramework)" Exclude="$(SunderSupportedTargetFrameworks)" />
+    </ItemGroup>
+    <Error Condition="'$(TargetFramework)' == '' or '@(_SunderUnsupportedFramework)' != ''" Text="package-authoring.framework-unsupported: Select a supported Worker target framework: $(SunderSupportedTargetFrameworks)." />
   </Target>
 
   <Target Name="_BuildSunderSelectedRid" DependsOnTargets="_ValidateSunderPackageBuildFramework;_InitializeSunderPackageDispatch">

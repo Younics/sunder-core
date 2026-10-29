@@ -100,6 +100,8 @@ public sealed partial class OfficialProcessRuntimeTests(
                 Assert.DoesNotContain("NODE_PATH", startInfo.Environment.Keys);
                 Assert.DoesNotContain(AmbientRuntimePoison.SentinelName, startInfo.Environment.Keys);
                 Assert.Equal("1", startInfo.Environment["SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"]);
+                Assert.Equal(SunderToolchainPolicy.Development,
+                    JsonSerializer.Deserialize<Sunder.Sdk.Abstractions.SunderDevelopmentToolchain>(startInfo.Environment["SUNDER_DEVELOPMENT_TOOLCHAIN"]!));
                 Assert.Equal(
                     ExpectedWorkerEnvironmentNames(),
                     startInfo.Environment.Keys
@@ -481,6 +483,7 @@ public sealed partial class OfficialProcessRuntimeTests(
         var names = new List<string>
         {
             "SUNDER_ACTIVATION_ID",
+            "SUNDER_DEVELOPMENT_TOOLCHAIN",
             "SUNDER_PACKAGE_CONTENT_ROOT",
             "SUNDER_PACKAGE_ID",
             "SUNDER_PACKAGE_VERSION",

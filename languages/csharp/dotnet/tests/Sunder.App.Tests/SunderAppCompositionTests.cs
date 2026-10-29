@@ -17,6 +17,12 @@ public sealed class SunderAppCompositionTests
         var services = SunderAppComposition.CreateServices(
             new Application(), new AppStartupOptions(), new AppPackageResourceAssemblyRegistry());
 
+        Assert.Contains(services, service => service.ServiceType == typeof(AppProcessPolicyLifetime));
+        Assert.DoesNotContain(services, service => service.ServiceType == typeof(AppProcessPolicySupervisor)
+            || service.ServiceType == typeof(AppRuntimeProcessTransport));
+        Assert.False(typeof(IDisposable).IsAssignableFrom(typeof(AppProcessPolicyLifetime)));
+        Assert.False(typeof(IAsyncDisposable).IsAssignableFrom(typeof(AppProcessPolicyLifetime)));
+
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions
         {
             ValidateScopes = true,

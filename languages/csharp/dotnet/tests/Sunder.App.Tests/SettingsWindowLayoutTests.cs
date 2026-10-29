@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
+using Sunder.App.Views.Controls;
 using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
 using Xunit;
@@ -56,7 +57,7 @@ public sealed class SettingsWindowLayoutTests
                     Assert.False(header.IsEffectivelyVisible);
                     Assert.DoesNotContain("workspace-surface", pane.Classes);
                     Assert.Equal(new Thickness(0), pane.BorderThickness);
-                    Assert.Equal(new Thickness(18), pane.Padding);
+                    Assert.Equal(new Thickness(0), pane.Padding);
                     Assert.Equal(package + " package title", vm.SelectedTitle);
                     Assert.Contains(pane.GetVisualDescendants().OfType<TextBlock>(), text => text.IsEffectivelyVisible
                         && text.Text == (package == "hosted" ? "Useful hosted heading" : "Useful form section"));
@@ -65,7 +66,32 @@ public sealed class SettingsWindowLayoutTests
                     if (package == "hosted")
                     {
                         var content = pane.GetVisualDescendants().OfType<HostedLayoutView>().Single();
-                        Assert.InRange(Math.Abs(content.TranslatePoint(default, pane)!.Value.Y - pane.Padding.Top), 0, 0.5);
+                        Assert.InRange(Math.Abs(content.TranslatePoint(default, pane)!.Value.X + content.Bounds.Width - pane.Bounds.Width), 0, 0.5);
+                        var scroll = Assert.IsType<ScrollViewer>(content.Content);
+                        Assert.InRange(Math.Abs(scroll.TranslatePoint(default, pane)!.Value.X + scroll.Bounds.Width - pane.Bounds.Width), 0, 0.5);
+                        AssertContentGuttersAndScrollbar(scroll, pane);
+                    }
+                    else
+                    {
+                        var scroll = window.FindControl<ScrollViewer>("SettingsSelectionScroll")!;
+                        AssertContentGuttersAndScrollbar(scroll, pane);
+                        var help = pane.GetVisualDescendants().OfType<SettingsHelpButton>().First(control => control.IsEffectivelyVisible);
+                        var icon = Assert.IsType<Avalonia.Controls.Shapes.Path>(help.Content);
+                        var origin = icon.TranslatePoint(default, help)!.Value;
+                        Assert.InRange(Math.Abs(origin.X + icon.Bounds.Width / 2 - help.Bounds.Width / 2), 0, 0.5);
+                        Assert.InRange(Math.Abs(origin.Y + icon.Bounds.Height / 2 - help.Bounds.Height / 2), 0, 0.5);
+                        Assert.True(help.Focus());
+                        window.KeyPress(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+                        window.KeyRelease(Key.Enter, RawInputModifiers.None, PhysicalKey.Enter, "\r");
+                        await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
+                        var flyout = Assert.IsType<Flyout>(help.Flyout);
+                        Assert.True(flyout.IsOpen);
+                        var text = Assert.IsType<SelectableTextBlock>(flyout.Content);
+                        var presenter = Assert.Single(text.GetVisualAncestors().OfType<FlyoutPresenter>());
+                        Assert.Same(Application.Current!.Resources["Sunder.Brush.Surface.Hover"], presenter.Background);
+                        Assert.Same(Application.Current.Resources["Sunder.Brush.Border.Strong"], presenter.BorderBrush);
+                        Assert.NotEqual(Application.Current.Resources["Sunder.Brush.Surface.Base"], presenter.Background);
+                        flyout.Hide();
                     }
                 }
                 Assert.True(await vm.SelectCoreSectionAsync("advanced"));
@@ -80,12 +106,28 @@ public sealed class SettingsWindowLayoutTests
         Assert.Null(Application.Current);
 
         static PackageSettingsSchemaDescriptor Schema(string id) => new(id, id + " package title", id + " package summary",
-            [new PackageSettingsSectionDescriptor("general", "Useful form section", null, [])]);
+            [new PackageSettingsSectionDescriptor("general", "Useful form section", "Section help", Enumerable.Range(0, 12)
+                .Select(index => new PackageSettingsFieldDescriptor("field" + index, "Field " + index,
+                    (PackageSettingsFieldKind)(index % 4), "Field-specific help", false, null, null,
+                    [new("one", "One"), new("two", "Two")])).ToArray())]);
+    }
+
+    private static void AssertContentGuttersAndScrollbar(ScrollViewer scroll, Border pane)
+    {
+        var content = Assert.IsType<StackPanel>(scroll.Content);
+        Assert.True(content.Margin.Left >= 16 && content.Margin.Right >= 16);
+        Assert.InRange(content.TranslatePoint(default, pane)!.Value.X, 16, 24);
+        var bar = scroll.GetVisualDescendants().OfType<ScrollBar>().Single(control => control.Orientation == Avalonia.Layout.Orientation.Vertical
+            && ReferenceEquals(control.GetVisualAncestors().OfType<ScrollViewer>().First(), scroll));
+        Assert.True(bar.IsEffectivelyVisible, $"Expected overflowing content: extent {scroll.Extent}, viewport {scroll.Viewport}.");
+        Assert.InRange(Math.Abs(bar.TranslatePoint(default, pane)!.Value.X + bar.Bounds.Width - pane.Bounds.Width), 0, 1);
+        Assert.True(scroll.Extent.Width <= scroll.Viewport.Width + 0.5);
     }
 
     public sealed class HostedLayoutView : UserControl
     {
-        public HostedLayoutView() => Content = new TextBlock { Text = "Useful hosted heading" };
+        public HostedLayoutView() => Content = new ScrollViewer { Content = new StackPanel { Margin = new Thickness(20), Children =
+            { new TextBlock { Text = "Useful hosted heading" }, new Border { Height = 1800 } } } };
     }
 
     [Fact]

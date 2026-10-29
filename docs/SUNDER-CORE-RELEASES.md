@@ -153,7 +153,9 @@ do not mechanically change it with the package version.
 Run `node scripts/release/check-sdk-version.mjs`; the SDK tag must equal its version.
 Dependencies use NuGet `[X.Y.0,X.(Y+1).0)` and npm `>=X.Y.0 <X.(Y+1).0`.
 Use a later-patch prerelease within an established minor line, not `X.Y.0-*`.
-The current tools are npm `11.19.0` and Vite `8.2.0`.
+The current tools are npm `11.19.1` and Vite `8.2.0`. Exact SDK and Node/npm pins
+are owned by [`eng/toolchains.json`](../eng/toolchains.json); see the
+[toolchain policy](package-toolchains.md).
 
 The six NuGets are `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`,
 `Sunder.Sdk.Worker`, `Sunder.Package.Build`, and `Sunder.Package.Templates`.

@@ -12,6 +12,7 @@ public interface IShellCompositionService
         SystemStatusResponse? systemStatus,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
-        ShellNormalizationPolicy normalizationPolicy
+        ShellNormalizationPolicy normalizationPolicy,
+        IReadOnlySet<string>? unavailablePackageIds = null
     );
 }

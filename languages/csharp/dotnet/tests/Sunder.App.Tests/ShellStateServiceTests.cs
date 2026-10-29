@@ -84,10 +84,21 @@ public sealed class ShellStateServiceTests
             {
                 ["agent.chat"] = 0,
             },
+            ViewPackageIds = new Dictionary<string, string> { ["agent.chat"] = "agent" },
             HiddenHotbarViewIds = ["agent.subsessions"],
             SelectedMiddleViewId = "agent.chat",
-            LeftPanelWidth = 410,
-            RightPanelWidth = 390,
+            SelectedLeftTopViewId = "left",
+            SelectedRightTopViewId = "right",
+            SelectedLeftBottomViewId = "bottom-left",
+            SelectedRightBottomViewId = "bottom-right",
+            LeftPanelWidth = 1410,
+            RightPanelWidth = 1390,
+            TopRowHeightRatio = 0.63,
+            BottomSplitRatio = 0.27,
+            MainWindowPlacement = new ShellWindowPlacement
+            {
+                X = 70, Y = 80, Width = 1900, Height = 1000, IsFullScreen = true,
+            },
             SettingsSidebarWidth = 310,
             PackagesSidebarWidth = 520,
             StacksSidebarWidth = 470,
@@ -137,9 +148,18 @@ public sealed class ShellStateServiceTests
 
         Assert.Equal("agent.chat", reloaded.SelectedMiddleViewId);
         Assert.Equal(RailPlacement.Middle, reloaded.ViewPlacements["agent.chat"]);
+        Assert.Equal("agent", reloaded.ViewPackageIds["agent.chat"]);
         Assert.Contains("agent.subsessions", reloaded.HiddenHotbarViewIds);
-        Assert.Equal(410, reloaded.LeftPanelWidth);
-        Assert.Equal(390, reloaded.RightPanelWidth);
+        Assert.Equal(1410, reloaded.LeftPanelWidth);
+        Assert.Equal(1390, reloaded.RightPanelWidth);
+        Assert.Equal(0.63, reloaded.TopRowHeightRatio);
+        Assert.Equal(0.27, reloaded.BottomSplitRatio);
+        Assert.Equal("left", reloaded.SelectedLeftTopViewId);
+        Assert.Equal("right", reloaded.SelectedRightTopViewId);
+        Assert.Equal("bottom-left", reloaded.SelectedLeftBottomViewId);
+        Assert.Equal("bottom-right", reloaded.SelectedRightBottomViewId);
+        Assert.True(reloaded.MainWindowPlacement?.IsFullScreen);
+        Assert.Equal(1900, reloaded.MainWindowPlacement?.Width);
         Assert.Equal(310, reloaded.SettingsSidebarWidth);
         Assert.Equal(520, reloaded.PackagesSidebarWidth);
         Assert.Equal(470, reloaded.StacksSidebarWidth);
@@ -190,9 +210,9 @@ public sealed class ShellStateServiceTests
         Assert.Equal(1200, liveState.SettingsWindowPlacement?.Width);
 
         var patchedPersisted = service.Load();
-        Assert.Empty(patchedPersisted.ViewPlacements);
-        Assert.Empty(patchedPersisted.HiddenHotbarViewIds);
-        Assert.Equal(ShellState.DefaultLeftPanelWidth, patchedPersisted.LeftPanelWidth);
+        Assert.Equal(RailPlacement.Middle, patchedPersisted.ViewPlacements["agent.chat"]);
+        Assert.Contains("agent.subsessions", patchedPersisted.HiddenHotbarViewIds);
+        Assert.Equal(475, patchedPersisted.LeftPanelWidth);
         Assert.Equal(1200, patchedPersisted.SettingsWindowPlacement?.Width);
 
         releaseSave.SetResult();
@@ -211,8 +231,90 @@ public sealed class ShellStateServiceTests
 
         persisted = service.Load();
         Assert.Equal(525, persisted.RightPanelWidth);
-        Assert.Equal(persisted.Revision, liveState.Revision);
+        // Background workers do not mutate the UI-owned live state.
+        Assert.Equal(2, liveState.Revision);
         Assert.Equal(3, persisted.Revision);
+    }
+
+    [Fact]
+    public async Task Flush_CapturesLatestStateAndSupersedesPendingDebounce()
+    {
+        using var service = new ShellStateService(Path.Combine(CreateTempDirectory(), "shell-state.json"));
+        var live = service.Load();
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var queue = new ShellStatePersistenceQueue(service, live, _ => never.Task);
+        live.RightPanelWidth = 1500;
+        var pending = queue.QueueSave();
+        live.RightPanelWidth = 1700;
+        live.SelectedMiddleViewId = "final";
+        await queue.FlushAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        await pending.WaitAsync(TimeSpan.FromSeconds(5));
+        var reloaded = service.Load();
+        Assert.Equal(1700, reloaded.RightPanelWidth);
+        Assert.Equal("final", reloaded.SelectedMiddleViewId);
+    }
+
+    [Fact]
+    public async Task IndependentStaleSaveCannotCancelAPendingSessionSnapshot()
+    {
+        using var service = new ShellStateService(Path.Combine(CreateTempDirectory(), "shell-state.json"));
+        var live = service.Load();
+        var stale = service.Load();
+        var never = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var queue = new ShellStatePersistenceQueue(service, live, _ => never.Task);
+        live.RightPanelWidth = 1700;
+        var pending = queue.QueueSave();
+        service.Save(stale);
+        await pending;
+        Assert.Equal(1700, service.Load().RightPanelWidth);
+        Assert.Equal(0, stale.Revision);
+    }
+
+    [Fact]
+    public async Task Writer_FlushBehindRunningWriteIsNotRejectedForAnOldRevision()
+    {
+        using var started = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var saved = new List<double>();
+        using var writer = new ShellStateWriter();
+        long Save(double width)
+        {
+            if (width == 600)
+            {
+                started.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            }
+            saved.Add(width);
+            return saved.Count;
+        }
+        var first = writer.Enqueue(() => Save(600));
+        Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+        var final = writer.Enqueue(() => Save(700));
+        Assert.False(final.IsCompleted);
+        release.Set();
+        await Task.WhenAll(first, final).WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal([600d, 700d], saved);
+
+        using var service = new ShellStateService(Path.Combine(CreateTempDirectory(), "shell-state.json"));
+        var live = service.Load();
+        service.Save(new ShellState { RightPanelWidth = 600 });
+        // The UI snapshot predates the completed disk write, but its contents
+        // are the newer session intent. A flush must not silently reject it.
+        live.RightPanelWidth = 700;
+        await service.FlushAsync(live);
+        Assert.Equal(700, service.Load().RightPanelWidth);
+    }
+
+    [Theory]
+    [InlineData(-1, 0.10, 0.01)]
+    [InlineData(2, 0.90, 0.99)]
+    public void LoadedRatiosUseTheSameBoundsAsRenderingAndInput(double value, double top, double bottom)
+    {
+        using var service = new ShellStateService(Path.Combine(CreateTempDirectory(), "shell-state.json"));
+        service.Save(new ShellState { TopRowHeightRatio = value, BottomSplitRatio = value });
+        var reloaded = service.Load();
+        Assert.Equal(top, reloaded.TopRowHeightRatio);
+        Assert.Equal(bottom, reloaded.BottomSplitRatio);
     }
 
     [Fact]

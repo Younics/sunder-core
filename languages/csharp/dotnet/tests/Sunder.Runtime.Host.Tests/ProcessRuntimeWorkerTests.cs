@@ -2173,6 +2173,8 @@ public sealed partial class ProcessRuntimeWorkerTests
         Assert.DoesNotContain("DOTNET_HOST_PATH", startInfo.Environment.Keys);
         Assert.DoesNotContain("NVM_BIN", startInfo.Environment.Keys);
         Assert.DoesNotContain("NVM_DIR", startInfo.Environment.Keys);
+        Assert.Equal(SunderToolchainPolicy.Development,
+            JsonSerializer.Deserialize<Sunder.Sdk.Abstractions.SunderDevelopmentToolchain>(startInfo.Environment["SUNDER_DEVELOPMENT_TOOLCHAIN"]!));
         Assert.Equal(
             ExpectedWorkerEnvironmentNames(),
             startInfo.Environment.Keys
@@ -2208,6 +2210,7 @@ public sealed partial class ProcessRuntimeWorkerTests
         var names = new List<string>
         {
             "SUNDER_ACTIVATION_ID",
+            "SUNDER_DEVELOPMENT_TOOLCHAIN",
             "SUNDER_PACKAGE_CONTENT_ROOT",
             "SUNDER_PACKAGE_ID",
             "SUNDER_PACKAGE_VERSION",

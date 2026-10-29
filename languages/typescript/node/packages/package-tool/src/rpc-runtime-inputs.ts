@@ -3,6 +3,7 @@ import { builtinModules } from "node:module";
 import { lstat, open, realpath } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import { build as esbuild, type BuildOptions, type Loader, type OnLoadResult, type OnResolveArgs, type OnResolveResult, type Plugin } from "esbuild";
+import { NODE_TARGET } from "./toolchains.generated";
 
 // Explicit conditions suppress esbuild's implicit `module` condition. Standard
 // import/require/default conditions still follow the syntax at each import site.
@@ -174,7 +175,7 @@ export async function captureOwnedRuntimeInputs(
     };
   }
   const scan = async (mode: "capture" | "verify"): Promise<void> => {
-    await esbuild({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: "node", format: "cjs", target: "node24",
+    await esbuild({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: "node", format: "cjs", target: NODE_TARGET,
       ...workerResolutionOptions, tsconfigRaw: {}, write: false, metafile: true, logLevel: "silent", plugins: [plugin(mode)] });
   };
   await scan("capture");

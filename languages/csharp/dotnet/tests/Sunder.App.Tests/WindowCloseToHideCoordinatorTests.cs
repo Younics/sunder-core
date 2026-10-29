@@ -57,10 +57,12 @@ public sealed class WindowCloseToHideCoordinatorTests
         using var coordinator = new WindowCloseToHideCoordinator(
             window,
             transition,
-            reconciliationScheduler: scheduler);
+            reconciliationScheduler: scheduler,
+            closeRequested: () => calls.Add("capture-reopen-state"));
 
         Assert.True(coordinator.HandleCloseRequest());
         Assert.Equal(1, transition.ExitRequestCount);
+        Assert.True(calls.IndexOf("capture-reopen-state") < calls.IndexOf("exit"));
         Assert.Equal(0, window.HideCount);
         Assert.True(coordinator.IsHidePending);
 

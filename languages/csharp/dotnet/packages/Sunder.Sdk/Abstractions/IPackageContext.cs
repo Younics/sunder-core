@@ -14,6 +14,9 @@ public interface IPackageContext
     string Version { get; }
     /// <summary>Gets the read-only activation content root; mutable data must use <see cref="Storage"/>.</summary>
     string ContentRootPath { get; }
+    /// <summary>Gets the running Host's exact development tools, or null on Hosts without this capability.</summary>
+    [SunderSdkCapability(SunderSdkCapabilities.DevelopmentToolchainV1)]
+    SunderDevelopmentToolchain? DevelopmentToolchain => null;
     /// <summary>Gets package-scoped storage for the current host role.</summary>
     IPackageStorageContext Storage { get; }
     /// <summary>Gets writable, schema-declared package settings stored independently from package state.</summary>

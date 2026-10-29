@@ -21,6 +21,7 @@ public partial class App : Application
     private readonly Action<Action> _postShutdownCompletion;
     private readonly Action<IClassicDesktopStyleApplicationLifetime, int> _shutdownDesktop;
     private ServiceProvider? _serviceProvider;
+    private AppProcessPolicyLifetime? _processPolicy;
     private ShellSession? _session;
     private IClassicDesktopStyleApplicationLifetime? _desktopLifetime;
     private Window? _shutdownWindow;
@@ -62,6 +63,7 @@ public partial class App : Application
             Program.StartupOptions,
             _packageResourceAssemblyRegistry
         );
+        _processPolicy = _serviceProvider.GetRequiredService<AppProcessPolicyLifetime>();
         _serviceProvider.GetRequiredService<IThemeManager>().Initialize();
 
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
@@ -443,7 +445,7 @@ public partial class App : Application
         }
     }
 
-    private void RequestDesktopShutdown(
+    internal void RequestDesktopShutdown(
         IClassicDesktopStyleApplicationLifetime desktop,
         int exitCode = 0
     )
@@ -453,12 +455,16 @@ public partial class App : Application
             Interlocked.Exchange(ref _requestedExitCode, exitCode);
         }
 
+        _processPolicy?.BeginShutdown();
+        _session?.BeginShutdown();
         var shutdownTask = _shutdown.ShutdownAsync(ShutdownCoreAsync);
         if (Interlocked.CompareExchange(ref _desktopShutdownTask, shutdownTask, null) is not null)
         {
             return;
         }
 
+        AppSessionLog.WritePolicySupervisionDiagnostic(
+            $"App shutdown reason={(exitCode == 0 ? "user" : "policy-or-failure")}; phase=requested.");
         shutdownTask.ContinueWith(
             completed =>
                 _postShutdownCompletion(() => CompleteDesktopShutdown(desktop, completed)),
@@ -468,21 +474,37 @@ public partial class App : Application
         );
     }
 
-    private void CompleteDesktopShutdown(
+    private async void CompleteDesktopShutdown(
         IClassicDesktopStyleApplicationLifetime desktop,
         Task shutdownTask
     )
     {
         var exitCode = Volatile.Read(ref _requestedExitCode);
-        if (shutdownTask.Exception is { } exception)
+        if (shutdownTask.Exception is { } shutdownException)
         {
             exitCode = 1;
-            AppSessionLog.WriteError("Sunder shutdown failed.", exception.Flatten());
+            AppSessionLog.WriteError("Sunder shutdown failed.", shutdownException.Flatten());
         }
 
-        _allowDesktopShutdown = true;
-        _allowWindowClose = true;
-        _shutdownDesktop(desktop, exitCode);
+        // This callback is the final UI exit handoff, not another cleanup phase.
+        // Keep proof alive even while the dispatcher is waiting to run it.
+        try
+        {
+            if (_processPolicy is { } processPolicy)
+                await processPolicy.StopForExitAsync();
+        }
+        catch (Exception exception)
+        {
+            exitCode = 1;
+            AppSessionLog.WriteError("Failed to complete the App policy exit handoff.", exception);
+        }
+        finally
+        {
+            if (Volatile.Read(ref _requestedExitCode) != 0) exitCode = 1;
+            _allowDesktopShutdown = true;
+            _allowWindowClose = true;
+            _shutdownDesktop(desktop, exitCode);
+        }
     }
 
     private async Task ShutdownCoreAsync()

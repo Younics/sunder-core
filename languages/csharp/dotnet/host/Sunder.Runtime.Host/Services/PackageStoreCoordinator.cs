@@ -18,14 +18,15 @@ internal sealed class PackageStoreCoordinator
         InstalledPackageStore store,
         SunderPackageArchiveInstaller archiveInstaller,
         IPackageStoreFaultInjector? faultInjector = null,
-        PackageLifecyclePolicyCache? packagePolicies = null)
+        PackageLifecyclePolicyCache? packagePolicies = null,
+        ILogger<PackageStoreCoordinator>? logger = null)
     {
         _paths = paths;
         _store = store;
         _packagePolicies = packagePolicies;
         _stages = new PackageStoreStageManager(store, archiveInstaller, packagePolicies);
         _transactions = new PackageStoreTransactionManager(paths, store, faultInjector, packagePolicies);
-        _recovery = new PackageStoreRecovery(paths, store, _transactions);
+        _recovery = new PackageStoreRecovery(paths, store, _transactions, logger);
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)

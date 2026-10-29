@@ -316,9 +316,9 @@ internal static class PackageTargetBuilder
         {
             log.LogError("A C# worker target requires OutputType 'Exe'.");
         }
-        if (!string.Equals(worker.TargetFramework, SunderPackageFormat.DotNetWorkerTargetFramework, StringComparison.Ordinal))
+        if (!DotNetWorkerProfile.IsSupported(worker.TargetFramework))
         {
-            log.LogError($"A C# worker target requires TargetFramework '{SunderPackageFormat.DotNetWorkerTargetFramework}'.");
+            log.LogError("A C# worker target requires a .NET target framework supported by this Sunder release.");
         }
         if (selfContained)
         {
@@ -391,7 +391,7 @@ internal static class PackageTargetBuilder
                 ? new SunderPackageExecutionRuntimeManifest
                 {
                     Id = SunderPackageFormat.DotNetExecutionRuntimeId,
-                    VersionRange = SunderPackageFormat.DotNetExecutionRuntimeVersionRange,
+                    VersionRange = DotNetWorkerProfile.TryGetRuntimeRange(targetFramework, out var range) ? range : null,
                     ModuleAbi = SunderPackageFormat.DotNetWorkerModuleAbi,
                 }
                 : null,

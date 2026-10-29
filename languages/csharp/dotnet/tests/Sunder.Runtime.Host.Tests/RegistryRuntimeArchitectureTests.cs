@@ -1344,7 +1344,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             var missing = Assert.Single(prerequisites.Requirements);
             Assert.Equal(packageId, missing.Package.PackageId);
             Assert.Equal(SunderPackageFormat.DotNetExecutionRuntimeId, missing.Requirement.RuntimeId);
-            Assert.Equal(SunderPackageFormat.DotNetExecutionRuntimeVersionRange, missing.Requirement.VersionRange);
+            Assert.Equal(">=10.0.0 <11.0.0", missing.Requirement.VersionRange);
             Assert.Equal(SunderPackageFormat.DotNetWorkerModuleAbi, missing.Requirement.ModuleAbi);
             Assert.False(missing.Satisfied);
             Assert.Equal(ExecutionRuntimeErrorCodes.Missing, missing.ErrorCode);

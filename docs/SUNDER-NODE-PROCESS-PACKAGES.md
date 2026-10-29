@@ -179,9 +179,10 @@ through the Host's official vendor source:
 sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1
 ```
 
-The repository pins Node `24.18.1`, TypeScript `6.0.3`, `esbuild` `0.28.1` and Vite
-`8.2.0` for package tooling. Those development pins do not place a Node distribution
-in the package.
+The repository pins Node `24.22.1` with npm `11.19.1`, TypeScript `6.0.3`, `esbuild`
+`0.28.1` and Vite `8.2.0` for package tooling. The [toolchain policy](package-toolchains.md)
+keeps those exact development versions separate from the compatible execution-runtime
+range. Development pins do not place a Node distribution in the package.
 
 ## Exact-RID Leaves And Aggregation
 

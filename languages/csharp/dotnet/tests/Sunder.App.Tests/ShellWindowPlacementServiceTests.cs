@@ -17,7 +17,8 @@ public sealed class ShellWindowPlacementServiceTests
             Snapshot(0, 0, 3024, 1964, WindowState.FullScreen),
             normal);
 
-        Assert.Same(normal, captured);
+        Assert.NotSame(normal, captured);
+        Assert.True(captured!.IsFullScreen);
         Assert.Equal(120, captured!.X);
         Assert.Equal(80, captured.Y);
         Assert.Equal(1100, captured.Width);
@@ -51,6 +52,21 @@ public sealed class ShellWindowPlacementServiceTests
         Assert.Equal(140, restored.Y);
         Assert.Equal(1280, restored.Width);
         Assert.Equal(820, restored.Height);
+        Assert.False(restored.IsFullScreen);
+        Assert.False(restored.IsMaximized);
+    }
+
+    [Theory]
+    [InlineData(WindowState.Maximized)]
+    [InlineData(WindowState.Minimized)]
+    public void Capture_NonNormalStateDoesNotOverwriteNormalRestoreBounds(WindowState mode)
+    {
+        var normal = ShellWindowPlacementService.Capture(Snapshot(120, 80, 1100, 760, WindowState.Normal));
+        var captured = ShellWindowPlacementService.Capture(Snapshot(0, 0, 3024, 1964, mode), normal);
+        Assert.Equal(1100, captured!.Width);
+        Assert.Equal(760, captured.Height);
+        Assert.Equal(120, captured.X);
+        Assert.Equal(mode == WindowState.Maximized, captured.IsMaximized);
     }
 
     private static ShellWindowPlacementSnapshot Snapshot(

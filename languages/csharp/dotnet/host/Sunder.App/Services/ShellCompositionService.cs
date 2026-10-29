@@ -12,7 +12,8 @@ public sealed class ShellCompositionService : IShellCompositionService
         SystemStatusResponse? systemStatus,
         IReadOnlyList<string> warnings,
         IReadOnlyList<string> errors,
-        ShellNormalizationPolicy normalizationPolicy
+        ShellNormalizationPolicy normalizationPolicy,
+        IReadOnlySet<string>? unavailablePackageIds = null
     )
     {
         var packageViews = new List<ShellPackageView>();
@@ -47,7 +48,9 @@ public sealed class ShellCompositionService : IShellCompositionService
             .ThenBy(x => x.Title, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        ShellStateNormalizer.Normalize(state, orderedViews, normalizationPolicy);
+        ShellStateNormalizer.Normalize(state, orderedViews, normalizationPolicy,
+            activePackages.Select(package => package.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase),
+            unavailablePackageIds);
 
         var systemStatusText = errors.Count > 0
             ? "Runtime loaded with errors"
@@ -60,6 +63,21 @@ public sealed class ShellCompositionService : IShellCompositionService
             : $"{activePackages.Count} package(s) active";
 
         return new ShellSnapshot(orderedViews, state, warnings, errors, systemStatusText, syncStatusText);
+    }
+
+    internal static IReadOnlySet<string> GetUnavailablePackageIds(
+        IReadOnlyList<ActivePackageDescriptor> composedPackages,
+        IReadOnlyList<ActivePackageDescriptor> runtimeActivePackages,
+        IReadOnlyList<SessionPackageDescriptor>? sessionPackages = null)
+    {
+        var composedIds = composedPackages.Select(package => package.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Runtime does not enumerate App registrations. It only identifies enabled
+        // App packages whose missing composition is a failure rather than removal.
+        return runtimeActivePackages.Where(package => package.IsEnabled && (package.HostRoles & PackageHostRoles.App) != 0)
+            .Select(package => package.PackageId)
+            .Concat((sessionPackages ?? []).Where(package => package.IsEnabled && (package.HostRoles & PackageHostRoles.App) != 0)
+                .Select(package => package.PackageId))
+            .Where(id => !composedIds.Contains(id)).ToHashSet(StringComparer.OrdinalIgnoreCase);
     }
 
     private static RailPlacement ResolvePlacement(PackageViewDescriptor view, ShellState state)

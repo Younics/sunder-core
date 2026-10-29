@@ -89,7 +89,7 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                     [],
                     new RegistryExecutionRuntimeRequirement(
                         SunderPackageFormat.DotNetExecutionRuntimeId,
-                        SunderPackageFormat.DotNetExecutionRuntimeVersionRange,
+                        ">=10.0.0 <11.0.0",
                         SunderPackageFormat.DotNetWorkerModuleAbi))],
                 [new RegistryPackageProjectionArtifact(
                     "runtime",

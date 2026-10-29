@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class AppProcessPolicySupervisorTests
+public sealed partial class AppProcessPolicySupervisorTests
 {
     private static readonly AsyncLocal<string?> ActivationContext = new();
 
@@ -537,12 +537,14 @@ public sealed class AppProcessPolicySupervisorTests
         internal int Permits;
         internal int Heartbeats;
         internal int Shutdowns;
+        internal TaskCompletionSource<RuntimeAppPolicySessionStatus>? ShutdownReply;
         internal string HeartbeatState = RuntimeAppPolicySessionStates.Active;
         internal bool ShutdownRequired;
         internal bool WrongIdentity;
         internal bool Development;
         internal bool DevelopmentPlatformLease;
         internal Action? BeforePermit;
+        internal Func<Task>? DuringOpen;
         internal Func<RuntimeAppPackageLoadPermitRequest, CancellationToken, Task>? DuringPermit;
         internal Exception? HeartbeatFailure;
         internal string? HeartbeatSessionId;
@@ -552,8 +554,12 @@ public sealed class AppProcessPolicySupervisorTests
         internal IReadOnlyList<RuntimeAppActivationRetirementRequirement> RequiredRetirements = [];
         public Task<RuntimeHandshakeResponse> HandshakeAsync(CancellationToken token) => Task.FromResult(Handshake);
         public RuntimeHandshakeResponse HeartbeatHandshake(CancellationToken token) => Handshake;
-        public Task<RuntimeAppPolicySessionDescriptor> OpenAsync(RuntimeAppPolicySessionOpenRequest request, CancellationToken token)
-        { Opens++; return Task.FromResult(new RuntimeAppPolicySessionDescriptor(SessionId, request.Process, "active")); }
+        public async Task<RuntimeAppPolicySessionDescriptor> OpenAsync(RuntimeAppPolicySessionOpenRequest request, CancellationToken token)
+        {
+            Opens++;
+            if (DuringOpen is { } opening) await opening();
+            return new(SessionId, request.Process, "active");
+        }
         public RuntimeAppPolicySessionStatus Heartbeat(RuntimeAppPolicySessionRequest request, CancellationToken token)
         {
             Interlocked.Increment(ref Heartbeats);
@@ -583,7 +589,7 @@ public sealed class AppProcessPolicySupervisorTests
         public Task<RuntimeAppPolicySessionStatus> ShutdownAsync(RuntimeAppPolicySessionRequest request, CancellationToken token)
         {
             Interlocked.Increment(ref Shutdowns);
-            return Task.FromResult(new RuntimeAppPolicySessionStatus(request.SessionId, "shutdown-requested", PackagePolicyErrorCodes.AppProcessTerminationRequired, true, []));
+            return ShutdownReply?.Task ?? Task.FromResult(new RuntimeAppPolicySessionStatus(request.SessionId, "shutdown-requested", PackagePolicyErrorCodes.AppProcessTerminationRequired, true, []));
         }
     }
 

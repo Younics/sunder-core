@@ -21,10 +21,7 @@
     <DataTemplate DataType="vm:TextSettingsFieldViewModel" x:DataType="vm:TextSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
-        <TextBlock Classes="section-title" Text="{Binding Label}" />
-        <TextBlock Classes="caption"
-                   Text="{Binding Description}"
-                   TextWrapping="Wrap" />
+        <controls:SettingsFieldHeader Title="{Binding Label}" HelpText="{Binding Description}" />
         <TextBox Text="{Binding Value}"
                  PlaceholderText="{Binding Placeholder}" />
       </StackPanel>
@@ -32,10 +29,7 @@
     <DataTemplate DataType="vm:SecretSettingsFieldViewModel" x:DataType="vm:SecretSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
-        <TextBlock Classes="section-title" Text="{Binding Label}" />
-        <TextBlock Classes="caption"
-                   Text="{Binding Description}"
-                   TextWrapping="Wrap" />
+        <controls:SettingsFieldHeader Title="{Binding Label}" HelpText="{Binding Description}" />
         <TextBox Text="{Binding Value}"
                  PasswordChar="*"
                  PlaceholderText="{Binding Placeholder}" />
@@ -44,20 +38,16 @@
     <DataTemplate DataType="vm:BooleanSettingsFieldViewModel" x:DataType="vm:BooleanSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
-        <CheckBox Content="{Binding Label}"
-                  IsChecked="{Binding Value}" />
-        <TextBlock Classes="caption"
-                   Text="{Binding Description}"
-                   TextWrapping="Wrap" />
+        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="{DynamicResource Sunder.Spacing.XSmall}" HorizontalAlignment="Left">
+          <CheckBox IsChecked="{Binding Value}"><TextBlock Text="{Binding Label}" TextWrapping="Wrap" /></CheckBox>
+          <controls:SettingsHelpButton Grid.Column="1" HelpText="{Binding Description}" />
+        </Grid>
       </StackPanel>
     </DataTemplate>
     <DataTemplate DataType="vm:SelectSettingsFieldViewModel" x:DataType="vm:SelectSettingsFieldViewModel">
       <StackPanel Spacing="8"
                   IsVisible="{Binding IsVisible}">
-        <TextBlock Classes="section-title" Text="{Binding Label}" />
-        <TextBlock Classes="caption"
-                   Text="{Binding Description}"
-                   TextWrapping="Wrap" />
+        <controls:SettingsFieldHeader Title="{Binding Label}" HelpText="{Binding Description}" />
         <controls:SunderComboBox ItemsSource="{Binding Options}"
                                  SelectedItem="{Binding SelectedOption}">
           <controls:SunderComboBox.ItemTemplate>
@@ -71,8 +61,32 @@
   </Window.DataTemplates>
 
   <Window.Styles>
-    <Style Selector="Border.settings-package-content">
-      <Setter Property="Padding" Value="18" />
+    <Style Selector="Border#SettingsSelectionPane">
+      <Setter Property="Margin" Value="0" /><Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="Border#SettingsSelectionPane.settings-package-content">
+      <Setter Property="Padding" Value="0" />
+      <Setter Property="Margin" Value="0" />
+    </Style>
+    <Style Selector="Button.settings-info">
+      <Setter Property="Width" Value="28" /><Setter Property="Height" Value="28" />
+      <Setter Property="MinWidth" Value="28" /><Setter Property="MinHeight" Value="28" />
+      <Setter Property="Padding" Value="0" /><Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
+      <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
+    </Style>
+    <Style Selector="Button.settings-info:pointerover"><Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" /></Style>
+    <Style Selector="FlyoutPresenter.settings-help-popover">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Padding" Value="{DynamicResource Sunder.Padding.Card}" />
+      <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Small}" />
+    </Style>
+    <Style Selector="FlyoutPresenter.settings-help-popover /template/ Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource Sunder.Shadow.Toast}" />
     </Style>
   </Window.Styles>
 
@@ -188,18 +202,17 @@
                 x:Name="SettingsSelectionPane"
                 Classes.workspace-surface="{Binding IsCoreSelection}"
                 Classes.settings-package-content="{Binding IsPackageSelection}"
-                AutomationProperties.Name="{Binding SelectedTitle}"
-                Margin="16">
+                AutomationProperties.Name="{Binding SelectedTitle}">
           <Grid RowDefinitions="Auto,*">
-            <StackPanel x:Name="SettingsSelectionHeader" Spacing="6" Margin="0,0,0,14"
+            <StackPanel x:Name="SettingsSelectionHeader" Spacing="6" Margin="20,20,20,0"
                         IsVisible="{Binding IsCoreSelection}">
               <TextBlock Classes="page-title" Text="{Binding SelectedTitle}" />
               <TextBlock Classes="caption" Text="{Binding SelectedDescription}" TextWrapping="Wrap" />
             </StackPanel>
 
-            <ScrollViewer Grid.Row="1"
+            <ScrollViewer x:Name="SettingsSelectionScroll" Grid.Row="1" HorizontalScrollBarVisibility="Disabled"
                           IsVisible="{Binding ShowScrollableSelectionContent}">
-              <StackPanel Spacing="16">
+              <StackPanel Spacing="{DynamicResource Sunder.Spacing.Large}" Margin="{DynamicResource Sunder.Padding.Panel}">
                 <Border IsVisible="{Binding IsPackageRuntimesSelection}">
                   <controls:PackageRuntimesSettings DataContext="{Binding PackageRuntimes}" />
                 </Border>
@@ -487,17 +500,14 @@
 
                 <ItemsControl ItemsSource="{Binding PackageSettings.SelectedPackageSections}"
                                IsVisible="{Binding ShowGenericPackageSettings}">
+                  <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="{DynamicResource Sunder.Spacing.Large}" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:SettingsFieldSectionViewModel">
                       <Border Classes="card-surface">
                         <StackPanel Spacing="12">
-                          <StackPanel Spacing="4">
-                            <TextBlock Classes="section-title" Text="{Binding Title}" />
-                            <TextBlock Classes="caption"
-                                       Text="{Binding Description}"
-                                       TextWrapping="Wrap" />
-                          </StackPanel>
+                          <controls:SettingsFieldHeader Title="{Binding Title}" HelpText="{Binding Description}" />
                           <ItemsControl ItemsSource="{Binding Fields}">
+                            <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Spacing="{DynamicResource Sunder.Spacing.Large}" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
                               <DataTemplate x:DataType="vm:SettingsFieldViewModel">
                                 <ContentControl Content="{Binding}" />

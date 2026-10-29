@@ -111,7 +111,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.100
+          dotnet-version: 10.0.403
       - run: dotnet restore MyPackage.slnx --locked-mode
       - run: dotnet test MyPackage.slnx -c Release --no-restore
       - run: dotnet msbuild src/MyPackage/MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release

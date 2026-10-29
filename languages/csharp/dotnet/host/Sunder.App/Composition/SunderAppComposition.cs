@@ -79,19 +79,18 @@ internal static class SunderAppComposition
         services.AddSingleton<IThemeManager>(provider => provider.GetRequiredService<ThemeManager>());
         services.AddSingleton<IShellCompositionService, ShellCompositionService>();
 
-        services.AddSingleton(provider => new AppRuntimeProcessTransport(provider.GetRequiredService<RuntimeClientTransport>()));
-        services.AddSingleton(provider => new AppProcessPolicySupervisor(provider.GetRequiredService<AppRuntimeProcessTransport>(), () =>
+        services.AddSingleton(provider => new AppProcessPolicyLifetime(provider.GetRequiredService<RuntimeConnectionState>(), () =>
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 if (application is App app) app.RequestPolicyShutdown();
             })));
         services.AddSingleton(provider => new PackageViewHostServiceFactory(
             provider.GetRequiredService<AppPackageShellViewService>(), provider.GetRequiredService<AppPackageSettingsNavigationService>(),
-            provider.GetRequiredService<AppRuntimeProcessTransport>().Transport, provider.GetRequiredService<NotificationCenterService>(),
+            provider.GetRequiredService<AppProcessPolicyLifetime>().PackageTransport, provider.GetRequiredService<NotificationCenterService>(),
             provider.GetRequiredService<BackgroundTaskQueueService>(), provider.GetRequiredService<AppPackageResourceAssemblyRegistry>(),
             provider.GetRequiredService<IUiDispatcher>())
         {
-            PackagePolicy = provider.GetRequiredService<AppProcessPolicySupervisor>(),
+            PackagePolicy = provider.GetRequiredService<AppProcessPolicyLifetime>().Supervisor,
             DeveloperServices = provider.GetRequiredService<AppPackageDeveloperServices>(),
         });
         services.AddSingleton<WindowLauncherFactory>();

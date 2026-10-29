@@ -124,6 +124,55 @@ public sealed class OfficialRuntimeSourcePolicyTests
             new("sunder.runtime.dotnet", ">=10.0.0 <11.0.0", "sunder.dotnet-worker-module.v1"), "linux-x64", default));
     }
 
+    [Fact]
+    public async Task DotNetSupportedMajorsCoexistAndResolveOnlyWithinThePackageMajor()
+    {
+        var metadata = DotNetMetadata("linux-x64", "tar.gz", new('a', 128));
+        using var http = Create(request => Json(request.RequestUri!.AbsolutePath.Contains("/11.0/", StringComparison.Ordinal)
+            ? metadata.Replace("10.0", "11.0", StringComparison.Ordinal).Replace("\"lts\"", "\"sts\"", StringComparison.Ordinal) : metadata));
+        var resolver = new OfficialRuntimeResolver(http, new Clock(), dotnetMajors: [10, 11]);
+        var catalog = await resolver.CatalogAsync(ConfiguredOfficialSourceId.DotNet, "linux-x64", 0, 10, default);
+        Assert.Equal(new[] { "11.0.12", "10.0.12" }, catalog.Items.Select(item => item.Identity.VendorVersion));
+        foreach (var major in new[] { 10, 11 })
+        {
+            var result = await resolver.ResolveAsync(new("sunder.runtime.dotnet", $">={major}.0.0 <{major + 1}.0.0", "sunder.dotnet-worker-module.v1"), "linux-x64", default);
+            Assert.Equal($"{major}.0.12", result.Identity.VendorVersion);
+            Assert.Equal($"dotnet-runtime-{major}.v1", result.Distribution.MaterializationProfile);
+            Assert.Contains($"/{major}.0/", result.Distribution.MetadataUrl);
+        }
+        var unsupported = await Assert.ThrowsAsync<RuntimeExecutionRuntimeException>(() => new OfficialRuntimeResolver(http, new Clock())
+            .ResolveAsync(new("sunder.runtime.dotnet", ">=11.0.0 <12.0.0", "sunder.dotnet-worker-module.v1"), "linux-x64", default));
+        Assert.Equal(ExecutionRuntimeErrorCodes.Unsupported, unsupported.Code);
+    }
+
+    [Fact]
+    public async Task NodeSupportedMajorsCoexistWithoutCrossMajorSelection()
+    {
+        using var http = Create(request => request.RequestUri!.AbsolutePath == "/dist/index.json" ? Json("""
+            [{"version":"v26.1.0","lts":"test-next-line","files":["linux-x64"]},
+             {"version":"v24.21.0","lts":"Krypton","files":["linux-x64"]}]
+            """) : Json(new string('b', 64) + "  " + request.RequestUri.Segments[2].TrimEnd('/').Replace("v", "node-v", StringComparison.Ordinal) + "-linux-x64.tar.gz\n"));
+        var resolver = new OfficialRuntimeResolver(http, new Clock(), nodeMajors: [24, 26], nodeEndOfLife: new Dictionary<int, DateTimeOffset>
+        { [24] = DateTimeOffset.Parse("2028-04-30T00:00:00Z"), [26] = DateTimeOffset.Parse("2030-04-30T00:00:00Z") });
+        foreach (var (major, version) in new[] { (24, "24.21.0"), (26, "26.1.0") })
+        {
+            var result = await resolver.ResolveAsync(new("sunder.runtime.node", $">={major}.0.0 <{major + 1}.0.0", "sunder.node-worker-module.v1"), "linux-x64", default);
+            Assert.Equal(version, result.Identity.VendorVersion);
+            Assert.Equal($"node-runtime-{major}.v1", result.Distribution.MaterializationProfile);
+        }
+    }
+
+    [Fact]
+    public void HistoricalEvidenceValidityIsNotCurrentSelectionEligibility()
+    {
+        var identity = new RuntimeExecutionRuntimeIdentity(ConfiguredOfficialSourceId.DotNet, "sunder.runtime.dotnet", "10.0.12", "linux-x64",
+            "sunder.dotnet-worker-module.v1", RuntimeExecutionRuntimeChecksumAlgorithm.Sha512, new('a', 128));
+        OfficialRuntimeSourcePolicy.ValidateIdentity(identity);
+        Assert.False(OfficialRuntimeSourcePolicy.EligibleVersion(identity.SourceId, identity.VendorVersion, [11]));
+        Assert.True(OfficialRuntimeSourcePolicy.EligibleVersion(identity.SourceId, identity.VendorVersion, [10, 11]));
+        Assert.Equal("dotnet-runtime-10.v1", OfficialRuntimeSourcePolicy.Profile(identity.SourceId, identity.VendorVersion));
+    }
+
     private static string DotNetMetadata(string rid, string extension, string hash) => $$$"""
         {"channel-version":"10.0","support-phase":"active","release-type":"lts","eol-date":"2028-11-14","releases":[
         {"runtime":{"version":"10.0.13-preview.1","files":[]}},

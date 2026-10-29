@@ -109,16 +109,16 @@ internal sealed class MacNativeMenuController : IDisposable
         _rootMenu.Items.Clear();
         foreach (var item in _viewModelAccessor()?.GetMainMenuItems() ?? [])
         {
-            _rootMenu.Add(BuildNativeItem(item));
+            _rootMenu.Add(BuildNativeItem(item, isTopLevel: true));
         }
     }
 
-    private NativeMenuItem BuildNativeItem(ShellMenuItem item)
+    internal NativeMenuItem BuildNativeItem(ShellMenuItem item, bool isTopLevel)
     {
         var nativeItem = new NativeMenuItem
         {
             Header = item.Title,
-            Icon = ResolveMenuIcon(item.IconImage),
+            Icon = isTopLevel ? null : ResolveMenuIcon(item.IconImage),
             IsEnabled = item.IsEnabled,
         };
         if (item.Children.Count > 0)
@@ -126,7 +126,7 @@ internal sealed class MacNativeMenuController : IDisposable
             var submenu = new NativeMenu();
             foreach (var child in item.Children)
             {
-                submenu.Add(BuildNativeItem(child));
+                submenu.Add(BuildNativeItem(child, isTopLevel: false));
             }
             nativeItem.Menu = submenu;
         }

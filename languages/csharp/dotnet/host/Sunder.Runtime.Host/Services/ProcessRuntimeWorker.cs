@@ -925,6 +925,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
         }
         startInfo.Environment["SUNDER_WORKER_PROTOCOL"] = SunderWorkerProtocol.Name;
         startInfo.Environment["SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1"] = "1";
+        startInfo.Environment["SUNDER_DEVELOPMENT_TOOLCHAIN"] = JsonSerializer.Serialize(Sunder.Package.Format.SunderToolchainPolicy.Development);
         startInfo.Environment["SUNDER_PACKAGE_ID"] = _package.PackageId;
         startInfo.Environment["SUNDER_PACKAGE_VERSION"] = _package.Version;
         startInfo.Environment["SUNDER_ACTIVATION_ID"] = _activationId.ToString("N");

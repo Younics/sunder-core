@@ -266,6 +266,8 @@ internal sealed class ExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchRe
                                : "does not carry its committed execution-runtime binding");
 
         ValidateTargetBinding(package, targetKey, requirement, binding);
+        if (!OfficialRuntimeSourcePolicy.EligibleVersion(binding.Identity.SourceId, binding.Identity.VendorVersion))
+            throw Invalid(package, "requires a runtime major outside Sunder's supported range");
         phase.SetIdentity(binding.Identity);
 
         var receipt = await _store.GetReceiptAsync(binding.Identity, cancellationToken).ConfigureAwait(false)

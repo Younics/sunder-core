@@ -144,11 +144,11 @@ internal sealed class ShellPackageViewPresentationCoordinator : IDisposable
                     var presentation = _uiDispatcher.CheckAccess()
                         ? _packageLifecyclePresenter.PrepareLifecycleChanges(
                             activePackages,
-                            snapshot.ActivePackages)
+                            snapshot.ActivePackages, snapshot.SessionPackages)
                         : await _uiDispatcher.InvokeAsync(
                             () => _packageLifecyclePresenter.PrepareLifecycleChanges(
                                 activePackages,
-                                snapshot.ActivePackages));
+                                snapshot.ActivePackages, snapshot.SessionPackages));
                     var stabilizedViewIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     foreach (var viewId in presentation.SelectedViewIds)
                     {

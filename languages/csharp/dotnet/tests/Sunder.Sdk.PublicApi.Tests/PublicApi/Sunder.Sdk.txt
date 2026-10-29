@@ -118,6 +118,8 @@ type public interface Sunder.Sdk.Abstractions.IPackageContext
   property Sunder.Sdk.Abstractions.IPackageSecrets Secrets { public abstract virtual get; }
   property Sunder.Sdk.Abstractions.IPackageSettings Settings { public abstract virtual get; }
   property Sunder.Sdk.Abstractions.IPackageStorageContext Storage { public abstract virtual get; }
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("development-toolchain.v1")
+  property Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? DevelopmentToolchain { public virtual get; }
   property Sunder.Sdk.Logging.IPackageLogging Logging { public abstract virtual get; }
   property System.String ContentRootPath { public abstract virtual get; }
   property System.String PackageId { public abstract virtual get; }
@@ -580,6 +582,20 @@ type public enum Sunder.Sdk.Abstractions.PackageWorkerExecutionState : System.In
   field public const Sunder.Sdk.Abstractions.PackageWorkerExecutionState CleanupPending = 1
   field public const Sunder.Sdk.Abstractions.PackageWorkerExecutionState Unknown = 0
   field public System.Int32 value__
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("development-toolchain.v1")
+type public sealed class Sunder.Sdk.Abstractions.SunderDevelopmentToolchain : System.IEquatable<Sunder.Sdk.Abstractions.SunderDevelopmentToolchain>
+  method public .ctor(System.String DotnetSdkVersion, System.String NodeVersion, System.String NpmVersion)
+  property System.String DotnetSdkVersion { public get; public init; }
+  property System.String NodeVersion { public get; public init; }
+  property System.String NpmVersion { public get; public init; }
+  method public Sunder.Sdk.Abstractions.SunderDevelopmentToolchain <Clone>$()
+  method public System.Void Deconstruct(out System.String DotnetSdkVersion, out System.String NodeVersion, out System.String NpmVersion)
+  method public final virtual System.Boolean Equals(Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? left, Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? right)
+  method public static System.Boolean op_Inequality(Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? left, Sunder.Sdk.Abstractions.SunderDevelopmentToolchain? right)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("auth.v1")
 type public enum Sunder.Sdk.Authentication.PackageAuthFlowKind : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field public const Sunder.Sdk.Authentication.PackageAuthFlowKind Browser = 0
@@ -780,6 +796,7 @@ type public static class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field public const System.String CallbacksV1 = "callbacks.v1"
   field public const System.String ContributionsV1 = "contributions.v1"
   field public const System.String CoreV1 = "core.v1"
+  field public const System.String DevelopmentToolchainV1 = "development-toolchain.v1"
   field public const System.String DockerEnvironmentV1 = "docker-environment.v1"
   field public const System.String LoggingV1 = "logging.v1"
   field public const System.String NotificationsV1 = "notifications.v1"

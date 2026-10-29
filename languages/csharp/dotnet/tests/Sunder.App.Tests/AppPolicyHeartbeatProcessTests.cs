@@ -7,6 +7,20 @@ namespace Sunder.App.Tests;
 
 public sealed class AppPolicyHeartbeatProcessTests
 {
+    [MacOsTheory]
+    [InlineData("quit")]
+    [InlineData("quit-timeout")]
+    [Trait("Capability", "NativeUI")]
+    [Trait("Capability", "Process")]
+    public async Task NativeQuitKeepsSupervisionThroughDelayedOrTimedOutCleanupAndExitsTheDesktop(string mode)
+    {
+        var result = await RunProbeAsync(mode);
+        using var report = JsonDocument.Parse(result.StandardOutput.Trim());
+        Assert.True(report.RootElement.GetProperty("nativeDesktopExited").GetBoolean());
+        Assert.Equal(1, report.RootElement.GetProperty("shutdowns").GetInt32());
+        Assert.Equal(mode == "quit", report.RootElement.GetProperty("cleanupCompleted").GetBoolean());
+    }
+
     [Fact]
     [Trait("Capability", "Process")]
     public async Task OneProofExchangeDoesNotRestartItsDeadlineAcrossHttpRequests()
@@ -42,11 +56,19 @@ public sealed class AppPolicyHeartbeatProcessTests
         var start = new ProcessStartInfo(host) { UseShellExecute = false };
         foreach (var key in start.Environment.Keys.Where(key => key.StartsWith("SUNDER_", StringComparison.OrdinalIgnoreCase)
             || key.StartsWith("DOTNET_", StringComparison.OrdinalIgnoreCase)).ToArray()) start.Environment.Remove(key);
+        var root = Directory.CreateTempSubdirectory("sunder-policy-probe-").FullName;
+        start.Environment["SUNDER_APP_STATE_ROOT"] = Path.Combine(root, "app");
+        start.Environment["SUNDER_RUNTIME_STATE_ROOT"] = Path.Combine(root, "runtime");
+        start.Environment["SUNDER_HOST_STATE_ROOT"] = Path.Combine(root, "host");
         foreach (var argument in new[] { "exec", "--runtimeconfig", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Tests.runtimeconfig.json"),
             assembly, mode }) start.ArgumentList.Add(argument);
-        await using var process = CapturedProcess.Start(start, 128 * 1024);
-        var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(35));
-        Assert.False(string.IsNullOrWhiteSpace(result.StandardOutput), process.Diagnostics);
-        return result;
+        try
+        {
+            await using var process = CapturedProcess.Start(start, 128 * 1024);
+            var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(35));
+            Assert.False(string.IsNullOrWhiteSpace(result.StandardOutput), process.Diagnostics);
+            return result;
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 }

@@ -96,6 +96,20 @@ public sealed class ExecutionRuntimeLaunchResolverTests
         Assert.Equal([false], fixture.Store.Depths);
     }
 
+    [Theory]
+    [InlineData(false, 11)]
+    [InlineData(true, 26)]
+    public async Task Resolve_ValidHistoricalReceiptCannotAuthorizeAnUnsupportedMajor(bool nodeStyle, int major)
+    {
+        using var fixture = new LaunchFixture(nodeStyle, major: major);
+        var binding = fixture.Package.ExecutionRuntimeBinding!;
+        OfficialRuntimeSourcePolicy.ValidateInstalledArtifact(binding.Runtime, binding.InstalledArtifact);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Resolver.ResolveAsync(fixture.Package, Guid.NewGuid(), default));
+        Assert.Contains("outside Sunder's supported range", error.Message);
+        Assert.Equal(0, fixture.Store.ReceiptReads);
+        Assert.Empty(fixture.Store.Leases);
+    }
+
     private sealed class LaunchFixture : IDisposable
     {
         private readonly TemporaryDirectoryScope _temporary = TemporaryDirectoryScope.Create("official-runtime-launch");
@@ -107,16 +121,18 @@ public sealed class ExecutionRuntimeLaunchResolverTests
         internal LaunchStore Store { get; }
         internal ExecutionRuntimeLaunchResolver Resolver { get; }
 
-        internal LaunchFixture(bool node, RuntimeExecutionRuntimeSupportState support = RuntimeExecutionRuntimeSupportState.Supported)
+        internal LaunchFixture(bool node, RuntimeExecutionRuntimeSupportState support = RuntimeExecutionRuntimeSupportState.Supported, int? major = null)
         {
             var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-            var version = node ? "24.21.0" : "10.0.12";
+            var runtimeMajor = major ?? (node ? 24 : 10);
+            var version = node ? $"{runtimeMajor}.21.0" : $"{runtimeMajor}.0.12";
             var identity = new RuntimeExecutionRuntimeIdentity(node ? ConfiguredOfficialSourceId.Node : ConfiguredOfficialSourceId.DotNet,
                 node ? SunderPackageFormat.NodeExecutionRuntimeId : SunderPackageFormat.DotNetExecutionRuntimeId,
                 version, rid, node ? SunderPackageFormat.NodeWorkerModuleAbi : SunderPackageFormat.DotNetWorkerModuleAbi,
                 node ? RuntimeExecutionRuntimeChecksumAlgorithm.Sha256 : RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
                 new('b', node ? 64 : 128));
-            var requirement = new RuntimeExecutionRuntimeRequirement(identity.RuntimeId, node ? ">=24.18.1 <25.0.0" : ">=10.0.0 <11.0.0", identity.ModuleAbi);
+            var requirement = new RuntimeExecutionRuntimeRequirement(identity.RuntimeId,
+                node ? $">={runtimeMajor}.18.1 <{runtimeMajor + 1}.0.0" : $">={runtimeMajor}.0.0 <{runtimeMajor + 1}.0.0", identity.ModuleAbi);
             var projection = Path.Combine(Root, "projection");
             Directory.CreateDirectory(projection);
             var entryName = node ? "worker.cjs" : "worker.dll";
@@ -126,7 +142,7 @@ public sealed class ExecutionRuntimeLaunchResolverTests
             var target = new SunderPackageTargetManifest
             {
                 Role = "runtime", Rid = rid, Kind = "worker", EntryPoint = entryName,
-                TargetFramework = node ? "node24" : "net10.0", SdkVersion = "1.1.0",
+                TargetFramework = node ? $"node{runtimeMajor}" : $"net{runtimeMajor}.0", SdkVersion = "1.1.0",
                 RequiredHostCapabilities = ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
                 ExecutionRuntime = new() { Id = identity.RuntimeId, VersionRange = requirement.VersionRange, ModuleAbi = identity.ModuleAbi },
             };
@@ -149,16 +165,16 @@ public sealed class ExecutionRuntimeLaunchResolverTests
             var archiveName = OfficialRuntimeSourcePolicy.ArchiveName(identity.SourceId, version, rid);
             var url = node ? $"https://nodejs.org/dist/v{version}/{archiveName}"
                 : $"https://builds.dotnet.microsoft.com/dotnet/Runtime/{version}/{archiveName}";
-            var distribution = new RuntimeExecutionRuntimeDistribution(url, OfficialRuntimeSourcePolicy.MetadataUri(identity.SourceId).AbsoluteUri,
+            var distribution = new RuntimeExecutionRuntimeDistribution(url, OfficialRuntimeSourcePolicy.MetadataUri(identity.SourceId, runtimeMajor).AbsoluteUri,
                 new('a', 64), node ? OfficialRuntimeSourcePolicy.ChecksumUri(version).AbsoluteUri : null, node ? new('e', 64) : null,
                 rid.StartsWith("win-", StringComparison.Ordinal) ? RuntimeExecutionRuntimeArchiveFormat.Zip : RuntimeExecutionRuntimeArchiveFormat.TarGzip,
-                OfficialRuntimeSourcePolicy.Profile(identity.SourceId), null);
+                OfficialRuntimeSourcePolicy.Profile(identity.SourceId, version), null);
             var now = DateTimeOffset.UtcNow;
             var receipt = new ExecutionRuntimeReceiptV1(1, ExecutionRuntimeIdentity.FromContract(identity), new('b', 64), 100, new('d', 64),
                 launcher, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length,
                 node ? [OfficialRuntimeSourcePolicy.EntryPointToken] : ["exec", OfficialRuntimeSourcePolicy.EntryPointToken],
                 [new(launcher, Convert.ToHexStringLower(SHA256.HashData(bytes)), bytes.Length, OfficialRuntimeMaterializer.ExecutableMode)],
-                new(distribution, url, now), new(support, node ? "24 LTS" : "10.0 LTS", now.AddYears(-2), now.AddYears(-1), null), now);
+                new(distribution, url, now), new(support, node ? $"{runtimeMajor} LTS" : $"{runtimeMajor}.0 {(runtimeMajor % 2 == 0 ? "LTS" : "STS")}", now.AddYears(-2), now.AddYears(-1), null), now);
             Package = new PreparedRuntimePackage(projection, source, projection, manifest.Id, manifest.Version, PackageHostRoles.Runtime,
                 new(manifest.Id, manifest.Name, manifest.Version, PackageHostRoles.Runtime, null, key, target), EntryPoint, key, target,
                 [], new Dictionary<string, Sunder.Sdk.Rpc.SunderRpcContractDescriptor>(), new('f', 64))

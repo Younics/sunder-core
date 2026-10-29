@@ -362,7 +362,7 @@ internal sealed class PackageSessionPublisher(
                 "Published package session snapshot for generation {SessionGeneration} in {ElapsedMilliseconds} ms",
                 publication.Stamp.SessionGeneration,
                 Stopwatch.GetElapsedTime(snapshotPublicationStarted).TotalMilliseconds);
-            candidate.Session.CompleteStorageMigrations();
+            await candidate.Session.CompleteStorageMigrationsAsync(logger).ConfigureAwait(false);
             logger.LogInformation(
                 "Published package session generation {SessionGeneration} with {ActivePackageCount} active package(s) in {ElapsedMilliseconds} ms",
                 publication.Stamp.SessionGeneration,
@@ -383,7 +383,7 @@ internal sealed class PackageSessionPublisher(
                 Stopwatch.GetElapsedTime(publicationStarted).TotalMilliseconds);
             if (pending.Publication.Committed)
             {
-                candidate.Session.CompleteStorageMigrations();
+                await candidate.Session.CompleteStorageMigrationsAsync(logger).ConfigureAwait(false);
             }
             rpcCatalog?.DiscardCandidateSession(candidate.Session);
             if (pending.Publication.Committed)
@@ -790,7 +790,7 @@ internal sealed class PackageSessionPublisher(
         {
             try
             {
-                await session.RollbackStorageMigrationsAsync();
+                await session.RollbackStorageMigrationsAsync(logger);
             }
             catch (Exception exception)
             {
@@ -907,7 +907,7 @@ internal sealed class PackageSessionPublisher(
                     generationCommitted: null,
                     cancellationToken: CancellationToken.None).ConfigureAwait(false);
                 previousSession.PublishCommittedRuntimeGeneration(PublishRecovery);
-                previousSession.CompleteStorageMigrations();
+                await previousSession.CompleteStorageMigrationsAsync(logger).ConfigureAwait(false);
             }
             else
             {
@@ -945,7 +945,7 @@ internal sealed class PackageSessionPublisher(
                 Stopwatch.GetElapsedTime(recoveryStarted).TotalMilliseconds);
             if (publication.RecoveryCommitted)
             {
-                previousSession.CompleteStorageMigrations();
+                await previousSession.CompleteStorageMigrationsAsync(logger).ConfigureAwait(false);
                 logger.LogError(
                     recoveryFailure,
                     "Recovered package workers became active, but publishing the recovery snapshot did not complete after {ElapsedMilliseconds} ms",
@@ -988,7 +988,7 @@ internal sealed class PackageSessionPublisher(
             {
                 try
                 {
-                    await previousSession.RollbackStorageMigrationsAsync().ConfigureAwait(false);
+                    await previousSession.RollbackStorageMigrationsAsync(logger).ConfigureAwait(false);
                 }
                 catch (Exception rollbackFailure)
                 {
@@ -1145,7 +1145,7 @@ internal sealed class PackageSessionPublisher(
         try
         {
             await session.WaitForDisposalCompletionAsync().ConfigureAwait(false);
-            await session.RollbackStorageMigrationsAsync().ConfigureAwait(false);
+            await session.RollbackStorageMigrationsAsync(logger).ConfigureAwait(false);
             logger.LogInformation(
                 "Completed deferred package storage rollback after {Operation} disposal in {ElapsedMilliseconds} ms",
                 operation,
