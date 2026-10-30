@@ -10,8 +10,8 @@ or Registry client.
 The rules and recipes here are language-neutral. Node now implements an independent
 production TypeScript classifier, lossless package-owned baseline lifecycle,
 Check/Accept/Freeze, and source-verified release Pack, including prebuilt leaves.
-Its actual classifier executes all 199 shared cases: 79 proof/inverse, 32
-presence/nullability directions, 16 minimum versions, and 72 forward/reversed history
+Its actual classifier executes all 209 shared cases: 79 proof/inverse, 32
+presence/nullability directions, 16 minimum versions, and 82 forward/reversed history
 cases. C# oracles and frozen expectations are unchanged. This establishes bounded
 owned classification/lifecycle execution, not import/platform/optional admission,
 publication-evidence import, new prerelease allocation, template cutover, or phase closure.
@@ -94,21 +94,25 @@ paths/codes, never descriptor bodies, annotations, or schema literal values.
    every matching entry. Version identity includes build metadata. Exact reuse
    succeeds before allocation/backfill/prerelease checks, including an old major
    or an already immutable prerelease; a conflicting duplicate still fails.
-2. A new allocation must have greater SemVer precedence than the highest
-   immutable version. Lower/backfilled versions and build-metadata-only
-   allocations fail with `contract-version.bump-required`.
-3. Compare against the highest version and every historical version in the
-   candidate's major. Compute each minimum from that historical version, then
+2. A new allocation in an established major must have greater SemVer precedence
+   than that line's highest immutable version. For example, `1.0.1` may follow
+   `2.0.0` when V1 already exists. A new major must exceed the overall highest;
+   creating an unestablished older major, backfilling within a line and
+   build-metadata-only allocations fail with `contract-version.bump-required`.
+3. Compare against every historical version in the candidate's major, or the
+   highest overall version when establishing a new major. Compute each minimum from that historical version, then
    take the strictest minimum. Do not take the strictest class and repeatedly
    rebase it onto the highest version: an old minor addition must not force every
    later patch to become another minor.
-4. A higher major establishes a new compatibility line. Earlier-major history
-   below the highest version does not constrain the new line. Major zero has no
-   special exemption from breaking-change rules.
+4. Major lines advance independently. Unrelated earlier/later-major history does
+   not constrain an established line. Major zero has no special exemption from
+   breaking-change rules. Owned history preserves append order and exact issued
+   snapshots, requiring increasing precedence within each established line;
+   companion projection reviews retain deterministic global SemVer order.
 5. New prerelease allocations and transitions involving a relevant historical
    prerelease fail with `contract-version.prerelease-policy-required` until an
-   explicit allocation policy exists. An earlier-major prerelease below a stable
-   highest version is not relevant to the new line. Package-selection
+   explicit allocation policy exists. Prereleases in another major do not block
+   maintenance of an established line. Package-selection
    `includePrerelease` does not supply contract allocation policy.
 
 `GetMinimumVersion` retains exact input for `Unchanged`; otherwise it increments
@@ -236,7 +240,7 @@ The proof fixture's `fourStateCases` additionally runs every presence/nullabilit
 transition in request and output directions. `SunderRpcContractCompatibilityTests`
 executes these recipes plus bounds, immutability, determinism, sampled directional
 validation, and diagnostic-safety tests. Node now executes every shared recipe,
-inverse, and four-state direction against its actual classifier, totaling 199 cases;
+inverse, and four-state direction against its actual classifier, totaling 209 cases;
 the expected classifications/reasons and C# oracles are unchanged. This bounded
 execution does not establish remaining import/publication/admission parity, retained
 release evidence, or Phase 1 completion.

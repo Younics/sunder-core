@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
 import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, parseRpcContractDescriptor, RpcDescriptorError } from "@sunder/sdk";
-import { classify, minimumVersion, minimumOwnedVersion, ordinal, validateVersion, type ChangeKind } from "../src/rpc-evolution";
+import { classify, minimumVersion, minimumOwnedVersion, ordinal, satisfies, validateVersion, type ChangeKind } from "../src/rpc-evolution";
+import { consumerRequirements } from "../src/rpc-consumer-requirements";
 
 const root = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/evolution");
 interface Operation { path: string; remove?: boolean; copy?: string; schema?: string; value?: unknown }
@@ -44,6 +45,8 @@ for (const recipe of proof.fourStateCases) for (const direction of ["request", "
     const changes: [string, string][] = recipe[direction + "Codes"].map((code: string) => [`/$defs/${slot}/properties/value`, code]);
     if (recipe[direction] === "Minor") changes.push([`/$defs/${slot}`, "schema-compatible"]);
     assertResult({ kind: recipe[direction], changes }, classify(parseRpcContractDescriptor(JSON.stringify(old)), parseRpcContractDescriptor(JSON.stringify(next))));
+    assert.equal(satisfies(consumerRequirements(parseRpcContractDescriptor(JSON.stringify(old)), [{ serviceId: "main", methodId: "call" }]),
+      parseRpcContractDescriptor(JSON.stringify(next))).kind !== "Major", recipe[direction] !== "Major");
   });
 }
 for (const [previous, kind, expected] of history.minimumCases) test(`Format minimum ${previous} ${kind}`, () => assert.equal(minimumVersion(previous, kind), expected));
@@ -87,6 +90,9 @@ test("reason truncation cannot hide Major; bounded proofs never print literals",
   delete next.errors["example.failed"].detailsSchema;
   const result = classify(parseRpcContractDescriptor(JSON.stringify(old)), parseRpcContractDescriptor(JSON.stringify(next)));
   assert.equal(result.kind, "Major"); assert.equal(result.changes.length, 64); assert.ok(result.changes.some((item) => item.code === "changes-truncated"));
+  const consumer = satisfies(consumerRequirements(parseRpcContractDescriptor(JSON.stringify(old)), [{ serviceId: "main", methodId: "call" }]), parseRpcContractDescriptor(JSON.stringify(next)));
+  assert.equal(consumer.kind, "Major"); assert.ok(consumer.changes.some(change => change.code === "error-details-presence-changed"));
+  assert.ok(!consumer.changes.some(change => change.code === "changes-truncated"));
   old.$defs.Input = { type: "string", const: "before" }; next.$defs.Input = { type: "string", const: "DO-NOT-PRINT", title: "DO-NOT-PRINT" };
   assert.doesNotMatch(JSON.stringify(classify(parseRpcContractDescriptor(JSON.stringify(old)), parseRpcContractDescriptor(JSON.stringify(next)))), /DO-NOT-PRINT/);
 });
@@ -98,6 +104,8 @@ test("65,536-step proof budget fails closed on otherwise compatible literal sets
   old.$defs.Input = record(before); next.$defs.Input = record(after);
   const result = classify(parseRpcContractDescriptor(JSON.stringify(old)), parseRpcContractDescriptor(JSON.stringify(next)));
   assert.equal(result.kind, "Major"); assert.ok(result.changes.some((item) => item.code === "analysis-limit-exceeded"));
+  const consumer = satisfies(consumerRequirements(parseRpcContractDescriptor(JSON.stringify(old)), [{ serviceId: "main", methodId: "call" }]), parseRpcContractDescriptor(JSON.stringify(next)));
+  assert.equal(consumer.kind, "Major"); assert.ok(consumer.changes.some(change => change.code === "analysis-limit-exceeded"));
 });
 test("1024 UTF-16 pointer bound escapes tokens and never truncates them", () => {
   for (const key of ["a".repeat(128), "😀".repeat(64), "~/".repeat(64)]) {

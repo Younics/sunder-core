@@ -70,13 +70,51 @@ public sealed class ImportedPackageTransactionTests
         Assert.False(fixture.Coordinator.HasPreparedStages);
     }
 
+    [Theory]
+    [InlineData("add-output", false, true)]
+    [InlineData("unrelated-method", false, true)]
+    [InlineData("remove-output-member", true, true)]
+    [InlineData("remove-output-member", false, false)]
+    [InlineData("required-method", false, false)]
+    [InlineData("range", false, false)]
+    public async Task UnchangedConsumerArchive_UpdatesProviderUsingRequiredSurfaceAndConsumerRange(string change, bool narrowView, bool compatible)
+    {
+        using var fixture = new Fixture();
+        var owner = fixture.Archive("example.authority", "1.0.1");
+        var consumer = fixture.Archive("example.consumer", "1.0.0", imported: true, consumerRequirements: true, narrowView: narrowView);
+        var archiveBytes = await File.ReadAllBytesAsync(consumer.Path);
+        await fixture.Policy.RefreshAsync(packages: [owner.Identity, consumer.Identity]);
+        var stage = await fixture.Coordinator.PrepareStageAsync([fixture.RegistryInstall(owner), fixture.RegistryInstall(consumer) with { ResolutionPolicy = fixture.Resolution }]);
+        Assert.True(stage.Success, stage.Failure?.Message);
+        Assert.True((await fixture.Coordinator.CommitStageAsync(stage.Stage!.StageId)).Success);
+        var original = (await fixture.Store.ListAsync()).Single(package => package.PackageId == consumer.Identity.PackageId);
+        var replacement = fixture.Archive("example.authority", change == "range" ? "2.0.0" : "1.9.0", evolution: change);
+        await fixture.Policy.RefreshAsync(packages: [replacement.Identity]);
+        async Task<PackageStoreStagePreparation> Prepare() => await fixture.Coordinator.PrepareStageAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Upgrade, "example.authority", replacement.Path)]);
+        if (!compatible) await Assert.ThrowsAsync<InvalidDataException>(Prepare);
+        else
+        {
+            var update = await Prepare();
+            Assert.True(update.Success, update.Failure?.Message);
+            Assert.True((await fixture.Coordinator.CommitStageAsync(update.Stage!.StageId)).Success);
+            var retained = (await fixture.Store.ListAsync()).Single(package => package.PackageId == consumer.Identity.PackageId);
+            Assert.Equal(original.ContentIdentity, retained.ContentIdentity);
+            Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(original.Compatibility!.Resolution.RestoreProvenance),
+                JsonSerializer.SerializeToUtf8Bytes(retained.Compatibility!.Resolution.RestoreProvenance));
+        }
+        Assert.Equal(archiveBytes, await File.ReadAllBytesAsync(consumer.Path));
+    }
+
     private sealed class Fixture : IDisposable
     {
         private readonly TemporaryDirectoryScope _temporary = TemporaryDirectoryScope.Create("sunder-import-transactions");
         private readonly SunderRpcContractDescriptor _contract = SunderRpcContractDescriptor.Parse("""
             {"descriptorVersion":1,"schemaProfile":"sunder.rpc.values.v1","contractId":"example.api","version":"1.0.0","errors":{},
-             "services":{"service":{"methods":{"call":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Request"}}}}},
-             "$defs":{"Request":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}
+             "services":{"service":{"methods":{"call":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}},
+             "other":{"kind":"unary","idempotency":"none","errors":[],"requestSchema":{"$ref":"#/$defs/Request"},"responseSchema":{"$ref":"#/$defs/Response"}}}}},
+             "$defs":{"Request":{"type":"object","properties":{},"required":[],"additionalProperties":false},
+             "Response":{"type":"object","properties":{"name":{"type":"string"},"unrelated":{"type":"string"}},"required":["name"],"additionalProperties":false}}}
             """u8.ToArray());
         private readonly RegistryPackagePublicApiInventoryResponseV1 _inventory;
         internal ActivePolicyTestContext Policy { get; } = new();
@@ -99,10 +137,22 @@ public sealed class ImportedPackageTransactionTests
                 [new(ActivePolicyTestContext.Origin, _inventory, ">=1.0.0 <2.0.0", false, [])], [], []);
         }
 
-        internal ArchiveInput Archive(string id, string version, bool imported = false, bool descriptorDrift = false)
+        internal ArchiveInput Archive(string id, string version, bool imported = false, bool descriptorDrift = false,
+            bool consumerRequirements = false, bool narrowView = false, string? evolution = null)
         {
             var root = _temporary.GetPath(id + "-" + version);
             var descriptor = _contract;
+            if (evolution is not null)
+            {
+                var json = JsonNode.Parse(_contract.GetCanonicalUtf8())!;
+                json["version"] = "2.0.0";
+                var methods = json["services"]!["service"]!["methods"]!.AsObject();
+                if (evolution == "unrelated-method") methods.Remove("other");
+                else if (evolution == "required-method") methods.Remove("call");
+                else if (evolution == "remove-output-member") json["$defs"]!["Response"]!["properties"]!.AsObject().Remove("unrelated");
+                else json["$defs"]!["Response"]!["properties"]!["added"] = new JsonObject { ["type"] = "string" };
+                descriptor = SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(json));
+            }
             if (descriptorDrift)
             {
                 var json = JsonNode.Parse(_contract.GetCanonicalUtf8())!;
@@ -119,11 +169,15 @@ public sealed class ImportedPackageTransactionTests
                     ContractId = descriptor.ContractId, Version = descriptor.Version, DescriptorPath = "contracts/api.json",
                     DescriptorSha256 = descriptor.Sha256, AbiSha256 = descriptor.AbiSha256, Exposure = "public",
                 }], usesContracts: imported ? [new() { Role = "app", ContractId = descriptor.ContractId, ContractVersion = descriptor.Version,
-                    AbiSha256 = descriptor.AbiSha256, Required = false, Actions = ["discover", "invoke"] }] : []);
+                     AbiSha256 = descriptor.AbiSha256, Required = false, Actions = ["discover", "invoke"],
+                     ConsumerRequirements = consumerRequirements ? JsonSerializer.SerializeToElement(new SunderRpcConsumerRequirements(_contract, [new("service", "call")],
+                         narrowView ? new Dictionary<string, IReadOnlyList<string>> { ["Response"] = ["name"] } : null).ToJson()) : null }] : []);
             if (imported)
             {
                 var path = Path.Combine(root, SunderPackageFormat.ManifestPath);
                 var json = JsonNode.Parse(File.ReadAllText(path))!;
+                if (consumerRequirements)
+                    foreach (var target in json["targets"]!.AsArray()) target!["requiredHostCapabilities"]!.AsArray().Add("rpc.consumer-requirements.v1");
                 var options = new JsonSerializerOptions { DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull };
                 json["packageArtifactImports"] = JsonSerializer.SerializeToNode(new[] { new SunderPackageArtifactImportManifest
                 {

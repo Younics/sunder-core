@@ -13,7 +13,8 @@ public sealed class RuntimeAvailabilityManagerTests
 {
     [Theory]
     [InlineData("dev.sunder.runtime", 1, 1, 1, true)]
-    [InlineData("dev.sunder.runtime", 2, 1, 2, false)]
+    [InlineData("dev.sunder.runtime", 2, 1, 2, true)]
+    [InlineData("dev.sunder.runtime", 2, 2, 2, false)]
     [InlineData("dev.sunder.runtime", 4, 4, 4, false)]
     [InlineData("dev.sunder.runtime", 5, 5, 5, false)]
     [InlineData("dev.sunder.runtime", 6, 6, 6, false)]
@@ -332,7 +333,7 @@ public sealed class RuntimeAvailabilityManagerTests
                 replacementStarted
                     ? CreateHandshake()
                     : runtimeRunning
-                        ? CreateHandshake(revision: 2, minimum: 1, maximum: 2)
+                        ? CreateHandshake(revision: 2, minimum: 2, maximum: 2)
                         : null),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(runtimeRunning),
             shutdownRuntimeAsync: (_, _) =>

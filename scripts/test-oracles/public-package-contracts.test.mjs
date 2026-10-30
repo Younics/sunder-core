@@ -23,7 +23,7 @@ const generatedAbiExports = [
 const authorBindingExports = new Map([
   ["api.ts", ["ApiContext", "ApiProvider", "ApiToken", "ApiTransport", "ServiceStream", "createApiContext"]],
   ["services.ts", ["ServiceContext", "ServiceMethods", "ServiceUse", "ServiceRuntimeUse", "ServiceConstraints",
-    "ServiceOptions", "ServiceError", "ServiceContract", "ServiceDefinition", "defineService", "defineServiceError"]],
+    "ServiceOptions", "ServiceError", "ServiceContract", "ServiceDefinition", "defineService", "defineServiceError", "declareRpcUse", "declareRpcView"]],
   ["service-reference.ts", ["ServiceApi", "ServiceToken", "OptionalServiceReference", "ServiceCatalogSnapshot",
     "ServiceCatalog", "ServiceReference", "ServiceProvider"]],
   ["service-bindings.ts", []],

@@ -15,6 +15,7 @@ public static class SunderPackageFormat
     public const string WorkerTargetKind = "worker";
     public const string ExecutionRuntimeV1Capability = "execution-runtime.v1";
     internal const string RpcV1Capability = "rpc.v1";
+    internal const string RpcConsumerRequirementsV1Capability = "rpc.consumer-requirements.v1";
     internal const string RpcExtendedDeadlineV1Capability = "rpc.extended-deadline.v1";
     internal const string RpcCallOwnershipV1Capability = "rpc.call-ownership.v1";
     internal const string WorkerProtocolV1Capability = "worker-protocol.v1";

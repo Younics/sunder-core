@@ -77,6 +77,8 @@ public sealed class SunderRpcContractCompatibilityTests
         if (kind == "Minor") expected.Add(new($"/$defs/{slot}", "schema-compatible"));
 
         AssertResult(kind, expected, SunderRpcContractCompatibility.Classify(previous, candidate));
+        Assert.Equal(kind != "Major", SunderRpcContractCompatibility.Satisfies(
+            new(previous, [new("main", "call")]), candidate).Kind != SunderRpcContractChangeKind.Major);
         if (kind == "Minor") AssertSampledDirection(previous, candidate);
     }
 
@@ -270,6 +272,10 @@ public sealed class SunderRpcContractCompatibilityTests
         Assert.Equal(64, result.Changes.Count);
         Assert.Contains(new SunderRpcContractChange("", "changes-truncated"), result.Changes);
         AssertResult("Major", result.Changes, SunderRpcContractCompatibility.Classify(previous, candidate));
+        var consumer = SunderRpcContractCompatibility.Satisfies(new(previous, [new("main", "call")]), candidate);
+        Assert.Equal(SunderRpcContractChangeKind.Major, consumer.Kind);
+        Assert.Contains(consumer.Changes, change => change.Code == "error-details-presence-changed");
+        Assert.DoesNotContain(consumer.Changes, change => change.Code == "changes-truncated");
     }
 
     [Fact]
@@ -297,6 +303,9 @@ public sealed class SunderRpcContractCompatibilityTests
         Assert.Contains(new SunderRpcContractChange("", "analysis-limit-exceeded"), result.Changes);
         Assert.InRange(result.Changes.Count, 1, 64);
         AssertResult("Major", result.Changes, SunderRpcContractCompatibility.Classify(previous, candidate));
+        var consumer = SunderRpcContractCompatibility.Satisfies(new(previous, [new("main", "call")]), candidate);
+        Assert.Equal(SunderRpcContractChangeKind.Major, consumer.Kind);
+        Assert.Contains(new SunderRpcContractChange("", "analysis-limit-exceeded"), consumer.Changes);
     }
 
     [Fact]

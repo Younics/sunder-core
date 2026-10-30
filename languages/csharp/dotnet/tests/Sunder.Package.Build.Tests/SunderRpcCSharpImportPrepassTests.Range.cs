@@ -118,14 +118,15 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
                 Assert.Equal(scopesBefore + (allowed ? 1 : 0), rpc.ScopeCount);
             }
             var valid = Provider("2.0.1");
-            foreach (var invalid in new[] { valid with { PackageId = "example.other" }, valid with { ContractVersion = "9.0.0" },
-                valid with { DescriptorSha256 = new string('a', 64) }, valid with { AbiSha256 = new string('a', 64) }, valid with { State = SunderRpcProviderState.Inactive } })
+            foreach (var invalid in new[] { valid with { PackageId = "example.other" }, valid with { ContractId = "example.other" },
+                valid with { State = SunderRpcProviderState.Inactive } })
             {
                 var scope = new RpcStub { Providers = [invalid], Current = invalid };
                 rpc.Providers = scope.Providers; rpc.Current = scope.Current;
                 rpc.ScopeFactory = _ => ValueTask.FromResult<ISunderRpcCallScope>(scope);
                 var scopesBefore = rpc.ScopeCount;
-                Assert.Equal("rpc.provider-not-found", (await Assert.ThrowsAsync<SunderRpcException>(call)).Error.Code);
+                Assert.Equal(invalid.ContractId == valid.ContractId ? "rpc.provider-not-found" : "rpc.binding.invalid-catalog",
+                    (await Assert.ThrowsAsync<SunderRpcException>(call)).Error.Code);
                 Assert.Equal(0, scope.InvokeCount); Assert.False(scope.Disposed); Assert.Equal(scopesBefore, rpc.ScopeCount);
             }
             foreach (var providers in new[] { Array.Empty<SunderRpcProviderSnapshot>(), new[] { valid, valid with { ProviderId = "example.second", Endpoint = new("second") } } })

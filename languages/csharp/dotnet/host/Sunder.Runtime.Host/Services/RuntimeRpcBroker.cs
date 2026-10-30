@@ -8,6 +8,7 @@ using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
+using Sunder.Package.Format;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -780,7 +781,7 @@ internal sealed partial class RuntimeRpcBroker
                 }
                 await ValidateOutputAsync(call, clone).ConfigureAwait(false);
                 ThrowIfCallCancelled(call);
-                return clone;
+                return ReadConsumerOutput(call, call.CallerMethod.OutputSchemaReference, clone);
             }
             catch (SunderRpcException exception)
             {
@@ -990,7 +991,7 @@ internal sealed partial class RuntimeRpcBroker
                                 isStream: true);
                         }
                         await ValidateStreamOutputAsync(call, item).ConfigureAwait(false);
-                        yield return item;
+                        yield return ReadConsumerOutput(call, call.CallerMethod.OutputSchemaReference, item);
                     }
                     ThrowIfStreamCallCancelled(call);
                 }
@@ -1099,6 +1100,10 @@ internal sealed partial class RuntimeRpcBroker
                           ?? throw NotFound("rpc.service.not-found", "The RPC service was not found in the bundled contract.");
             var method = service.FindMethod(methodId)
                          ?? throw NotFound("rpc.method.not-found", "The RPC method was not found in the bundled contract.");
+            var selectors = FindUse(caller, providerSnapshot.ContractId, action)?.ConsumerRequirements;
+            var requirements = selectors is { } selected ? SunderRpcConsumerRequirements.Parse(selected, callerContract) : null;
+            if (requirements is not null && !requirements.Methods.Contains(new(serviceId, methodId)))
+                throw PermissionDenied(providerSnapshot.ContractId, action);
             if (method.Kind != expectedKind)
             {
                 throw SunderRpcException.Infrastructure(
@@ -1107,6 +1112,10 @@ internal sealed partial class RuntimeRpcBroker
                     "The requested RPC invocation shape does not match the method contract.");
             }
             ValidatePayload(callerContract, method.RequestSchemaReference, request, "request");
+            var providerContract = acquiredProvider.Registration.Contract;
+            var providerMethod = providerContract.FindService(serviceId)?.FindMethod(methodId)
+                ?? throw NotFound("rpc.method.not-found", "The provider no longer implements the required method.");
+            ValidatePayload(providerContract, providerMethod.RequestSchemaReference, request, "request");
 
             var frameResult = RuntimeRpcCallAcquisitionPolicy.AcquireFrame(
                 _policy,
@@ -1192,8 +1201,8 @@ internal sealed partial class RuntimeRpcBroker
                 deadlineCancellation,
                 acquiredProvider,
                 service.ServiceId,
-                method,
-                callerContract,
+                providerMethod,
+                providerContract,
                 frame,
                 new SunderRpcInvocationContext(
                     caller.PackageId,
@@ -1202,7 +1211,11 @@ internal sealed partial class RuntimeRpcBroker
                     frame.DeadlineUtc,
                     frame.Depth,
                     linked.Token,
-                    invocationAuthority));
+                    invocationAuthority))
+            {
+                CallerContract = callerContract, CallerMethod = method, ConsumerRequirements = requirements,
+                ConsumerOutputContract = requirements?.OutputReader() ?? callerContract,
+            };
         }
         catch
         {
@@ -1758,6 +1771,13 @@ internal sealed partial class RuntimeRpcBroker
         }
     }
 
+    private static JsonElement ReadConsumerOutput(RuntimeRpcCallLease call, string reference, JsonElement value)
+    {
+        var requirements = call.ConsumerRequirements;
+        if (call.CallerContract.Sha256 == call.Contract.Sha256 && requirements?.OutputMembers.Count is not > 0) return value;
+        return SunderRpcConsumerOutput.Read(call.ConsumerOutputContract, reference, value, requirements?.ExactOutputDefinitions);
+    }
+
     private async ValueTask<SunderRpcException> HandleProviderExceptionAsync(
         RuntimeRpcCallLease call,
         Exception exception)
@@ -1844,7 +1864,8 @@ internal sealed partial class RuntimeRpcBroker
                     SunderRpcErrorKind.Domain,
                     rpcException.Error.Code,
                     Sanitize(rpcException.Error.Message),
-                    details: rpcException.Error.Details));
+                    details: rpcException.Error.Details is { } callerDetails && call.CallerContract.FindError(rpcException.Error.Code)?.DetailsSchema is { } callerSchema
+                        ? ReadConsumerOutput(call, callerSchema, callerDetails) : rpcException.Error.Details));
             }
             if (rpcException.IsHostAuthenticated)
             {
@@ -2267,6 +2288,9 @@ internal sealed class RuntimeRpcCallLease : IDisposable
         ServiceId = serviceId;
         Method = method;
         Contract = contract;
+        CallerContract = contract;
+        CallerMethod = method;
+        ConsumerOutputContract = contract;
         Frame = frame;
         Context = context;
     }
@@ -2276,6 +2300,10 @@ internal sealed class RuntimeRpcCallLease : IDisposable
     public string ServiceId { get; }
     public SunderRpcMethodDescriptor Method { get; }
     public SunderRpcContractDescriptor Contract { get; }
+    public SunderRpcContractDescriptor CallerContract { get; init; }
+    public SunderRpcMethodDescriptor CallerMethod { get; init; }
+    public SunderRpcContractDescriptor ConsumerOutputContract { get; init; }
+    public SunderRpcConsumerRequirements? ConsumerRequirements { get; init; }
     public RuntimeRpcCallFrame Frame { get; }
     public SunderRpcInvocationContext Context { get; }
     public CancellationToken CancellationToken => _linked.Token;

@@ -124,10 +124,16 @@ internal sealed class UnavailableAppWebRpcClient : IAppWebRpcClient
 internal sealed class AppWebRpcContractCatalog
 {
     private readonly IReadOnlyDictionary<string, SunderRpcContractDescriptor> _contracts;
+    private readonly IReadOnlyDictionary<string, SunderPackageContractUseManifest> _uses;
+    private readonly IReadOnlyDictionary<string, SunderRpcContractDescriptor> _outputReaders;
 
-    private AppWebRpcContractCatalog(IReadOnlyDictionary<string, SunderRpcContractDescriptor> contracts)
+    private AppWebRpcContractCatalog(IReadOnlyDictionary<string, SunderRpcContractDescriptor> contracts, SunderPackageManifest manifest)
     {
         _contracts = contracts;
+        _uses = (manifest.UsesContracts ?? []).OfType<SunderPackageContractUseManifest>().Where(use => use.Role == "app")
+            .ToDictionary(use => use.ContractId!, StringComparer.Ordinal);
+        _outputReaders = _uses.Values.Where(use => use.ConsumerRequirements is not null).ToDictionary(use => use.ContractId!, use =>
+            SunderRpcConsumerRequirements.Parse(use.ConsumerRequirements!.Value, contracts[Key(use.ContractId!, use.ContractVersion!)]).OutputReader(), StringComparer.Ordinal);
     }
 
     public static AppWebRpcContractCatalog Load(
@@ -223,7 +229,7 @@ internal sealed class AppWebRpcContractCatalog
                     $"Web package RPC contract '{descriptor.ContractId}' version '{descriptor.Version}' is bundled more than once.");
             }
         }
-        return new AppWebRpcContractCatalog(contracts);
+        return new AppWebRpcContractCatalog(contracts, manifest);
     }
 
     public SunderRpcMethodDescriptor GetMethod(
@@ -232,14 +238,17 @@ internal sealed class AppWebRpcContractCatalog
         string methodId,
         SunderRpcMethodKind kind)
     {
+        var use = _uses.GetValueOrDefault(provider.ContractId);
         if (!_contracts.TryGetValue(
-                Key(provider.ContractId, provider.ContractVersion),
+                Key(provider.ContractId, use?.ConsumerRequirements is not null ? use.ContractVersion! : provider.ContractVersion),
                 out var contract))
         {
             throw Validation("rpc.bridge.contract-missing", "The provider contract is not bundled by the caller package.");
         }
         var method = contract.FindService(serviceId)?.FindMethod(methodId)
-                     ?? throw Validation("rpc.bridge.method-not-found", "The RPC service or method is not bundled by the caller package.");
+                      ?? throw Validation("rpc.bridge.method-not-found", "The RPC service or method is not bundled by the caller package.");
+        if (!SunderRpcConsumerCompatibility.AllowsMethod(use, contract, serviceId, methodId))
+            throw Validation("rpc.bridge.method-not-found", "The RPC method is not declared by the caller's consumer requirements.");
         if (method.Kind != kind)
         {
             throw Validation("rpc.bridge.method-kind", "The RPC method invocation shape is invalid.");
@@ -265,7 +274,9 @@ internal sealed class AppWebRpcContractCatalog
         System.Text.Json.JsonElement value,
         string label)
     {
-        var contract = _contracts[Key(provider.ContractId, provider.ContractVersion)];
+        var use = _uses.GetValueOrDefault(provider.ContractId);
+        var contract = label == "output" && _outputReaders.TryGetValue(provider.ContractId, out var reader) ? reader
+            : _contracts[Key(provider.ContractId, use?.ConsumerRequirements is not null ? use.ContractVersion! : provider.ContractVersion)];
         if (!contract.IsValid(schemaReference, value, out _))
         {
             throw Validation(

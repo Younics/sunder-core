@@ -287,6 +287,15 @@ The shared internal `SunderPackagePublicApiInventory` in Format now parses and h
 
 `packageArtifactImports`, `packageApiImports`, `providerImports`, and `platformImports` use the exact closed Manifest V1 group member models. `providers` and `uses` point to receipt-local `contractKey` values. `generatedPackageFacades` and `generatedBindings` retain path-free logical names. The receipt contains no source text, handler, absolute path, credential, timestamp, environment value, mutable URL, or generated source body.
 
+Optional `consumerRequirements` separately records exact imported descriptor
+provenance, selected method IDs, explicit output-member views and exact output
+definitions. It is emitted only when nonempty, in contract-ID order. Manifest
+projection attaches each role's validated selectors to `usesContracts` and stamps
+`rpc.consumer-requirements.v1` on its consuming targets. The complete restored
+inventory remains intact; selectors are neither another descriptor nor a grant.
+See [consumer requirements](consumer-requirements/README.md) for the proof and
+execution-reader boundary.
+
 The C# manifest builder consumes the receipt with the generation task's expected SHA-256 plus lock/package identity, validates canonical descriptor snapshots and complete inventory/group/task-item agreement, and projects the validated records rather than reconstructing authority from authored items. Generated source, owned/imported descriptor snapshots, and applicable receipt/export outputs publish atomically under the existing marker-owned output lock/transaction. First and final compilation passes must agree on registration and complete receipt bytes before publication.
 
 Manifest bundle members `source` (`owned|imported`), `authorityKind` (`package|platform`), and `authorityId` are mandatory. Owned bundles require the enclosing package's authority and forbid selected-authority fields. Imported bundles require `selectedAuthorityRelease` and `selectedAuthorityContentIdentity`; platform authority names `sunder.core`. Dependencies require canonical nonempty ranges and explicit `presence: required|optional`, with no reader defaults. Unlike the receipt's required arrays, the four root manifest import groups may be absent or empty; explicit JSON `null` is rejected, including for forbidden conditional provenance members.
@@ -306,11 +315,20 @@ to another activation. The [ordinary-service guide](../../../../docs/package-dev
 owns the current author-facing signatures. Advanced caller-owned scopes retain their
 explicit ownership contract.
 
-Only the selected-package resolver additionally requires exact package ID, package version satisfying `requestedVersionRange` by SemVer precedence and explicit `includePrerelease` policy, and `Active` state. Contract ID/version/`descriptorSha256`/`abiSha256` remain exact for every operation. Prereleases are excluded unless explicitly included; build metadata does not affect package-version precedence. The resolver MUST NOT filter by package content hash or equality to the restore-selected package version. Zero matches report `rpc.provider-not-found`; multiple matches report `rpc.provider-ambiguous`, with no ranking, retry, or endpoint replacement.
+Only the selected-package resolver additionally requires exact package ID, package version satisfying `requestedVersionRange` by SemVer precedence and explicit `includePrerelease` policy, and `Active` state. Broker discovery admits either the exact imported tuple or a current schema satisfying the caller's consumer requirements. An issued binding retains the provider's actual exact contract/schema and activation identity for every subsequent operation. Prereleases are excluded unless explicitly included; build metadata does not affect package-version precedence. The resolver MUST NOT filter by package content hash or equality to the restore-selected package version. Zero matches report `rpc.provider-not-found`; multiple matches report `rpc.provider-ambiguous`, with no ranking, retry, or endpoint replacement.
 
 ### Compatible Installation
 
-The user explicitly selected Compatible Installation on 2026-09-11. Package dependencies MAY install an in-requested-range package version only with the exact locked imported contract ID/version/`descriptorSha256`/`abiSha256`. Every applicable reviewed range and prerelease policy MUST hold. ABI equality alone is insufficient when descriptor bytes/hash differ. A package patch retaining all exact imported RPC identities may satisfy the dependency without matching the restore-selected release/content. No compatible-schema substitution is permitted.
+The 2026-10-30 consumer-requirements amendment extends Compatible Installation:
+package dependencies MAY install an in-requested-range provider whose one current
+descriptor satisfies every consumer's declared requirements and service-reference
+projection. An unchanged consumer archive retains its original lock, descriptor
+bytes/hashes and restore provenance. Every applicable reviewed range and prerelease
+policy MUST still hold. Missing selectors retain exact imported contract
+ID/version/`descriptorSha256`/`abiSha256` matching, including older roles in mixed-role
+packages; imported provider implementations remain exact. ABI equality alone is
+not evidence for either case. Providers need not ship old schemas or retain API
+surface unrelated to the consumer.
 
 Selected package and ultimate authority release/content are exact restore/build
 provenance, NOT install or routing hard pins. Different restore snapshots alone
@@ -318,9 +336,9 @@ MUST NOT cause installed release conflicts. Restore MUST preserve locked evidenc
 installed artifacts are individually validated and recorded. Host official-runtime
 bindings and exact platform-catalog constraints remain independent.
 
-Dependency contributors coalesce by package ID with `required` winning over `optional`, preserving the source `packageApiImports[].presence`. The current C# manifest projection preserves each selected artifact's canonical reviewed `requestedVersionRange` and rejects authored non-RPC dependency IDs that duplicate lock-derived IDs. Across consumers, range strings need not be identical, but one installed version MUST satisfy every applicable range/prerelease policy and all exact imported RPC identities for each required contract MUST agree. Content identity is not an install-coalescing equality requirement. A distinct ultimate package authority without an explicit selection and reviewed range is an unreviewed-range fail-closed/migration gate: implementations MUST NOT infer either a permissive range or an exact-equality range/content pin from the provenance snapshot. Dependency review MUST NOT implicitly grant uses/actions.
+Dependency contributors coalesce by package ID with `required` winning over `optional`, preserving the source `packageApiImports[].presence`. The current C# manifest projection preserves each selected artifact's canonical reviewed `requestedVersionRange` and rejects authored non-RPC dependency IDs that duplicate lock-derived IDs. Across consumers, range strings need not be identical, but one installed version MUST satisfy every applicable range/prerelease policy, consumer requirement and remaining exact import constraint. Content identity is not an install-coalescing equality requirement. A distinct ultimate package authority without an explicit selection and reviewed range is an unreviewed-range fail-closed/migration gate: implementations MUST NOT infer either a permissive range or an exact-equality range/content pin from the provenance snapshot. Dependency review MUST NOT implicitly grant uses/actions.
 
-An optional branch may be omitted as a unit; its omission MUST NOT hide or disable an otherwise-authorized provider. The selected resolver still accepts any authorized active matching package ID/version within the requested range and exact RPC identity, including an independently installed package. Required-contract readiness accepts any authorized exact matching provider regardless of provider package. No install disposition grants authorization. Platform imports require an explicit Registry selection and exact restored catalog. The generated resolver performs no restore/install operation or Registry fallback.
+An optional branch may be omitted as a unit; its omission MUST NOT hide or disable an otherwise-authorized provider. The selected resolver still accepts any authorized active matching package ID/version within the requested range and admitted consumer surface, including an independently installed package. Required-contract readiness accepts any authorized satisfying provider regardless of provider package, retaining exact matching when selectors are absent. No install disposition grants authorization. Platform imports require an explicit Registry selection and exact restored catalog. The generated resolver performs no restore/install operation or Registry fallback.
 
 ### Platform Catalog Envelope
 

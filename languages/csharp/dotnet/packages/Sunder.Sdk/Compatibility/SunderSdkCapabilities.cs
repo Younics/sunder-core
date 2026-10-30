@@ -71,6 +71,8 @@ public static class SunderSdkCapabilities
     public const string ViewNavigationPreparationV1 = "view-navigation-preparation.v1";
     /// <summary>Canonical schema-first RPC contracts, discovery, invocation, and provider registration.</summary>
     public const string RpcV1 = "rpc.v1";
+    /// <summary>Consumer-surface RPC compatibility with authenticated current-provider schemas.</summary>
+    public const string RpcConsumerRequirementsV1 = "rpc.consumer-requirements.v1";
     /// <summary>Explicit Worker RPC parent ownership, including independently bounded activation-owned root calls.</summary>
     public const string RpcCallOwnershipV1 = "rpc.call-ownership.v1";
     /// <summary>Capability-gated support for caller-requested RPC deadlines beyond the Host default.</summary>

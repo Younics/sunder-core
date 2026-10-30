@@ -6,7 +6,10 @@ using Sunder.Sdk.Rpc;
 namespace Sunder.Package.Build.Rpc.Authoring.CSharp;
 
 internal sealed record SunderRpcCSharpResourceTarget(SunderRpcContractDescriptor Descriptor, string ServiceId,
-    string InterfaceName, string CatalogName, string SchemaNamespace);
+    string InterfaceName, string CatalogName, string SchemaNamespace)
+{
+    internal bool ConsumerCompatible { get; init; }
+}
 
 internal sealed record SunderRpcCSharpMarshallingPlan(SunderRpcContractDescriptor Descriptor, SunderRpcModelProjection Projection,
     IReadOnlyDictionary<string, SunderRpcCSharpResourceLayout> Layouts,
@@ -188,7 +191,8 @@ internal sealed record SunderRpcCSharpMarshallingPlan(SunderRpcContractDescripto
                 .Append(provider ? "(__bindings ?? throw new global::System.InvalidOperationException(\"Service references require the receiver's shared binding lifetime.\"))" : "__lifetime.Bindings")
                 .Append(", (_, provider, retirement) => ((")
                 .Append(factory).Append(")(__services?.GetService(typeof(").Append(factory)
-                .AppendLine(")) ?? throw new global::System.InvalidOperationException(\"The referenced service requires reviewed receiver-role use and generated DI composition.\")))(provider, retirement));");
+                .Append(")) ?? throw new global::System.InvalidOperationException(\"The referenced service requires reviewed receiver-role use and generated DI composition.\")))(provider, retirement)")
+                .AppendLine(target.ConsumerCompatible ? ", consumerCompatible: true);" : ");");
         }
         output.AppendLine("}");
         if (!sourceCodec) SunderRpcCSharpJsonMetadata.Emit(output, this);

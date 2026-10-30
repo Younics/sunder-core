@@ -30,6 +30,14 @@ public sealed partial class SunderRpcMarshallingContext
     public void AddServiceReference<TService>(SunderRpcContractDescriptor contract, string serviceId,
         SunderRpcServiceBindingLifetime serviceBindings,
         Func<ISunderRpcClient, SunderRpcProviderSnapshot, CancellationToken, TService> createService) where TService : class
+        => AddServiceReference(contract, serviceId, serviceBindings, createService, consumerCompatible: false);
+
+    /// <summary>Installs a generated reference factory using the broker's consumer-surface admission, while preserving the full activation locator.</summary>
+    [Sunder.Sdk.Compatibility.SunderSdkCapability(Sunder.Sdk.Compatibility.SunderSdkCapabilities.RpcConsumerRequirementsV1)]
+    public void AddServiceReference<TService>(SunderRpcContractDescriptor contract, string serviceId,
+        SunderRpcServiceBindingLifetime serviceBindings,
+        Func<ISunderRpcClient, SunderRpcProviderSnapshot, CancellationToken, TService> createService,
+        bool consumerCompatible) where TService : class
     {
         Check();
         ArgumentNullException.ThrowIfNull(contract);
@@ -42,7 +50,7 @@ public sealed partial class SunderRpcMarshallingContext
         if (JsonOptions.IsReadOnly) throw new InvalidOperationException("Install service-reference bindings before serialization.");
         if (_serviceBindings.ContainsKey(typeof(TService)))
             throw new InvalidOperationException("A generated service type must have exactly one projected service target.");
-        var binding = new ServiceReferenceBinding<TService>(this, contract, serviceBindings, createService);
+        var binding = new ServiceReferenceBinding<TService>(this, contract, serviceBindings, createService, consumerCompatible);
         _serviceBindings.Add(typeof(TService), binding);
         JsonOptions.Converters.Insert(0, binding);
     }
@@ -139,7 +147,7 @@ public sealed partial class SunderRpcMarshallingContext
 
     private sealed class ServiceReferenceBinding<TService>(SunderRpcMarshallingContext context,
         SunderRpcContractDescriptor contract, SunderRpcServiceBindingLifetime serviceBindings,
-        Func<ISunderRpcClient, SunderRpcProviderSnapshot, CancellationToken, TService> createService)
+        Func<ISunderRpcClient, SunderRpcProviderSnapshot, CancellationToken, TService> createService, bool consumerCompatible)
         : JsonConverter<ServiceReference<TService>>, IServiceReferenceBinding where TService : class
     {
         private readonly Dictionary<ServiceReference<TService>, bool> _outgoing = new(ReferenceEqualityComparer.Instance);
@@ -244,8 +252,8 @@ public sealed partial class SunderRpcMarshallingContext
         private void MatchContract(SunderRpcProviderSnapshot snapshot)
         {
             SunderRpcServiceLocator.Validate(snapshot);
-            if (snapshot.ContractId != contract.ContractId || snapshot.ContractVersion != contract.Version
-                || snapshot.DescriptorSha256 != contract.Sha256 || snapshot.AbiSha256 != contract.AbiSha256)
+            if (snapshot.ContractId != contract.ContractId || !consumerCompatible && (snapshot.ContractVersion != contract.Version
+                || snapshot.DescriptorSha256 != contract.Sha256 || snapshot.AbiSha256 != contract.AbiSha256))
                 throw new JsonException("The service reference does not match its selected projected contract.");
         }
 

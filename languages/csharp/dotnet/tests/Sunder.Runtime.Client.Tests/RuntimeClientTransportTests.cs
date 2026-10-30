@@ -13,6 +13,43 @@ namespace Sunder.Runtime.Client.Tests;
 public sealed class RuntimeClientTransportTests
 {
     [Theory]
+    [InlineData(1, 1, 1, true)]
+    [InlineData(2, 1, 2, true)]
+    [InlineData(1, 1, 2, true)]
+    [InlineData(2, 2, 2, false)]
+    [InlineData(0, 0, 1, false)]
+    [InlineData(1, 2, 1, false)]
+    [InlineData(3, 1, 2, false)]
+    [InlineData(0, 1, 2, false)]
+    public async Task Negotiation_UsesV1OnlyWhenTheValidServerRangeIncludesIt(int revision, int minimum, int maximum, bool compatible)
+    {
+        var handshake = CreateHandshake(revision, minimum, maximum);
+        var handler = new RecordingHandler(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/handshake" => Json(handshake),
+            "/api/v1/system" => Json(new SystemStatusResponse("Runtime", "9.0.0", true, DateTimeOffset.UtcNow)),
+            _ => throw new InvalidOperationException("The V1 client must not switch API routes."),
+        });
+        using var client = new RuntimeManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("http://runtime.test/"), "secret"), handler);
+
+        if (compatible)
+        {
+            Assert.Equal("9.0.0", (await client.GetSystemStatusAsync()).Version);
+            Assert.Equal(["/api/handshake", "/api/v1/system"], handler.Paths);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<RuntimeProtocolException>(() => client.GetSystemStatusAsync());
+            Assert.Equal(["/api/handshake"], handler.Paths);
+        }
+        Assert.All(handler.Authorizations, authorization => Assert.Equal("Bearer secret", authorization));
+        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(handshake, "missing-feature.v1"));
+        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(handshake with { ProtocolIdentity = "other" }));
+        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(handshake with { RuntimeInstanceId = Guid.Empty }));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task DevelopmentImportPreparationRequiresItsAdvertisedFeature(bool supported)

@@ -65,6 +65,8 @@ import { authority, importProjection, importedContractsForRoles, importedDepende
 import { withBaselineLease } from "./rpc-baseline-store";
 import { workerResolutionOptions } from "./rpc-runtime-inputs";
 import { emptyModelProjection, MODEL_PROJECTION_ARCHIVE_PATH, MODEL_PROJECTION_PATH, projectionDocumentBytes, validateModelProjectionSet } from "./rpc-model-projection";
+import { consumerRequirementsOuter, readConsumerRequirements } from "./rpc-consumer-requirements";
+import type { OuterObject } from "./rpc-baseline-json";
 import {
   generateRpcBindingsForLoadedProjectLocked,
   withRpcBindingsOutputLock,
@@ -921,7 +923,10 @@ function createManifest(
       versionRange: dependency.versionRange,
       presence: "required" as const,
     })), ...(imports ? importedDependenciesForRoles(imports, targetRoles) : [])].sort((a, b) => ordinal(a.packageId, b.packageId)),
-    targets: [...targets].sort(compareTargets),
+    targets: targets.map(target => ({ ...target, requiredHostCapabilities: [...new Set([...target.requiredHostCapabilities,
+      ...(selectedDeclarations.usesContracts.some(use => use.role === target.role && (target.role === "app"
+        ? project.ownedRpc?.appConsumerRequirements : project.ownedRpc?.consumerRequirements)?.some(value => value.source.contractId === use.contractId))
+        ? ["rpc.consumer-requirements.v1"] : [])])].sort(ordinal) })).sort(compareTargets),
     contractBundles,
     usesContracts: [...selectedDeclarations.usesContracts].sort(compareContractUses),
     provides: [...selectedDeclarations.provides].sort(compareProviders),
@@ -939,6 +944,8 @@ function configuredRpcDeclarations(
     .filter((use) => targetRoles.has(use.role))
     .map((use): ContractUseManifest => {
       const contract = exactContract(project, use.contractId, use.contractVersion);
+      const requirement = (use.role === "app" ? project.ownedRpc?.appConsumerRequirements : project.ownedRpc?.consumerRequirements)
+        ?.find(value => value.source.contractId === use.contractId);
       return {
         role: use.role,
         contractId: use.contractId,
@@ -946,6 +953,7 @@ function configuredRpcDeclarations(
         abiSha256: contract.abiSha256,
         required: use.required,
         actions: [...use.actions],
+        ...(requirement ? { consumerRequirements: consumerRequirementsOuter(requirement) } : {}),
       };
     });
   const provides = project.config.providers
@@ -1343,7 +1351,7 @@ async function readLeaf(root: string, config: SunderNodePackageConfig, project: 
   }
   if (index.files.length > MAXIMUM_ARCHIVE_ENTRIES) throw new Error(`Target leaf '${root}' contains too many indexed files.`);
   const target = manifest.targets[0]!;
-  validateTarget(target, manifest.id, root, config);
+  validateTarget(target, manifest.id, root, config, manifest.usesContracts.some(use => use.role === target.role && use.consumerRequirements !== undefined));
   validateManifestMetadata(manifest, new Set([target.role]), `Target leaf '${root}'`, project.ownedRpc ? createManifest(project, manifest.targets) : undefined);
   const bundledDescriptorPaths = new Set(manifest.contractBundles.map((bundle) => bundle.descriptorPath));
   const files = new Map<string, LeafFile>();
@@ -1394,7 +1402,7 @@ async function readLeaf(root: string, config: SunderNodePackageConfig, project: 
   if (!files.has(normalizeLogicalPath(target.entryPoint))) {
     throw new Error(`Target leaf '${root}' does not contain its declared entry point '${target.entryPoint}'.`);
   }
-  await validateBundledDescriptorFiles(manifest.contractBundles, files, root);
+  await validateBundledDescriptorFiles(manifest.contractBundles, files, root, manifest.usesContracts);
   const projection = files.get(MODEL_PROJECTION_PATH);
   if (!projection || !(await readProjectDescriptorFile(root, projection.fullPath, "Leaf model projection", 4_194_304))
     .equals(packageProjectionBytes(project, manifest.contractBundles.map(bundle => bundle.contractId))))
@@ -1512,7 +1520,8 @@ function validateManifestMetadata(
   const uses = new Set<string>();
   for (const [index, item] of manifest.usesContracts.entries()) {
     const value = manifestRecord(item, `${label} usesContracts[${index}]`);
-    manifestOnly(value, `${label} usesContracts[${index}]`, "role", "contractId", "contractVersion", "abiSha256", "required", "actions");
+    manifestOnly(value, `${label} usesContracts[${index}]`, "role", "contractId", "contractVersion", "abiSha256", "required", "actions",
+      ...(Object.hasOwn(value, "consumerRequirements") ? ["consumerRequirements"] : []));
     const use = item as ContractUseManifest;
     if (use.role !== "app" && use.role !== "runtime"
       || typeof use.contractId !== "string" || !isPackageId(use.contractId)
@@ -1590,6 +1599,7 @@ async function validateBundledDescriptorFiles(
   bundles: readonly ContractBundleManifest[],
   files: ReadonlyMap<string, LeafFile>,
   root: string,
+  uses: readonly ContractUseManifest[],
 ): Promise<void> {
   for (const bundle of bundles) {
     const file = files.get(bundle.descriptorPath);
@@ -1613,6 +1623,11 @@ async function validateBundledDescriptorFiles(
       || file.sha256 !== bundle.descriptorSha256
       || rpcAbiSha256(descriptor) !== bundle.abiSha256) {
       throw new Error(`Target leaf '${root}' contract descriptor '${bundle.descriptorPath}' does not match its exact V1 bundle identity and hashes.`);
+    }
+    for (const use of uses.filter(use => use.contractId === bundle.contractId && use.consumerRequirements !== undefined)) {
+      if (bundle.source !== "imported" || bundle.authorityKind !== "package" || bundle.exposure !== "public")
+        throw new Error("Consumer requirements require an imported public package contract.");
+      readConsumerRequirements(use.consumerRequirements!, descriptor);
     }
   }
 }
@@ -1643,6 +1658,7 @@ function validateTarget(
   packageId: string,
   root: string,
   config: SunderNodePackageConfig,
+  consumerCompatible = false,
 ): void {
   const value = manifestRecord(target, `Target leaf '${root}' target`);
   const commonProperties = [
@@ -1664,9 +1680,10 @@ function validateTarget(
     throw new Error(`Target leaf '${root}' Runtime target kind '${target.kind}' is invalid; Manifest V1 Runtime targets must use 'worker'.`);
   }
   const compatibility = packageToolCompatibility();
-  const expectedCapabilities = target.role === "app"
+  const baselineCapabilities = target.role === "app"
     ? webTargetCapabilities(config)
     : workerTargetCapabilities(config);
+  const expectedCapabilities = [...baselineCapabilities, ...(consumerCompatible ? ["rpc.consumer-requirements.v1"] : [])].sort(ordinal);
   const capabilitiesMatch = Array.isArray(target.requiredHostCapabilities)
     && target.requiredHostCapabilities.length === expectedCapabilities.length
     && target.requiredHostCapabilities.every((capability, index) => capability === expectedCapabilities[index]);
@@ -2335,6 +2352,7 @@ interface ContractUseManifest {
   readonly abiSha256: string;
   readonly required: boolean;
   readonly actions: readonly ("discover" | "invoke" | "subscribe")[];
+  readonly consumerRequirements?: OuterObject;
 }
 
 interface ProviderManifest {

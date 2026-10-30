@@ -38,6 +38,28 @@ internal static class PackageContractValidator
                 ContractKey(reference.ContractId ?? string.Empty, reference.ContractVersion ?? string.Empty)))
             .ToHashSet(StringComparer.Ordinal);
         ValidateUses(manifest.UsesContracts, localContracts, targetRoles, packageApiUses, errors);
+        foreach (var use in (manifest.UsesContracts ?? []).Take(SunderPackageFormat.MaxContractUses).OfType<SunderPackageContractUseManifest>().Where(use => use.ConsumerRequirements is not null))
+        {
+            try
+            {
+                var bundle = (manifest.ContractBundles ?? []).SingleOrDefault(bundle => bundle is not null && bundle.ContractId == use.ContractId && bundle.Version == use.ContractVersion);
+                if (bundle is not { Source: "imported", AuthorityKind: "package", Exposure: "public" })
+                    throw new InvalidDataException("Consumer requirements require an imported public package contract.");
+                if (validateDescriptorPayload)
+                {
+                    if ((manifest.Targets ?? []).Where(target => target?.Role == use.Role).Any(target =>
+                        target!.RequiredHostCapabilities?.Contains(Sunder.Sdk.Compatibility.SunderSdkCapabilities.RpcConsumerRequirementsV1, StringComparer.Ordinal) != true))
+                        throw new InvalidDataException("Consumer requirements must be gated by rpc.consumer-requirements.v1 on every consuming target.");
+                    if (!descriptors.TryGetValue(use.ContractId!, out var descriptor))
+                        throw new InvalidDataException("Consumer requirements lack their exact source descriptor.");
+                    _ = SunderRpcConsumerRequirements.Parse(use.ConsumerRequirements!.Value, descriptor);
+                }
+            }
+            catch (Exception error) when (error is InvalidDataException or InvalidOperationException or KeyNotFoundException)
+            {
+                errors.Add($"Contract use '{use.ContractId}' has invalid consumer requirements: {error.Message}");
+            }
+        }
         ValidateProviders(manifest.Provides, localContracts, targetRoles, errors);
     }
 
@@ -227,9 +249,17 @@ internal static class PackageContractValidator
                 throw new InvalidDataException("Model projection sidecar must be nonempty and at most 4 MiB.");
             var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes);
             if (stream.ReadByte() != -1) throw new IOException("Model projection sidecar changed size during validation.");
-            SunderRpcModelProjectionDocument.Parse(bytes).Validate(manifest, descriptors);
+            var projection = SunderRpcModelProjectionDocument.Parse(bytes);
+            projection.Validate(manifest, descriptors);
+            foreach (var use in (manifest.UsesContracts ?? []).Take(SunderPackageFormat.MaxContractUses).OfType<SunderPackageContractUseManifest>().Where(use => use.ConsumerRequirements is not null))
+            {
+                var requirements = SunderRpcConsumerRequirements.Parse(use.ConsumerRequirements!.Value, descriptors[use.ContractId!]);
+                var entry = projection.Contracts.Single(value => value.ContractId == use.ContractId);
+                if (entry.ModelProjection.ServiceReferences.Keys.Any(name => !requirements.ExactOutputDefinitions.Contains(name, StringComparer.Ordinal)))
+                    throw new InvalidDataException("Consumer requirements must preserve exact service-reference protocol definitions.");
+            }
         }
-        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is InvalidDataException or IOException or UnauthorizedAccessException or KeyNotFoundException or InvalidOperationException)
         {
             errors.Add($"Package model projection sidecar is invalid: {exception.Message}");
         }

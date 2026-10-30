@@ -11,6 +11,37 @@ namespace Sunder.Host.Client.Tests;
 public sealed class HostManagementClientTests
 {
     [Fact]
+    public async Task ExpandedServerRange_PreservesV1RoutesAndRequiredFeatures()
+    {
+        var paths = new List<string>();
+        var handshake = new HostHandshakeResponse(HostProtocol.Identity, 2, 1, 2,
+            Guid.NewGuid(), Guid.NewGuid(), [HostProtocolFeatures.RuntimeGatewayV1],
+            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "9.0.0", "9.0.0"));
+        using var client = new HostManagementClient(
+            () => new RuntimeConnectionInfo(new Uri("https://host.example/"), "client-token"),
+            new RecordingHandler(request =>
+            {
+                paths.Add(request.RequestUri!.AbsolutePath);
+                Assert.Equal("Bearer client-token", request.Headers.Authorization?.ToString());
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = request.RequestUri.AbsolutePath switch
+                    {
+                        "/api/host/handshake" => JsonContent.Create(handshake),
+                        "/api/host/v1/status" => JsonContent.Create(CreateStatus()),
+                        _ => throw new InvalidOperationException("The V1 client must not switch API routes."),
+                    },
+                });
+            }));
+
+        var received = await client.GetHandshakeAsync();
+        Assert.Null(HostProtocolCompatibility.GetIncompatibility(received, HostProtocolFeatures.RuntimeGatewayV1));
+        Assert.NotNull(HostProtocolCompatibility.GetManagedSupervisorIncompatibility(received));
+        await client.GetStatusAsync();
+        Assert.Equal(["/api/host/handshake", "/api/host/v1/status"], paths);
+    }
+
+    [Fact]
     public async Task Client_SubmitsAndPollsDurableLifecycleOperation()
     {
         var operationId = "11111111111111111111111111111111";

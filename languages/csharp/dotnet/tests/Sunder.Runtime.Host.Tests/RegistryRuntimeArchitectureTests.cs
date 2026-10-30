@@ -1047,11 +1047,12 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 var body = request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
                     .GetAwaiter()
                     .GetResult()!;
-                Assert.Equal([SunderPackageFormat.CurrentManifestVersion], body.Compatibility.ManifestVersions);
-                Assert.Equal(["worker"], body.Compatibility.RuntimeTargetKinds);
-                Assert.Equal("worker-protocol.v1", body.Compatibility.WorkerProtocol);
-                Assert.Contains("rpc.v1", body.Compatibility.WorkerCapabilities);
-                Assert.Equal("sdk-baseline-1-1.v1", body.Compatibility.SdkBaseline);
+                var profile = Assert.Single(body.Compatibility.Profiles);
+                Assert.Equal([SunderPackageFormat.CurrentManifestVersion], profile.ManifestVersions);
+                Assert.Equal(["worker"], profile.RuntimeTargetKinds);
+                Assert.Equal("worker-protocol.v1", profile.WorkerProtocol);
+                Assert.Contains("rpc.v1", profile.WorkerCapabilities);
+                Assert.Equal("sdk-baseline-1-1.v1", profile.SdkBaseline);
                 Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), body.Compatibility.Rid);
                 var package = Assert.Single(body.Packages);
                 requests.Add((

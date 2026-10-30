@@ -4115,6 +4115,7 @@ public sealed partial class PackageBuildManifestTests
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedPackageApiIsLazyOwnsUnaryScopesRejectsDriftAndDoesNotRetry"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.ImportedExample"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCancellation_UsesOriginalCallerAndRetainsRemoteDispatchMetadata"),
+            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.UnchangedGeneratedClient_UsesAdmittedCurrentProviderWithoutRelabelingItsIdentity"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCatalogBorrowedSelectionProbesFreshPermissionAfterEndpointUnavailable"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InvokeCollectibleImportedGraph"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.AssertNoCollectibleJsonAccessorEntries"),

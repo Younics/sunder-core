@@ -7,6 +7,7 @@ import { serviceApiSource } from "../src/service-bindings";
 import { preparePackageImports } from "../src/rpc-package-imports";
 import { parseContractLock } from "../src/rpc-contract-lock";
 import { checkServiceApiBrowser, exerciseServiceApiScopes, serviceApiFixture } from "./service-api-fixtures";
+import { readConsumerRequirementEvidence } from "../src/rpc-consumer-requirements";
 
 const toolRoot = resolve(__dirname, "../src");
 for (const extension of ["ts", "js"] as const) test(`${extension} two-contract service scopes preserve Self, selected APIs, browser declarations and wire hashes`, async () => {
@@ -28,6 +29,7 @@ export function configure(context: WorkerContext) {
   }};
 }`);
     const loaded = await c.load(); await c.generate(loaded);
+    assert.ok(loaded.ownedRpc!.consumerRequirements.every(value => value.methods.length === 1));
     assert.deepEqual(await readFile(join(c.root, "sunder-contracts.lock.json")), c.lockBytes);
     for (const [id, bytes] of c.descriptors) assert.deepEqual(loaded.contracts.find(contract => contract.descriptor.contractId === id)!.canonicalBytes, bytes);
   } finally { await c.dispose(); }
@@ -37,6 +39,7 @@ test("single-contract imports have contract scopes and true service collisions r
   const c = await serviceApiFixture(toolRoot, "ts", ["example.dependency.first"]);
   try {
     const loaded = await c.load(); await c.generate(loaded);
+    assert.deepEqual(loaded.ownedRpc!.consumerRequirements.map(value => value.methods), [[]]);
     const declaration = await readFile(join(c.root, ".sunder/generated/rpc/api.d.ts"), "utf8");
     assert.match(declaration, /\$createDependency[\s\S]*example_Dependency_First: Readonly<\{[\s\S]*messages: Readonly</);
     const imports = await preparePackageImports(parseContractLock(c.lockBytes), c.cache, "example.owner", [], new Set(["app", "runtime"]));
@@ -45,6 +48,32 @@ test("single-contract imports have contract scopes and true service collisions r
       "message-items": original.descriptor.services.messages!, "message_items": original.descriptor.services.messages!,
     }}};
     assert.throws(() => serviceApiSource("example.owner", [collision], [], imports, "1.0.0"), /generated-name-collision/);
+  } finally { await c.dispose(); }
+});
+
+for (const extension of ["ts", "js"] as const) test(`${extension} App and Worker consumer requirements do not include the other roles method references`, async () => {
+  const c = await serviceApiFixture(toolRoot, extension);
+  try {
+    await writeFile(join(c.root, `src/services.${extension}`), c.source + `
+import {Dependency} from "#sunder/api";
+/** @param {import("@sunder/sdk").WorkerContext} context */
+export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) {
+  return {async onActivated() { await context.api(Dependency).example_Dependency_First.messages.send({}); }};
+}`);
+    await writeFile(join(c.root, `app/consumer.${extension}`), `import {Self, Dependency} from "#sunder/api";
+import {createBrowserContext} from "@sunder/sdk/browser";
+export function connect() {return createBrowserContext(Self).api(Dependency).example_Dependency_Second.messages.send({});}`);
+    const loaded = await c.load();
+    assert.deepEqual(loaded.ownedRpc!.consumerRequirements.map(value => [value.source.contractId, value.methods.length]),
+      [["example.dependency.first", 1], ["example.dependency.second", 0]]);
+    assert.deepEqual(loaded.ownedRpc!.appConsumerRequirements.map(value => [value.source.contractId, value.methods.length]),
+      [["example.dependency.first", 0], ["example.dependency.second", 1]]);
+    await c.generate(loaded);
+    for (const [role, file] of [["runtime", "authoring-receipt.v1.json"], ["app", "app-authoring-receipt.v1.json"]] as const) {
+      const receipt = JSON.parse(await readFile(join(c.root, ".sunder/generated/rpc", file), "utf8"));
+      assert.deepEqual(readConsumerRequirementEvidence(receipt).map(value => [value.source.contractId, value.methods.length]),
+        (role === "app" ? loaded.ownedRpc!.appConsumerRequirements : loaded.ownedRpc!.consumerRequirements).map(value => [value.source.contractId, value.methods.length]));
+    }
   } finally { await c.dispose(); }
 });
 
@@ -60,7 +89,9 @@ export function configure(context${extension === "ts" ? ": WorkerContext" : ""})
   const api = context.api(Dependency);
   const token = Services.Dependency.example_Dependency_First.messages;
   if (token !== Services.Contracts.CExample_Dependency_First.messages) throw new Error("Different token");
-  return {async onActivated() { const value = await api.example_Dependency_First.messages.send({}); value.message.toUpperCase(); }};
+  const service = api.example_Dependency_First.messages;
+  ${extension === "ts" ? "const send = service.send;" : "const {send} = service;"}
+  return {async onActivated() { const value = await send({}); value.message.toUpperCase(); }};
 }`;
     const browser = `import {Self, Dependency, Services} from "#sunder/api";
 import {createBrowserContext} from "@sunder/sdk/browser";
@@ -78,11 +109,18 @@ export function connect() {
 }`;
     await writeFile(workerPath, worker); await writeFile(browserPath, browser);
     const before = await c.load(); await c.generate(before); await checkServiceApiBrowser(c, extension);
+    assert.deepEqual(before.ownedRpc!.consumerRequirements.map(value => [value.source.contractId, value.methods]),
+      [["example.dependency.first", [{ serviceId: "messages", methodId: "send" }]]]);
     // Replace only the test's reviewed selection/cache. Existing consumer source
     // and the first contract's descriptor, ABI and model projection stay exact.
     await cp(next.cache, c.cache, { recursive: true });
     await writeFile(join(c.root, "sunder-contracts.lock.json"), next.lockBytes);
     const after = await c.load(); await c.generate(after); await checkServiceApiBrowser(c, extension);
+    assert.deepEqual(after.ownedRpc!.consumerRequirements.map(value => [value.source.contractId, value.methods]),
+      [["example.dependency.first", [{ serviceId: "messages", methodId: "send" }]], ["example.dependency.second", []]]);
+    const receipt = JSON.parse(await readFile(join(c.root, ".sunder/generated/rpc/authoring-receipt.v1.json"), "utf8"));
+    assert.deepEqual(readConsumerRequirementEvidence(receipt).map(value => [value.source.contractId, value.methods]),
+      after.ownedRpc!.consumerRequirements.map(value => [value.source.contractId, value.methods]));
     assert.equal(after.contracts.filter(contract => contract.imported).length, 2);
     const first = (project: typeof before) => project.contracts.find(contract => contract.descriptor.contractId === "example.dependency.first")!;
     assert.deepEqual([first(after).canonicalBytes, first(after).abiSha256, first(after).modelProjection], [first(before).canonicalBytes, first(before).abiSha256, first(before).modelProjection]);
@@ -111,5 +149,28 @@ export const messages=defineService({send(request:Message):Message{return reques
     const oldGeneration = tokenGeneration(before.ownedRpc!.files.get("api.js")!); const newGeneration = tokenGeneration(after.ownedRpc!.files.get("api.js")!);
     assert.equal(oldGeneration.length, 2); assert.equal(newGeneration.length, 2);
     assert.equal(new Set(oldGeneration).size, 1); assert.equal(new Set(newGeneration).size, 1); assert.notEqual(oldGeneration[0], newGeneration[0]);
+  } finally { await c.dispose(); }
+});
+
+for (const extension of ["ts", "js"] as const) test(`${extension} explicit raw method/view declarations are collected without narrowing a full typed model`, async () => {
+  const c = await serviceApiFixture(toolRoot, extension, ["example.dependency.first"]);
+  try {
+    const path = join(c.root, `src/services.${extension}`);
+    const declared = c.source + `
+import {declareRpcUse, declareRpcView} from "@sunder/sdk";
+import {Services} from "#sunder/api";
+declareRpcUse(Services.Dependency.example_Dependency_First.messages, ["send"]);
+declareRpcView(Services.Dependency.example_Dependency_First.messages, "Response", ["message"]);`;
+    await writeFile(path, declared);
+    const selected = await c.load();
+    assert.deepEqual(selected.ownedRpc!.consumerRequirements[0]!.methods, [{ serviceId: "messages", methodId: "send" }]);
+    assert.deepEqual(Object.entries(selected.ownedRpc!.consumerRequirements[0]!.outputMembers), [["Response", ["message"]]]);
+    await writeFile(path, declared.replace('["send"]', '["missing"]'));
+    await assert.rejects(c.load(), /consumer-requirements-invalid/);
+    await writeFile(path, declared + `
+import {Dependency} from "#sunder/api";
+/** @param {import("@sunder/sdk").WorkerContext} context */
+export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) { return {async onActivated() { await context.api(Dependency).example_Dependency_First.messages.send({}); }}; }`);
+    await assert.rejects(c.load(), /consumer-view-invalid/);
   } finally { await c.dispose(); }
 });

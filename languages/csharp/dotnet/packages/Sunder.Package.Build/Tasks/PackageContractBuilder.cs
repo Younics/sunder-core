@@ -247,6 +247,13 @@ internal static class PackageContractBuilder
         var uses = BuildUses(useItems, local, targets, log);
         var providers = BuildProviders(providerItems, local, targets, log);
         if (log.HasLoggedErrors || uses is null || providers is null) return null;
+        uses = uses.Select(use => new SunderPackageContractUseManifest
+        {
+            Role = use!.Role, ContractId = use.ContractId, ContractVersion = use.ContractVersion,
+            AbiSha256 = use.AbiSha256, Required = use.Required, Actions = use.Actions,
+            ConsumerRequirements = receipt?.Manifest.UsesContracts?.SingleOrDefault(expected => expected is not null && expected.Role == use.Role
+                && expected.ContractId == use.ContractId)?.ConsumerRequirements,
+        }).ToArray();
         if (receiptBundles.Keys.Any(key => !local.ContainsKey(key))
             || (receipt?.Manifest.UsesContracts ?? []).Any(expected => !uses.Any(actual => JsonElement.DeepEquals(
                 JsonSerializer.SerializeToElement(expected), JsonSerializer.SerializeToElement(actual))))

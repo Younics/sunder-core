@@ -395,7 +395,29 @@ for naming, provider selection, content ownership and public evolution.
 
 ### Advanced RPC Boundary
 
-The earlier RPC-prefixed declaration attributes are removed; `Sunder.Sdk.Services`
+Imported typed calls automatically contribute consumer method/schema requirements.
+The original lock and imported descriptor stay intact; compatible in-range provider
+updates need not rebuild the consumer. Full models require every declared member,
+not just the properties a particular call site reads. Older imports without this
+metadata keep exact matching.
+
+For raw RPC, reflection or dynamic code, declare the method wire IDs explicitly:
+
+```csharp
+using Sunder.Sdk.Services;
+
+[assembly: SunderRpcDynamicUse("example.directory", "people", "read")]
+// Only for a deliberately narrow raw response model; never a full generated model.
+[assembly: SunderRpcConsumerView("example.directory", "Person", "name")]
+```
+
+Raw output definitions stay exact unless explicitly narrowed. Nested views are
+separate declarations. Views cannot narrow service-reference protocol schemas or
+definitions also required by typed calls. Build tooling stamps the consuming target
+with `rpc.consumer-requirements.v1`; these declarations grant no permission. See the
+[compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md#imported-api-compatibility).
+
+The earlier declaration attributes in `Sunder.Sdk.Rpc` are removed; `Sunder.Sdk.Services`
 is the sole source-authoring namespace. The advanced broker, content-scope and wire
 APIs below retain their RPC namespace and semantics.
 
@@ -405,7 +427,7 @@ Descriptors are strict UTF-8 JSON with `descriptorVersion: 1`, exact `schemaProf
 
 Descriptor hashes use deterministic JCS-compatible canonical JSON, while ABI hashes use the domain-separated structural RPC V1 identity. Every descriptor number must decode to a finite IEEE-754 binary64 value. Integer-valued keywords and safe-integer schema values remain mathematical integers in the inclusive range `-9007199254740991` through `9007199254740991`; floating-point schemas select their wire semantics explicitly with `format: "float32"` or `format: "float64"`.
 
-Runtime validates requests and responses/events against the same parsed descriptor. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. `SunderRpcException` represents bounded domain failures. Raw content-reference and transport APIs serve advanced integration; ordinary services use `SunderContent`.
+Runtime validates requests against caller and provider descriptors, validates provider responses/events in full, then reads the consumer's declared output shape. Grants are explicit, default-deny, durable, and fenced to the caller package version plus manifest hash. Revocation immediately removes discovery visibility and cancels active calls and subscriptions. `SunderRpcException` represents bounded domain failures. Raw content-reference and transport APIs serve advanced integration; ordinary services use `SunderContent`.
 
 C# source/binding generation belongs to `Sunder.Package.Build`, not the public runtime
 SDK. Normal Build and Pack generate the required bindings and composition; package

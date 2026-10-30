@@ -334,6 +334,15 @@ internal static partial class SunderRpcAuthoringDocuments
             ["contractKey"] = contract.Key,
             ["logicalName"] = contract.LogicalName,
         }));
+        if (compilation.ConsumerRequirements.Count != 0)
+        {
+            var requirements = compilation.ConsumerRequirements.Where(value => importedByKey.ContainsKey(value.Source.ContractId)).ToArray();
+            if (!requirements.Select(value => value.Source.ContractId).Order(StringComparer.Ordinal).SequenceEqual(
+                    roleContracts.Where(value => value.AuthorityPackageId is not null).Select(value => value.ContractKey).Order(StringComparer.Ordinal), StringComparer.Ordinal)
+                || requirements.Any(value => value.Source.Sha256 != importedByKey[value.Source.ContractId].Descriptor.Sha256))
+                throw new InvalidDataException("rpc-authoring.evidence-mismatch: Consumer requirements differ from the compiled imported surface.");
+            if (requirements.Length != 0) root["consumerRequirements"] = ReceiptArray(requirements.OrderBy(value => value.Source.ContractId, StringComparer.Ordinal).Select(value => value.ToJson()));
+        }
         if (role == "app") root["role"] = "app";
         if (typedUses.Count != 0) root["roleUses"] = RoleUsesJson(typedUses.Select(use => use.Evidence));
 

@@ -278,10 +278,10 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
     }
 
     [Fact]
-    public async Task Resolver_UsesRangeAndExactRpcIdentityRatherThanRestoreVersionOrContent()
+    public async Task Resolver_UsesReviewedRangeAndAdmittedContractRatherThanRestoreVersionOrContent()
     {
         using var probe = CompileProbe(SunderRpcCSharpImportPrepass.Prepare(_lock, _root));
-        var expected = Provider("1.9.9+new.build");
+        var expected = Provider("1.9.9+new.build") with { ContractVersion = "2.0.1", DescriptorSha256 = new('c', 64), AbiSha256 = new('d', 64) };
         var rpc = new RpcStub
         {
             Providers =
@@ -289,9 +289,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
                 Provider("2.0.0"),
                 Provider("1.9.9-beta.1"),
                 Provider("1.9.9") with { PackageId = "example.extension" },
-                Provider("1.9.9") with { ContractVersion = "2.0.1" },
-                Provider("1.9.9") with { DescriptorSha256 = new string('a', 64) },
-                Provider("1.9.9") with { AbiSha256 = new string('b', 64) },
+                Provider("1.9.9") with { ContractId = "example.other" },
                 Provider("1.9.9") with { State = SunderRpcProviderState.Inactive },
                 expected,
             ],
@@ -376,6 +374,12 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
         Assert.Null(await probe.Get(rpc, matching));
         rpc.Current = matching with { Endpoint = new("replacement") };
         Assert.Null(await probe.Get(rpc, matching));
+        foreach (var changed in new[] { matching with { ContractVersion = "3.0.0" }, matching with { DescriptorSha256 = new('c', 64) },
+                     matching with { AbiSha256 = new('d', 64) } })
+        {
+            rpc.Current = changed;
+            Assert.Null(await probe.Get(rpc, matching)); // Compatibility never retargets an already issued binding.
+        }
     }
 
     [Fact]
@@ -454,9 +458,9 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
         foreach (var invalid in new[]
                  {
                      provider with { ContractId = "example.other" },
-                     provider with { ContractVersion = "2.0.1" },
-                     provider with { DescriptorSha256 = new string('a', 64) },
-                     provider with { AbiSha256 = new string('a', 64) },
+                     provider with { ContractVersion = "not-semver" },
+                     provider with { DescriptorSha256 = "not-a-hash" },
+                     provider with { AbiSha256 = "not-a-hash" },
                      provider with { ProviderId = "INVALID" },
                  })
         {

@@ -4,6 +4,7 @@ import { apiTokenOwner, bindApiContext, createApiContext, type ApiContext, type 
 export { createApiContext } from "./api";
 export type { ApiToken, ApiContext, ApiTransport, ServiceStream } from "./api";
 export type { ServiceContext, ServiceContract } from "./services";
+export { declareRpcUse, declareRpcView } from "./services";
 export {SunderContent} from "./content";
 export type {SunderContentOptions,SunderContentStreamOptions} from "./content";
 export { ServiceReference, ServiceProvider } from "./service-reference";
@@ -13,7 +14,7 @@ export type { RpcCallOptions, JsonValue, RpcInvoker } from "./core";
 
 export { formatUtcTimestamp } from "./timestamp";
 export { RpcDomainError, RpcError } from "./types";
-export { isVersionInRange } from "./validation";
+export { isVersionInRange, isSemanticVersion } from "./validation";
 export {
   RpcDescriptorError,
   canonicalizeDescriptor,

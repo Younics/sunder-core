@@ -58,7 +58,9 @@ internal static partial class SunderRpcAuthoringDocuments
                 output.Append(": {\n");
                 StringProperty(output, 3, "contractId", contract.ContractId, comma: true);
                 var reviews = contract.History.Concat(contract.Current is { } active ? [active] : [])
-                    .Where(snapshot => snapshot.ProjectionReview is not null).Select(snapshot => snapshot.ProjectionReview!.ReviewJson).ToArray();
+                    .Where(snapshot => snapshot.ProjectionReview is not null)
+                    .OrderBy(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version))
+                    .Select(snapshot => snapshot.ProjectionReview!.ReviewJson).ToArray();
                 if (contract.Current is { } current)
                 {
                     output.Append("      \"current\": ");
@@ -249,10 +251,12 @@ internal static partial class SunderRpcAuthoringDocuments
             : GetMinimumOwnedContractVersion(previous.Descriptor.Version,
                 kind == SunderRpcContractChangeKind.Unchanged ? SunderRpcContractChangeKind.Patch : kind));
         var major = minimum.Major;
+        var hasLine = immutableHistory.Any(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version).Major == major);
+        var highest = immutableHistory.MaxBy(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version));
         foreach (var snapshot in immutableHistory)
         {
             var historicalVersion = SemanticVersion.Parse(snapshot.Descriptor.Version);
-            if (historicalVersion.Major != major && !ReferenceEquals(snapshot, immutableHistory[^1])) continue;
+            if (historicalVersion.Major != major && (hasLine || !ReferenceEquals(snapshot, highest))) continue;
             // The final-version validator rejects any still-applicable undefined prerelease progression.
             if (historicalVersion.Prerelease is not null) continue;
             var historicalKind = ClassifyOwnedChange(snapshot, candidate);
@@ -477,9 +481,9 @@ internal static partial class SunderRpcAuthoringDocuments
     {
         if (immutableHistory.Count == 0) return;
         var version = SemanticVersion.Parse(candidate.Version);
-        var highest = immutableHistory[^1];
-        var comparisons = immutableHistory.Where(snapshot => ReferenceEquals(snapshot, highest)
-            || SemanticVersion.Parse(snapshot.Descriptor.Version).Major == version.Major).ToArray();
+        var comparisons = immutableHistory.Where(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version).Major == version.Major).ToArray();
+        if (comparisons.Length == 0) comparisons = [immutableHistory.MaxBy(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version))!];
+        var highest = comparisons.MaxBy(snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version))!;
         if (version.Prerelease is not null || comparisons.Any(static snapshot => SemanticVersion.Parse(snapshot.Descriptor.Version).Prerelease is not null))
         {
             // Retaining an exact tuple does not allocate or infer a prerelease progression.
@@ -488,7 +492,7 @@ internal static partial class SunderRpcAuthoringDocuments
         }
         if (version.ComparePrecedenceTo(SemanticVersion.Parse(highest.Descriptor.Version)) <= 0)
         {
-            throw new InvalidDataException($"Owned contract '{key}' next version must follow all immutable history; issued versions cannot be reused, even with matching hashes.");
+            throw new InvalidDataException($"Owned contract '{key}' next version must follow immutable history in its major line; issued versions cannot be reused, even with matching hashes.");
         }
         var errors = SunderRpcContractCompatibility.ValidateVersion(candidate, immutableHistory.Select(static snapshot => snapshot.Descriptor).ToArray());
         if (errors.Count != 0)

@@ -22,9 +22,11 @@ import { analyzeServices, pascal } from "./service-source";
 import { serviceAdapterSource, serviceApiSource, serviceWorkerSource, serviceReferenceTypes } from "./service-bindings";
 import { MODEL_PROJECTION_PATH, modelProjectionBytes, modelProjectionOuter, methodPoliciesBytes, methodPoliciesOuter, projectionDocumentBytes, validateModelProjectionSet } from "./rpc-model-projection";
 import { outerBytes, type Outer } from "./rpc-baseline-json";
+import { analyzeConsumerRequirements } from "./rpc-consumer-analysis";
+import { consumerRequirementsOuter, type ConsumerRequirements } from "./rpc-consumer-requirements";
 
 const resolve = (...paths: string[]): string => nativeResolve(...paths).replaceAll("\\", "/");
-const producer = captureRpcProducer([__filename, require.resolve("@sunder/sdk"), require.resolve("typescript"), ...["./toolchains.generated", "./rpc-model-projection", "./rpc-model-projection-cache", "./rpc-contract-acquisition", "./service-source", "./service-bindings", "./model", "./module", "./compatibility", "./package", "./rpc-bindings", "./rpc-authoring-plugin", "./rpc-owned-app", "./output", "./notices", "./rpc-runtime-inputs", "./rpc-baseline", "./rpc-baseline-json", "./rpc-baseline-store", "./rpc-evolution", "./rpc-contracts", "./rpc-contract-lock", "./rpc-contract-cache", "./rpc-contract-cache-gc", "./rpc-contract-candidate", "./rpc-contract-restore", "./rpc-package-imports", "./rpc-package-selection", "./rpc-package-commands", "./rpc-publication", "./rpc-platform-catalogs", "./platform-catalog", "./rpc-platform-cache", "./cli"].map(path => require.resolve(path)), require.resolve("@sunder/package-tool/package.json"), resolve(dirname(require.resolve("@sunder/sdk")), "../package.json"), require.resolve("typescript/package.json")]);
+const producer = captureRpcProducer([__filename, require.resolve("@sunder/sdk"), require.resolve("typescript"), ...["./toolchains.generated", "./rpc-model-projection", "./rpc-model-projection-cache", "./rpc-contract-acquisition", "./service-source", "./service-bindings", "./rpc-consumer-analysis", "./rpc-consumer-requirements", "./rpc-owned-uses", "./model", "./module", "./compatibility", "./package", "./rpc-bindings", "./rpc-authoring-plugin", "./rpc-owned-app", "./output", "./notices", "./rpc-runtime-inputs", "./rpc-baseline", "./rpc-baseline-json", "./rpc-baseline-store", "./rpc-evolution", "./rpc-contracts", "./rpc-contract-lock", "./rpc-contract-cache", "./rpc-contract-cache-gc", "./rpc-contract-candidate", "./rpc-contract-restore", "./rpc-package-imports", "./rpc-package-selection", "./rpc-package-commands", "./rpc-publication", "./rpc-platform-catalogs", "./platform-catalog", "./rpc-platform-cache", "./cli"].map(path => require.resolve(path)), require.resolve("@sunder/package-tool/package.json"), resolve(dirname(require.resolve("@sunder/sdk")), "../package.json"), require.resolve("typescript/package.json")]);
 export interface OwnedRpcAnalysis {
   readonly imports: PackageImportAnalysis; readonly producerFiles: readonly string[];
   readonly baselineInput: BaselineInput; readonly baseline?: OwnedBaseline;
@@ -33,6 +35,8 @@ export interface OwnedRpcAnalysis {
   readonly providers: readonly ProviderConfig[]; readonly importedProviders: readonly ImportedProviderBinding[];
   readonly appUses: readonly ContractUseConfig[]; readonly runtimeUses: readonly ContractUseConfig[];
   readonly roleUses: readonly SourceRoleUse[];
+  readonly consumerRequirements: readonly ConsumerRequirements[];
+  readonly appConsumerRequirements: readonly ConsumerRequirements[];
   readonly inputFingerprint: string; readonly runtime: OwnedRuntimeInputs; readonly revalidate: () => Promise<void>;
 }
 export interface OwnedAnalysisOptions extends RegistryOriginOptions {
@@ -173,6 +177,16 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   const diagnostics = ts.getPreEmitDiagnostics(checked);
   if (diagnostics.length) fail("handler-incomplete", ts.formatDiagnostics(diagnostics, { getCanonicalFileName: path => path, getCurrentDirectory: () => project.root, getNewLine: () => "\n" }));
   const checkedServices = analyzeServices(checked, checked.getSourceFile(modulePath)!, sdk, project.config.id, project.config.version, baseline, imports.providerSurfaces, nodes, {root:generated,contracts:imports.contracts});
+  const requirements = analyzeConsumerRequirements(checked, generated, imports.contracts);
+  // App sources have their own role requirements. Do not infer App use from a
+  // Worker's references or scan generated bindings as if they were authored code.
+  const appImports = importedContractsForRoles(imports, new Set(["app"]));
+  const browserRoot = project.config.app && imports.contracts.some(contract => contract.imported?.authorityKind === "package"
+    && appImports.has(contract.descriptor.contractId)) ? resolve(project.root, project.config.app.root) : undefined;
+  const browserFiles = (): string[] => browserRoot ? ts.sys.readDirectory(browserRoot, [".ts", ".tsx", ".js", ".jsx"],
+    ["**/node_modules/**", "**/.sunder/**"], undefined, 24).map(path => resolve(path)).sort(ordinal) : [];
+  const appFiles = browserFiles();
+  if (appFiles.length > 4096) fail("source-limit-exceeded", "Browser consumer source exceeds 4096 files.");
   if(!roleUsesBytes(roleUses).equals(roleUsesBytes(coalesceRoleUses(checkedServices.flatMap(service=>service.roleUses)))))fail("evidence-mismatch","Generated-member recompilation changed typed Runtime source intent.");
   if (checkedServices.length !== services.length || checkedServices.some((service, index) => service.exportName !== services[index]!.exportName
     || !Buffer.from(canonicalRpcDescriptorBytes(service.descriptor)).equals(Buffer.from(canonicalRpcDescriptorBytes(services[index]!.descriptor)))
@@ -197,6 +211,11 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
     }));
   }
   virtual.set(resolve(generated, "api.ts"), serviceApiSource(project.config.id, allContracts, services, imports, project.config.version, false));
+  // Use the portable API, not adapter/worker roots (or source-model aliases):
+  // those pull Worker implementation references into the App's requirements.
+  const appProgram = browserRoot ? ts.createProgram([...appFiles, resolve(generated, "api.ts")],
+    { ...frame.options, jsx: ts.JsxEmit.ReactJSX }, frame.host) : undefined;
+  const appRequirements = appProgram ? analyzeConsumerRequirements(appProgram, generated, imports.contracts, "app") : [];
   const declarations = ts.createProgram([...virtual.keys()], { ...frame.options, noEmit: false, declaration: true, emitDeclarationOnly: true }, frame.host);
   for (const path of virtual.keys()) {
     const emitted = declarations.emit(declarations.getSourceFile(path), (output, text) => {
@@ -219,6 +238,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   for (const role of presentRoles(project)) {
     const selectedImports = importedContractsForRoles(imports, new Set([role]));
     const selected = allContracts.filter(contract => !contract.imported || selectedImports.has(contract.descriptor.contractId));
+    const selectedRequirements = (role === "runtime" ? requirements : appRequirements).filter(value => selectedImports.has(value.source.contractId));
     const uses = [...imports.uses.filter(use => use.role === role), ...(role === "app" ? appUses : runtimeUses)];
     const receipt = { schemaVersion: 1, producer: { name: "@sunder/package-tool", version: toolVersion, language: modulePath.endsWith(".js") ? "javascript" : "typescript" },
       inputFingerprint: fingerprint, lockSha256: lock.sha256, packageId: project.config.id, packageVersion: project.config.version, ...(role === "app" ? { role } : {}),
@@ -229,7 +249,9 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
       packageArtifacts: importReceiptArtifacts(imports, new Set([role])), bundles: selected.map(contract => contract.imported ? { contractKey: contract.contractKey!, source: "imported", ...authority(contract.imported) } : { contractKey: contract.contractKey!, source: "owned", authorityKind: "package", authorityId: project.config.id }),
       ...importProjection(imports, new Set([role]), importedProviders), providers: role === "app" ? [] : providers.map(provider => ({ providerId: provider.providerId, role, audience: provider.audience, contractKey: allContracts.find(contract => contract.descriptor.contractId === provider.contractId)!.contractKey! })),
       uses: uses.map(use => ({ role, required: use.required, actions: use.actions, contractKey: allContracts.find(contract => contract.descriptor.contractId === use.contractId)!.contractKey! })).sort((a, b) => ordinal(a.contractKey, b.contractKey)),
-      generatedPackageFacades: importedFacadeReceipt(imports, new Set([role])), generatedBindings: selected.map(contract => ({ contractKey: contract.contractKey!, logicalName: contract.imported ? contractSymbol(contract.contractKey!) : pascal(contract.contractKey!) })),...(role==="runtime"?roleUsesOuter(roleUses):{}) };
+      generatedPackageFacades: importedFacadeReceipt(imports, new Set([role])), generatedBindings: selected.map(contract => ({ contractKey: contract.contractKey!, logicalName: contract.imported ? contractSymbol(contract.contractKey!) : pascal(contract.contractKey!) })),
+      ...(selectedRequirements.length ? { consumerRequirements: selectedRequirements.map(consumerRequirementsOuter) } : {}),
+      ...(role==="runtime"?roleUsesOuter(roleUses):{}) };
     validateRoleUseEvidence(receipt as unknown as import("./rpc-baseline-json").OuterObject,"receipt",role==="runtime"?roleUses:[]);
     const text = outerBytes(receipt as unknown as Outer).toString(); if (Buffer.byteLength(text) > 67_108_864) fail("aggregate-materializability-overflow", "Service receipt exceeds 64 MiB.");
     files.set(role === "app" ? "app-authoring-receipt.v1.json" : "authoring-receipt.v1.json", text);
@@ -250,9 +272,10 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
     producer.revalidate(); await baselineInput.revalidate(); await verifyBaselineEvidence(); frame.revalidate();
     for (const [path, bytes] of [[project.configPath, configBytes], [lockPath, physicalLock]] as const) if (!(await readProjectDescriptorFile(project.root, path, "Service input", 33_554_432)).equals(bytes)) fail("unsupported-source", `Service input changed: ${path}`);
     await runtime.revalidate(); producer.revalidate();
+    if (JSON.stringify(appFiles) !== JSON.stringify(browserFiles())) fail("unsupported-source", "Browser consumer source membership changed during generation.");
   };
   await revalidate();
-  return { imports, roleUses, producerFiles: producer.files, baselineInput, ...(baseline ? { baseline } : {}), physicalFingerprint, modulePath, exportName: "", source, files, contracts, providers, importedProviders, appUses, runtimeUses, inputFingerprint: fingerprint, runtime, revalidate };
+  return { imports, roleUses, consumerRequirements: requirements, appConsumerRequirements: appRequirements, producerFiles: producer.files, baselineInput, ...(baseline ? { baseline } : {}), physicalFingerprint, modulePath, exportName: "", source, files, contracts, providers, importedProviders, appUses, runtimeUses, inputFingerprint: fingerprint, runtime, revalidate };
 }
 function presentRoles(project: LoadedProject): ReadonlySet<PackageRole> { return new Set(project.config.app ? ["app", "runtime"] : ["runtime"]); }
 function transpile(source: string): string { return ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext } }).outputText; }

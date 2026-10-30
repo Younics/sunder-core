@@ -10,4 +10,7 @@ internal sealed record RuntimeRpcProviderRegistration(
     string DescriptorSha256,
     SunderRpcContractDescriptor Contract,
     ISunderRpcServiceHandler Handler,
-    SunderPackageProviderManifest Manifest);
+    SunderPackageProviderManifest Manifest)
+{
+    internal SunderRpcModelProjection ModelProjection { get; init; } = SunderRpcModelProjection.Empty;
+}

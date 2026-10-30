@@ -29,6 +29,8 @@ internal sealed record RuntimePackageSource(
     internal DevelopmentImportAuthority? DevelopmentImports { get; init; }
     internal IReadOnlyList<string> DevelopmentOmittedPackages { get; init; } = [];
     internal IReadOnlyList<SunderPackageTargetKey>? AcquiredTargets { get; init; }
+    internal IReadOnlyDictionary<string, Sunder.Sdk.Rpc.SunderRpcContractDescriptor>? RpcContracts { get; init; }
+    internal SunderRpcModelProjectionDocument? RpcModelProjection { get; init; }
 
     internal string Folder => SourceFolder;
 

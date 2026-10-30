@@ -13,6 +13,35 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task UnchangedGeneratedClient_UsesAdmittedCurrentProviderWithoutRelabelingItsIdentity(bool selectedProvider)
+    {
+        using var probe = CompileProbe(SunderRpcCSharpImportPrepass.Prepare(_lock, _root));
+        var current = Provider("1.9.0") with { ContractVersion = "3.0.0", DescriptorSha256 = new('c', 64), AbiSha256 = new('d', 64) };
+        var scope = new RpcStub { Current = current };
+        var rpc = new RpcStub { LiveCatalog = true, Current = current, Providers = [current],
+            ScopeFactory = _ => ValueTask.FromResult<ISunderRpcCallScope>(scope) };
+        object owner = selectedProvider ? probe.CreateNaturalCatalog(rpc)
+            : Activator.CreateInstance(probe.Assembly.GetType("Sunder.Generated.Packages.Example_Dependency_Internal.PackageServices")!, rpc)!;
+        await using var lifetime = (IAsyncDisposable)owner;
+        if (selectedProvider)
+        {
+            var snapshot = await probe.ListNatural(owner, default);
+            var entry = ((System.Collections.IEnumerable)snapshot.GetType().GetProperty("Providers")!.GetValue(snapshot)!).Cast<object>().Single();
+            await probe.CallNatural(entry, default);
+        }
+        else
+        {
+            var service = ImportedExample(owner);
+            await ((ValueTask)service.GetType().GetMethod("PingAsync")!.Invoke(service, [CancellationToken.None])!);
+        }
+        Assert.Equal(1, scope.InvokeCount);
+        Assert.Equal(current, rpc.Current);
+        Assert.True(scope.Disposed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task GeneratedCancellation_UsesOriginalCallerAndRetainsRemoteDispatchMetadata(bool selectedProvider)
     {
         using var probe = CompileProbe(SunderRpcCSharpImportPrepass.Prepare(_lock, _root));
@@ -98,7 +127,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             using System.Threading.Tasks;
             using Sunder.Sdk.Services;
             [SunderService(SunderServiceExposure.Public, ContractId = "{{firstId}}", ServiceId = "shared")]
-            public interface FirstService { ValueTask<bool> ReadyAsync(); }
+            public interface FirstService { ValueTask<bool> ReadyAsync(); ValueTask<string> UnrelatedAsync(); }
             """;
         var second = $$"""
 
@@ -127,6 +156,9 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
             var compiled = new SunderRpcCSharpSourceCompiler().Compile(new("example.consumer", "1.0.0", [consumer], References(),
                 SupplementalSources: imports.Sources, ImportedPackageApis: imports.PackageApis));
             Assert.True(compiled.Success, string.Join(Environment.NewLine, compiled.Diagnostics));
+            var requirements = compiled.ConsumerRequirements.Single(value => value.Source.ContractId == firstId);
+            Assert.Equal([new Sunder.Package.Format.SunderRpcRequiredMethod("shared", "ready")], requirements.Methods);
+            Assert.All(compiled.ConsumerRequirements.Where(value => value.Source.ContractId != firstId), value => Assert.Empty(value.Methods));
             using var bytes = new MemoryStream();
             var emitted = compiled.SourceCompilation!.Emit(bytes);
             Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));

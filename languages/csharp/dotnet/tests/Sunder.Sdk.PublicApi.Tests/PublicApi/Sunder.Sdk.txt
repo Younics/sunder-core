@@ -811,6 +811,7 @@ type public static class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field public const System.String PackagingV1 = "packaging.v1"
   field public const System.String RoleLocalWorkspaceV1 = "role-local-workspace.v1"
   field public const System.String RpcCallOwnershipV1 = "rpc.call-ownership.v1"
+  field public const System.String RpcConsumerRequirementsV1 = "rpc.consumer-requirements.v1"
   field public const System.String RpcExtendedDeadlineV1 = "rpc.extended-deadline.v1"
   field public const System.String RpcV1 = "rpc.v1"
   field public const System.String RuntimeGenerationsV1 = "runtime-generations.v1"
@@ -1222,6 +1223,8 @@ type public sealed class Sunder.Sdk.Rpc.SunderRpcMarshallingContext : System.IAs
   method public System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement?> SerializeResponseStreamItemAsync<T>(T? value, System.Func<Sunder.Sdk.Rpc.SunderRpcMarshallingContext, T?, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? register = null, System.Threading.CancellationToken cancellationToken = null)
   method public System.Threading.Tasks.ValueTask<T> DeserializeAsync<T>(System.Text.Json.JsonElement value, System.Func<Sunder.Sdk.Rpc.SunderRpcMarshallingContext, System.Text.Json.JsonElement, System.Threading.CancellationToken, System.Threading.Tasks.ValueTask>? prepare = null, System.Threading.CancellationToken cancellationToken = null)
   method public System.Void AddServiceReference<TService>(Sunder.Sdk.Rpc.SunderRpcContractDescriptor contract, System.String serviceId, Sunder.Sdk.Rpc.SunderRpcServiceBindingLifetime serviceBindings, System.Func<Sunder.Sdk.Rpc.ISunderRpcClient, Sunder.Sdk.Rpc.SunderRpcProviderSnapshot, System.Threading.CancellationToken, TService> createService) where TService : class
+  attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.consumer-requirements.v1")
+  method public System.Void AddServiceReference<TService>(Sunder.Sdk.Rpc.SunderRpcContractDescriptor contract, System.String serviceId, Sunder.Sdk.Rpc.SunderRpcServiceBindingLifetime serviceBindings, System.Func<Sunder.Sdk.Rpc.ISunderRpcClient, Sunder.Sdk.Rpc.SunderRpcProviderSnapshot, System.Threading.CancellationToken, TService> createService, System.Boolean consumerCompatible) where TService : class
   method public System.Void AddServiceReference<TService>(Sunder.Sdk.Rpc.SunderRpcContractDescriptor contract, System.String serviceId, System.Func<Sunder.Sdk.Rpc.ISunderRpcClient, Sunder.Sdk.Rpc.SunderRpcProviderSnapshot, TService> createService) where TService : class
   method public final virtual System.Threading.Tasks.ValueTask DisposeAsync()
   method public static Sunder.Sdk.Rpc.SunderRpcMarshallingContext ForInvocation(Sunder.Sdk.Rpc.SunderRpcInvocationContext invocation, Sunder.Sdk.Rpc.ISunderRpcClient? receiver = null, Sunder.Sdk.Rpc.SunderRpcServiceBindingLifetime? serviceBindings = null)
@@ -1485,6 +1488,18 @@ type public sealed class Sunder.Sdk.Services.SunderPlatformImportAttribute : Sys
   method public .ctor(System.String contractId, System.Type adapterType)
   property System.String ContractId { public get; }
   property System.Type AdapterType { public get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.consumer-requirements.v1")
+type public sealed class Sunder.Sdk.Services.SunderRpcConsumerViewAttribute : System.Attribute
+  method public .ctor(System.String contractId, System.String definition, params System.String[] members)
+  property System.String ContractId { public get; }
+  property System.String Definition { public get; }
+  property System.String[] Members { public get; }
+attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.consumer-requirements.v1")
+type public sealed class Sunder.Sdk.Services.SunderRpcDynamicUseAttribute : System.Attribute
+  method public .ctor(System.String contractId, System.String serviceId, params System.String[] methodIds)
+  property System.String ContractId { public get; }
+  property System.String ServiceId { public get; }
+  property System.String[] MethodIds { public get; }
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("rpc.v1")
 type public sealed class Sunder.Sdk.Services.SunderRuntimeUseAttribute : System.Attribute
   method public .ctor()

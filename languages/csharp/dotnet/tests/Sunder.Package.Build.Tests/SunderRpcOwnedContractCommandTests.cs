@@ -188,6 +188,50 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
     }
 
     [Fact]
+    public void MaintainedMajor_AcceptsAndFreezesV1PatchesAfterV2WithoutChangingIssuedSnapshots()
+    {
+        Success(Command("Accept"));
+        Success(Command("Freeze"));
+        var v1 = Baseline();
+        var patch = Command("Accept");
+        patch.ContractKey = "greeting";
+        patch.ContractCurrentVersion = "1.0.0";
+        patch.ContractNextVersion = "1.0.1";
+        Success(patch);
+        var patchSnapshot = Baseline().Contracts["greeting"].Current!;
+
+        File.WriteAllBytes(BaselinePath, v1.ExactBytes);
+        File.WriteAllText(SourcePath, Source.Replace("GreetAsync", "ReadAsync", StringComparison.Ordinal));
+        Success(BreakingAcceptance());
+        Success(Command("Freeze"));
+        var v2 = Baseline();
+        var issued = new[] { v1.Contracts["greeting"].Current!, v2.Contracts["greeting"].Current! };
+        var merged = v2 with
+        {
+            Contracts = new Dictionary<string, SunderRpcOwnedContractBaseline>(StringComparer.Ordinal)
+            {
+                ["greeting"] = new(patchSnapshot.Descriptor.ContractId, patchSnapshot, Array.AsReadOnly(issued)),
+            },
+        };
+        File.WriteAllBytes(BaselinePath, SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(merged));
+        File.WriteAllText(SourcePath, Source);
+        Success(Command("Check"));
+        Success(Command("Freeze"));
+        patch = Command("Accept");
+        patch.ContractKey = "greeting";
+        patch.ContractCurrentVersion = "1.0.1";
+        patch.ContractNextVersion = "1.0.2";
+        Success(patch);
+        Success(Command("Freeze"));
+        var maintained = Baseline();
+        Assert.Equal("1.0.2", maintained.Contracts["greeting"].Current!.Descriptor.Version);
+        Assert.Equal(["1.0.0", "2.0.0", "1.0.1"], maintained.Contracts["greeting"].History.Select(snapshot => snapshot.Descriptor.Version));
+        for (var index = 0; index < issued.Length; index++)
+            Assert.True(JsonElement.DeepEquals(issued[index].SnapshotJson, maintained.Contracts["greeting"].History[index].SnapshotJson));
+        Assert.Equal(maintained.ExactBytes, SunderRpcAuthoringDocuments.WriteOwnedPackageBaseline(maintained));
+    }
+
+    [Fact]
     public void Rename_IsSeparateRemovalAndAddition_NotAContractIdentityAlias()
     {
         Success(Command("Accept"));

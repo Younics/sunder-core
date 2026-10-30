@@ -1,4 +1,5 @@
 import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isSemanticVersion, isVersionInRange, type RpcContractDescriptor } from "@sunder/sdk";
+import { consumerProjection, type ConsumerRequirements } from "./rpc-consumer-requirements";
 
 // Private port of Format/SunderRpcContractCompatibility. Admission, authority and
 // strict descriptor validation belong to callers; this proves normalized ABI
@@ -54,8 +55,10 @@ export function minimumOwnedVersion(version: string, kind: ChangeKind): string {
 }
 export function validateVersion(candidate: RpcContractDescriptor, history: readonly RpcContractDescriptor[]): readonly string[] {
   const bytes = Buffer.from(canonicalRpcDescriptorBytes(candidate));
+  const parsed = versionParts(candidate.version);
   let reused = false;
   let highest: RpcContractDescriptor | undefined;
+  let highestInLine: RpcContractDescriptor | undefined;
   for (const previous of history) {
     if (previous.contractId !== candidate.contractId) return ["contract-version.bump-required: Immutable history must contain only the candidate contract family."];
     if (previous.version === candidate.version) {
@@ -64,11 +67,13 @@ export function validateVersion(candidate: RpcContractDescriptor, history: reado
     }
     if (!highest || compareVersions(previous.version, highest.version) > 0
       || compareVersions(previous.version, highest.version) === 0 && ordinal(previous.version, highest.version) > 0) highest = previous;
+    if (versionParts(previous.version).core[0] === parsed.core[0] && (!highestInLine || compareVersions(previous.version, highestInLine.version) > 0
+      || compareVersions(previous.version, highestInLine.version) === 0 && ordinal(previous.version, highestInLine.version) > 0)) highestInLine = previous;
   }
   if (reused) return [];
-  const parsed = versionParts(candidate.version);
   if (parsed.prerelease) return [prereleaseDiagnostic];
   if (!highest) return [];
+  highest = highestInLine ?? highest;
   if (versionParts(highest.version).prerelease) return [prereleaseDiagnostic];
   if (compareVersions(candidate.version, highest.version) <= 0) return [`contract-version.bump-required: Candidate '${candidate.version}' must have greater SemVer precedence than highest immutable version '${highest.version}'; backfills and build-metadata-only allocations are forbidden.`];
   let failure: string | undefined; let strictest: string | undefined; let prior = "";
@@ -107,6 +112,11 @@ export function classify(previous: RpcContractDescriptor, candidate: RpcContract
   try { proof.compare(); } catch (error) { if (!(error instanceof ProofLimit)) throw error; proof.change("Major", "", "analysis-limit-exceeded"); }
   return proof.result();
 }
+export function satisfies(requirements: ConsumerRequirements, provider: RpcContractDescriptor): CompatibilityResult {
+  const proof = new Proof(consumerProjection(requirements, requirements.source) as Abi, consumerProjection(requirements, provider) as Abi, requirements);
+  try { proof.compare(); } catch (error) { if (!(error instanceof ProofLimit)) throw error; proof.change("Major", "", "analysis-limit-exceeded"); }
+  return proof.result();
+}
 class Proof {
   private readonly oldRefs = new Map<string, string[]>();
   private readonly newRefs = new Map<string, string[]>();
@@ -116,7 +126,7 @@ class Proof {
   private readonly changes: Change[] = [];
   private kind: ChangeKind = "Minor";
   private steps = 0;
-  constructor(private readonly previous: Abi, private readonly candidate: Abi) {}
+  constructor(private readonly previous: Abi, private readonly candidate: Abi, private readonly consumer?: ConsumerRequirements) {}
   result(): CompatibilityResult { return { kind: this.kind, changes: this.changes.sort((a, b) => ordinal(a.path, b.path) || ordinal(a.code, b.code)) }; }
   change(kind: ChangeKind, path: string, code: string): void {
     if (kinds.indexOf(kind) > kinds.indexOf(this.kind)) this.kind = kind;
@@ -134,6 +144,7 @@ class Proof {
   compare(): void {
     if (this.previous.contractId !== this.candidate.contractId) this.fail("/contractId", "contract-id-changed");
     this.graph(); this.services(); this.errors();
+    if (this.consumer) return;
     for (const [name] of entries(this.previous.$defs)) {
       this.step(); const path = this.at("/$defs", name);
       if (!Object.hasOwn(this.candidate.$defs, name)) this.fail(path, "definition-removed");
@@ -190,7 +201,7 @@ class Proof {
   private errors(): void {
     for (const [name, error] of entries(this.previous.errors)) {
       this.step(); const path = this.at("/errors", name);
-      if (!Object.hasOwn(this.candidate.errors, name)) { this.fail(path, "error-removed"); continue; }
+      if (!Object.hasOwn(this.candidate.errors, name)) { if (!this.consumer) this.fail(path, "error-removed"); continue; }
       const next = this.candidate.errors[name]!;
       const oldDetails = Object.hasOwn(error, "detailsSchema"); const newDetails = Object.hasOwn(next, "detailsSchema");
       if (oldDetails !== newDetails) this.fail(`${path}/detailsSchema`, "error-details-presence-changed");
@@ -213,6 +224,7 @@ class Proof {
       if (this.proved.has(key)) return this.proved.get(key)!;
       const at = this.at("/$defs", name);
       if (!Object.hasOwn(this.previous.$defs, name) || !Object.hasOwn(this.candidate.$defs, name)) return this.fail(at, "reference-changed");
+      if (!request && this.consumer?.exactOutputDefinitions.includes(name)) return this.fail(at, "exact-output-definition-changed");
       if (this.cycle(name, this.oldRefs) || this.cycle(name, this.newRefs)) { this.proved.set(key, false); return this.fail(at, "recursive-change-unclassified"); }
       const proved = this.subset(this.previous.$defs[name]!, this.candidate.$defs[name]!, request, at, depth + 1);
       this.proved.set(key, proved); if (proved) this.change("Minor", at, "schema-compatible"); return proved;
@@ -227,6 +239,8 @@ class Proof {
       case "array": { const bounds = this.bounds(source, target, "minItems", "maxItems", path); return this.subset(old.items!, next.items!, request, `${path}/items`, depth + 1) && bounds; }
       case "object": {
         if (!Object.hasOwn(old, "additionalProperties") || !Object.hasOwn(next, "additionalProperties") || typeof old.additionalProperties !== typeof next.additionalProperties) return this.fail(path, "object-form-change-unclassified");
+        if (typeof old.additionalProperties === "boolean" && old.additionalProperties !== next.additionalProperties) return this.fail(path, "object-form-change-unclassified");
+        if (!request && this.consumer && old.additionalProperties === false) return this.outputRecord(old, next, path, depth);
         let valid = this.bounds(source, target, "minProperties", "maxProperties", path);
         if (typeof old.additionalProperties === "object") {
           const values = this.subset(old.additionalProperties, next.additionalProperties as Schema, request, `${path}/additionalProperties`, depth + 1);
@@ -246,6 +260,23 @@ class Proof {
       }
       default: return this.fail(path, "numeric-change-unclassified");
     }
+  }
+  private outputRecord(required: Schema, provider: Schema, path: string, depth: number): boolean {
+    const members = path.startsWith("/$defs/") && Object.hasOwn(this.consumer!.outputMembers, path.slice(7))
+      ? this.consumer!.outputMembers[path.slice(7)]! : Object.keys(required.properties!);
+    let valid = true;
+    for (const member of members) {
+      this.step(); const at = this.at(`${path}/properties`, member);
+      if (!Object.hasOwn(provider.properties!, member)) { valid = this.fail(at, "required-member-removed"); continue; }
+      if (required.required!.includes(member) && !provider.required!.includes(member)) valid = this.fail(at, "required-property-not-guaranteed");
+      valid = this.subset(required.properties![member]!, provider.properties![member]!, false, at, depth + 1) && valid;
+    }
+    const extra = Object.keys(provider.properties!).filter(name => !members.includes(name)).length;
+    const lower = Math.max(provider.required!.filter(name => members.includes(name)).length, Math.max(0, (provider.minProperties ?? 0) - extra));
+    const upper = Math.min(provider.maxProperties ?? Infinity, members.length);
+    if (lower < (required.minProperties ?? 0)) valid = this.fail(`${path}/minProperties`, "lower-bound-not-contained");
+    if (upper > (required.maxProperties ?? Infinity)) valid = this.fail(`${path}/maxProperties`, "upper-bound-not-contained");
+    return valid;
   }
   private nullable(schema: Schema, defs: Record<string, Schema>): [Schema, Schema] | undefined {
     if (!Object.hasOwn(schema, "oneOf") || schema.oneOf?.length !== 2) return undefined;

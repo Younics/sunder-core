@@ -373,6 +373,8 @@ internal static partial class SunderRpcCSharpImportPrepass
                     if (current is null || !Matches(current)
                         || current.Endpoint != previous.Endpoint
                         || current.PackageId != previous.PackageId || current.PackageVersion != previous.PackageVersion
+                        || current.ContractVersion != previous.ContractVersion || current.DescriptorSha256 != previous.DescriptorSha256
+                        || current.AbiSha256 != previous.AbiSha256
                         || current.ProviderId != previous.ProviderId || current.ActivationId != previous.ActivationId
                         || current.ActivationEpoch != previous.ActivationEpoch || current.SessionGeneration < previous.SessionGeneration)
                     {
@@ -431,14 +433,14 @@ internal static partial class SunderRpcCSharpImportPrepass
                 }
 
                 private static bool Matches(SunderRpcProviderSnapshot provider)
-                    => string.Equals(provider.ContractId, {{Literal(descriptor.ContractId)}}, StringComparison.Ordinal)
-                       && string.Equals(provider.ContractVersion, {{Literal(descriptor.Version)}}, StringComparison.Ordinal)
-                       && string.Equals(provider.DescriptorSha256, {{Literal(descriptor.Sha256)}}, StringComparison.Ordinal)
-                       && string.Equals(provider.AbiSha256, {{Literal(descriptor.AbiSha256)}}, StringComparison.Ordinal);
+                    // Discovery is filtered by the authenticated caller's requirements
+                    // at the broker. Keep the provider's real activation/schema identity.
+                    => string.Equals(provider.ContractId, {{Literal(descriptor.ContractId)}}, StringComparison.Ordinal);
 
                 private static Provider Wrap(SunderRpcProviderSnapshot provider)
                 {
                     if (!Matches(provider) || !PackageId.TryParse(provider.PackageId, out _) || !SemanticVersion.TryParse(provider.PackageVersion, out _)
+                        || !SemanticVersion.TryParse(provider.ContractVersion, out _) || !IsHash(provider.DescriptorSha256) || !IsHash(provider.AbiSha256)
                         || !PackageId.TryParse(provider.ProviderId, out _) || provider.Endpoint is null
                         || provider.ActivationId == Guid.Empty || provider.ActivationEpoch < 0 || provider.SessionGeneration < 0
                         || provider.CatalogRevision < 0 || !Enum.IsDefined(provider.State))
@@ -447,6 +449,9 @@ internal static partial class SunderRpcCSharpImportPrepass
                     }
                     return new(provider);
                 }
+
+                private static bool IsHash(string value)
+                    => value is { Length: 64 } && value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
             }
             """ + "\n").Replace("\r\n", "\n", StringComparison.Ordinal);
     }

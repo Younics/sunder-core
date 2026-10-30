@@ -15,6 +15,7 @@ internal sealed record SunderRpcAuthoringReceiptProjection(
     IReadOnlyDictionary<string, SunderRpcMethodPolicies> MethodPolicies)
 {
     internal IReadOnlyList<SunderRpcRoleUse> RoleUses { get; init; } = [];
+    internal IReadOnlyList<SunderRpcConsumerRequirements> ConsumerRequirements { get; init; } = [];
 }
 
 internal static partial class SunderRpcAuthoringDocuments
@@ -89,7 +90,7 @@ internal static partial class SunderRpcAuthoringDocuments
         string[] members = ["schemaVersion", "producer", "inputFingerprint", "lockSha256", "packageId", "packageVersion",
             "contracts", "packageArtifacts", "bundles", "packageArtifactImports", "packageApiImports", "providerImports",
             "platformImports", "providers", "uses", "generatedPackageFacades", "generatedBindings"];
-        RequireObject(root, label, [.. members, "role", "roleUses"], members, ["role", "roleUses"]);
+        RequireObject(root, label, [.. members, "consumerRequirements", "role", "roleUses"], members, ["consumerRequirements", "role", "roleUses"]);
         var roleUses = ReadRoleUses(root);
         var appRole = root.TryGetProperty("role", out var role);
         if (appRole && (role.ValueKind != JsonValueKind.String || role.GetString() != "app"))
@@ -224,6 +225,11 @@ internal static partial class SunderRpcAuthoringDocuments
             var (key, descriptor, record) = Join(value);
             record["contractVersion"] = descriptor.Version;
             record["abiSha256"] = descriptor.AbiSha256;
+            if (root.TryGetProperty("consumerRequirements", out var requirements))
+            {
+                var selected = requirements.EnumerateArray().SingleOrDefault(value => value.GetProperty("contractId").GetString() == descriptor.ContractId);
+                if (selected.ValueKind != JsonValueKind.Undefined) record["consumerRequirements"] = JsonNode.Parse(selected.GetRawText());
+            }
             var actions = RequireProperty(value, "actions", JsonValueKind.Array, label).EnumerateArray()
                 .Select(static action => action.ValueKind == JsonValueKind.String ? action.GetString()
                     : throw new InvalidDataException("Receipt actions must be strings.")).ToArray();
@@ -395,7 +401,11 @@ internal static partial class SunderRpcAuthoringDocuments
         PackageDependencyValidator.Validate(manifest.DependsOn, errors);
         if (errors.Count != 0) throw new InvalidDataException("rpc-authoring.receipt-invalid: " + string.Join(" ", errors));
         ValidateReceiptModelProjections(manifest, contracts, modelProjections);
-        return new(manifest, contracts, modelProjections, methodPolicies) { RoleUses = roleUses };
+        return new(manifest, contracts, modelProjections, methodPolicies)
+        {
+            RoleUses = roleUses,
+            ConsumerRequirements = ReadConsumerRequirements(root, manifest, contracts, modelProjections),
+        };
 
         (string Key, SunderRpcContractDescriptor Descriptor, JsonObject Record) Join(JsonElement value)
         {

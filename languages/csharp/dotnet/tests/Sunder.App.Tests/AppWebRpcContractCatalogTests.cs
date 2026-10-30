@@ -99,6 +99,36 @@ public sealed class AppWebRpcContractCatalogTests
         }
     }
 
+    [Fact]
+    public void ConsumerRequirements_UseTheCallersOriginalSchemaForAnAdmittedCurrentProvider()
+    {
+        var root = CreateRoot();
+        try
+        {
+            var bytes = DescriptorBytes();
+            var descriptor = SunderRpcContractDescriptor.Parse(bytes);
+            WriteDescriptor(root, bytes);
+            var json = JsonSerializer.SerializeToNode(Manifest(Bundle(descriptor)))!;
+            json["usesContracts"] = JsonSerializer.SerializeToNode(new[] { new SunderPackageContractUseManifest
+            {
+                Role = "app", ContractId = descriptor.ContractId, ContractVersion = descriptor.Version, AbiSha256 = descriptor.AbiSha256,
+                Required = false, Actions = ["discover", "invoke"], ConsumerRequirements = JsonSerializer.SerializeToElement(new
+                {
+                    schemaVersion = 1, contractId = descriptor.ContractId, contractVersion = descriptor.Version,
+                    descriptorSha256 = descriptor.Sha256, abiSha256 = descriptor.AbiSha256,
+                    methods = new[] { new { serviceId = "example", methodId = "ping" } }, outputMembers = new { }, exactOutputDefinitions = Array.Empty<string>(),
+                }),
+            } });
+            var catalog = AppWebRpcContractCatalog.Load(root, JsonSerializer.Deserialize<SunderPackageManifest>(json.ToJsonString())!, ContentIndex(bytes, Hash(bytes)));
+            var provider = Provider(descriptor) with { ContractVersion = "2.0.0", DescriptorSha256 = new('b', 64), AbiSha256 = new('c', 64) };
+            var method = catalog.GetMethod(provider, "example", "ping", SunderRpcMethodKind.Unary);
+            catalog.ValidateRequest(provider, method, JsonSerializer.SerializeToElement(new { }));
+            catalog.ValidateOutput(provider, method, JsonSerializer.SerializeToElement(new { }));
+            Assert.Throws<SunderRpcException>(() => catalog.ValidateOutput(provider, method, JsonSerializer.SerializeToElement(new { unknown = true })));
+        }
+        finally { DeleteRoot(root); }
+    }
+
     [Theory]
     [InlineData("descriptor-version")]
     [InlineData("contract-id")]

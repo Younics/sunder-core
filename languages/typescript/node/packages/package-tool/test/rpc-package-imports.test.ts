@@ -59,14 +59,18 @@ for (const extension of ["ts", "js"]) test(`offline ${extension} imports generat
     assert.deepEqual(manifest.dependsOn, [{ packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0", presence: "required" }]);
     assert.equal(manifest.contractBundles[0].source, "imported"); assert.equal(manifest.contractBundles[0].authorityId, "example.dependency");
     assert.equal(manifest.packageArtifactImports[0].publicInventorySha256, c.locked.packageArtifacts.get("example.dependency")!.publicInventorySha256);
-    assert.equal(manifest.packageApiImports[0].useRefs[0].role, "runtime"); assert.equal(manifest.usesContracts[0].required, true);
-    assert.deepEqual(await readFile(c.lockPath), c.original);
+     assert.equal(manifest.packageApiImports[0].useRefs[0].role, "runtime"); assert.equal(manifest.usesContracts[0].required, true);
+     assert.deepEqual(manifest.usesContracts[0].consumerRequirements, { schemaVersion: 1, contractId: c.descriptor.contractId,
+       contractVersion: c.descriptor.version, descriptorSha256: c.requirement.descriptorSha256, abiSha256: c.requirement.abiSha256,
+       methods: [], outputMembers: {}, exactOutputDefinitions: [] });
+     assert.ok(manifest.targets.every((target: any) => target.requiredHostCapabilities.includes("rpc.consumer-requirements.v1")));
+     assert.deepEqual(await readFile(c.lockPath), c.original);
     const frozen = await snapshot(generated); await rm(join(c.cache, c.requirement.descriptorSha256 + ".json"));
     await assert.rejects(c.run("generate"), /contract-cache.entry-missing/u); assert.deepEqual(await snapshot(generated), frozen);
   } finally { await c.dispose(); }
 });
 
-test("generated discovery keeps exact tuples, compatible ranges, opaque endpoints and reset/lifecycle events", async () => {
+test("generated discovery accepts admitted schemas but keeps exact activation tuples, ranges, opaque endpoints and lifecycle events", async () => {
   const c = await fixture();
   try {
     const project = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }); await generateRpcBindingsForLoadedProject(project);
@@ -83,11 +87,16 @@ test("generated discovery keeps exact tuples, compatible ranges, opaque endpoint
     const api = packageApis.dependency(rpc).CExample_Rpc_V1_Minimal;
     const provider = await api.resolveSelectedPackage(); assert.ok(Object.isFrozen(provider)); assert.equal("endpointReference" in provider, false);
     assert.ok(await api.get(provider)); replacement = { ...raw, endpointReference: "replacement" }; assert.equal(await api.get(provider), null);
+    for (const changed of [{ contractVersion: "3.0.0" }, { descriptorSha256: "c".repeat(64) }, { abiSha256: "d".repeat(64) }]) {
+      replacement = { ...raw, ...changed }; assert.equal(await api.get(provider), null, "An issued binding cannot change its schema identity.");
+    }
     let called = false; const scope = { invoke: async (target: string) => { assert.equal(target, "opaque"); called = true; return {}; } };
     const client = api.createClient(scope, provider); const model = authoringBindingModel(c.descriptor); const service = model.services[0]!;
     await client[service.clientPropertyName][service.methods[0]!.methodName]({}); assert.ok(called);
     assert.throws(() => api.createClient(scope, { ...provider }), (error: any) => error.error.code === "rpc.provider-invalid");
-    providers = [{ ...raw, descriptorSha256: "a".repeat(64) }]; await assert.rejects(api.resolveSelectedPackage(), (error: any) => error.error.code === "rpc.provider-not-found");
+    providers = [{ ...raw, contractVersion: "3.0.0", descriptorSha256: "c".repeat(64), abiSha256: "d".repeat(64) }];
+    const current = await api.resolveSelectedPackage(); assert.equal(current.contractVersion, "3.0.0"); assert.equal(current.descriptorSha256, "c".repeat(64));
+    providers = [{ ...raw, descriptorSha256: "not-a-hash" }]; await assert.rejects(api.resolveSelectedPackage(), (error: any) => error.error.code === "rpc.provider-invalid");
     providers = [{ ...raw, packageVersion: "2.0.0" }]; await assert.rejects(api.resolveSelectedPackage(), (error: any) => error.error.code === "rpc.provider-not-found");
     providers = [raw, raw]; await assert.rejects(api.resolveSelectedPackage(), (error: any) => error.error.code === "rpc.provider-ambiguous");
     resetRequired = true; await assert.rejects(api.resolveSelectedPackage(), (error: any) => error.error.code === "rpc.catalog-reset-required");
@@ -365,6 +374,11 @@ for (const roles of [["runtime"], ["app"], ["app", "runtime"]]) test(`imported $
     await mkdir(join(c.root, "app")); await writeFile(join(c.root, "app/index.html"), '<html><body>App</body></html>');
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ ...c.config, app: { root: "app", entryPoint: "index.html", views: [{ viewId: "example.owner.main", displayName: "App", route: "/", defaultPlacement: "middle", showInHotbar: true }] } }));
     await c.run("build"); await c.run("package", "--discovery-root", join(c.root, "dist/targets"));
+    const workerReceipt = JSON.parse(await readFile(join(c.root, ".sunder/generated/rpc/authoring-receipt.v1.json"), "utf8"));
+    if (roles.includes("runtime")) {
+      assert.equal(workerReceipt.consumerRequirements.length, 1);
+      assert.deepEqual(workerReceipt.consumerRequirements[0].methods, []); // Generated bodies grant no method requirements.
+    } else assert.equal(Object.hasOwn(workerReceipt, "consumerRequirements"), false);
     const app = JSON.parse(await readFile(join(c.root, "dist/targets", "app-" + currentRid(), "manifest/sunder-package.json"), "utf8"));
     assert.equal(app.contractBundles.length, roles.includes("app") ? 1 : 0); assert.equal(app.packageApiImports.length, roles.includes("app") ? 1 : 0); assert.equal(app.usesContracts.length, roles.includes("app") ? 1 : 0);
     const aggregate = JSON.parse(await readFile(join(c.root, "dist/package/manifest/sunder-package.json"), "utf8"));

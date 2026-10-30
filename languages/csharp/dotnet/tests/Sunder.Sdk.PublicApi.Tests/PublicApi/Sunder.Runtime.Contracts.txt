@@ -530,6 +530,19 @@ type public enum Sunder.Runtime.Contracts.PackageFailureOrigin : System.Int32, S
   field public const Sunder.Runtime.Contracts.PackageFailureOrigin RuntimeRpcProvider = 8
   field public const Sunder.Runtime.Contracts.PackageFailureOrigin Unknown = 0
   field public System.Int32 value__
+type public sealed class Sunder.Runtime.Contracts.PackageFeatureDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackageFeatureDescriptor>
+  method public .ctor(System.String Role, System.String Rid, System.String Capability)
+  property System.String Capability { public get; public init; }
+  property System.String Rid { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackageFeatureDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Capability)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageFeatureDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageFeatureDescriptor? left, Sunder.Runtime.Contracts.PackageFeatureDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageFeatureDescriptor? left, Sunder.Runtime.Contracts.PackageFeatureDescriptor? right)
 type public sealed class Sunder.Runtime.Contracts.PackageFileEntry : System.IEquatable<Sunder.Runtime.Contracts.PackageFileEntry>
   method public .ctor(System.String RelativePath, System.Int64 Length)
   property System.Int64 Length { public get; public init; }
@@ -570,6 +583,39 @@ type public sealed class Sunder.Runtime.Contracts.PackageIconDescriptor : System
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageIconDescriptor? left, Sunder.Runtime.Contracts.PackageIconDescriptor? right)
   method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageIconDescriptor? left, Sunder.Runtime.Contracts.PackageIconDescriptor? right)
+type public sealed class Sunder.Runtime.Contracts.PackageInformationDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackageInformationDescriptor>
+  method public .ctor(System.String PackageId, System.String Version, System.String ContentIdentity, Sunder.Runtime.Contracts.PackageSourceKind SourceKind, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRelationshipDescriptor> Dependencies, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses)
+  property Sunder.Runtime.Contracts.PackageSourceKind SourceKind { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRelationshipDescriptor> Dependencies { public get; }
+  property System.String ContentIdentity { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String? Summary { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackageInformationDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String Version, out System.String ContentIdentity, out Sunder.Runtime.Contracts.PackageSourceKind SourceKind, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRelationshipDescriptor> Dependencies, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageInformationDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageInformationDescriptor? left, Sunder.Runtime.Contracts.PackageInformationDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageInformationDescriptor? left, Sunder.Runtime.Contracts.PackageInformationDescriptor? right)
+type public sealed class Sunder.Runtime.Contracts.PackageIntegrationDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackageIntegrationDescriptor>
+  method public .ctor(System.String Role, System.String ContractId, System.String Version, System.String Kind)
+  property System.String ContractId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String Role { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackageIntegrationDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String Version, out System.String Kind)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageIntegrationDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageIntegrationDescriptor? left, Sunder.Runtime.Contracts.PackageIntegrationDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageIntegrationDescriptor? left, Sunder.Runtime.Contracts.PackageIntegrationDescriptor? right)
 type public sealed class Sunder.Runtime.Contracts.PackageLifecycleChangeSet : System.IEquatable<Sunder.Runtime.Contracts.PackageLifecycleChangeSet>
   method public .ctor(System.Collections.Generic.IReadOnlyList<System.String> StoreChangedPackageIds, System.Collections.Generic.IReadOnlyList<System.String> RuntimeReloadPackageIds, System.Collections.Generic.IReadOnlyList<System.String> AppReloadPackageIds, System.Collections.Generic.IReadOnlyList<System.String> RemovedPackageIds, System.Boolean SharedAssemblyResetRequired)
   property System.Boolean SharedAssemblyResetRequired { public get; public init; }
@@ -690,6 +736,47 @@ type public sealed class Sunder.Runtime.Contracts.PackageOperationResult : Syste
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageOperationResult? left, Sunder.Runtime.Contracts.PackageOperationResult? right)
   method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageOperationResult? left, Sunder.Runtime.Contracts.PackageOperationResult? right)
+type public sealed class Sunder.Runtime.Contracts.PackagePublicBindingDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor>
+  method public .ctor(System.String ContractId, System.String Version, System.String Kind, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicProviderDescriptor> Providers)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicProviderDescriptor> Providers { public get; }
+  property System.String ContractId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackagePublicBindingDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String Kind, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicProviderDescriptor> Providers)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackagePublicBindingDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackagePublicBindingDescriptor? left, Sunder.Runtime.Contracts.PackagePublicBindingDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackagePublicBindingDescriptor? left, Sunder.Runtime.Contracts.PackagePublicBindingDescriptor? right)
+type public sealed class Sunder.Runtime.Contracts.PackagePublicProviderDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackagePublicProviderDescriptor>
+  method public .ctor(System.String Role, System.String ProviderId)
+  property System.String ProviderId { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackagePublicProviderDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ProviderId)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackagePublicProviderDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackagePublicProviderDescriptor? left, Sunder.Runtime.Contracts.PackagePublicProviderDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackagePublicProviderDescriptor? left, Sunder.Runtime.Contracts.PackagePublicProviderDescriptor? right)
+type public sealed class Sunder.Runtime.Contracts.PackagePublicUseDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackagePublicUseDescriptor>
+  method public .ctor(System.String Role, System.String ContractId, System.String Version, System.Boolean Required, System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  property System.Boolean Required { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Actions { public get; }
+  property System.String ContractId { public get; public init; }
+  property System.String Role { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackagePublicUseDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String Version, out System.Boolean Required, out System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackagePublicUseDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackagePublicUseDescriptor? left, Sunder.Runtime.Contracts.PackagePublicUseDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackagePublicUseDescriptor? left, Sunder.Runtime.Contracts.PackagePublicUseDescriptor? right)
 type public enum Sunder.Runtime.Contracts.PackageReadinessState : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field public const Sunder.Runtime.Contracts.PackageReadinessState Degraded = 3
   field public const Sunder.Runtime.Contracts.PackageReadinessState Disabled = 5
@@ -698,6 +785,20 @@ type public enum Sunder.Runtime.Contracts.PackageReadinessState : System.Int32, 
   field public const Sunder.Runtime.Contracts.PackageReadinessState Ready = 1
   field public const Sunder.Runtime.Contracts.PackageReadinessState Unknown = 0
   field public System.Int32 value__
+type public sealed class Sunder.Runtime.Contracts.PackageRelationshipDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackageRelationshipDescriptor>
+  method public .ctor(System.String PackageId, System.String VersionRange, System.String Presence, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageIntegrationDescriptor> Bindings)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageIntegrationDescriptor> Bindings { public get; }
+  property System.String PackageId { public get; public init; }
+  property System.String Presence { public get; public init; }
+  property System.String VersionRange { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackageRelationshipDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String VersionRange, out System.String Presence, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageIntegrationDescriptor> Bindings)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageRelationshipDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageRelationshipDescriptor? left, Sunder.Runtime.Contracts.PackageRelationshipDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageRelationshipDescriptor? left, Sunder.Runtime.Contracts.PackageRelationshipDescriptor? right)
 type public sealed class Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor>
   method public .ctor(System.String Role, System.String ContractId, System.String ContractVersion, System.String AbiSha256, System.Boolean Required, System.Collections.Generic.IReadOnlyList<System.String> Actions)
   property System.Boolean Required { public get; public init; }
@@ -3822,6 +3923,7 @@ type public sealed class Sunder.Runtime.Contracts.SessionPackageDescriptor : Sys
   property Sunder.Runtime.Contracts.PackageReadinessState Readiness { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRpcContractUseDescriptor> RpcContractUses { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageViewDescriptor> Views { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String>? RequiredPackageIds { public get; public init; }
   property Sunder.Runtime.Contracts.PackageFailureOrigin? FailureOrigin { public get; public init; }
   property System.DateTimeOffset? LastFailureAtUtc { public get; public init; }
   property System.String DisplayName { public get; public init; }

@@ -23,9 +23,14 @@ public static class HostProtocolCompatibility
         {
             return $"Host protocol identity '{handshake.ProtocolIdentity}' is not supported.";
         }
-        if (handshake.ProtocolRevision != HostProtocol.CurrentRevision
-            || handshake.MinimumSupportedRevision != HostProtocol.MinimumSupportedRevision
-            || handshake.MaximumSupportedRevision != HostProtocol.MaximumSupportedRevision)
+        // A newer server can keep serving this client's V1 routes. Its preferred
+        // revision is diagnostic, not an instruction to switch client protocols.
+        if (handshake.MinimumSupportedRevision < 1
+            || handshake.MaximumSupportedRevision < handshake.MinimumSupportedRevision
+            || handshake.ProtocolRevision < handshake.MinimumSupportedRevision
+            || handshake.ProtocolRevision > handshake.MaximumSupportedRevision
+            || HostProtocol.CurrentRevision < handshake.MinimumSupportedRevision
+            || HostProtocol.CurrentRevision > handshake.MaximumSupportedRevision)
         {
             return $"Host protocol revision {handshake.ProtocolRevision} with supported range "
                    + $"{handshake.MinimumSupportedRevision}-{handshake.MaximumSupportedRevision} is incompatible with client revision {HostProtocol.CurrentRevision}.";

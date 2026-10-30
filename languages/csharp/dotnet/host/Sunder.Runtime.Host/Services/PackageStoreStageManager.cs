@@ -349,7 +349,8 @@ internal sealed class PackageStoreStageManager(
                 {
                     var source = prepared.TryGetValue(package.PackageId, out var archive)
                         ? PackagePolicyAdmission.WithProvenance(new(package.PackageId, PackageSourceKind.Installed, archive.StagingPath,
-                            ContentIdentity: package.ContentIdentity, Manifest: archive.Manifest), package)
+                            ContentIdentity: package.ContentIdentity, Manifest: archive.Manifest,
+                            ContentIndex: new(1, package.ContentInventory.Select(value => new SunderPackageContentIndexEntry(value.Path, value.Sha256, value.Size)).ToArray())), package)
                         : await PackageCompatibilityAuthority.ReadSourceAsync(package, cancellationToken);
                     graphSources.Add(source);
                 }

@@ -579,7 +579,8 @@ internal sealed class PackageSessionPreparer
                 manifest,
                 contentIndex,
                 selectedTargetKey,
-                selectedTarget) { AcquiredTargets = acquiredTargets };
+                selectedTarget) { AcquiredTargets = acquiredTargets, RpcContracts = rpcContracts };
+            preparedSource = preparedSource with { RpcModelProjection = PackageCompatibilityAuthority.ReadProjections(preparedSource) };
             var prepared = new PreparedRuntimePackage(
                 sourceFolder,
                 preparedSource,

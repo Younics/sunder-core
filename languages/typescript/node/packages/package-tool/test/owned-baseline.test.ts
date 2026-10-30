@@ -92,6 +92,26 @@ test("lossless immutable publication and release fields survive acceptance, hist
   assert.deepEqual(outerBytes(minor.contracts.get("minimal")!.history[0]!.json), bytes(fixture.contracts.minimal.current));
   assert.deepEqual(writeBaseline(minor.packageId, minor.contracts), minor.bytes);
 });
+test("maintained V1 patches accept, freeze and roundtrip after V2 without rewriting issued snapshots", async () => {
+  const source = await contract();
+  const v1 = parseBaseline(planFreeze(parseBaseline(planAcceptance(emptyBaseline("example.owner"), [source])), [source], "1.0.0"));
+  const patch = parseBaseline(planAcceptance(v1, [source], { key: "minimal", currentVersion: "1.0.0", nextVersion: "1.0.1" }));
+  const v2Source = await contract("1.0.0", "major");
+  const v2Draft = parseBaseline(planAcceptance(v1, [v2Source], { key: "minimal", currentVersion: "1.0.0", nextVersion: "2.0.0", acknowledgeBreakingChange: true }));
+  const v2 = parseBaseline(planFreeze(v2Draft, [await contract("2.0.0", "major")], "2.0.0"));
+  const issued = [v1.contracts.get("minimal")!.current!, v2.contracts.get("minimal")!.current!];
+  const merged = parseBaseline(writeBaseline("example.owner", new Map([["minimal", {
+    contractId: source.descriptor.contractId, current: patch.contracts.get("minimal")!.current!, history: issued,
+  }]])));
+  const frozen = parseBaseline(planFreeze(merged, [await contract("1.0.1")], "1.0.1"));
+  const next = parseBaseline(planAcceptance(frozen, [await contract("1.0.1", "annotation")]));
+  assert.equal(next.contracts.get("minimal")!.current!.descriptor.version, "1.0.2");
+  const maintained = parseBaseline(planFreeze(next, [await contract("1.0.2", "annotation")], "1.0.2"));
+  const entry = maintained.contracts.get("minimal")!;
+  assert.deepEqual(entry.history.map(snapshot => snapshot.descriptor.version), ["1.0.0", "2.0.0", "1.0.1"]);
+  for (const [index, snapshot] of issued.entries()) assert.deepEqual(outerBytes(entry.history[index]!.json), outerBytes(snapshot.json));
+  assert.deepEqual(writeBaseline(maintained.packageId, maintained.contracts), maintained.bytes);
+});
 test("active private baselines remain readable evidence but cannot enter the current lifecycle", async () => {
   for (const state of ["draft", "release-frozen", "published"]) {
     const input = await publishedFixture(); const snapshot = input.contracts.minimal.current;

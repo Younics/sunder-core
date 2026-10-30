@@ -53,7 +53,7 @@ internal static partial class SunderRpcCSharpImportPrepass
             contracts[id] = contracts[id] with { ProjectedModel = binding.Model, TypeBindings = binding.Types };
         var targets = contracts.Values.SelectMany(contract => contract.NaturalServices.Select(service => new KeyValuePair<string, SunderRpcCSharpResourceTarget>(
             contract.Descriptor.ContractId + "/" + service.ServiceId, new(contract.Descriptor, service.ServiceId, "global::" + service.InterfaceMetadataName,
-                "global::" + service.CatalogMetadataName, contract.GeneratedLogicalName)))).ToDictionary();
+                "global::" + service.CatalogMetadataName, contract.GeneratedLogicalName) { ConsumerCompatible = contract.AuthorityPackageId is not null }))).ToDictionary();
         foreach (var id in contracts.Keys.ToArray()) contracts[id] = contracts[id] with { ResourceTargets = targets };
         var complete = Array.AsReadOnly(contracts.Values.OrderBy(contract => contract.Descriptor.ContractId, StringComparer.Ordinal).ToArray());
         foreach (var id in contracts.Keys.ToArray()) contracts[id] = contracts[id] with { ProjectionSet = complete };

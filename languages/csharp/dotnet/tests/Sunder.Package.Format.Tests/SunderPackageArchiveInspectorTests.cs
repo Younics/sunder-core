@@ -2290,7 +2290,7 @@ public sealed partial class SunderPackageArchiveInspectorTests
                 .Select(static property => property.Name)
                 .Order(StringComparer.Ordinal));
         Assert.Equal(
-            ["AbiSha256", "Actions", "ContractId", "ContractVersion", "Required", "Role"],
+            ["AbiSha256", "Actions", "ConsumerRequirements", "ContractId", "ContractVersion", "Required", "Role"],
             typeof(SunderPackageContractUseManifest).GetProperties()
                 .Select(static property => property.Name)
                 .Order(StringComparer.Ordinal));

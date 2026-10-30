@@ -73,24 +73,34 @@ public sealed class RuntimeApiClientTests
         Assert.Empty(handler.Requests);
     }
 
-    [Fact]
-    public async Task VersionedRequest_WhenHandshakeRangeIsIncompatible_FailsBeforeVersionedCall()
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(2, false)]
+    public async Task VersionedRequest_UsesV1WhenTheServerStillSupportsIt(int minimum, bool compatible)
     {
-        var handler = new RecordingHttpMessageHandler(_ => throw new InvalidOperationException("Versioned call must not be sent."))
+        var handler = new RecordingHttpMessageHandler(request =>
+        {
+            Assert.True(compatible, "An incompatible server must be rejected before the operation.");
+            Assert.Equal("/api/v1/system", request.RequestUri!.AbsolutePath);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(new SystemStatusResponse("Runtime", "9.0.0", true, DateTimeOffset.UtcNow)),
+            };
+        })
         {
             Handshake = CreateHandshake() with
             {
                 ProtocolRevision = 2,
-                MinimumSupportedRevision = 1,
+                MinimumSupportedRevision = minimum,
                 MaximumSupportedRevision = 2,
             },
         };
         var connection = new RuntimeConnectionInfo(new Uri("http://127.0.0.1:5275/"), "test-runtime-token");
         using var runtimeApiClient = new RuntimeApiClient(() => connection, handler);
 
-        await Assert.ThrowsAsync<RuntimeProtocolException>(() => runtimeApiClient.GetSystemStatusAsync());
-
-        Assert.Single(handler.Requests);
+        if (compatible) Assert.Equal("9.0.0", (await runtimeApiClient.GetSystemStatusAsync())?.Version);
+        else await Assert.ThrowsAsync<RuntimeProtocolException>(() => runtimeApiClient.GetSystemStatusAsync());
+        Assert.Equal(compatible ? 2 : 1, handler.Requests.Count);
         Assert.Equal("/api/handshake", handler.Requests[0].RequestUri?.AbsolutePath);
     }
 

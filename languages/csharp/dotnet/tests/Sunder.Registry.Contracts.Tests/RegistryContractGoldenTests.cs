@@ -152,9 +152,12 @@ public sealed class RegistryContractGoldenTests
     public void CompatibilityProfile_IsImmutableAndPublishesBounds()
     {
         var capabilities = new List<string> { "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1" };
-        var profile = new RegistryClientCompatibilityProfile([1], ["worker"], "worker-protocol.v1", capabilities, "sdk-baseline-1-1.v1", "win-x64");
+        var profiles = new List<RegistrySupportedPackageProfile> { new([1], ["worker"], "worker-protocol.v1", capabilities, "sdk-baseline-1-1.v1", ">=1.1.0 <1.2.0") };
+        var profile = new RegistryClientCompatibilityProfile(profiles, "win-x64");
         capabilities.Clear();
-        Assert.Equal(["rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], profile.WorkerCapabilities);
+        profiles.Clear();
+        Assert.Equal(["rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], Assert.Single(profile.Profiles).WorkerCapabilities);
+        Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumProfiles);
         Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumManifestVersions);
         Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumRuntimeTargetKinds);
         Assert.Equal(64, RegistryClientCompatibilityProfile.MaximumWorkerCapabilities);
@@ -164,11 +167,7 @@ public sealed class RegistryContractGoldenTests
     [Fact]
     public void CompatibilityQueryParameters_MatchTheJsonProfile()
     {
-        Assert.Equal("manifestVersions", RegistryClientCompatibilityProfile.ManifestVersionsQueryParameter);
-        Assert.Equal("runtimeTargetKinds", RegistryClientCompatibilityProfile.RuntimeTargetKindsQueryParameter);
-        Assert.Equal("workerProtocol", RegistryClientCompatibilityProfile.WorkerProtocolQueryParameter);
-        Assert.Equal("workerCapabilities", RegistryClientCompatibilityProfile.WorkerCapabilitiesQueryParameter);
-        Assert.Equal("sdkBaseline", RegistryClientCompatibilityProfile.SdkBaselineQueryParameter);
+        Assert.Equal("profiles", RegistryClientCompatibilityProfile.ProfilesQueryParameter);
         Assert.Equal("rid", RegistryClientCompatibilityProfile.RidQueryParameter);
     }
 
@@ -262,7 +261,7 @@ public sealed class RegistryContractGoldenTests
 
     private static RegistryClientCompatibilityProfile Compatibility()
         => new([1], ["worker"], "worker-protocol.v1",
-            ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], "sdk-baseline-1-1.v1", "win-x64");
+            ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], "sdk-baseline-1-1.v1", "win-x64", ">=1.1.0 <1.2.0");
 
     private static RegistryExecutionRuntimeRequirement Requirement()
         => new("sunder.runtime.dotnet", ">=10.0.0 <11.0.0", "sunder.dotnet-worker-module.v1");

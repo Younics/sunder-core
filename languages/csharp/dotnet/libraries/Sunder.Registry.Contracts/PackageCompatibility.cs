@@ -19,7 +19,16 @@ public sealed record RegistryExactRpcRequirement(
     [property: JsonRequired] string ContractId,
     [property: JsonRequired] string ContractVersion,
     [property: JsonRequired] string DescriptorSha256,
-    [property: JsonRequired] string AbiSha256);
+    [property: JsonRequired] string AbiSha256)
+{
+    private IReadOnlyList<System.Text.Json.JsonElement>? _consumerRequirements;
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<System.Text.Json.JsonElement>? ConsumerRequirements
+    {
+        get => _consumerRequirements;
+        init => _consumerRequirements = value is null ? null : Array.AsReadOnly(value.Select(item => item.Clone()).ToArray());
+    }
+}
 
 /// <summary>Installation constraints. Restore-selected package hashes are not installation or routing pins.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]

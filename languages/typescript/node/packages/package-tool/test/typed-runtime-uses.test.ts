@@ -93,7 +93,10 @@ for(const language of ["ts","js"] as const)test(`${language} provider-only Updat
       const leaf=await writeTargetLeaf({project:loaded,rid,modulePath,workerNoticePath:notice,discoveryRoot:join(c.consumer,"dist/targets")});
       const manifest=JSON.parse(await readFile(join(leaf,"manifest/sunder-package.json"),"utf8"));assert.equal(manifest.roleUses,undefined);
       assert.deepEqual(manifest.packageApiImports,[]);assert.equal(manifest.usesContracts.length,1);
-      assert.deepEqual(manifest.usesContracts[0],{role:"runtime",contractId:target.descriptor.contractId,contractVersion:target.descriptor.version,abiSha256:target.abiSha256,required:false,actions:["discover"]});
+       assert.deepEqual(manifest.usesContracts[0],{role:"runtime",contractId:target.descriptor.contractId,contractVersion:target.descriptor.version,abiSha256:target.abiSha256,required:false,actions:["discover"],
+         consumerRequirements:{schemaVersion:1,contractId:target.descriptor.contractId,contractVersion:target.descriptor.version,descriptorSha256:target.descriptorSha256,abiSha256:target.abiSha256,
+           methods:[],outputMembers:{},exactOutputDefinitions:Object.keys(target.modelProjection.serviceReferences).sort()}});
+       assert.ok(manifest.targets[0].requiredHostCapabilities.includes("rpc.consumer-requirements.v1"));
     }
     for(const mutate of [
       (value:any)=>delete value.roleUses,(value:any)=>value.uses[0].actions.push("invoke"),(value:any)=>value.uses[0].required=true,

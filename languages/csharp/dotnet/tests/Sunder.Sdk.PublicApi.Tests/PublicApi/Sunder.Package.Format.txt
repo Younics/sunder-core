@@ -128,6 +128,7 @@ type public sealed class Sunder.Package.Format.SunderPackageContractUseManifest
   method public .ctor()
   property System.Collections.Generic.IReadOnlyList<System.String?>? Actions { public get; public init; }
   property System.Boolean? Required { public get; public init; }
+  property System.Text.Json.JsonElement? ConsumerRequirements { public get; public init; }
   property System.String? AbiSha256 { public get; public init; }
   property System.String? ContractId { public get; public init; }
   property System.String? ContractVersion { public get; public init; }
@@ -167,6 +168,19 @@ type public sealed class Sunder.Package.Format.SunderPackageExtractedProjection 
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackageExtractedProjection? left, Sunder.Package.Format.SunderPackageExtractedProjection? right)
   method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackageExtractedProjection? left, Sunder.Package.Format.SunderPackageExtractedProjection? right)
+type public sealed class Sunder.Package.Format.SunderPackageFeature : System.IEquatable<Sunder.Package.Format.SunderPackageFeature>
+  method public .ctor(System.String Role, System.String Rid, System.String Capability)
+  property System.String Capability { public get; public init; }
+  property System.String Rid { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Package.Format.SunderPackageFeature <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Capability)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageFeature? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackageFeature? left, Sunder.Package.Format.SunderPackageFeature? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackageFeature? left, Sunder.Package.Format.SunderPackageFeature? right)
 type public static class Sunder.Package.Format.SunderPackageFormat
   field public const System.String AppHostRole = "app"
   field public const System.String AppPayloadRoot = "payload/app/"
@@ -229,6 +243,35 @@ type public static class Sunder.Package.Format.SunderPackageFormat
   method public static System.Boolean IsTargetKind(System.String? role, System.String? kind)
   method public static System.Boolean IsWebViewPlacement(System.String? value)
   method public static System.Boolean IsWebViewRoute(System.String? value)
+type public sealed class Sunder.Package.Format.SunderPackageInformation : System.IEquatable<Sunder.Package.Format.SunderPackageInformation>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageFeature> Features, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageRelationship> Dependencies, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicBinding> PublicBindings, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicUse> PublicUses)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageFeature> Features { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicBinding> PublicBindings { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicUse> PublicUses { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageRelationship> Dependencies { public get; public init; }
+  method public Sunder.Package.Format.SunderPackageInformation <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageFeature> Features, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageRelationship> Dependencies, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicBinding> PublicBindings, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicUse> PublicUses)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageInformation? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static Sunder.Package.Format.SunderPackageInformation FromManifest(Sunder.Package.Format.SunderPackageManifest manifest)
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackageInformation? left, Sunder.Package.Format.SunderPackageInformation? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackageInformation? left, Sunder.Package.Format.SunderPackageInformation? right)
+type public sealed class Sunder.Package.Format.SunderPackageIntegration : System.IEquatable<Sunder.Package.Format.SunderPackageIntegration>
+  method public .ctor(System.String Role, System.String ContractId, System.String Version, System.String Kind)
+  property System.String ContractId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String Role { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Package.Format.SunderPackageIntegration <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String Version, out System.String Kind)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageIntegration? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackageIntegration? left, Sunder.Package.Format.SunderPackageIntegration? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackageIntegration? left, Sunder.Package.Format.SunderPackageIntegration? right)
 type public sealed class Sunder.Package.Format.SunderPackageManifest
   method public .ctor()
   property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageApiImportManifest?>? PackageApiImports { public get; public init; }
@@ -386,6 +429,61 @@ type public sealed class Sunder.Package.Format.SunderPackageProviderReferenceMan
   property System.String? ContractVersion { public get; public init; }
   property System.String? ProviderId { public get; public init; }
   property System.String? Role { public get; public init; }
+type public sealed class Sunder.Package.Format.SunderPackagePublicBinding : System.IEquatable<Sunder.Package.Format.SunderPackagePublicBinding>
+  method public .ctor(System.String ContractId, System.String Version, System.String Kind, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicProvider> Providers)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicProvider> Providers { public get; public init; }
+  property System.String ContractId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Package.Format.SunderPackagePublicBinding <Clone>$()
+  method public System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String Kind, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackagePublicProvider> Providers)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackagePublicBinding? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackagePublicBinding? left, Sunder.Package.Format.SunderPackagePublicBinding? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackagePublicBinding? left, Sunder.Package.Format.SunderPackagePublicBinding? right)
+type public sealed class Sunder.Package.Format.SunderPackagePublicProvider : System.IEquatable<Sunder.Package.Format.SunderPackagePublicProvider>
+  method public .ctor(System.String Role, System.String ProviderId)
+  property System.String ProviderId { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Package.Format.SunderPackagePublicProvider <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ProviderId)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackagePublicProvider? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackagePublicProvider? left, Sunder.Package.Format.SunderPackagePublicProvider? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackagePublicProvider? left, Sunder.Package.Format.SunderPackagePublicProvider? right)
+type public sealed class Sunder.Package.Format.SunderPackagePublicUse : System.IEquatable<Sunder.Package.Format.SunderPackagePublicUse>
+  method public .ctor(System.String Role, System.String ContractId, System.String Version, System.Boolean Required, System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  property System.Boolean Required { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Actions { public get; public init; }
+  property System.String ContractId { public get; public init; }
+  property System.String Role { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Package.Format.SunderPackagePublicUse <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String Version, out System.Boolean Required, out System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackagePublicUse? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackagePublicUse? left, Sunder.Package.Format.SunderPackagePublicUse? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackagePublicUse? left, Sunder.Package.Format.SunderPackagePublicUse? right)
+type public sealed class Sunder.Package.Format.SunderPackageRelationship : System.IEquatable<Sunder.Package.Format.SunderPackageRelationship>
+  method public .ctor(System.String PackageId, System.String VersionRange, System.String Presence, System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageIntegration> Bindings)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageIntegration> Bindings { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String Presence { public get; public init; }
+  property System.String VersionRange { public get; public init; }
+  method public Sunder.Package.Format.SunderPackageRelationship <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String VersionRange, out System.String Presence, out System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageIntegration> Bindings)
+  method public final virtual System.Boolean Equals(Sunder.Package.Format.SunderPackageRelationship? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Package.Format.SunderPackageRelationship? left, Sunder.Package.Format.SunderPackageRelationship? right)
+  method public static System.Boolean op_Inequality(Sunder.Package.Format.SunderPackageRelationship? left, Sunder.Package.Format.SunderPackageRelationship? right)
 attribute System.Runtime.CompilerServices.IsReadOnlyAttribute
 type public struct Sunder.Package.Format.SunderPackageTargetKey : System.IEquatable<Sunder.Package.Format.SunderPackageTargetKey>
   method public .ctor(System.String role, System.String rid)

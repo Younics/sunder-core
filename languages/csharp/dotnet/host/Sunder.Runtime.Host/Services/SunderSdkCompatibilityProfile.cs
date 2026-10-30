@@ -4,6 +4,9 @@ using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Services;
 
+internal sealed record SunderSdkSupportedProfile(string SdkVersionRange, string SdkBaseline, string WorkerProtocol,
+    IReadOnlySet<string> HostCapabilities, IReadOnlySet<string> WorkerCapabilities);
+
 internal static class SunderSdkCompatibilityProfile
 {
     private const string SupportedSdkRange = ">=1.1.0 <1.2.0";
@@ -43,6 +46,7 @@ internal static class SunderSdkCompatibilityProfile
         SunderSdkCapabilities.ShellViewV1,
         SunderSdkCapabilities.ViewNavigationPreparationV1,
         SunderSdkCapabilities.RpcV1,
+        SunderSdkCapabilities.RpcConsumerRequirementsV1,
         SunderSdkCapabilities.RpcCallOwnershipV1,
         SunderSdkCapabilities.RpcExtendedDeadlineV1,
         SunderSdkCapabilities.StacksV1,
@@ -90,6 +94,7 @@ internal static class SunderSdkCompatibilityProfile
             [SunderSdkCapabilities.ShellViewV1] = false,
             [SunderSdkCapabilities.ViewNavigationPreparationV1] = false,
             [SunderSdkCapabilities.RpcV1] = true,
+            [SunderSdkCapabilities.RpcConsumerRequirementsV1] = true,
             [SunderSdkCapabilities.RpcCallOwnershipV1] = true,
             [SunderSdkCapabilities.RpcExtendedDeadlineV1] = true,
             [SunderSdkCapabilities.StacksV1] = true,
@@ -104,35 +109,50 @@ internal static class SunderSdkCompatibilityProfile
     internal static IReadOnlyDictionary<string, bool> WorkerV1CapabilityClassification
         => WorkerV1Capabilities;
 
+    internal static IReadOnlyList<SunderSdkSupportedProfile> SupportedProfiles { get; } = Array.AsReadOnly<SunderSdkSupportedProfile>(
+    [
+        new(SupportedSdkRange, SunderSdkCapabilities.Baseline11V1, SunderWorkerProtocol.V1Capability,
+            SupportedCapabilities, WorkerV1Capabilities.Where(capability => capability.Value).Select(capability => capability.Key).ToHashSet(StringComparer.Ordinal)),
+    ]);
+
     public static IReadOnlyList<string> Validate(
         string? packageId,
         SunderPackageTargetKey targetKey,
         SunderPackageTargetManifest target)
-        => Validate(
-            packageId,
-            targetKey,
-            target.Kind,
-            target.SdkVersion,
-            target.RequiredHostCapabilities);
+        => Validate(packageId, targetKey, target, SupportedProfiles);
 
-    private static IReadOnlyList<string> Validate(
+    internal static IReadOnlyList<string> Validate(string? packageId, SunderPackageTargetKey targetKey,
+        SunderPackageTargetManifest target, IReadOnlyList<SunderSdkSupportedProfile> profiles)
+    {
+        IReadOnlyList<string>? closest = null;
+        foreach (var profile in profiles)
+        {
+            var errors = ValidateProfile(packageId, targetKey, target.Kind, target.SdkVersion, target.RequiredHostCapabilities, profile);
+            if (errors.Count == 0) return errors;
+            if (closest is null || errors.Count < closest.Count) closest = errors;
+        }
+        return closest ?? [$"Package '{packageId ?? "unknown"}' target '{targetKey}' has no supported SDK/protocol profile."];
+    }
+
+    private static IReadOnlyList<string> ValidateProfile(
         string? packageId,
         SunderPackageTargetKey targetKey,
         string? targetKind,
         string? sdkPackageVersion,
-        IReadOnlyList<string?>? requiredHostCapabilities)
+        IReadOnlyList<string?>? requiredHostCapabilities,
+        SunderSdkSupportedProfile profile)
     {
         var errors = new List<string>();
         var packageLabel = packageId ?? "unknown";
         if (!SemanticVersion.TryParse(sdkPackageVersion, out _)
-            || !PackageVersionRange.IsSatisfiedBy(sdkPackageVersion!, SupportedSdkRange))
+            || !PackageVersionRange.IsSatisfiedBy(sdkPackageVersion!, profile.SdkVersionRange))
         {
-            errors.Add($"Package '{packageLabel}' target '{targetKey}' was built with Sunder.Sdk '{sdkPackageVersion ?? "unknown"}', but this Host requires {SupportedSdkRange}.");
+            errors.Add($"Package '{packageLabel}' target '{targetKey}' was built with Sunder.Sdk '{sdkPackageVersion ?? "unknown"}', but this Host profile requires {profile.SdkVersionRange}.");
         }
 
-        if (requiredHostCapabilities?.Contains(SunderSdkCapabilities.Baseline11V1, StringComparer.Ordinal) != true)
+        if (requiredHostCapabilities?.Contains(profile.SdkBaseline, StringComparer.Ordinal) != true)
         {
-            errors.Add($"Package '{packageLabel}' target '{targetKey}' does not declare the Sunder SDK 1.1 baseline capability '{SunderSdkCapabilities.Baseline11V1}'.");
+            errors.Add($"Package '{packageLabel}' target '{targetKey}' does not declare the Sunder SDK baseline capability '{profile.SdkBaseline}'.");
         }
 
         foreach (var capability in requiredHostCapabilities ?? [])
@@ -143,44 +163,43 @@ internal static class SunderSdkCompatibilityProfile
                 continue;
             }
 
-            if (!SupportedCapabilities.Contains(capability))
+            if (!profile.HostCapabilities.Contains(capability))
             {
                 errors.Add($"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but this Host does not support it.");
             }
             else if ((capability is SunderSdkCapabilities.WorkerExecutionObservationsV1 or SunderSdkCapabilities.PackageDevelopmentRevisionsV1 or SunderSdkCapabilities.PackageDevelopmentReloadV1 or SunderSdkCapabilities.PackageDevelopmentLogsV1 or SunderSdkCapabilities.PackageDevelopmentLogQueriesV1 or SunderSdkCapabilities.PackageDevelopmentViewsV1 or SunderSdkCapabilities.PackageDevelopmentFeedbackV1 or SunderSdkCapabilities.AppActivationServicesV1)
                 && (targetKey.Role != SunderPackageFormat.AppHostRole || targetKind != SunderPackageFormat.AvaloniaTargetKind)
                 && !(targetKey.Role == SunderPackageFormat.RuntimeHostRole && targetKind == SunderPackageFormat.WorkerTargetKind
-                    && requiredHostCapabilities?.Contains(SunderWorkerProtocol.V1Capability, StringComparer.Ordinal) == true))
+                     && requiredHostCapabilities?.Contains(profile.WorkerProtocol, StringComparer.Ordinal) == true))
             {
                 errors.Add($"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but it is implemented only by the managed App.");
             }
         }
 
-        var usesWorkerV1 = requiredHostCapabilities?.Contains(
-            SunderWorkerProtocol.V1Capability,
+        var usesWorker = requiredHostCapabilities?.Contains(
+            profile.WorkerProtocol,
             StringComparer.Ordinal) == true;
         var isRuntimeWorker = string.Equals(
                                   targetKey.Role,
                                   SunderPackageFormat.RuntimeHostRole,
                                   StringComparison.Ordinal)
                               && targetKind is SunderPackageFormat.WorkerTargetKind;
-        if (usesWorkerV1 && !isRuntimeWorker)
+        if (usesWorker && !isRuntimeWorker)
         {
             errors.Add(
-                $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{SunderWorkerProtocol.V1Capability}', but that capability is valid only for Runtime worker targets.");
+                $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{profile.WorkerProtocol}', but that capability is valid only for Runtime worker targets.");
         }
-        else if (usesWorkerV1)
+        else if (usesWorker)
         {
             foreach (var capability in (requiredHostCapabilities ?? [])
                          .Where(static capability => !string.IsNullOrWhiteSpace(capability))
                          .Select(static capability => capability!)
-                         .Where(SupportedCapabilities.Contains))
+                          .Where(profile.HostCapabilities.Contains))
             {
-                if (!WorkerV1Capabilities.TryGetValue(capability, out var supported)
-                    || !supported)
+                if (!profile.WorkerCapabilities.Contains(capability))
                 {
                     errors.Add(
-                        $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but Sunder Worker Protocol V1 does not implement that capability, so the worker process cannot be launched.");
+                        $"Package '{packageLabel}' target '{targetKey}' requires Host capability '{capability}', but Worker protocol '{profile.WorkerProtocol}' does not implement that capability, so the worker process cannot be launched.");
                 }
             }
         }

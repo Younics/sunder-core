@@ -6,7 +6,7 @@ This document defines the Sunder V1 compatibility contract for independently ins
 
 The compatibility boundary is each exact target's generated manifest metadata, the public `Sunder.Sdk*` assemblies, and Host support for those contracts. The Host validates target compatibility before loading an assembly or starting a process.
 
-The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, an overlapping supported revision range, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
+The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, a valid supported range containing the client's implemented revision, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. A server advertising revisions 1–2 is accepted by a V1 client, which continues using V1 routes and payloads. The server's preferred revision must itself lie inside its advertised range. Supervisor `/api/host/handshake` follows the same rule for `/api/host/v1` clients. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
 
 The current App and Runtime use protocol revision `1`. RPC V1 clients require the Runtime feature `schema-first-rpc.v1`; package web Apps additionally require `app-web-rpc.v1` and use only the injected `sunder.bridge.v1` browser protocol. Dev sessions require `dev-package-owner-leases.v1`: every mutation and heartbeat is fenced to one `RuntimeInstanceId`, owner mutations replace the complete desired folder/watch set, and mutation id plus owner revision make retries idempotent.
 
@@ -33,13 +33,59 @@ retaining explicitly authored XML content.
 
 ## Registry Resolution Profile
 
-Installable Registry resolution is filtered against the requesting Host, not only against the Registry's publication baseline. `RegistryClientCompatibilityProfile` carries bounded, non-empty sets of supported manifest versions, Runtime target kinds, and Worker capabilities plus one Worker protocol capability, one SDK baseline capability, and the exact current RID. The current Runtime sends Manifest V1, Runtime kind `worker`, `worker-protocol.v1`, `sdk-baseline-1-1.v1`, its complete Worker V1 capability allowlist, and the RID returned by the Runtime process.
+Installable Registry resolution is filtered against the requesting Host, not only against the Registry's publication baseline. `RegistryClientCompatibilityProfile` carries the exact current `rid` and 1–8 complete `profiles`. Each `RegistrySupportedPackageProfile` contains bounded, non-empty collections of manifest versions, Runtime target kinds and Worker capabilities, plus one Worker protocol, one SDK baseline and its implemented `sdkVersionRange`. Every target must match one whole profile, including its numeric SDK range; capabilities from different profiles are never combined. Duplicate SDK-baseline/Worker-protocol pairs are rejected. Profiles and their collections are normalized before plan fingerprinting, so their input order does not affect the plan identity.
 
-`RegistryResolveUpdatesRequest`, `RegistryResolveInstallPlanRequest`, and `RegistryResolvePackageChangesRequest` require this profile in their `compatibility` property. Package exact/tag GET resolution uses the same camel-case property names as query parameters: repeat `manifestVersions`, `runtimeTargetKinds`, and `workerCapabilities`; send `workerProtocol`, `sdkBaseline`, and `rid` once. `version` and `tag` remain mutually exclusive selection parameters. The desired target RIDs must agree with the profile RID.
+The current Runtime advertises one implemented profile: Manifest V1, Runtime kind `worker`, `worker-protocol.v1`, `sdk-baseline-1-1.v1`, and its complete Worker V1 allowlist. SDK range/capability admission and Registry declarations derive from the same Host-owned profile list. A future implementation can add another profile while retaining the existing one; this does not claim that Worker V2 or an incompatible App framework is implemented today.
+
+`RegistryResolveUpdatesRequest`, `RegistryResolveInstallPlanRequest`, and `RegistryResolvePackageChangesRequest` require the envelope in their `compatibility` property. Package exact/tag GET resolution repeats `profiles`, with each value a URL-encoded JSON `RegistrySupportedPackageProfile`, and sends `rid` once. Each JSON query value is bounded to 16,384 characters and uses the same closed JSON reader as POST requests. `version` and `tag` remain mutually exclusive selection parameters. The desired target RIDs must agree with the envelope RID. The former flat, singular pre-release wire shape is not accepted as an alternative.
 
 Missing, malformed, empty, oversized, internally inconsistent, or unsupported compatibility data fails resolution. Candidate filtering applies to exact versions, explicit tags, `latest` fallback, updates, transitive dependencies, install plans, and installed-version reuse. Public search, package details, version history, and immutable version details remain historical inspection APIs and do not require a compatibility profile.
 
 Compatibility is request data, not an ambient or client-selected HTTP header. App and CLI install/update operations delegate to Runtime; Runtime authors the profile from its own implementation before calling Registry. This prevents an App, CLI, proxy, or stale persisted option from claiming capabilities on the Host's behalf.
+
+## Imported API compatibility
+
+A provider ships one current descriptor. A consumer retains its original complete
+import inventory, descriptor bytes/hashes and restore provenance; those are not
+rewritten to resemble a newer provider. Its reviewed provider-package version
+ranges still control installation and selection.
+
+Current tooling separately emits `usesContracts[].consumerRequirements` for
+imported package APIs. It records the methods the consumer references and selectors
+over its original schemas. Registry resolution, local graph checks, discovery,
+required-provider readiness and call admission check those requirements against
+the provider's current descriptor. Unrelated contracts/methods need not survive;
+the selected methods, accepted requests, declared errors and known output members
+must remain compatible. An unchanged consumer archive needs no lock refresh or
+rebuild just because a provider adds an unrelated API or advances its contract major.
+Missing requirement metadata retains exact matching, including an older role in
+a mixed-role package. Implementing an imported provider contract remains exact.
+
+Typed calls and method captures are collected from authored code, not generated
+bodies. A full response model requires **all declared members**, including optional
+members' definitions; tooling does not infer a smaller model from property reads.
+Raw/reflection/dynamic calls require explicit method declarations. Their output
+definitions are exact by default; an explicit raw consumer view can select a
+smaller set of ordinary record members. A view cannot narrow a model also used by
+typed calls or a service-reference protocol value. See the C# and Node SDK guides
+for `SunderRpcDynamicUse` / `SunderRpcConsumerView` and `declareRpcUse` /
+`declareRpcView`.
+
+The broker validates each request against both original caller and current provider
+schemas. It validates provider results, stream events and domain-error details in
+full **before** reading the caller's output shape. Only unknown ordinary record
+members are dropped; known members, maps, unions and protocol/resource values remain
+validated. Referenced services contribute their target requirements too. Grants
+remain keyed to the caller's original contract/manifest identity; permissions,
+package ranges, exact provider activations, cancellation/deadlines and reference
+ownership are unchanged. Compatibility is not an authorization grant.
+
+Tooling stamps `rpc.consumer-requirements.v1` on consuming targets. Older Hosts
+without that capability reject those targets before activation. This is an additive
+feature on the unreleased `1.1.0` candidate, not Worker V2 or a new App framework.
+Supporting another line requires a separately implemented complete profile; explicitly
+removing an old profile/revision stops admitting it rather than silently upgrading
+its packages. Retained release evidence is never deleted by that runtime choice.
 
 ## Compatibility Rules
 

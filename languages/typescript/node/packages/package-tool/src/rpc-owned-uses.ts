@@ -3,6 +3,7 @@ import { isPackageId, isSemanticVersion, parseRpcContractDescriptor, canonicalRp
 import { createHash } from "node:crypto";
 import { fields, object, outerBytes, type Outer, type OuterObject } from "./rpc-baseline-json";
 import { contractSymbol } from "./rpc-package-imports";
+import { readConsumerRequirementEvidence } from "./rpc-consumer-requirements";
 
 export interface SourceRoleUse {
   readonly role:"runtime"; readonly contractId:string; readonly contractVersion:string;
@@ -65,10 +66,11 @@ export function importedRuntimeUses(uses:readonly SourceRoleUse[],contracts:read
 }
 /** Validate generated source evidence; a retained JSON document never grants use. */
 export function validateRoleUseEvidence(root:OuterObject,kind:"receipt"|"export",expected?:readonly SourceRoleUse[]):readonly SourceRoleUse[]{
+  if (kind === "receipt") readConsumerRequirementEvidence(root);
   if(root.roleUses!==undefined){
     const required=kind==="export"?["schemaVersion","producer","projectIdentity","configuration","targetFramework","inputFingerprint","lockSha256","packageId","packageVersion","contracts"]
       :["schemaVersion","producer","inputFingerprint","lockSha256","packageId","packageVersion","contracts","packageArtifacts","bundles","packageArtifactImports","packageApiImports","providerImports","platformImports","providers","uses","generatedPackageFacades","generatedBindings"];
-    const optional=kind==="export"?["roleUses"]:["role","roleUses"],allowed=new Set([...required,...optional]);
+    const optional=kind==="export"?["roleUses"]:["role","roleUses","consumerRequirements"],allowed=new Set([...required,...optional]);
     fields(root,required,optional,Object.keys(root).filter(key=>allowed.has(key)));
   }
   const uses=readRoleUses(root.roleUses),bad=():never=>{throw new Error("rpc-authoring.evidence-mismatch: Source role evidence differs from the exact imported tuple or effective Runtime use.");};

@@ -33,6 +33,7 @@ export function serviceApiSource(owner: string, contracts: readonly LoadedContra
         const key = authored ? camel(authored.key) : lowerInitial(service.clientPropertyName);
         add(serviceNames, key, `${contract.descriptor.contractId}/${service.descriptor.serviceId}`);
         const identity = JSON.stringify({ packageId, contractId: contract.descriptor.contractId, contractVersion: contract.descriptor.version, descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256,
+          ...(contract.imported?.authorityKind === "package" ? { consumerCompatible: true } : {}),
           ...(range === undefined ? {} : { packageRange: range, includePrerelease: prerelease }) });
         const serviceKey=contract.descriptor.contractId+"/"+service.descriptor.serviceId;
         let generatedService=serviceFactories.get(serviceKey);
@@ -57,7 +58,8 @@ export function serviceApiSource(owner: string, contracts: readonly LoadedContra
           methods.push(`${JSON.stringify(source?.name??lowerInitial(method.methodName))}(${[...parameters, "$options?: RpcCallOptions"].join(", ")}): ${operation === "unary" ? `Promise<${returnType}>` : `ServiceStream<${returnType}>`} { return context.${operation}(${methodIdentity}, (transport, target, linked, resources) => ${invocation}${source?.unit && operation === "unary" ? ".then(() => undefined)" : ""}, $options); }`);
         }
         const factory=`$createService${serviceFactories.size}`;const token=`$serviceToken${serviceFactories.size}`;
-        const target={contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,serviceId:service.descriptor.serviceId};
+         const target={contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,serviceId:service.descriptor.serviceId,
+           ...(contract.imported?.authorityKind === "package" ? { consumerCompatible: true } : {})};
         serviceDefinitions.push(`function ${factory}(context:ApiBindingContext,identity:ApiIdentity){return Object.freeze({${methods.join(",\n")}});}`,
           `const ${token}: ServiceToken<ReturnType<typeof ${factory}>> & {readonly contractId:${JSON.stringify(target.contractId)};readonly serviceId:${JSON.stringify(target.serviceId)}} = createServiceToken(${JSON.stringify(target)} as const,context=>${factory}(context,${identity}));`,
           `export type ${serviceTokenTypeName(target.contractId,target.serviceId)} = typeof ${token};`);

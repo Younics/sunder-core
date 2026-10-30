@@ -253,25 +253,19 @@ type public sealed class Sunder.Registry.Contracts.RegistryCliTokenResponse : Sy
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryCliTokenResponse? left, Sunder.Registry.Contracts.RegistryCliTokenResponse? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryCliTokenResponse? left, Sunder.Registry.Contracts.RegistryCliTokenResponse? right)
 type public sealed class Sunder.Registry.Contracts.RegistryClientCompatibilityProfile : System.IEquatable<Sunder.Registry.Contracts.RegistryClientCompatibilityProfile>
-  method public .ctor(System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, System.String WorkerProtocol, System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, System.String SdkBaseline, System.String Rid)
-  field public const System.String ManifestVersionsQueryParameter = "manifestVersions"
+  method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistrySupportedPackageProfile> profiles, System.String rid)
+  method public .ctor(System.Collections.Generic.IReadOnlyList<System.Int32> manifestVersions, System.Collections.Generic.IReadOnlyList<System.String> runtimeTargetKinds, System.String workerProtocol, System.Collections.Generic.IReadOnlyList<System.String> workerCapabilities, System.String sdkBaseline, System.String rid, System.String sdkVersionRange)
   field public const System.Int32 MaximumIdentifierLength = 128
   field public const System.Int32 MaximumManifestVersions = 8
+  field public const System.Int32 MaximumProfileQueryLength = 16384
+  field public const System.Int32 MaximumProfiles = 8
   field public const System.Int32 MaximumRuntimeTargetKinds = 8
   field public const System.Int32 MaximumWorkerCapabilities = 64
+  field public const System.String ProfilesQueryParameter = "profiles"
   field public const System.String RidQueryParameter = "rid"
-  field public const System.String RuntimeTargetKindsQueryParameter = "runtimeTargetKinds"
-  field public const System.String SdkBaselineQueryParameter = "sdkBaseline"
-  field public const System.String WorkerCapabilitiesQueryParameter = "workerCapabilities"
-  field public const System.String WorkerProtocolQueryParameter = "workerProtocol"
-  property System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions { public get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds { public get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistrySupportedPackageProfile> Profiles { public get; }
   property System.String Rid { public get; }
-  property System.String SdkBaseline { public get; }
-  property System.String WorkerProtocol { public get; }
   method public Sunder.Registry.Contracts.RegistryClientCompatibilityProfile <Clone>$()
-  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, out System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, out System.String WorkerProtocol, out System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, out System.String SdkBaseline, out System.String Rid)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryClientCompatibilityProfile? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -426,6 +420,7 @@ type public sealed class Sunder.Registry.Contracts.RegistryDeprecatePackageVersi
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryDeprecatePackageVersionRequest? left, Sunder.Registry.Contracts.RegistryDeprecatePackageVersionRequest? right)
 type public sealed class Sunder.Registry.Contracts.RegistryExactRpcRequirement : System.IEquatable<Sunder.Registry.Contracts.RegistryExactRpcRequirement>
   method public .ctor(System.String ContractId, System.String ContractVersion, System.String DescriptorSha256, System.String AbiSha256)
+  property System.Collections.Generic.IReadOnlyList<System.Text.Json.JsonElement>? ConsumerRequirements { public get; public init; }
   property System.String AbiSha256 { public get; public init; }
   property System.String ContractId { public get; public init; }
   property System.String ContractVersion { public get; public init; }
@@ -741,6 +736,34 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageDownloadPoint 
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageDownloadPoint? left, Sunder.Registry.Contracts.RegistryPackageDownloadPoint? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageDownloadPoint? left, Sunder.Registry.Contracts.RegistryPackageDownloadPoint? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackageFeature : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageFeature>
+  method public .ctor(System.String Role, System.String Rid, System.String Capability)
+  property System.String Capability { public get; public init; }
+  property System.String Rid { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackageFeature <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Capability)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageFeature? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageFeature? left, Sunder.Registry.Contracts.RegistryPackageFeature? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageFeature? left, Sunder.Registry.Contracts.RegistryPackageFeature? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackageInformation : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageInformation>
+  method public .ctor(System.String PackageContentIdentity, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageFeature> Features, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageRelationship> Dependencies, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicBinding> PublicBindings, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicUse> PublicUses)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageFeature> Features { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicBinding> PublicBindings { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicUse> PublicUses { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageRelationship> Dependencies { public get; }
+  property System.String PackageContentIdentity { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackageInformation <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageContentIdentity, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageFeature> Features, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageRelationship> Dependencies, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicBinding> PublicBindings, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicUse> PublicUses)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageInformation? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageInformation? left, Sunder.Registry.Contracts.RegistryPackageInformation? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageInformation? left, Sunder.Registry.Contracts.RegistryPackageInformation? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageInstallPlanConflict>
   method public .ctor(System.String PackageId, System.String? CurrentVersion, System.String? RequestedVersionRange, System.String? RequiredByPackageId, System.String ErrorCode = "registry.v1.resource.conflict", System.String Message = "")
   property System.String? CurrentVersion { public get; public init; }
@@ -776,6 +799,20 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageInstallPlanIte
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageInstallPlanItem? left, Sunder.Registry.Contracts.RegistryPackageInstallPlanItem? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageInstallPlanItem? left, Sunder.Registry.Contracts.RegistryPackageInstallPlanItem? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackageIntegration : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageIntegration>
+  method public .ctor(System.String Role, System.String ContractId, System.String Version, System.String Kind)
+  property System.String ContractId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String Role { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackageIntegration <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String Version, out System.String Kind)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageIntegration? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageIntegration? left, Sunder.Registry.Contracts.RegistryPackageIntegration? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageIntegration? left, Sunder.Registry.Contracts.RegistryPackageIntegration? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackageMaintainer : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageMaintainer>
   method public .ctor(System.String UserId, System.Boolean IsOwner, System.DateTimeOffset AddedAtUtc, System.String? Username = null, System.String? DisplayName = null, System.String? Email = null, System.String? AvatarUrl = null)
   property System.Boolean IsOwner { public get; public init; }
@@ -1010,6 +1047,47 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackagePublicApiInven
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackagePublicApiInventoryV1? left, Sunder.Registry.Contracts.RegistryPackagePublicApiInventoryV1? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackagePublicApiInventoryV1? left, Sunder.Registry.Contracts.RegistryPackagePublicApiInventoryV1? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackagePublicBinding : System.IEquatable<Sunder.Registry.Contracts.RegistryPackagePublicBinding>
+  method public .ctor(System.String ContractId, System.String Version, System.String Kind, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicProvider> Providers)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicProvider> Providers { public get; }
+  property System.String ContractId { public get; public init; }
+  property System.String Kind { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackagePublicBinding <Clone>$()
+  method public System.Void Deconstruct(out System.String ContractId, out System.String Version, out System.String Kind, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackagePublicProvider> Providers)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackagePublicBinding? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackagePublicBinding? left, Sunder.Registry.Contracts.RegistryPackagePublicBinding? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackagePublicBinding? left, Sunder.Registry.Contracts.RegistryPackagePublicBinding? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackagePublicProvider : System.IEquatable<Sunder.Registry.Contracts.RegistryPackagePublicProvider>
+  method public .ctor(System.String Role, System.String ProviderId)
+  property System.String ProviderId { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackagePublicProvider <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ProviderId)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackagePublicProvider? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackagePublicProvider? left, Sunder.Registry.Contracts.RegistryPackagePublicProvider? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackagePublicProvider? left, Sunder.Registry.Contracts.RegistryPackagePublicProvider? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackagePublicUse : System.IEquatable<Sunder.Registry.Contracts.RegistryPackagePublicUse>
+  method public .ctor(System.String Role, System.String ContractId, System.String Version, System.Boolean Required, System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  property System.Boolean Required { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> Actions { public get; }
+  property System.String ContractId { public get; public init; }
+  property System.String Role { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackagePublicUse <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String ContractId, out System.String Version, out System.Boolean Required, out System.Collections.Generic.IReadOnlyList<System.String> Actions)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackagePublicUse? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackagePublicUse? left, Sunder.Registry.Contracts.RegistryPackagePublicUse? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackagePublicUse? left, Sunder.Registry.Contracts.RegistryPackagePublicUse? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackagePublicationEvidence : System.IEquatable<Sunder.Registry.Contracts.RegistryPackagePublicationEvidence>
   method public .ctor(Sunder.Registry.Contracts.RegistryPackageVersionIdentity Package, System.String OwnerPrincipalId, System.String PublicInventorySha256, System.String InitialAvailability)
   property Sunder.Registry.Contracts.RegistryPackageVersionIdentity Package { public get; public init; }
@@ -1024,6 +1102,20 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackagePublicationEvi
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackagePublicationEvidence? left, Sunder.Registry.Contracts.RegistryPackagePublicationEvidence? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackagePublicationEvidence? left, Sunder.Registry.Contracts.RegistryPackagePublicationEvidence? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackageRelationship : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageRelationship>
+  method public .ctor(System.String PackageId, System.String VersionRange, System.String Presence, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageIntegration> Bindings)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageIntegration> Bindings { public get; }
+  property System.String PackageId { public get; public init; }
+  property System.String Presence { public get; public init; }
+  property System.String VersionRange { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackageRelationship <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String VersionRange, out System.String Presence, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageIntegration> Bindings)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageRelationship? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageRelationship? left, Sunder.Registry.Contracts.RegistryPackageRelationship? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageRelationship? left, Sunder.Registry.Contracts.RegistryPackageRelationship? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackageResolutionPolicy : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageResolutionPolicy>
   method public .ctor(Sunder.Registry.Contracts.RegistryPolicyIdentity PackagePolicy, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageCompatibilityRequirement> Requirements, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageRestoreProvenance> RestoreProvenance, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryOptionalPackageDecision> OptionalPackages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPlatformPolicyDecision> PlatformCatalogs)
   property Sunder.Registry.Contracts.RegistryPolicyIdentity PackagePolicy { public get; public init; }
@@ -1205,6 +1297,7 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageVersionDetails
   property System.Int32 ArchiveFormatVersion { public get; public init; }
   property System.Int32 ManifestFormatVersion { public get; public init; }
   property Sunder.Registry.Contracts.RegistryPackageCanonicalArtifact CanonicalArtifact { public get; public init; }
+  property Sunder.Registry.Contracts.RegistryPackageInformation? Information { public get; public init; }
   property Sunder.Registry.Contracts.RegistryPackagePublicationEvidence? Publication { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageContractBundle> ContractBundles { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageContractUse> UsesContracts { public get; public init; }
@@ -2125,6 +2218,22 @@ type public static class Sunder.Registry.Contracts.RegistryStackVisibilityStates
   field public const System.String Listed = "Listed"
   field public const System.String SecurityBlocked = "SecurityBlocked"
   field public const System.String Unlisted = "Unlisted"
+type public sealed class Sunder.Registry.Contracts.RegistrySupportedPackageProfile : System.IEquatable<Sunder.Registry.Contracts.RegistrySupportedPackageProfile>
+  method public .ctor(System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, System.String WorkerProtocol, System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, System.String SdkBaseline, System.String SdkVersionRange)
+  property System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities { public get; }
+  property System.String SdkBaseline { public get; }
+  property System.String SdkVersionRange { public get; }
+  property System.String WorkerProtocol { public get; }
+  method public Sunder.Registry.Contracts.RegistrySupportedPackageProfile <Clone>$()
+  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, out System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, out System.String WorkerProtocol, out System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, out System.String SdkBaseline, out System.String SdkVersionRange)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistrySupportedPackageProfile? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistrySupportedPackageProfile? left, Sunder.Registry.Contracts.RegistrySupportedPackageProfile? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistrySupportedPackageProfile? left, Sunder.Registry.Contracts.RegistrySupportedPackageProfile? right)
 type public sealed class Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryUpdateCurrentUserProfileRequest>
   method public .ctor(System.String? Username)
   property System.String? Username { public get; public init; }

@@ -344,7 +344,6 @@ internal static class RuntimeRpcCallAcquisitionPolicy
             || declaration is null
             || !string.Equals(declaration.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
             || !AudienceAllows(caller.PackageId, provider.PackageId, declaration.Audience)
-            || !string.Equals(use.ContractVersion, provider.ContractVersion, StringComparison.Ordinal)
             || !string.Equals(declaration.ContractId, provider.ContractId, StringComparison.Ordinal)
             || !string.Equals(declaration.ContractVersion, provider.ContractVersion, StringComparison.Ordinal)
             || !string.Equals(registration.ContractId, provider.ContractId, StringComparison.Ordinal)
@@ -360,8 +359,7 @@ internal static class RuntimeRpcCallAcquisitionPolicy
                 out descriptor)
             || !string.Equals(descriptor.ContractId, provider.ContractId, StringComparison.Ordinal)
             || !string.Equals(descriptor.Version, use.ContractVersion, StringComparison.Ordinal)
-            || !string.Equals(descriptor.Sha256, provider.DescriptorSha256, StringComparison.Ordinal)
-            || !CallerExposureAllows(caller, provider))
+            || !CallerExposureAllows(caller, provider, use.ContractVersion))
         {
             descriptor = null;
             return false;
@@ -372,7 +370,8 @@ internal static class RuntimeRpcCallAcquisitionPolicy
             && use.AbiSha256 is not null
             && declaration.AbiSha256 is not null
             && string.Equals(descriptor.AbiSha256, use.AbiSha256, StringComparison.Ordinal)
-            && string.Equals(use.AbiSha256, declaration.AbiSha256, StringComparison.Ordinal)
+            && SunderRpcConsumerCompatibility.Matches(descriptor, registration.Contract, use.ConsumerRequirements)
+            && ProjectionAllows(caller, descriptor, registration, use)
             && string.Equals(registration.Contract.AbiSha256, declaration.AbiSha256, StringComparison.Ordinal))
         {
             return true;
@@ -382,7 +381,18 @@ internal static class RuntimeRpcCallAcquisitionPolicy
         return false;
     }
 
-    private static bool CallerExposureAllows(IRuntimeRpcCallerActivation caller, SunderRpcProviderSnapshot provider)
+    private static bool ProjectionAllows(IRuntimeRpcCallerActivation caller, SunderRpcContractDescriptor descriptor,
+        RuntimeRpcProviderRegistration provider, SunderPackageContractUseManifest use)
+    {
+        if (use.ConsumerRequirements is not { } selectors) return true;
+        var requirements = SunderRpcConsumerRequirements.Parse(selectors, descriptor);
+        if (requirements.ExactOutputDefinitions.Count == 0 && provider.ModelProjection.ServiceReferences.Count == 0) return true;
+        var source = caller switch { RuntimeRpcPackageActivation package => package.Package.Source, RuntimeRpcAppCallerSession app => app.Source, _ => null };
+        return source is not null && SunderRpcConsumerCompatibility.MatchesProjection(requirements,
+            PackageCompatibilityAuthority.ReadProjection(source, descriptor.ContractId), provider.ModelProjection);
+    }
+
+    private static bool CallerExposureAllows(IRuntimeRpcCallerActivation caller, SunderRpcProviderSnapshot provider, string version)
     {
         if (caller.PackageId == provider.PackageId) return true;
         var source = caller switch
@@ -392,7 +402,7 @@ internal static class RuntimeRpcCallAcquisitionPolicy
             _ => null,
         };
         return source is null || source.Manifest?.ContractBundles?.Any(bundle => bundle?.ContractId == provider.ContractId
-            && bundle.Version == provider.ContractVersion && bundle.Exposure == SunderPackageFormat.PublicContractExposure) == true;
+            && bundle.Version == version && bundle.Exposure == SunderPackageFormat.PublicContractExposure) == true;
     }
 
     private static bool AudienceAllows(

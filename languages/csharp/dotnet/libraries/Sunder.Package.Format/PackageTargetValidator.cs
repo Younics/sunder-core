@@ -235,6 +235,7 @@ internal static class PackageTargetValidator
                      capability.StartsWith("rpc.", StringComparison.Ordinal)
                      && capability != SunderPackageFormat.RpcV1Capability
                       && capability != SunderPackageFormat.RpcExtendedDeadlineV1Capability
+                      && capability != SunderPackageFormat.RpcConsumerRequirementsV1Capability
                       && capability != SunderPackageFormat.RpcCallOwnershipV1Capability))
         {
             errors.Add(

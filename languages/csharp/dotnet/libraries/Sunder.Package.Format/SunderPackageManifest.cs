@@ -183,6 +183,11 @@ public sealed class SunderPackageContractUseManifest
 
     [JsonPropertyName("actions")]
     public IReadOnlyList<string?>? Actions { get; init; }
+
+    // Selectors over this use's exact local bundle. Absence retains exact matching.
+    [JsonPropertyName("consumerRequirements")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public System.Text.Json.JsonElement? ConsumerRequirements { get; init; }
 }
 
 public sealed class SunderPackageProviderManifest

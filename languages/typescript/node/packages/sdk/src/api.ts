@@ -23,6 +23,8 @@ export interface ApiTransport extends RpcInvoker<string> {
 export interface ApiIdentity {
   readonly packageId: string; readonly contractId: string; readonly contractVersion: string;
   readonly descriptorSha256: string; readonly abiSha256: string;
+  /** @internal Broker-authenticated consumer requirements, not client-side schema negotiation. */
+  readonly consumerCompatible?: boolean;
   readonly packageRange?: string; readonly includePrerelease?: boolean;
   /** Content authority outlives individual values; an existing caller-owned scope is required. */
   readonly callerOwnedContent?: boolean;
@@ -146,8 +148,8 @@ export function createApiContext(packageId: string, transport: ApiTransport | ((
       controller.signal.throwIfAborted();
       if (snapshot.resetRequired) throw new RpcError({ kind: "unavailable", code: "rpc.catalog.reset", message: "Service catalog requires a fresh snapshot." });
       const matches = snapshot.providers.filter(provider => provider.state === "active" && provider.packageId === (identity.provider?.packageId??identity.packageId)
-        && provider.contractId === identity.contractId && provider.contractVersion === identity.contractVersion
-        && provider.descriptorSha256 === identity.descriptorSha256 && provider.abiSha256 === identity.abiSha256
+        && provider.contractId === identity.contractId && (identity.consumerCompatible || provider.contractVersion === identity.contractVersion
+        && provider.descriptorSha256 === identity.descriptorSha256 && provider.abiSha256 === identity.abiSha256)
         && (identity.provider ? sameServiceLocator(identity.provider,locatorFromProvider(provider)) : identity.packageRange === undefined || isVersionInRange(provider.packageVersion, identity.packageRange)
           && (identity.includePrerelease || !provider.packageVersion.split("+", 1)[0]!.includes("-"))));
       if (matches.length !== 1) throw new RpcError({ kind: "not-found",

@@ -781,6 +781,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
            && left.ContractVersion == right.ContractVersion
            && left.AbiSha256 == right.AbiSha256
            && left.Required == right.Required
+           && JsonElement.DeepEquals(JsonSerializer.SerializeToElement(left.ConsumerRequirements), JsonSerializer.SerializeToElement(right.ConsumerRequirements))
            && (left.Actions ?? []).SequenceEqual(right.Actions ?? [], StringComparer.Ordinal);
 
     private static bool ProvidersAreIdentical(

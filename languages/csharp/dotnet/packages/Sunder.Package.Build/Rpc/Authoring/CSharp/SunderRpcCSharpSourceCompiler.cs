@@ -195,6 +195,7 @@ internal sealed record SunderRpcCSharpCompilationResult(
     public bool Success => Diagnostics.Count == 0;
     internal IReadOnlyList<SunderRpcCSharpPackageApiSurface> ImportedPackageApis { get; init; } = [];
     internal IReadOnlyList<SunderRpcCSharpImportedUse> ImportedUses { get; init; } = [];
+    internal IReadOnlyList<Sunder.Package.Format.SunderRpcConsumerRequirements> ConsumerRequirements { get; init; } = [];
     internal CSharpCompilation? SourceCompilation { get; init; }
     internal IReadOnlySet<INamedTypeSymbol> TrustedImportedModelTypes { get; init; }
         = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
@@ -471,6 +472,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
         var contracts = new List<SunderRpcCSharpCompiledContract>(serviceSymbols.Length);
         var importedProviders = new List<SunderRpcCSharpImportedProvider>();
         IReadOnlyList<SunderRpcCSharpImportedUse> importedUses = [];
+        IReadOnlyList<Sunder.Package.Format.SunderRpcConsumerRequirements> consumerRequirements = [];
         var contractIds = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
         var contractKeys = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
         var generatedNames = new Dictionary<string, INamedTypeSymbol>(StringComparer.OrdinalIgnoreCase);
@@ -650,6 +652,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
                     && attribute.NamedArguments.Any(pair => pair.Key == nameof(SunderMethodAttribute.CompleteOnResponseContentRetirement))))
                     throw Failure("rpc-authoring.method-invalid", "Response-content completion policy must bind an owned or imported natural provider method.", method);
             importedUses = CompileImportedUses(compilation, input, sourceTreeSet, sourceTypes, attributes, importedProviders);
+            consumerRequirements = CompileConsumerRequirements(compilation, input, sourceTreeSet);
             ValidateOptionalReferences(sourceTypes, contracts);
             var providerCount = packageProviderIds.Count;
             if (providerCount > MaximumProviders)
@@ -687,6 +690,7 @@ internal sealed partial class SunderRpcCSharpSourceCompiler
             TrustedImportedModelTypes = input.ImportedModels.Keys.ToHashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default),
             ImportedPackageApis = input.ImportedPackageApis ?? [],
             ImportedUses = importedUses,
+            ConsumerRequirements = consumerRequirements,
             ImportedProviders = importedProviders.OrderBy(static item => item.Surface.Key, StringComparer.Ordinal)
                 .ThenBy(static item => item.Provider.ProviderId, StringComparer.Ordinal)
                 .ToArray(),

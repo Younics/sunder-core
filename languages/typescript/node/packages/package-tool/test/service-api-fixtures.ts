@@ -166,7 +166,10 @@ export {connect} from "./app/consumer.${extension}";`, resolveDir: c.root, loade
       async discover(id: string) {
         discoveries++; const contract = loaded.contracts.find(value => value.descriptor.contractId === id)!; assert.ok(contract);
         return {revision:1,sequence:1, resetRequired: false, providers: [{providerId:id+".provider",activationId:"11223344556677889900aabbccddeeff",activationEpoch:1,sessionGeneration:1,catalogRevision:1, packageId: contract.imported ? "example.dependency" : "example.owner", packageVersion: "1.0.0", state: "active",
-          contractId: id, contractVersion: contract.descriptor.version, descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256,
+          // Already generated consumers keep their original descriptors. Host
+          // discovery supplies the admitted provider's real current identity.
+          contractId: id, contractVersion: contract.imported ? "2.0.0" : contract.descriptor.version,
+          descriptorSha256: contract.imported ? "c".repeat(64) : contract.descriptorSha256, abiSha256: contract.imported ? "d".repeat(64) : contract.abiSha256,
           endpointReference: id, providerHandle: id }] };
       },
       async invoke(id: string, service: string, method: string, request: unknown) {

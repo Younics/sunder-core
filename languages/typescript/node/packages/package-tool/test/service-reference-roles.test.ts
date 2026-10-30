@@ -170,6 +170,16 @@ for (const language of ["ts", "js"] as const) test(`${language} imported referen
       assert.deepEqual(modelProjectionBytes(entry.modelProjection),modelProjectionBytes(original.modelProjection));
       assert.deepEqual(methodPoliciesBytes(entry.methodPolicies),methodPoliciesBytes(original.methodPolicies));
     }
+    await writeFile(consumer.path, fixtureSource(`import {Library} from "#sunder/api";
+/*ts import type {WorkerContext} from "@sunder/sdk";*/
+/** @param {import("@sunder/sdk").WorkerContext} context */
+export function configure(context/*:WorkerContext*/) {return {async onActivated(){
+  await context.api(Library).example_Roles_Run_Control.runControl.step({});
+}};}`,language));
+    const usingReference = await loadProjectWithOwnedFrame(consumer.root,{contractCacheRoot:cache});
+    assert.deepEqual(usingReference.ownedRpc!.consumerRequirements.map(value=>[value.source.contractId,value.methods.map(method=>method.methodId)]),
+      [[behaviorId,["run","watch"]],[controlId,["step"]]]);
+    assert.ok(usingReference.ownedRpc!.consumerRequirements.every(value=>value.exactOutputDefinitions.length>0));
     const provided = await preparePackageImports(lockFor(["runtime"],[behaviorId]),cache,"example.consumer",[],new Set(["app","runtime"]));
     assert.equal(provided.providerSurfaces.size,1); assert.ok(provided.uses.every(use=>use.role==="runtime"));
     const appOnly=await preparePackageImports(lockFor(["app"],[behaviorId]),cache,"example.consumer",[],new Set(["app","runtime"]));

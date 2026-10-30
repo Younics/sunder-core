@@ -733,22 +733,30 @@ internal static partial class SunderRpcAuthoringDocuments
 
         var versions = new HashSet<string>(StringComparer.Ordinal);
         var snapshots = new List<SunderRpcOwnedContractSnapshot>(historyItems.Length);
-        SemanticVersion? previous = null;
+        var latestByMajor = new Dictionary<string, SemanticVersion>(StringComparer.Ordinal);
+        SemanticVersion? highest = null;
+        bool AdvancesLine(SemanticVersion version)
+        {
+            var prior = latestByMajor.TryGetValue(version.Major, out var line) ? line : highest;
+            if (prior is not null && version.ComparePrecedenceTo(prior.Value) <= 0) return false;
+            latestByMajor[version.Major] = version;
+            if (highest is null || version.ComparePrecedenceTo(highest.Value) > 0) highest = version;
+            return true;
+        }
         foreach (var item in historyItems)
         {
             var snapshot = readSnapshot(item, contractKey, contractId, false);
             var version = SemanticVersion.Parse(snapshot.Descriptor.Version);
-            if (previous is not null && version.ComparePrecedenceTo(previous.Value) <= 0)
+            if (!AdvancesLine(version))
             {
                 throw new InvalidDataException(
-                    $"Owned contract '{contractKey}' history is not in strictly increasing semantic-version order.");
+                    $"Owned contract '{contractKey}' history is not in strictly increasing semantic-version order within each established major line.");
             }
             if (!versions.Add(snapshot.Descriptor.Version))
             {
                 throw new InvalidDataException(
                     $"Owned contract '{contractKey}' repeats version '{snapshot.Descriptor.Version}'.");
             }
-            previous = version;
             snapshots.Add(snapshot);
         }
 
@@ -757,7 +765,7 @@ internal static partial class SunderRpcAuthoringDocuments
         {
             current = readSnapshot(currentElement, contractKey, contractId, true);
             var currentVersion = SemanticVersion.Parse(current.Descriptor.Version);
-            if (previous is not null && currentVersion.ComparePrecedenceTo(previous.Value) <= 0)
+            if (!AdvancesLine(currentVersion))
             {
                 throw new InvalidDataException(
                     $"Owned contract '{contractKey}' current version must follow its immutable history.");

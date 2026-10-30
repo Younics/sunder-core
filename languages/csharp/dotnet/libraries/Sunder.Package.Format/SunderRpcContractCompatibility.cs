@@ -53,6 +53,23 @@ internal static class SunderRpcContractCompatibility
         return proof.Result();
     }
 
+    // Package ranges and authority/integrity are separate caller-owned checks.
+    // This proof compares only the selected consumer surface against one current
+    // provider descriptor. It does not establish behavioral compatibility.
+    internal static SunderRpcContractCompatibilityResult Satisfies(
+        SunderRpcConsumerRequirements requirements, SunderRpcContractDescriptor provider)
+    {
+        ArgumentNullException.ThrowIfNull(requirements);
+        ArgumentNullException.ThrowIfNull(provider);
+        var options = new JsonSerializerOptions { MaxDepth = 256 };
+        using var previous = JsonDocument.Parse(requirements.Project(requirements.Source).ToJsonString(options), new JsonDocumentOptions { MaxDepth = 256 });
+        using var candidate = JsonDocument.Parse(requirements.Project(provider).ToJsonString(options), new JsonDocumentOptions { MaxDepth = 256 });
+        var proof = new Proof(previous.RootElement, candidate.RootElement, requirements);
+        try { proof.Compare(); }
+        catch (ProofLimitException) { proof.Change(SunderRpcContractChangeKind.Major, "", "analysis-limit-exceeded"); }
+        return proof.Result();
+    }
+
     internal static string GetMinimumVersion(string previousVersion, SunderRpcContractChangeKind kind)
     {
         if (!SemanticVersion.TryParse(previousVersion, out var previous))
@@ -74,9 +91,11 @@ internal static class SunderRpcContractCompatibility
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(immutableHistory);
         var candidateBytes = candidate.GetCanonicalUtf8();
+        var candidateVersion = SemanticVersion.Parse(candidate.Version);
         var reused = false;
         SunderRpcContractDescriptor? highest = null;
         var highestVersion = default(SemanticVersion);
+        SunderRpcContractDescriptor? highestInLine = null;
         foreach (var previous in immutableHistory)
         {
             ArgumentNullException.ThrowIfNull(previous);
@@ -94,14 +113,20 @@ internal static class SunderRpcContractCompatibility
                 highest = previous;
                 highestVersion = version;
             }
+            if (version.Major == candidateVersion.Major
+                && (highestInLine is null || version.CompareTo(SemanticVersion.Parse(highestInLine.Version)) > 0))
+                highestInLine = previous;
         }
 
         // Reusing any exact immutable tuple is not a new allocation, including old majors
         // and prereleases. Conflicting duplicates above still fail closed.
         if (reused) return Array.Empty<string>();
-        var candidateVersion = SemanticVersion.Parse(candidate.Version);
         if (candidateVersion.Prerelease is not null) return [PrereleaseDiagnostic];
         if (highest is null) return Array.Empty<string>();
+        // Once a major line exists it advances independently. Publishing V2 must
+        // not prevent a compatible V1 maintenance release or import V2's shape.
+        highest = highestInLine ?? highest;
+        highestVersion = SemanticVersion.Parse(highest.Version);
         if (highestVersion.Prerelease is not null) return [PrereleaseDiagnostic];
         if (candidateVersion.ComparePrecedenceTo(highestVersion) <= 0)
             return [$"contract-version.bump-required: Candidate '{candidate.Version}' must have greater SemVer precedence than highest immutable version '{highest.Version}'; backfills and build-metadata-only allocations are forbidden."];
@@ -175,7 +200,7 @@ internal static class SunderRpcContractCompatibility
 
     private sealed class ProofLimitException : Exception { }
 
-    private sealed class Proof(JsonElement previous, JsonElement candidate)
+    private sealed class Proof(JsonElement previous, JsonElement candidate, SunderRpcConsumerRequirements? consumer = null)
     {
         private const int MaximumSteps = 65_536;
         private const int MaximumChanges = 64;
@@ -230,6 +255,7 @@ internal static class SunderRpcContractCompatibility
             BuildNamedGraph();
             CompareServices();
             CompareErrors();
+            if (consumer is not null) return;
             foreach (var definition in _oldDefinitions.EnumerateObject())
             {
                 Step();
@@ -375,7 +401,7 @@ internal static class SunderRpcContractCompatibility
                 var path = At("/errors", error.Name);
                 if (!newErrors.TryGetProperty(error.Name, out var other))
                 {
-                    Fail(path, "error-removed");
+                    if (consumer is null) Fail(path, "error-removed");
                     continue;
                 }
                 var oldDetails = error.Value.TryGetProperty("detailsSchema", out var oldSchema);
@@ -416,13 +442,16 @@ internal static class SunderRpcContractCompatibility
                 _examinedDefinitions.Add(name);
                 if (_provedDefinitions.TryGetValue((name, request), out var proved)) return proved;
                 var definitionPath = At("/$defs", name);
+                if (!_newDefinitions.TryGetProperty(name, out var candidateDefinition)) return Fail(definitionPath, "definition-removed");
+                if (!request && consumer?.ExactOutputDefinitions.Contains(name, StringComparer.Ordinal) == true)
+                    return Fail(definitionPath, "exact-output-definition-changed");
                 if (HasCycle(name, _oldReferences, new(StringComparer.Ordinal), new(StringComparer.Ordinal))
                     || HasCycle(name, _newReferences, new(StringComparer.Ordinal), new(StringComparer.Ordinal)))
                 {
                     _provedDefinitions[(name, request)] = false;
                     return Fail(definitionPath, "recursive-change-unclassified");
                 }
-                proved = Subset(_oldDefinitions.GetProperty(name), _newDefinitions.GetProperty(name), request, definitionPath, depth + 1);
+                proved = Subset(_oldDefinitions.GetProperty(name), candidateDefinition, request, definitionPath, depth + 1);
                 _provedDefinitions[(name, request)] = proved;
                 if (proved) Change(SunderRpcContractChangeKind.Minor, definitionPath, "schema-compatible");
                 return proved;
@@ -455,6 +484,8 @@ internal static class SunderRpcContractCompatibility
                     var newAdditional = newSchema.TryGetProperty("additionalProperties", out var newItems) ? newItems.ValueKind : JsonValueKind.Undefined;
                     if (oldAdditional != newAdditional || oldAdditional == JsonValueKind.Undefined)
                         return Fail(path, "object-form-change-unclassified");
+                    if (!request && consumer is not null && oldAdditional == JsonValueKind.False)
+                        return OutputRecord(oldSchema, newSchema, path, depth);
                     var bounds = BoundsSubset(source, target, "minProperties", "maxProperties", path);
                     if (oldAdditional == JsonValueKind.Object)
                         return Subset(oldItems, newItems, request, path + "/additionalProperties", depth + 1)
@@ -481,6 +512,34 @@ internal static class SunderRpcContractCompatibility
                 default:
                     return Fail(path, "numeric-change-unclassified");
             }
+        }
+
+        private bool OutputRecord(JsonElement required, JsonElement provider, string path, int depth)
+        {
+            var properties = required.GetProperty("properties");
+            var available = provider.GetProperty("properties");
+            IReadOnlyList<string> members = properties.EnumerateObject().Select(property => property.Name).ToArray();
+            if (path.StartsWith("/$defs/", StringComparison.Ordinal)
+                && consumer!.OutputMembers.TryGetValue(path["/$defs/".Length..], out var view)) members = view;
+            var requiredMembers = Strings(required.GetProperty("required"));
+            var guaranteed = Strings(provider.GetProperty("required"));
+            var valid = true;
+            foreach (var member in members)
+            {
+                Step();
+                var at = At(path + "/properties", member);
+                if (!available.TryGetProperty(member, out var other)) { valid = Fail(at, "required-member-removed"); continue; }
+                if (requiredMembers.Contains(member) && !guaranteed.Contains(member)) valid = Fail(at, "required-property-not-guaranteed");
+                valid = Subset(properties.GetProperty(member), other, false, at, depth + 1) && valid;
+            }
+            // Count bounds apply to the known record after unknown fields are
+            // discarded. Extra required/optional fields cannot evade old bounds.
+            var extra = available.EnumerateObject().Count(property => !members.Contains(property.Name, StringComparer.Ordinal));
+            var lower = Math.Max(guaranteed.Count(members.Contains), Math.Max(0, Bound(provider, "minProperties", 0) - extra));
+            var upper = Math.Min(Bound(provider, "maxProperties", long.MaxValue), members.Count);
+            if (lower < Bound(required, "minProperties", 0)) valid = Fail(path + "/minProperties", "lower-bound-not-contained");
+            if (upper > Bound(required, "maxProperties", long.MaxValue)) valid = Fail(path + "/maxProperties", "upper-bound-not-contained");
+            return valid;
         }
 
         private bool NullableBranch(JsonElement schema, JsonElement definitions, out JsonElement value, out JsonElement nullSchema)

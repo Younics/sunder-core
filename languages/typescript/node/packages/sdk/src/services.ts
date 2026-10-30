@@ -8,6 +8,20 @@ type ServiceShape<M> = { readonly [K in keyof M]: (...args: never[]) => unknown 
 export interface ServiceUse { readonly required?: boolean; readonly actions?: readonly ("discover" | "invoke" | "subscribe")[] }
 /** Explicit Runtime intent for one canonical imported service on a bound provider. */
 export interface ServiceRuntimeUse<TService=unknown> extends ServiceUse { readonly service:ServiceToken<TService> }
+/** Declares method wire IDs reached through raw/dynamic RPC. It grants no access and performs no RPC. Raw output schemas stay exact. */
+export function declareRpcUse(service: ServiceToken<unknown>, methodIds: readonly string[], role: "runtime" | "app" = "runtime"): void {
+  serviceTokenDefinition(service);
+  if (!["runtime", "app"].includes(role) || !Array.isArray(methodIds) || methodIds.length < 1 || methodIds.length > 512
+    || methodIds.some(id => typeof id !== "string" || !id) || new Set(methodIds).size !== methodIds.length)
+    throw new TypeError("Dynamic RPC use requires a role and unique method wire IDs.");
+}
+/** Declares the complete wire-member set of a narrow raw-RPC response model. Full generated-model calls cannot use this view. */
+export function declareRpcView(service: ServiceToken<unknown>, definition: string, members: readonly string[], role: "runtime" | "app" = "runtime"): void {
+  serviceTokenDefinition(service);
+  if (!["runtime", "app"].includes(role) || typeof definition !== "string" || !definition || !Array.isArray(members)
+    || members.length > 256 || members.some(member => typeof member !== "string" || !member) || new Set(members).size !== members.length)
+    throw new TypeError("A consumer view requires a role, definition and unique wire-member names.");
+}
 export interface ServiceConstraints {
   readonly title?: string; readonly description?: string;
   readonly format?: "integer" | "float32" | "float64" | "uuid" | "date" | "date-time" | "duration" | "uri" | "decimal";

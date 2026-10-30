@@ -31,7 +31,7 @@ public sealed class WorkerExecutionObservationCapabilityProfileTests
             RequiredHostCapabilities = [SunderSdkCapabilities.Baseline11V1, SunderWorkerProtocol.V1Capability, capability],
         };
         var error = Assert.Single(SunderSdkCompatibilityProfile.Validate("test.package", new("runtime", "win-x64"), worker));
-        Assert.Contains("Worker Protocol V1 does not implement", error, StringComparison.Ordinal);
+        Assert.Contains("Worker protocol 'worker-protocol.v1' does not implement", error, StringComparison.Ordinal);
         Assert.False(SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification[capability]);
     }
 

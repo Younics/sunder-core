@@ -67,7 +67,14 @@ export function parseBaseline(bytes: Buffer): OwnedBaseline {
     const all = current ? [...history, current] : history;
     if (retired && all.some(item => item.exposure !== "package")) throw new Error(`rpc-authoring.private-retirement-public-evidence: ${key} contains public evidence; use the public lifecycle.`);
     if (!all.length) invalid("removed contract must retain nonempty immutable history");
-    for (let i = 1; i < all.length; i++) if (compareVersions(all[i]!.descriptor.version, all[i - 1]!.descriptor.version) <= 0) invalid("current/history versions must be in strictly increasing SemVer precedence order");
+    const latestByMajor = new Map<string, string>(); let highest: string | undefined;
+    for (const item of all) {
+      const version = item.descriptor.version, major = versionParts(version).core[0]!;
+      const prior = latestByMajor.get(major) ?? highest;
+      if (prior !== undefined && compareVersions(version, prior) <= 0) invalid("current/history versions must be in strictly increasing SemVer precedence order within each established major line");
+      latestByMajor.set(major, version);
+      if (highest === undefined || compareVersions(version, highest) > 0) highest = version;
+    }
     if (value.projectionReviews !== undefined) {
       if (!Array.isArray(value.projectionReviews) || !value.projectionReviews.length || value.projectionReviews.length > 257) invalid("projectionReviews must have 1..257 entries; omit when absent");
       let previous: string | undefined;
@@ -93,7 +100,8 @@ export function parseBaseline(bytes: Buffer): OwnedBaseline {
 }
 export function writeBaseline(owner: string, contracts: ReadonlyMap<string, OwnedContract>, retiredPrivateContracts?: ReadonlyMap<string, OwnedContract>): Buffer {
   const records = (values: ReadonlyMap<string, OwnedContract>): OuterObject => ordered([...values].sort(([a], [b]) => ordinal(a, b)).map(([key, contract]) => {
-    const reviews = [...contract.history, ...contract.current ? [contract.current] : []].flatMap(entry => entry.projectionReview ? [entry.projectionReview.json] : []);
+    const reviews = [...contract.history, ...contract.current ? [contract.current] : []]
+      .sort((a,b)=>compareVersions(a.descriptor.version,b.descriptor.version)).flatMap(entry => entry.projectionReview ? [entry.projectionReview.json] : []);
     return [key, ordered([
     ["contractId", contract.contractId], ...(contract.current ? [["current", contract.current.json] as const] : []), ["history", contract.history.map(entry => entry.json)],
     ...reviews.length ? [["projectionReviews", reviews] as const] : [],
@@ -156,13 +164,15 @@ function candidatesByKey(baseline: OwnedBaseline, candidates: readonly LoadedCon
 // Lifecycle is intentionally stricter than validateVersion's immutable reuse.
 export function validateLifecycleHistory(candidate: RpcContractDescriptor, exposure: OwnedSnapshot["exposure"], history: readonly OwnedSnapshot[], preservePrerelease = false, review?: OwnedProjectionReview): void {
   if (!history.length) return;
-  const version = versionParts(candidate.version); const highest = history.at(-1)!;
-  const comparisons = history.filter((item) => item === highest || versionParts(item.descriptor.version).core[0] === version.core[0]);
+  const version = versionParts(candidate.version);
+  let comparisons = history.filter((item) => versionParts(item.descriptor.version).core[0] === version.core[0]);
+  if (!comparisons.length) comparisons = [[...history].sort((a,b)=>compareVersions(a.descriptor.version,b.descriptor.version)).at(-1)!];
+  const highest = [...comparisons].sort((a,b)=>compareVersions(a.descriptor.version,b.descriptor.version)).at(-1)!;
   if (version.prerelease || comparisons.some((item) => versionParts(item.descriptor.version).prerelease)) {
     if (preservePrerelease) return;
     invalid("needs an undefined prerelease history progression policy");
   }
-  if (compareVersions(candidate.version, highest.descriptor.version) <= 0) invalid("next version must follow all immutable history; issued versions cannot be reused");
+  if (compareVersions(candidate.version, highest.descriptor.version) <= 0) invalid("next version must follow immutable history in its major line; issued versions cannot be reused");
   const errors = validateVersion(candidate, history.map((item) => item.descriptor)); if (errors.length) invalid(errors.join("; "));
   for (const item of comparisons) if (item.exposure !== exposure && compareVersions(candidate.version, minimumOwnedVersion(item.descriptor.version, "Major")) < 0) invalid("exposure change is Major relative to immutable history");
   validateProjectionReviewHistory(candidate, review, comparisons);
@@ -219,9 +229,11 @@ export function planAcceptance(baseline: OwnedBaseline, candidates: readonly Loa
     if (!nextVersion && previous) {
       let minimum = current?.state === "draft" ? current.descriptor.version : minimumOwnedVersion(previous.descriptor.version, kind === "Unchanged" ? "Patch" : kind);
       const major = versionParts(minimum).core[0];
+      const hasLine = history.some(item=>versionParts(item.descriptor.version).core[0]===major);
+      const highest = [...history].sort((a,b)=>compareVersions(a.descriptor.version,b.descriptor.version)).at(-1);
       for (const item of history) {
         const version = versionParts(item.descriptor.version);
-        if (version.core[0] !== major && item !== history.at(-1) || version.prerelease) continue;
+        if (version.core[0] !== major && (hasLine || item !== highest) || version.prerelease) continue;
         const change = ownedChange(item, candidate); const floor = minimumOwnedVersion(item.descriptor.version, change === "Unchanged" ? "Patch" : change);
         if (compareVersions(floor, minimum) > 0) minimum = floor;
       }

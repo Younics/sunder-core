@@ -113,7 +113,8 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoo
       const key=contractId+"/"+serviceId;if(seen.has(key))return fail(item,"Declare each Runtime target only once on a provider.","runtime-use-invalid");seen.add(key);
       const applicable=applicableUseActions(contract),actions=policy.actions??applicable;
       if(policy.required!==undefined&&typeof policy.required!=="boolean"||!Array.isArray(actions)||!actions.length||new Set(actions).size!==actions.length||actions.some(action=>!applicable.includes(action as typeof applicable[number])))return fail(item,"Runtime actions must be a nonempty applicable subset and required must be Boolean.","runtime-use-invalid");
-      const target={contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,serviceId};
+      const target={contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,serviceId,
+        ...(contract.imported?.authorityKind === "package" ? {consumerCompatible:true} : {})};
       uses.push({role:"runtime",...target,serviceType:canonicalServiceType(contract.imported.authorityId,contract.descriptor.contractId,serviceId),required:policy.required===true,actions:applicable.filter(action=>actions.includes(action))});
       metadata.push({service:target,...policy});
     }

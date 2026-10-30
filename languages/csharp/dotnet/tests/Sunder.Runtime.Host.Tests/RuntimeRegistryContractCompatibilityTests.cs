@@ -166,7 +166,8 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     [Fact]
     public void RegistryCompatibilityProfile_TracksCurrentManifestWorkerAndSdkSupport()
     {
-        var profile = RuntimeRegistryContractMapper.CompatibilityProfile;
+        var compatibility = RuntimeRegistryContractMapper.CompatibilityProfile;
+        var profile = Assert.Single(compatibility.Profiles);
 
         Assert.Equal([SunderPackageFormat.CurrentManifestVersion], profile.ManifestVersions);
         Assert.Equal([SunderPackageFormat.WorkerTargetKind], profile.RuntimeTargetKinds);
@@ -180,7 +181,8 @@ public sealed class RuntimeRegistryContractCompatibilityTests
         Assert.Contains(profile.WorkerProtocol, profile.WorkerCapabilities);
         Assert.Equal(SunderSdkCapabilities.Baseline11V1, profile.SdkBaseline);
         Assert.Contains(profile.SdkBaseline, profile.WorkerCapabilities);
-        Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), profile.Rid);
+        Assert.Equal(Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles).SdkVersionRange, profile.SdkVersionRange);
+        Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), compatibility.Rid);
     }
 
     private static string NormalizeShape(Type type)

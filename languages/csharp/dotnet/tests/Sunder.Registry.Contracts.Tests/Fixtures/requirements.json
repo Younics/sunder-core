@@ -1,20 +1,25 @@
 {
   "compatibility": {
-    "manifestVersions": [
-      1
+    "profiles": [
+      {
+        "manifestVersions": [
+          1
+        ],
+        "runtimeTargetKinds": [
+          "worker"
+        ],
+        "workerProtocol": "worker-protocol.v1",
+        "workerCapabilities": [
+          "core.v1",
+          "execution-runtime.v1",
+          "rpc.v1",
+          "sdk-baseline-1-1.v1",
+          "worker-protocol.v1"
+        ],
+        "sdkBaseline": "sdk-baseline-1-1.v1",
+        "sdkVersionRange": "\u003E=1.1.0 \u003C1.2.0"
+      }
     ],
-    "runtimeTargetKinds": [
-      "worker"
-    ],
-    "workerProtocol": "worker-protocol.v1",
-    "workerCapabilities": [
-      "core.v1",
-      "execution-runtime.v1",
-      "rpc.v1",
-      "sdk-baseline-1-1.v1",
-      "worker-protocol.v1"
-    ],
-    "sdkBaseline": "sdk-baseline-1-1.v1",
     "rid": "win-x64"
   },
   "expectedResolutionFingerprint": "previous-fingerprint-001",

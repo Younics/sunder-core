@@ -4,6 +4,7 @@ using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
+using Sunder.Sdk.Rpc;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -38,7 +39,8 @@ internal static class PackageCompatibilityAuthority
             && receipt.Sha256 == Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), "Installed compatibility manifest differs from retained content.");
         var manifest = StrictJsonSerializer.Deserialize<SunderPackageManifest>(bytes, new JsonSerializerOptions()) ?? throw Required(package.PackageId);
         Require(manifest.Id == package.PackageId && manifest.Version == package.Version, "Installed compatibility manifest identity differs.");
-        return PackagePolicyAdmission.WithProvenance(new(package.PackageId, PackageSourceKind.Installed, package.InstallPath, ContentIdentity: package.ContentIdentity, Manifest: manifest), package);
+        return PackagePolicyAdmission.WithProvenance(new(package.PackageId, PackageSourceKind.Installed, package.InstallPath, ContentIdentity: package.ContentIdentity, Manifest: manifest,
+            ContentIndex: new(1, package.ContentInventory.Select(value => new SunderPackageContentIndexEntry(value.Path, value.Sha256, value.Size)).ToArray())), package);
     }
 
     internal static bool NeedsEvidence(SunderPackageManifest manifest) => manifest.PackageArtifactImports is { Count: > 0 }
@@ -122,14 +124,14 @@ internal static class PackageCompatibilityAuthority
                     "Imported contract differs from its complete restore inventory.");
                 if (omitted) return;
                 Require(graph.TryGetValue(selectedId, out var selected) && InRange(selected!.Manifest!.Version!, artifacts[selectedId]), "Selected package is absent or out of range.");
-                Require((selected!.Manifest!.ContractBundles ?? []).Any(bundle => bundle is not null && bundle.Exposure == "public" && Matches(bundle, original)),
-                    "The installed selected package does not expose the exact imported RPC identity.");
+                Require(SatisfiesImport(source, selected!, original),
+                    "The installed selected package does not satisfy the imported consumer surface.");
                 if (original.AuthorityKind == "package")
                 {
                     Require(artifacts.TryGetValue(original.AuthorityId, out var review) && graph.TryGetValue(original.AuthorityId, out var authority)
                         && InRange(authority!.Manifest!.Version!, review!)
-                        && (authority.Manifest.ContractBundles ?? []).Any(bundle => bundle is not null && bundle.Source == "owned" && bundle.Exposure == "public" && Matches(bundle, original)),
-                        "The ultimate package authority lacks a reviewed in-range exact owned contract.");
+                        && SatisfiesImport(source, authority, original, requireOwned: true),
+                        "The ultimate package authority lacks a reviewed in-range compatible owned contract.");
                 }
             }
         }
@@ -195,12 +197,75 @@ internal static class PackageCompatibilityAuthority
         foreach (var reference in required)
         {
             var contract = inventory.Contracts.Single(value => value.ContractId == reference!.ContractId && value.ContractVersion == reference.ContractVersion);
-            if (!(actual.Manifest.ContractBundles ?? []).Any(bundle => bundle is not null && bundle.Exposure == "public" && Matches(bundle, contract))) return false;
+            if (!SatisfiesImport(source, actual, contract)) return false;
             if (contract.AuthorityKind == "package" && (!artifacts.TryGetValue(contract.AuthorityId, out var review)
                 || !graph.TryGetValue(contract.AuthorityId, out var authority) || !InRange(authority.Manifest!.Version!, review)
-                || !(authority.Manifest.ContractBundles ?? []).Any(bundle => bundle is not null && bundle.Source == "owned" && bundle.Exposure == "public" && Matches(bundle, contract)))) return false;
+                || !SatisfiesImport(source, authority, contract, requireOwned: true))) return false;
         }
         return true;
+    }
+
+    private static bool SatisfiesImport(RuntimePackageSource consumer, RuntimePackageSource provider,
+        RegistryPackagePublicApiContractV1 original, bool requireOwned = false)
+    {
+        var uses = (consumer.Manifest!.UsesContracts ?? []).OfType<SunderPackageContractUseManifest>()
+            .Where(use => use.ContractId == original.ContractId && use.ContractVersion == original.ContractVersion).ToArray();
+        var exact = uses.Length == 0 || uses.Any(use => use.ConsumerRequirements is null)
+            || (consumer.Manifest.ProviderImports ?? []).Any(import => import?.ContractId == original.ContractId);
+        // Complete restore inventory is retained, but unused APIs are not runtime requirements.
+        if (!exact && uses.All(use => use.Required != true && use.ConsumerRequirements!.Value.GetProperty("methods").GetArrayLength() == 0)) return true;
+        var candidate = (provider.Manifest!.ContractBundles ?? []).SingleOrDefault(bundle => bundle?.ContractId == original.ContractId
+            && bundle.Exposure == "public" && bundle.AuthorityKind == original.AuthorityKind && bundle.AuthorityId == original.AuthorityId
+            && (!requireOwned || bundle.Source == "owned"));
+        if (candidate is null) return false;
+        if (exact) return Matches(candidate, original);
+        var sourceBundle = consumer.Manifest.ContractBundles!.Single(bundle => bundle?.ContractId == original.ContractId)!;
+        var source = ReadContract(consumer, sourceBundle);
+        var current = ReadContract(provider, candidate);
+        return uses.All(use => SunderRpcConsumerCompatibility.Matches(source, current, use.ConsumerRequirements)
+            && SunderRpcConsumerCompatibility.MatchesProjection(SunderRpcConsumerRequirements.Parse(use.ConsumerRequirements!.Value, source),
+                ReadProjection(consumer, original.ContractId), ReadProjection(provider, original.ContractId)));
+    }
+
+    internal static SunderRpcModelProjection ReadProjection(RuntimePackageSource source, string id)
+        => ReadProjections(source).Contracts.Single(value => value.ContractId == id).ModelProjection;
+
+    internal static SunderRpcModelProjectionDocument ReadProjections(RuntimePackageSource source)
+    {
+        if (source.RpcModelProjection is { } cached) return cached;
+        var path = Path.Combine(source.EffectiveSnapshotFolder, SunderPackageFormat.RpcModelProjectionPath);
+        PackageStorePathGuard.EnsureSafe(path, source.EffectiveSnapshotFolder);
+        using var stream = File.OpenRead(path);
+        Require(stream.Length is > 0 and <= SunderPackageFormat.MaxRpcModelProjectionBytes, "Model projection exceeds its bound.");
+        var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes);
+        Require(stream.ReadByte() == -1, "Model projection changed size while being read.");
+        if (source.ContentIndex is { } index)
+        {
+            var entry = index.Files!.Single(value => value?.Path == SunderPackageFormat.RpcModelProjectionPath)!;
+            Require(entry.Size == bytes.Length && entry.Sha256 == Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
+                "Model projection differs from the authenticated content inventory.");
+        }
+        var projection = SunderRpcModelProjectionDocument.Parse(bytes);
+        Require(projection.PackageId == source.PackageId && projection.PackageVersion == source.Manifest!.Version, "Model projection names different package content.");
+        return projection;
+    }
+
+    internal static SunderRpcContractDescriptor ReadContract(RuntimePackageSource source, SunderPackageContractBundleManifest bundle)
+    {
+        if (source.RpcContracts?.TryGetValue(PackageSessionPreparer.ContractKey(bundle.ContractId!, bundle.Version!), out var cached) == true)
+            return cached;
+        var relative = ArchiveRelativePath.Parse(SunderPackageFormat.SharedPayloadRoot + bundle.DescriptorPath!,
+            SunderPackageFormat.MaxLogicalPathLength, SunderPackageFormat.MaxLogicalPathDepth);
+        var path = relative.ToPlatformPath(source.EffectiveSnapshotFolder);
+        PackageStorePathGuard.EnsureSafe(path, source.EffectiveSnapshotFolder);
+        using var stream = File.OpenRead(path);
+        Require(stream.Length is > 0 and <= SunderPackageFormat.MaxContractDescriptorBytes, "Contract descriptor exceeds its bound.");
+        var bytes = new byte[(int)stream.Length]; stream.ReadExactly(bytes);
+        var descriptor = SunderRpcContractDescriptor.Parse(bytes);
+        Require(stream.ReadByte() == -1 && descriptor.ContractId == bundle.ContractId && descriptor.Version == bundle.Version
+            && descriptor.Sha256 == bundle.DescriptorSha256 && descriptor.AbiSha256 == bundle.AbiSha256
+            && bytes.AsSpan().SequenceEqual(descriptor.GetCanonicalUtf8()), "Contract descriptor differs from authenticated import provenance.");
+        return descriptor;
     }
 
     internal static bool DevelopmentUseEnabled(RuntimePackageSource source, string role, string contractId, string version)

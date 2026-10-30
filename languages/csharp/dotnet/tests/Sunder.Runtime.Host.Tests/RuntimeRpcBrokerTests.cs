@@ -3951,7 +3951,8 @@ public sealed partial class RuntimeRpcBrokerTests
             string providerAudience = SunderPackageFormat.PublicProviderAudience,
             SunderRpcContractDescriptor? providerContract = null,
             IReadOnlyList<string>? providerRequiredHostCapabilities = null,
-            Func<ActiveLoadedPackage, ActiveLoadedPackage>? transform = null)
+            Func<ActiveLoadedPackage, ActiveLoadedPackage>? transform = null,
+            IReadOnlyList<ActiveLoadedPackage>? additionalPackages = null)
         {
             var descriptor = providerContract ?? Contract();
             callerContract ??= descriptor;
@@ -3984,9 +3985,10 @@ public sealed partial class RuntimeRpcBrokerTests
             caller = transform?.Invoke(caller) ?? caller;
             provider = transform?.Invoke(provider) ?? provider;
             if (healthy is not null) healthy = transform?.Invoke(healthy) ?? healthy;
-            var session = healthy is null
-                ? CreateSession(caller, provider)
-                : CreateSession(caller, provider, healthy);
+            var packages = new List<ActiveLoadedPackage> { caller, provider };
+            if (healthy is not null) packages.Add(healthy);
+            packages.AddRange(additionalPackages ?? []);
+            var session = CreateSession(packages.ToArray());
             await Owner.PublishAsync(
                 session,
                 Owner.Sources.Snapshot(),

@@ -256,7 +256,8 @@ internal sealed class RuntimePackageActivator(
                         declaration.DescriptorSha256!,
                         contract,
                         new ProcessRpcProviderHandler(worker, declaration.ProviderId!),
-                        declaration)))
+                        declaration) { ModelProjection = package.Source.Manifest!.ContractBundles!.Any(bundle => bundle?.ContractId == contract.ContractId && bundle.Exposure == "public")
+                            ? PackageCompatibilityAuthority.ReadProjection(package.Source, contract.ContractId) : SunderRpcModelProjection.Empty }))
             {
                 throw new InvalidDataException(
                     $"Worker provider id '{declaration.ProviderId}' is declared more than once for the Runtime role.");

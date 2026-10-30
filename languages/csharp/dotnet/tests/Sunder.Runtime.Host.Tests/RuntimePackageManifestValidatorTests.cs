@@ -10,6 +10,50 @@ public sealed class RuntimePackageManifestValidatorTests
 {
     private static readonly SunderPackageTargetKey RuntimeTargetKey = new("runtime", "win-x64");
 
+    [Fact]
+    public void MultipleSupportedProfiles_AcceptEachLineWithoutMixingTheirCapabilities()
+    {
+        var current = Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles);
+        const string baseline = "sdk-baseline-1-2.v1";
+        var next = current with
+        {
+            SdkVersionRange = ">=1.2.0 <1.3.0",
+            SdkBaseline = baseline,
+            HostCapabilities = current.HostCapabilities.Where(capability => capability != current.SdkBaseline)
+                .Concat([baseline, "future.v1"]).ToHashSet(StringComparer.Ordinal),
+            WorkerCapabilities = current.WorkerCapabilities.Where(capability => capability != current.SdkBaseline)
+                .Concat([baseline, "future.v1"]).ToHashSet(StringComparer.Ordinal),
+        };
+        SunderSdkSupportedProfile[] profiles = [current, next];
+
+        Assert.Empty(SunderSdkCompatibilityProfile.Validate("old.package", RuntimeTargetKey, CreateTarget(), profiles));
+        Assert.Empty(SunderSdkCompatibilityProfile.Validate("new.package", RuntimeTargetKey,
+            CreateTarget(sdkVersion: "1.2.1", capabilities: [baseline, current.WorkerProtocol, "future.v1"]), profiles));
+        Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("mixed.package", RuntimeTargetKey,
+            CreateTarget(capabilities: [current.SdkBaseline, current.WorkerProtocol, "future.v1"]), profiles));
+        Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("wrong-baseline.package", RuntimeTargetKey,
+            CreateTarget(sdkVersion: "1.2.1", capabilities: [current.SdkBaseline, current.WorkerProtocol]), profiles));
+        // Retirement is explicit: removing the old profile stops admitting its
+        // targets; it does not reinterpret them as the newer SDK line.
+        Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("retired.package", RuntimeTargetKey, CreateTarget(), [next]));
+        Assert.Empty(SunderSdkCompatibilityProfile.Validate("current.package", RuntimeTargetKey,
+            CreateTarget(sdkVersion: "1.2.1", capabilities: [baseline, current.WorkerProtocol, "future.v1"]), [next]));
+    }
+
+    [Fact]
+    public void ConsumerRequirementsCapability_RejectsOnAnOlderProfileBeforeActivation()
+    {
+        var current = Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles);
+        var older = current with
+        {
+            HostCapabilities = current.HostCapabilities.Where(value => value != SunderSdkCapabilities.RpcConsumerRequirementsV1).ToHashSet(StringComparer.Ordinal),
+            WorkerCapabilities = current.WorkerCapabilities.Where(value => value != SunderSdkCapabilities.RpcConsumerRequirementsV1).ToHashSet(StringComparer.Ordinal),
+        };
+        var target = CreateTarget(capabilities: [current.SdkBaseline, current.WorkerProtocol, SunderSdkCapabilities.RpcConsumerRequirementsV1]);
+        Assert.Empty(SunderSdkCompatibilityProfile.Validate("consumer.package", RuntimeTargetKey, target, [current]));
+        Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("consumer.package", RuntimeTargetKey, target, [older]));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -123,7 +167,7 @@ public sealed class RuntimePackageManifestValidatorTests
             Assert.Contains($"Host capability '{capability}'", error, StringComparison.Ordinal);
             Assert.True(
                 error.Contains("this Host does not support", StringComparison.Ordinal)
-                || error.Contains("Worker Protocol V1 does not implement", StringComparison.Ordinal));
+                || error.Contains("Worker protocol 'worker-protocol.v1' does not implement", StringComparison.Ordinal));
         }
     }
 

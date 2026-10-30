@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "contractId": "example.consumer",
+  "contractVersion": "1.0.0",
+  "descriptorSha256": "3ed81932545eecb8cc9b9e00aff7c284f4aad5d54d44eed0db0d534219ae1a83",
+  "abiSha256": "34b718c619cad30e33b7f8277458eaf55b6239c03ed522b30f657a3efd8b652f",
+  "methods": [
+    {
+      "serviceId": "main",
+      "methodId": "call"
+    },
+    {
+      "serviceId": "main",
+      "methodId": "watch"
+    }
+  ],
+  "outputMembers": {
+    "Detail": [
+      "keep"
+    ]
+  },
+  "exactOutputDefinitions": []
+}

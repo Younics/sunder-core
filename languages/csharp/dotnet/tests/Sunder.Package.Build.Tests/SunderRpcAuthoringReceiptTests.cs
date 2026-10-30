@@ -144,12 +144,19 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         Assert.Empty(compilation.Contracts);
         var expected = input.GetProperty("common").EnumerateObject()
             .Concat(input.GetProperty(providerOnly ? "provider" : "consumer").EnumerateObject()).ToArray();
-        Assert.Equal(expected.Select(property => property.Name).Order(StringComparer.Ordinal), root.EnumerateObject().Skip(6).Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(expected.Select(property => property.Name).Concat(providerOnly ? ["consumerRequirements"] : []).Order(StringComparer.Ordinal),
+            root.EnumerateObject().Skip(6).Select(property => property.Name).Order(StringComparer.Ordinal));
         foreach (var record in expected)
             Assert.True(JsonElement.DeepEquals(record.Value, root.GetProperty(record.Name)), $"{record.Name} differs from the current reviewed record.");
         if (providerOnly)
         {
             Assert.Single(compilation.ImportedProviders);
+            Assert.True(JsonElement.DeepEquals(JsonSerializer.SerializeToElement(new
+            {
+                schemaVersion = 1, contractId = _descriptor.ContractId, contractVersion = _descriptor.Version,
+                descriptorSha256 = _descriptor.Sha256, abiSha256 = _descriptor.AbiSha256,
+                methods = Array.Empty<object>(), outputMembers = new { }, exactOutputDefinitions = Array.Empty<string>(),
+            }), Assert.Single(root.GetProperty("consumerRequirements").EnumerateArray())));
             AssertEmpty(root, "uses", "packageApiImports", "generatedPackageFacades");
         }
         else
@@ -1003,7 +1010,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         using var receipt = JsonDocument.Parse(bytes);
         using var schema = JsonDocument.Parse(File.ReadAllBytes(Fixture("authoring/authoring-receipt.schema.json")));
         Assert.True(MatchesAuthoringSchema(schema.RootElement, receipt.RootElement), "Generated receipt does not conform to authoring-receipt.schema.json.");
-        Assert.Equal(schema.RootElement.GetProperty("required").EnumerateArray().Select(value => value.GetString()),
+        Assert.Equal(schema.RootElement.GetProperty("required").EnumerateArray().Select(value => value.GetString())
+                .Concat(new[] { "consumerRequirements", "roleUses", "role" }.Where(name => receipt.RootElement.TryGetProperty(name, out _))),
             receipt.RootElement.EnumerateObject().Select(property => property.Name));
         var path = _temporary.GetPath("validated-receipt.json");
         File.WriteAllBytes(path, bytes);

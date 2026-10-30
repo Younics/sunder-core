@@ -404,6 +404,34 @@ JS supplies a checked JSDoc `ServiceDefinition<OrdinaryInterface>` annotation.
 Local implementations bind that definition through the same `implements` option.
 Multiple implementations require distinct stable `providerId` values.
 
+### Consumer requirements and raw RPC
+
+Typed imported calls and method captures contribute requirements automatically,
+separately for Worker and App sources. Full output models require every declared
+member; property-read usage does not silently narrow them. The original lock,
+descriptor and hashes stay intact across compatible in-range provider updates.
+Imports without requirement metadata keep exact matching.
+
+Declare raw/dynamic calls with literal method wire IDs. An optional explicit view
+describes a deliberately narrow raw output model, not a generated full model:
+
+```ts
+import { declareRpcUse, declareRpcView } from "@sunder/sdk";
+import { Services } from "#sunder/api";
+
+const people = Services.Dependency.example_Directory.people;
+declareRpcUse(people, ["read"]);
+declareRpcView(people, "Person", ["name"]);
+```
+
+These functions do not perform RPC or grant access. Raw output definitions are
+exact by default. A view cannot narrow a definition also required by typed calls
+or a service-reference protocol value. Browser sources import these functions
+from `@sunder/sdk/browser` and pass `"app"` as the final argument. The default role
+is `"runtime"`. Tooling stamps `rpc.consumer-requirements.v1` so older Hosts reject
+unsupported targets before activation. See the
+[compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md#imported-api-compatibility).
+
 ## Lifecycle and package APIs
 
 Export an optional `configure(context)` from the service module, returning

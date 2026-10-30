@@ -20,9 +20,14 @@ public static class RuntimeProtocolCompatibility
         {
             return $"Runtime protocol identity '{handshake.ProtocolIdentity}' is not supported.";
         }
-        if (handshake.ProtocolRevision != RuntimeProtocol.CurrentRevision
-            || handshake.MinimumSupportedRevision != RuntimeProtocol.MinimumSupportedRevision
-            || handshake.MaximumSupportedRevision != RuntimeProtocol.MaximumSupportedRevision)
+        // Keep using the implemented V1 API when the server also supports newer
+        // revisions; accepting a range does not negotiate a new wire contract.
+        if (handshake.MinimumSupportedRevision < 1
+            || handshake.MaximumSupportedRevision < handshake.MinimumSupportedRevision
+            || handshake.ProtocolRevision < handshake.MinimumSupportedRevision
+            || handshake.ProtocolRevision > handshake.MaximumSupportedRevision
+            || RuntimeProtocol.CurrentRevision < handshake.MinimumSupportedRevision
+            || RuntimeProtocol.CurrentRevision > handshake.MaximumSupportedRevision)
         {
             return $"Runtime protocol revision {handshake.ProtocolRevision} with supported range "
                    + $"{handshake.MinimumSupportedRevision}-{handshake.MaximumSupportedRevision} is incompatible with client revision {RuntimeProtocol.CurrentRevision}.";

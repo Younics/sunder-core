@@ -11,7 +11,7 @@ export type ServiceApi<T> = T extends ServiceToken<infer M> ? M : T extends Serv
   ? {readonly [K in keyof M]:M[K] extends (...args:infer A)=>infer R ? (...args:[...WithoutControl<A>,$options?:RpcCallOptions])=>R extends AsyncIterable<infer E>?ServiceStream<E>:Promise<Awaited<R>> : never} : T;
 declare const serviceType:unique symbol;
 export interface ServiceToken<T> {readonly [serviceType]:T;readonly contractId:string;readonly serviceId:string}
-export interface ServiceTarget extends RpcContractIdentity {readonly serviceId:string}
+export interface ServiceTarget extends RpcContractIdentity {readonly serviceId:string;readonly consumerCompatible?:boolean}
 export interface ServiceReferenceLocator {
   readonly packageId:string;readonly packageVersion:string;readonly providerId:string;readonly contractId:string;readonly contractVersion:string;
   readonly descriptorSha256:string;readonly abiSha256:string;readonly activationId:string;readonly activationEpoch:number;readonly sessionGeneration:number;readonly endpoint:string;
@@ -153,7 +153,7 @@ export function locatorFromProvider(provider:ApiProvider):ServiceReferenceLocato
 }
 export function sameServiceLocator(a:ServiceReferenceLocator,b:ServiceReferenceLocator):boolean{return fields.every(key=>a[key]===b[key]);}
 export function assertServiceTarget(locator:ServiceReferenceLocator,target:ServiceTarget):void{if(!matchesTarget(locator,target))throw staleReference();}
-function matchesTarget(value:RpcContractIdentity,target:ServiceTarget):boolean{return value.contractId===target.contractId&&value.contractVersion===target.contractVersion&&value.descriptorSha256===target.descriptorSha256&&value.abiSha256===target.abiSha256;}
+function matchesTarget(value:RpcContractIdentity,target:ServiceTarget):boolean{return value.contractId===target.contractId&&(target.consumerCompatible===true||value.contractVersion===target.contractVersion&&value.descriptorSha256===target.descriptorSha256&&value.abiSha256===target.abiSha256);}
 function hash(value:unknown):value is string{return typeof value==="string"&&/^[0-9a-f]{64}$/u.test(value);}
 function staleReference():RpcError{return new RpcError({kind:"stale-endpoint",code:"rpc.stale-endpoint",message:"The exact referenced service activation is not visible or current."});}
 function parseLocatorJson(text:string):unknown{

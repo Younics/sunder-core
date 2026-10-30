@@ -153,7 +153,9 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             targets,
             contracts.RpcRoles,
             Log,
-            contracts.ExtendedDeadlineRoles);
+            contracts.ExtendedDeadlineRoles,
+            (contracts.Manifest.UsesContracts ?? []).Where(use => use?.ConsumerRequirements is not null)
+                .Select(use => use!.Role!).ToHashSet(StringComparer.Ordinal));
         if (manifestTargets is null) return false;
 
         var manifest = new SunderPackageManifest

@@ -7,38 +7,32 @@ namespace Sunder.Host.Client.Tests;
 
 public sealed class HostContractTests
 {
-    [Fact]
-    public void ProtocolRevision1_IsExactAndRejectsOtherRevisions()
+    [Theory]
+    [InlineData(1, 1, 1, true)]
+    [InlineData(2, 1, 2, true)]
+    [InlineData(1, 1, 2, true)]
+    [InlineData(2, 2, 2, false)]
+    [InlineData(0, 0, 1, false)]
+    [InlineData(1, 2, 1, false)]
+    [InlineData(3, 1, 2, false)]
+    [InlineData(0, 1, 2, false)]
+    public void ProtocolRevision1_AcceptsValidServerRangesContainingV1(int revision, int minimum, int maximum, bool compatible)
     {
-        var otherRevision = new HostHandshakeResponse(
+        var handshake = new HostHandshakeResponse(
             HostProtocol.Identity,
-            ProtocolRevision: 2,
-            MinimumSupportedRevision: 2,
-            MaximumSupportedRevision: 2,
+            revision,
+            minimum,
+            maximum,
             Guid.NewGuid(),
             Guid.NewGuid(),
             [HostProtocolFeatures.RuntimeGatewayV1],
             new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "Development", "Development"));
-        var revision1 = new HostHandshakeResponse(
-            HostProtocol.Identity,
-            HostProtocol.CurrentRevision,
-            HostProtocol.MinimumSupportedRevision,
-            HostProtocol.MaximumSupportedRevision,
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            [HostProtocolFeatures.RuntimeGatewayV1],
-            new HostProductVersionDiagnostics("Sunder.Host.Supervisor", "Development", "Development"));
-        var overlappingRange = revision1 with
-        {
-            ProtocolRevision = 2,
-            MinimumSupportedRevision = 1,
-            MaximumSupportedRevision = 2,
-        };
 
         Assert.Equal(1, HostProtocol.CurrentRevision);
-        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(otherRevision));
-        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(overlappingRange));
-        Assert.Null(HostProtocolCompatibility.GetIncompatibility(revision1));
+        Assert.Equal(compatible, HostProtocolCompatibility.GetIncompatibility(handshake) is null);
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(handshake, HostProtocolFeatures.RuntimeLifecycleV1));
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(handshake with { ProtocolIdentity = "other" }));
+        Assert.NotNull(HostProtocolCompatibility.GetIncompatibility(handshake with { SupervisorInstanceId = Guid.Empty }));
     }
 
     [Fact]

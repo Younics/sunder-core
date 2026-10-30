@@ -29,8 +29,13 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
             var registration = provider.Registration;
             if (ownerOnlyContracts?.Contains(predicate.Contract.ContractId + "\0" + predicate.Contract.ContractVersion, StringComparer.Ordinal) == true
                 && provider.PackageId != predicate.ConsumerPackageId) return false;
-            if (registration.Manifest?.Role != SunderPackageFormat.RuntimeHostRole || registration.ContractId != predicate.Contract.ContractId
-                || registration.ContractVersion != predicate.Contract.ContractVersion || registration.DescriptorSha256 != predicate.Contract.DescriptorSha256
+            if (registration.Manifest?.Role != SunderPackageFormat.RuntimeHostRole || registration.ContractId != predicate.Contract.ContractId) return false;
+            if (session.TryGetPackageSource(predicate.ConsumerPackageId, out var source) && source is not null)
+            {
+                if (!MatchesSource(source, "app", predicate.Contract.ContractId, predicate.Contract.ContractVersion,
+                    predicate.Contract.DescriptorSha256, predicate.Contract.AbiSha256, registration)) return false;
+            }
+            else if (registration.ContractVersion != predicate.Contract.ContractVersion || registration.DescriptorSha256 != predicate.Contract.DescriptorSha256
                 || registration.Contract.AbiSha256 != predicate.Contract.AbiSha256) return false;
             if (IsOwnerProvider(predicate.ConsumerPackageId, provider)) return true;
             return registration.Manifest.Audience == SunderPackageFormat.PublicProviderAudience && (development
@@ -66,8 +71,7 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
             {
                 var bundle = source.Manifest?.ContractBundles?.SingleOrDefault(value => value?.ContractId == use.ContractId && value.Version == use.ContractVersion);
                 var hash = bundle?.DescriptorSha256 ?? caller?.RpcContracts.Values.SingleOrDefault(value => value.ContractId == use.ContractId && value.Version == use.ContractVersion)?.Sha256;
-                var alternatives = providers.Where(provider => hash is not null && provider.Registration.DescriptorSha256 == hash
-                        && IsAvailable(package, source, caller, use, [provider]))
+                var alternatives = providers.Where(provider => hash is not null && IsAvailable(package, source, caller, use, [provider]))
                     .Select(provider => provider.PackageId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
                 requirements.Add(new(new(package.PackageId, use.Role, new(use.ContractId, use.ContractVersion, hash ?? "", use.AbiSha256), use.Actions.Order(StringComparer.Ordinal).ToArray()), alternatives));
             }
@@ -139,9 +143,10 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
             .Where(provider => IsCompatible(caller.PackageId, use, provider)
                 && (provider.PackageId == caller.PackageId || source.Manifest?.ContractBundles?.Any(bundle => bundle?.ContractId == use.ContractId
                     && bundle.Version == use.ContractVersion && bundle.Exposure == SunderPackageFormat.PublicContractExposure) == true)
-                && (source.Manifest?.ContractBundles?.SingleOrDefault(value => value?.ContractId == use.ContractId && value.Version == use.ContractVersion)?.DescriptorSha256
-                    ?? callerActivation?.RpcContracts.Values.SingleOrDefault(value => value.ContractId == use.ContractId && value.Version == use.ContractVersion)?.Sha256)
-                    == provider.Registration.DescriptorSha256)
+                && MatchesSource(source, use.Role, use.ContractId, use.ContractVersion,
+                    source.Manifest?.ContractBundles?.SingleOrDefault(value => value?.ContractId == use.ContractId && value.Version == use.ContractVersion)?.DescriptorSha256
+                    ?? callerActivation?.RpcContracts.Values.SingleOrDefault(value => value.ContractId == use.ContractId && value.Version == use.ContractVersion)?.Sha256,
+                    use.AbiSha256, provider.Registration))
             .ToArray();
         if (compatibleProviders.Length == 0)
         {
@@ -190,16 +195,29 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
                    || declaration.Audience == SunderPackageFormat.OwnerProviderAudience
                    && string.Equals(callerPackageId, provider.PackageId, StringComparison.Ordinal))
                && string.Equals(declaration.ContractId, use.ContractId, StringComparison.Ordinal)
-               && string.Equals(declaration.ContractVersion, use.ContractVersion, StringComparison.Ordinal)
-               && string.Equals(declaration.AbiSha256, use.AbiSha256, StringComparison.Ordinal)
                && string.Equals(registration.ContractId, use.ContractId, StringComparison.Ordinal)
-               && string.Equals(registration.ContractVersion, use.ContractVersion, StringComparison.Ordinal)
+               && string.Equals(registration.ContractVersion, declaration.ContractVersion, StringComparison.Ordinal)
                && string.Equals(registration.Contract.ContractId, use.ContractId, StringComparison.Ordinal)
-               && string.Equals(registration.Contract.Version, use.ContractVersion, StringComparison.Ordinal)
+               && string.Equals(registration.Contract.Version, declaration.ContractVersion, StringComparison.Ordinal)
                && registration.Contract.DescriptorVersion == SunderRpcProtocol.DescriptorVersion
-               && string.Equals(registration.Contract.AbiSha256, use.AbiSha256, StringComparison.Ordinal)
+               && string.Equals(registration.Contract.AbiSha256, declaration.AbiSha256, StringComparison.Ordinal)
                && string.Equals(registration.DescriptorSha256, declaration.DescriptorSha256, StringComparison.Ordinal)
                && string.Equals(registration.Contract.Sha256, declaration.DescriptorSha256, StringComparison.Ordinal);
+    }
+
+    private static bool MatchesSource(RuntimePackageSource source, string role, string id, string version, string? hash,
+        string abi, RuntimeRpcProviderRegistration provider)
+    {
+        var use = source.Manifest?.UsesContracts?.SingleOrDefault(use => use?.Role == role && use.ContractId == id && use.ContractVersion == version);
+        if (use?.ConsumerRequirements is null)
+            return provider.ContractVersion == version && provider.DescriptorSha256 == hash && provider.Contract.AbiSha256 == abi;
+        var bundle = source.Manifest!.ContractBundles!.Single(bundle => bundle?.ContractId == id && bundle.Version == version)!;
+        var descriptor = PackageCompatibilityAuthority.ReadContract(source, bundle);
+        var requirements = SunderRpcConsumerRequirements.Parse(use.ConsumerRequirements.Value, descriptor);
+        return bundle.DescriptorSha256 == hash && bundle.AbiSha256 == abi
+            && SunderRpcConsumerCompatibility.Matches(descriptor, provider.Contract, use.ConsumerRequirements)
+            && (requirements.ExactOutputDefinitions.Count == 0 && provider.ModelProjection.ServiceReferences.Count == 0
+                || SunderRpcConsumerCompatibility.MatchesProjection(requirements, PackageCompatibilityAuthority.ReadProjection(source, id), provider.ModelProjection));
     }
 
     private static bool IsOwnerProvider(string callerPackageId, ActiveProvider provider)

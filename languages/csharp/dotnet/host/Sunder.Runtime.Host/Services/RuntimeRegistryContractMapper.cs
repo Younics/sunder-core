@@ -8,15 +8,9 @@ namespace Sunder.Runtime.Host.Services;
 internal static class RuntimeRegistryContractMapper
 {
     public static RegistryClientCompatibilityProfile CompatibilityProfile { get; } = new(
-        [SunderPackageFormat.CurrentManifestVersion],
-        [SunderPackageFormat.WorkerTargetKind],
-        SunderWorkerProtocol.V1Capability,
-        SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification
-            .Where(static capability => capability.Value)
-            .Select(static capability => capability.Key)
-            .Order(StringComparer.Ordinal)
-            .ToArray(),
-        SunderSdkCapabilities.Baseline11V1,
+        SunderSdkCompatibilityProfile.SupportedProfiles.Select(profile => new RegistrySupportedPackageProfile(
+            [SunderPackageFormat.CurrentManifestVersion], [SunderPackageFormat.WorkerTargetKind], profile.WorkerProtocol,
+            profile.WorkerCapabilities.Order(StringComparer.Ordinal).ToArray(), profile.SdkBaseline, profile.SdkVersionRange)).ToArray(),
         PackageTargetSelection.GetCurrentRuntimeIdentifier());
 
     public static IReadOnlyList<RegistryPackageChangeRequest> ToRegistry(

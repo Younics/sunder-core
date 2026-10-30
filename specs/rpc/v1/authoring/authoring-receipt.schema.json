@@ -5,7 +5,7 @@
   "description": "Validated internal package-build metadata joining canonical contract snapshots, lock evidence, manifest import groups, providers, uses, and generated logical names.",
   "type": "object",
   "additionalProperties": false,
-  "maxProperties": 19,
+  "maxProperties": 20,
   "required": [
     "schemaVersion",
     "producer",
@@ -153,11 +153,62 @@
         "$ref": "#/$defs/generatedBinding"
       }
     },
+    "consumerRequirements": {
+      "description": "Consumer selectors over the separately retained exact imported descriptors; never a replacement inventory or permission grant.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/consumerRequirements" }
+    },
     "role": {
       "const": "app"
     }
   },
   "$defs": {
+    "consumerRequirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "contractId", "contractVersion", "descriptorSha256", "abiSha256", "methods", "outputMembers", "exactOutputDefinitions"],
+      "properties": {
+        "schemaVersion": { "const": 1 },
+        "contractId": { "$ref": "#/$defs/packageId" },
+        "contractVersion": { "$ref": "#/$defs/semanticVersion" },
+        "descriptorSha256": { "$ref": "#/$defs/sha256" },
+        "abiSha256": { "$ref": "#/$defs/sha256" },
+        "methods": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["serviceId", "methodId"],
+            "properties": {
+              "serviceId": { "$ref": "#/$defs/portableKey" },
+              "methodId": { "$ref": "#/$defs/portableKey" }
+            }
+          }
+        },
+        "outputMembers": {
+          "type": "object",
+          "maxProperties": 256,
+          "propertyNames": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "additionalProperties": {
+            "type": "array",
+            "maxItems": 256,
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+          }
+        },
+        "exactOutputDefinitions": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
     "roleUse": {
       "type": "object",
       "additionalProperties": false,

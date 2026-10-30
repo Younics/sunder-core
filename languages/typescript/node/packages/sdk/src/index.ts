@@ -31,7 +31,7 @@ export {
 } from "./framing";
 export type { FrameLimits } from "./framing";
 export { runWorker, safeStderr } from "./worker";
-export { defineService, defineServiceError } from "./services";
+export { defineService, defineServiceError, declareRpcUse, declareRpcView } from "./services";
 export type { ServiceContext, ServiceMethods, ServiceUse, ServiceRuntimeUse, ServiceConstraints, ServiceOptions, ServiceError, ServiceContract, ServiceDefinition } from "./services";
 export { createApiContext } from "./api";
 export type { ApiToken, ApiContext, ApiTransport, ApiProvider, ServiceStream } from "./api";

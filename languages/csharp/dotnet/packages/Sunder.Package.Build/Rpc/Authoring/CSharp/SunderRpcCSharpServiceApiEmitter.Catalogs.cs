@@ -19,6 +19,7 @@ internal static partial class SunderRpcCSharpServiceApiEmitter
             .Append("    public ").Append(catalogName).AppendLine("(global::Sunder.Sdk.Rpc.ISunderRpcClient rpc, global::System.IServiceProvider? services)")
             .Append("        : base(rpc, ").Append(Literal(descriptor.ContractId)).Append(", ").Append(Literal(descriptor.Version))
             .Append(", ").Append(Literal(descriptor.Sha256)).Append(", ").Append(Literal(descriptor.AbiSha256))
+            .Append(", ").Append(imported ? "true" : "false")
             .Append(", (lifetime, provider, retirement) => new ").Append(clientName).AppendLine("(lifetime, provider, services, retirement), services?.GetService(typeof(global::Sunder.Sdk.Rpc.SunderRpcServiceBindingLifetime)) as global::Sunder.Sdk.Rpc.SunderRpcServiceBindingLifetime) { }")
             .AppendLine("}");
     }
@@ -28,7 +29,7 @@ internal static partial class SunderRpcCSharpServiceApiEmitter
     // Discovery/watch never allocate a call scope or eagerly instantiate providers.
     private const string CatalogRuntimeSource = """
         internal class GeneratedServiceProviders<TService>(ISunderRpcClient rpc, string contractId, string contractVersion,
-            string descriptorSha256, string abiSha256, Func<ServiceClientLifetime, SunderRpcProviderSnapshot, CancellationToken, TService> createService,
+            string descriptorSha256, string abiSha256, bool consumerCompatible, Func<ServiceClientLifetime, SunderRpcProviderSnapshot, CancellationToken, TService> createService,
             SunderRpcServiceBindingLifetime? bindings)
             : global::Sunder.Sdk.Services.IServiceProviders<TService>, IDisposable, IAsyncDisposable where TService : class
         {
@@ -68,8 +69,8 @@ internal static partial class SunderRpcCSharpServiceApiEmitter
             }
 
             private bool Matches(SunderRpcProviderSnapshot provider)
-                => provider.ContractId == contractId && provider.ContractVersion == contractVersion
-                    && provider.DescriptorSha256 == descriptorSha256 && provider.AbiSha256 == abiSha256;
+                => provider.ContractId == contractId && (consumerCompatible || provider.ContractVersion == contractVersion
+                    && provider.DescriptorSha256 == descriptorSha256 && provider.AbiSha256 == abiSha256);
 
             private global::Sunder.Sdk.Services.ServiceProvider<TService> Wrap(SunderRpcProviderSnapshot provider)
             {

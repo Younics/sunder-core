@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "baseline": {
+    "descriptorVersion": 1,
+    "schemaProfile": "sunder.rpc.values.v1",
+    "contractId": "example.consumer",
+    "version": "1.0.0",
+    "$defs": {
+      "Input": { "type": "object", "properties": { "value": { "type": "string", "minLength": 1, "maxLength": 20 } }, "required": ["value"], "additionalProperties": false },
+      "Output": { "type": "object", "properties": { "name": { "type": "string", "maxLength": 64 }, "nested": { "$ref": "#/$defs/Detail" }, "items": { "type": "array", "items": { "$ref": "#/$defs/Detail" }, "maxItems": 8 }, "optional": { "type": "string" } }, "required": ["items", "name", "nested"], "additionalProperties": false },
+      "Detail": { "type": "object", "properties": { "keep": { "type": "string", "maxLength": 64 }, "unrelated": { "$ref": "#/$defs/Other" } }, "required": ["keep"], "additionalProperties": false },
+      "Other": { "type": "string", "maxLength": 20 },
+      "Error": { "type": "object", "properties": { "message": { "type": "string", "maxLength": 64 } }, "required": ["message"], "additionalProperties": false },
+      "Unused": { "type": "string" }
+    },
+    "errors": { "example.failed": { "detailsSchema": { "$ref": "#/$defs/Error" } }, "example.unrelated": {} },
+    "services": {
+      "main": { "methods": {
+        "call": { "kind": "unary", "requestSchema": { "$ref": "#/$defs/Input" }, "responseSchema": { "$ref": "#/$defs/Output" }, "idempotency": "idempotent", "errors": ["example.failed"] },
+        "watch": { "kind": "server-stream", "requestSchema": { "$ref": "#/$defs/Input" }, "eventSchema": { "$ref": "#/$defs/Output" }, "idempotency": "none", "errors": ["example.failed"] }
+      } },
+      "unrelated": { "methods": { "old": { "kind": "unary", "requestSchema": { "$ref": "#/$defs/Unused" }, "responseSchema": { "$ref": "#/$defs/Unused" }, "idempotency": "none", "errors": ["example.unrelated"] } } }
+    }
+  },
+  "methods": [{ "serviceId": "main", "methodId": "call" }],
+  "cases": [
+    { "id": "exact", "satisfies": true },
+    { "id": "one-current-schema-new-version", "satisfies": true, "provider": [{ "path": "/version", "value": "2.3.0" }] },
+    { "id": "unrelated-inventory-removed", "satisfies": true, "provider": [{ "path": "/services/unrelated", "remove": true }, { "path": "/$defs/Unused", "remove": true }, { "path": "/errors/example.unrelated", "remove": true }, { "path": "/services/main/methods/watch", "remove": true }] },
+    { "id": "unrelated-inventory-changed", "satisfies": true, "provider": [{ "path": "/$defs/Unused/type", "value": "boolean" }, { "path": "/services/main/methods/watch/idempotency", "value": "idempotent" }] },
+    { "id": "required-service-removed", "satisfies": false, "code": "service-removed", "provider": [{ "path": "/services/main", "remove": true }] },
+    { "id": "required-method-removed", "satisfies": false, "code": "method-removed", "provider": [{ "path": "/services/main/methods/call", "remove": true }] },
+    { "id": "required-method-kind-changed", "satisfies": false, "code": "method-kind-changed", "provider": [{ "path": "/services/main/methods/call/kind", "value": "server-stream" }, { "path": "/services/main/methods/call/responseSchema", "remove": true }, { "path": "/services/main/methods/call/eventSchema", "value": { "$ref": "#/$defs/Output" } }] },
+    { "id": "idempotency-changed", "satisfies": false, "code": "idempotency-changed", "provider": [{ "path": "/services/main/methods/call/idempotency", "value": "none" }] },
+    { "id": "request-widens", "satisfies": true, "provider": [{ "path": "/$defs/Input/properties/value/maxLength", "value": 40 }] },
+    { "id": "request-narrows", "satisfies": false, "code": "upper-bound-not-contained", "provider": [{ "path": "/$defs/Input/properties/value/maxLength", "value": 10 }] },
+    { "id": "request-added-optional", "satisfies": true, "provider": [{ "path": "/$defs/Input/properties/hint", "value": { "type": "string" } }] },
+    { "id": "request-added-required", "satisfies": false, "code": "required-property-not-guaranteed", "provider": [{ "path": "/$defs/Input/properties/hint", "value": { "type": "string" } }, { "path": "/$defs/Input/required", "value": ["hint", "value"] }] },
+    { "id": "request-member-removed", "satisfies": false, "code": "property-not-accepted", "provider": [{ "path": "/$defs/Input/properties/value", "remove": true }, { "path": "/$defs/Input/required", "value": [] }] },
+    { "id": "response-added-top-level", "satisfies": true, "provider": [{ "path": "/$defs/Output/properties/new", "value": { "type": "string" } }] },
+    { "id": "response-added-nested-and-array", "satisfies": true, "provider": [{ "path": "/$defs/Detail/properties/new", "value": { "type": "string" } }, { "path": "/$defs/Detail/required", "value": ["keep", "new"] }] },
+    { "id": "response-declared-optional-is-a-requirement", "satisfies": false, "code": "required-member-removed", "provider": [{ "path": "/$defs/Output/properties/optional", "remove": true }] },
+    { "id": "response-required-no-longer-guaranteed", "satisfies": false, "code": "required-property-not-guaranteed", "provider": [{ "path": "/$defs/Output/required", "value": ["items", "nested"] }] },
+    { "id": "nested-required-member-removed", "satisfies": false, "code": "required-member-removed", "provider": [{ "path": "/$defs/Detail/properties/keep", "remove": true }, { "path": "/$defs/Detail/required", "value": [] }] },
+    { "id": "response-value-widens", "satisfies": false, "code": "upper-bound-not-contained", "provider": [{ "path": "/$defs/Detail/properties/keep/maxLength", "value": 100 }] },
+    { "id": "response-value-narrows", "satisfies": true, "provider": [{ "path": "/$defs/Detail/properties/keep/maxLength", "value": 30 }] },
+    { "id": "array-bound-widens", "satisfies": false, "code": "upper-bound-not-contained", "provider": [{ "path": "/$defs/Output/properties/items/maxItems", "value": 20 }] },
+    { "id": "narrow-view-ignores-unselected-field-and-schema", "satisfies": true, "views": { "Detail": ["keep"] }, "provider": [{ "path": "/$defs/Detail/properties/unrelated", "remove": true }, { "path": "/$defs/Other", "remove": true }] },
+    { "id": "narrow-view-still-requires-selected-field", "satisfies": false, "code": "upper-bound-not-contained", "views": { "Detail": ["keep"] }, "provider": [{ "path": "/$defs/Detail/properties/keep/maxLength", "value": 100 }] },
+    { "id": "narrow-view-can-drop-top-level-model-members", "satisfies": true, "views": { "Output": ["name"] }, "provider": [{ "path": "/$defs/Output/properties/optional", "remove": true }, { "path": "/$defs/Detail/properties/keep/maxLength", "value": 100 }] },
+    { "id": "method-new-error-rejected", "satisfies": false, "code": "method-error-added", "provider": [{ "path": "/services/main/methods/call/errors", "value": ["example.failed", "example.unrelated"] }] },
+    { "id": "method-error-no-longer-thrown", "satisfies": true, "provider": [{ "path": "/services/main/methods/call/errors", "value": [] }] },
+    { "id": "error-details-additive", "satisfies": true, "provider": [{ "path": "/$defs/Error/properties/context", "value": { "type": "string" } }] },
+    { "id": "error-details-required-field-changed", "satisfies": false, "code": "upper-bound-not-contained", "provider": [{ "path": "/$defs/Error/properties/message/maxLength", "value": 100 }] },
+    { "id": "stream-events-additive", "satisfies": true, "methods": [{ "serviceId": "main", "methodId": "watch" }], "provider": [{ "path": "/$defs/Detail/properties/new", "value": { "type": "string" } }] },
+    { "id": "stream-event-still-requires-model", "satisfies": false, "code": "required-member-removed", "methods": [{ "serviceId": "main", "methodId": "watch" }], "provider": [{ "path": "/$defs/Output/properties/optional", "remove": true }] },
+    { "id": "discovery-only-does-not-require-methods", "satisfies": true, "methods": [], "provider": [{ "path": "/services/main", "remove": true }] },
+    { "id": "discovery-only-never-changes-contract-family", "satisfies": false, "code": "contract-id-changed", "methods": [], "provider": [{ "path": "/contractId", "value": "example.other" }] },
+    { "id": "request-response-shared-schema-checked-in-both-directions", "satisfies": false, "code": "upper-bound-not-contained", "source": [{ "path": "/services/main/methods/call/responseSchema", "value": { "$ref": "#/$defs/Input" } }], "provider": [{ "path": "/$defs/Input/properties/value/maxLength", "value": 40 }] },
+    { "id": "exact-output-schema-is-not-a-tolerant-record", "satisfies": false, "code": "exact-output-definition-changed", "exactOutputs": ["Detail"], "provider": [{ "path": "/$defs/Detail/properties/new", "value": { "type": "string" } }] }
+  ]
+}

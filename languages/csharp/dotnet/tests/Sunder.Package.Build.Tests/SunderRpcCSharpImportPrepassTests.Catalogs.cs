@@ -25,7 +25,7 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         Assert.Equal(0, rpc.DiscoverCount); Assert.Equal(0, rpc.ScopeCount);
         var snapshot = await probe.ListNatural(catalog, default);
         var providers = ((IEnumerable)snapshot.GetType().GetProperty("Providers")!.GetValue(snapshot)!).Cast<object>().ToArray();
-        Assert.Equal(2, providers.Length);
+        Assert.Equal(3, providers.Length); // The broker may admit a different current ABI for this consumer surface.
         Assert.Equal(7L, snapshot.GetType().GetProperty("Revision")!.GetValue(snapshot));
         Assert.Equal(10L, snapshot.GetType().GetProperty("Sequence")!.GetValue(snapshot));
         Assert.Equal(false, snapshot.GetType().GetProperty("ResetRequired")!.GetValue(snapshot));
@@ -82,14 +82,15 @@ public sealed partial class SunderRpcCSharpImportPrepassTests
         [
             new(32, 73, SunderRpcCatalogEventKind.Added, provider),
             new(33, 74, SunderRpcCatalogEventKind.Removed, provider with { State = SunderRpcProviderState.Inactive }),
-            new(34, 75, SunderRpcCatalogEventKind.Added, provider with { ContractVersion = "99.0.0" }),
-            new(35, 76, SunderRpcCatalogEventKind.ResetRequired, null),
+            new(34, 75, SunderRpcCatalogEventKind.Added, provider with { ContractVersion = "99.0.0", ActivationId = Guid.NewGuid(), Endpoint = new("current") }),
+            new(35, 76, SunderRpcCatalogEventKind.Added, provider with { ContractId = "example.other" }),
+            new(36, 77, SunderRpcCatalogEventKind.ResetRequired, null),
         ] };
         var catalog = probe.CreateNaturalCatalog(rpc);
         await using var lifetime = (IAsyncDisposable)catalog;
         var events = await probe.WatchNatural(catalog, 31, 72, default);
         Assert.Contains((31L, 72L), rpc.WatchCursors); // The independent shared observer has its own real snapshot cursor.
-        Assert.Equal(new[] { "Added", "Removed", "ResetRequired" }, events.Select(value => value.GetType().GetProperty("Kind")!.GetValue(value)!.ToString()));
+        Assert.Equal(new[] { "Added", "Removed", "Added", "ResetRequired" }, events.Select(value => value.GetType().GetProperty("Kind")!.GetValue(value)!.ToString()));
         Assert.Null(events[^1].GetType().GetProperty("Provider")!.GetValue(events[^1]));
         Assert.Equal(0, rpc.ScopeCount);
         using var canceled = new CancellationTokenSource(); canceled.Cancel();

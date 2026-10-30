@@ -27,7 +27,7 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed partial class RuntimeProtocolHttpIntegrationTests
 {
     [Fact]
-    public void ProtocolRevision1_IsExactAndRejectsOtherRevisions()
+    public void ProtocolRevision1_AcceptsNewerServerWhenV1IsStillSupported()
     {
         var otherRevision = CreateHandshake(
             protocolRevision: 2,
@@ -43,11 +43,11 @@ public sealed partial class RuntimeProtocolHttpIntegrationTests
             protocolRevision: 2,
             minimumSupportedRevision: 1,
             maximumSupportedRevision: 2,
-            [RuntimeProtocolFeatures.VersionedApiV1]);
+            [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1]);
 
         Assert.Equal(1, RuntimeProtocol.CurrentRevision);
         Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(otherRevision));
-        Assert.NotNull(RuntimeProtocolCompatibility.GetIncompatibility(overlappingRange));
+        Assert.Null(RuntimeProtocolCompatibility.GetIncompatibility(overlappingRange));
         Assert.Null(RuntimeProtocolCompatibility.GetIncompatibility(revision1));
     }
 
