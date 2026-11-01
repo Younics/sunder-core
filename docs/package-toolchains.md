@@ -25,3 +25,20 @@ eligibility; an unsupported runtime is not made executable merely by retaining i
 
 Avalonia package UI runs in the App process. Its compatibility with a new App runtime
 and shared assemblies must also be tested before adopting a new .NET major.
+
+## Dependency compatibility constraints
+
+Dependency upgrades must preserve the supported compiler and test-runner boundaries,
+not merely select the highest package version:
+
+- Build tasks use the coordinated MSBuild/Roslyn packages in `Directory.Packages.props`.
+  The portable editor analyzer separately targets the supported Roslyn compiler-floor
+  contracts; its compile-only Immutable reference is not an application runtime pin.
+- Agent's headless Presentation tests retain the xUnit discovery ABI required by
+  `Avalonia.Headless.XUnit`. The owning central package file records this exception;
+  ordinary Agent tests use the VSTest-compatible `xunit.v3.mtp-off` variant.
+- The Velopack CLI version belongs to the App release workflow. Its supported SDK
+  shim is release tooling, not a change to Sunder's application/runtime major.
+
+Review the owning compatibility tests before changing these exceptions. Completed
+upgrade run logs are not a second source of current version policy.

@@ -10,7 +10,7 @@ Run commands from the Core repository root unless a script accepts an explicit r
 | `test/release/` | Release Python/Node/shell fixtures, including Host official-runtime evidence shape and package/catalog acceptance. |
 | `test/check-markdown-links.py` | General documentation lint. |
 | `test-oracles/` | Declaration policy, prerequisite checks, runners and result reconciliation. `run-core-test-lane.mjs` checks readiness; it does not execute tests. |
-| `compatibility/` | Residue checks and reviewed compatibility/history maintenance. |
+| `compatibility/` | Current contract inputs, public API comparisons, supported-release history and source-bound release qualification. |
 
 ## Local candidate feed
 

@@ -127,7 +127,7 @@ test-only snapshot records accessor visibility and functional MSBuild
 The Runtime/App `AgentPackageReleaseSmokeTests` link `tests/AgentCurrentBaseline.cs`
 and `tests/AgentCurrentInputs.cs`. Workspace harnesses link the same test-only input
 reader, without adding a public SDK surface. It reads two independent Agent-owned inputs: `compatibility/agent-current-inventory.json`
-(15 exact package/project pairs, 12 App roles, 18 public / 13 private APIs and 62
+(15 exact package/project pairs, 12 App roles, 18 public / 13 private APIs and 64
 providers) and `compatibility/agent-current-contracts.json` (reviewed canonical
 descriptor/ABI records bound to the exact inventory bytes). Missing records fail
 the selected artifact lane; tests never generate them from the output under test.

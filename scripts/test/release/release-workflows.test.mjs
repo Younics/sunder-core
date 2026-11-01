@@ -155,6 +155,16 @@ test("strict App packaging retains signing, notarization and Full-only feeds", a
   const source = await workflow("app-release");
   assert.match(source, /environment: sunder-app-signing/u);
   assert.match(source, /StrictRelease = \$true/u);
+  const signing = source.split("      - name: Configure Azure Trusted Signing\n")[1]?.split("      - name: Configure Apple signing and notarization\n")[0];
+  assert.ok(signing, "Missing Azure signing configuration step");
+  const requiredSettings = /foreach \(\$name in @\(([^)]+)\)\)/u.exec(signing)?.[1] ?? "";
+  assert.deepEqual([...requiredSettings.matchAll(/"([^"]+)"/gu)].map((match) => match[1]), [
+    "AZURE_TRUSTED_SIGNING_ENDPOINT", "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME", "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME",
+  ], "Publisher pinning must not become an additional required signing setting");
+  assert.doesNotMatch(signing, /WINDOWS_PUBLISHER_SUBJECT/u);
+  assert.match(source, /WINDOWS_PUBLISHER_SUBJECT: \$\{\{ vars\.WINDOWS_PUBLISHER_SUBJECT \|\| secrets\.WINDOWS_PUBLISHER_SUBJECT \}\}/u);
+  assert.match(source, /WindowsPublisherSubject = \$env:WINDOWS_PUBLISHER_SUBJECT/u);
+  assert.match(source, /WindowsSignParams = "[^\n]+\/dlib [^\n]+\/dmdf/u);
   assert.match(source, /--strict-release/u);
   assert.match(source, /codesign --verify --deep --strict/u);
   assert.match(source, /stapler validate/u);
@@ -162,6 +172,8 @@ test("strict App packaging retains signing, notarization and Full-only feeds", a
   assert.doesNotMatch(source, /vpk upload github/u);
   const shell = await readFile(resolve(root, "scripts/release/package-sunder.sh"), "utf8");
   const powershell = await readFile(resolve(root, "scripts/release/package-sunder.ps1"), "utf8");
+  assert.match(powershell, /if \(\$hasWindowsSignParams\) \{\s+\$signature = Get-AuthenticodeSignature -LiteralPath \$setupPath\s+if \(\$signature\.Status -ne \[System\.Management\.Automation\.SignatureStatus\]::Valid\) \{\s+throw/u);
+  assert.match(powershell, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$WindowsPublisherSubject\) -and\s+\$signature\.SignerCertificate\.Subject -cne \$WindowsPublisherSubject\) \{\s+throw/u);
   const central = await readFile(resolve(root, "languages/csharp/dotnet/Directory.Packages.props"), "utf8");
   const version = /Include="Velopack" Version="([^"]+)"/u.exec(central)?.[1];
   assert.ok(version, "Missing Velopack library version");

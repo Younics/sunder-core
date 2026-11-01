@@ -95,7 +95,7 @@ owned by the Agent release pipeline.
 
 After authorization, create and push `app/vX.Y.Z`. The workflow builds, signs and
 notarizes, validates all six payloads and Full-only feeds, then publishes them.
-Velopack `0.0.1298` uses separate channels such as `app-win-x64-stable` and
+The workflow-pinned Velopack CLI uses separate channels such as `app-win-x64-stable` and
 `app-osx-arm64-stable`. Windows produces signed Setup executables, Linux unsigned
 AppImages, and macOS signed/notarized drag-to-install DMGs.
 
@@ -275,11 +275,22 @@ for a protected App directory. Next App start activates the matching Host payloa
 
 ## App Signing And Notarization
 
+Configure **Younics/sunder-core → Settings → Environments → `sunder-app-signing`**.
+Windows settings may be environment variables or secrets; the workflow reads `vars`
+first and then `secrets`. Apple signing material must be environment secrets.
+The private workspace's signing Terraform provisions the Azure account/OIDC trust;
+it is not run during App release and does not replace these GitHub settings.
+
 Windows environment values: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
 `AZURE_SUBSCRIPTION_ID`, `AZURE_TRUSTED_SIGNING_ENDPOINT`,
-`AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`, `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`,
-and exact `WINDOWS_PUBLISHER_SUBJECT`. Azure OIDC supplies signing access; no Windows
-private key/PFX is stored in GitHub.
+`AZURE_TRUSTED_SIGNING_ACCOUNT_NAME`, and `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`.
+Azure OIDC supplies signing access; no Windows private key/PFX is stored in GitHub.
+
+`WINDOWS_PUBLISHER_SUBJECT` is optional. When supplied, the packaging script also
+requires the signed installer's certificate subject to match it exactly. Leaving it
+unset does not disable Azure signing or Authenticode signature validation. Existing
+Azure settings are sufficient; no additional GitHub setting is needed. Protect the
+environment with reviewers and restrict release tags.
 
 Apple secrets: `APPLE_BUILD_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`,
 `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`,
@@ -288,6 +299,9 @@ Use the Developer ID Application identity with bundle ID `com.younics.sunder`.
 Packaging signs/notarizes/staples the App, then places those unchanged bytes into
 the themed DMG and signs/notarizes/staples it. No Installer certificate is required.
 Signing material belongs in environment secrets, never source control.
+
+The current DMG flow does not use `APPLE_INSTALLER_CERTIFICATE_BASE64` or
+`APPLE_SIGN_INSTALL_IDENTITY`; those settings are not prerequisites for this workflow.
 
 Standalone CLI and Host workflows have no OS signing step; their checksum-verified
 archives must not be described as signed releases.
