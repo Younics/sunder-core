@@ -525,9 +525,8 @@ internal sealed class GeneratedOutputLock : IDisposable
             DateTime.UtcNow);
         var root = ProcessMarkerRoot();
         EnsureMarkerAncestors(root);
-        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(root);
-        else Directory.CreateDirectory(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        EnsureDirectory(root, "generated output process marker root");
+        CreateMarkerRoot(root);
+        EnsureMarkerAncestors(root);
         EnsurePrivateMarkerRoot(root);
         var path = Path.Combine(root, token + ".json");
         WriteDurableJson(path, marker, privateFile: true);
@@ -615,6 +614,28 @@ internal sealed class GeneratedOutputLock : IDisposable
         {
             if (!PathExists(current)) continue;
             EnsureDirectory(current, "generated output process marker ancestor");
+        }
+    }
+
+    private static void CreateMarkerRoot(string root)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(root);
+            return;
+        }
+
+        // CreateDirectory(path, mode) applies mode only to the leaf. Missing
+        // parents otherwise inherit the umask and can become group-writable.
+        // Create each missing component privately; never chmod existing paths.
+        var missing = new Stack<string>();
+        for (var current = root; !PathExists(current); current = Path.GetDirectoryName(current)
+                 ?? throw new IOException($"Generated output process marker path '{root}' has no existing ancestor."))
+            missing.Push(current);
+        while (missing.TryPop(out var directory))
+        {
+            EnsureMarkerAncestors(directory);
+            Directory.CreateDirectory(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
     }
 

@@ -29,9 +29,13 @@ internal static class PackageOutputLockFixture
         }
         var processStartedAtValue = processStartedAt.ToUniversalTime().ToString("O");
         var processMarkerToken = Guid.NewGuid().ToString("D");
-        var processMarkerRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sunder", "generated-output", "processes");
+        var sunderHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sunder");
+        var generatedOutput = Path.Combine(sunderHome, "generated-output");
+        var processMarkerRoot = Path.Combine(generatedOutput, "processes");
         if (OperatingSystem.IsWindows()) Directory.CreateDirectory(processMarkerRoot);
-        else Directory.CreateDirectory(processMarkerRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        else
+            foreach (var markerDirectory in new[] { sunderHome, generatedOutput, processMarkerRoot })
+                Directory.CreateDirectory(markerDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var processMarkerPath = Path.Combine(processMarkerRoot, processMarkerToken + ".json");
         File.WriteAllText(processMarkerPath, JsonSerializer.Serialize(new
         {

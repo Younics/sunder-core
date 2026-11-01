@@ -2,6 +2,14 @@ using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
+internal sealed class UnixTheoryAttribute : TheoryAttribute
+{
+    public UnixTheoryAttribute()
+    {
+        if (OperatingSystem.IsWindows()) Skip = "Requires a Unix platform.";
+    }
+}
+
 internal sealed class LinuxTheoryAttribute : TheoryAttribute
 {
     public LinuxTheoryAttribute()
