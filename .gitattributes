@@ -1,0 +1,8 @@
+# These documents are byte-verified inputs. Preserve repository bytes even when
+# a developer or Windows runner enables core.autocrlf; never renormalize evidence.
+*.json -text
+specs/** -text
+compatibility/** -text
+
+# Shell entry points must also run from Windows checkouts.
+*.sh text eol=lf

@@ -5,7 +5,10 @@ namespace Sunder.ExecutionRuntime.Build;
 // Only explicit input paths and invocation-owned temporaries are touched. No tree enumeration or orphan cleanup.
 internal static class EngineeringFileOperations
 {
-    internal readonly record struct FileStamp(long Length, DateTime CreatedUtc, DateTime WrittenUtc);
+    internal readonly record struct FileStamp(long Length, DateTime CreatedUtc, DateTime WrittenUtc, string Identity)
+    {
+        internal string Proof => FormattableString.Invariant($"{Length}:{CreatedUtc.Ticks}:{WrittenUtc.Ticks}:{Identity}");
+    }
 
     internal static string NormalizePath(string path)
     {
@@ -70,8 +73,11 @@ internal static class EngineeringFileOperations
         {
             throw new InvalidDataException($"Engineering input '{path}' must be a non-link regular file.");
         }
-        return new FileStamp(info.Length, info.CreationTimeUtc, info.LastWriteTimeUtc);
+        return new FileStamp(info.Length, info.CreationTimeUtc, info.LastWriteTimeUtc, EngineeringPathIdentity.Read(path, directory: false));
     }
+
+    internal static string ObserveDirectory(string path)
+        => EngineeringPathIdentity.Read(EnsureDirectory(path), directory: true);
 
     internal static async Task<byte[]> ReadStableAsync(
         string path,

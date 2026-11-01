@@ -176,7 +176,7 @@ internal sealed class PlatformContractSourceOperations
                 OperatingSystem.IsMacOS() || OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             throw new InvalidDataException("Platform catalog output must be outside Core language source trees.");
         var parent = EngineeringFileOperations.EnsureDirectory(Path.GetDirectoryName(destination)!);
-        var parentCreated = Directory.GetCreationTimeUtc(parent);
+        var parentIdentity = EngineeringFileOperations.ObserveDirectory(parent);
         CheckDestination();
         _cancellationToken.ThrowIfCancellationRequested();
         using var lease = GeneratedOutputLock.Acquire([destination], cancellationToken: _cancellationToken);
@@ -214,7 +214,7 @@ internal sealed class PlatformContractSourceOperations
         void CheckDestination()
         {
             EngineeringFileOperations.EnsureDirectory(parent);
-            if (Directory.GetCreationTimeUtc(parent) != parentCreated)
+            if (EngineeringFileOperations.ObserveDirectory(parent) != parentIdentity)
                 throw new IOException("Platform catalog output parent changed after planning.");
             EngineeringFileOperations.EnsureAbsent(destination);
         }

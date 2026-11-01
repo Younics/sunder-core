@@ -575,25 +575,35 @@ public sealed class PackageStoreCoordinatorTests
         Assert.True(File.Exists(journalPath));
     }
 
-    [Fact]
-    public void StorageSnapshot_RejectsFifoWithoutOpeningIt()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void StorageSnapshot_AcceptsRegularFileAndRejectsFifoWithoutOpeningIt(bool fifo)
     {
         if (OperatingSystem.IsWindows())
         {
             return;
         }
         var root = CreateTempDirectory();
-        var fifoPath = Path.Combine(root, "package.fifo");
+        var path = Path.Combine(root, "package.entry");
         try
         {
-            Assert.Equal(0, MkFifo(fifoPath, 0x180));
-            var exception = Assert.Throws<InvalidDataException>(
-                () => PackageStoreFileSystem.EnsureRegularFile(fifoPath));
-            Assert.Contains("not a regular file", exception.Message, StringComparison.Ordinal);
+            if (fifo)
+            {
+                Assert.Equal(0, MkFifo(path, 0x180));
+                var exception = Assert.Throws<InvalidDataException>(
+                    () => PackageStoreFileSystem.EnsureRegularFile(path));
+                Assert.Contains("not a regular file", exception.Message, StringComparison.Ordinal);
+            }
+            else
+            {
+                File.WriteAllText(path, "regular file");
+                PackageStoreFileSystem.EnsureRegularFile(path);
+            }
         }
         finally
         {
-            File.Delete(fifoPath);
+            File.Delete(path);
             Directory.Delete(root);
         }
     }

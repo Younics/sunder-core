@@ -50,6 +50,7 @@
       <Code Type="Class" Language="cs"><![CDATA[
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -58,6 +59,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Build.Framework;
+using Microsoft.Win32.SafeHandles;
 
 public sealed class _SunderWriteCoreStackTransportRequest : Microsoft.Build.Utilities.Task
 {
@@ -136,21 +138,21 @@ public sealed class _SunderWriteCoreStackTransportRequest : Microsoft.Build.Util
             EnsureDirectory(project);
             if (!Directory.Exists(parent)) Directory.CreateDirectory(parent);
             EnsureDirectory(parent);
-            var parentCreated = Directory.GetCreationTimeUtc(parent);
-            DateTime created;
+            var parentIdentity = Identity(parent, true);
+            string identity;
             using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, FileOptions.WriteThrough))
             {
-                created = File.GetCreationTimeUtc(path);
+                identity = Identity(path, false, file.SafeFileHandle);
                 file.Write(bytes, 0, bytes.Length);
                 file.Flush(true);
             }
             EnsureDirectory(parent);
             var info = new FileInfo(path);
-            if (Directory.GetCreationTimeUtc(parent) != parentCreated || info.CreationTimeUtc != created
+            if (Identity(parent, true) != parentIdentity || Identity(path, false) != identity
                 || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0
                 || info.Length != bytes.Length)
                 throw new IOException("Core request path changed during creation.");
-            var stamp = Stamp(info);
+            var stamp = Stamp(info, identity);
             using (var hash = SHA256.Create())
             using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
             {
@@ -169,7 +171,8 @@ public sealed class _SunderWriteCoreStackTransportRequest : Microsoft.Build.Util
             }
             info.Refresh();
             EnsureDirectory(parent);
-            if (Stamp(info) != stamp || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
+            if (Stamp(info, Identity(path, false)) != stamp || Identity(parent, true) != parentIdentity
+                || (info.Attributes & (FileAttributes.ReparsePoint | FileAttributes.Directory | FileAttributes.Device)) != 0)
                 throw new IOException("Core request stamp changed during creation.");
             RequestStamp = stamp;
             return true;
@@ -177,8 +180,72 @@ public sealed class _SunderWriteCoreStackTransportRequest : Microsoft.Build.Util
         catch (Exception exception) { Log.LogErrorFromException(exception, false); return false; }
     }
 
-    private static string Stamp(FileInfo info)
-        => string.Format(CultureInfo.InvariantCulture, "{0}:{1}:{2}", info.Length, info.CreationTimeUtc.Ticks, info.LastWriteTimeUtc.Ticks);
+    private static string Stamp(FileInfo info, string identity)
+        => string.Format(CultureInfo.InvariantCulture, "{0}:{1}:{2}:{3}", info.Length, info.CreationTimeUtc.Ticks, info.LastWriteTimeUtc.Ticks, identity);
+
+    // Keep the BCL-only writer's identity format aligned with EngineeringPathIdentity.
+    // Never use a directory creation timestamp: Linux may synthesize it from mtime.
+    private static string Identity(string path, bool directory, SafeFileHandle file = null)
+    {
+        var buffer = Marshal.AllocHGlobal(512);
+        try
+        {
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                using (var opened = file == null ? CreateFile(path, 0x80, 7, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero) : null)
+                {
+                    var handle = file ?? opened;
+                    if (handle.IsInvalid || !GetFileInformationByHandleEx(handle, 9, buffer, 8)) throw InspectionError(path);
+                    var attributes = (FileAttributes)Marshal.ReadInt32(buffer);
+                    if ((attributes & (FileAttributes.ReparsePoint | FileAttributes.Device)) != 0
+                        || ((attributes & FileAttributes.Directory) != 0) != directory)
+                        throw new IOException("Core request identity requires a non-link regular file or directory.");
+                    if (!GetFileInformationByHandleEx(handle, 18, buffer, 24)) throw InspectionError(path);
+                    return string.Format(CultureInfo.InvariantCulture, "windows:{0:x16}:{1:x16}:{2:x16}",
+                        Marshal.ReadInt64(buffer, 0), Marshal.ReadInt64(buffer, 8), Marshal.ReadInt64(buffer, 16));
+                }
+            }
+            uint mode;
+            string identity;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                if (Statx(file == null ? -100 : file.DangerousGetHandle().ToInt32(), file == null ? path : "",
+                        file == null ? 0x900 : 0x1000, 0x101, buffer) != 0) throw InspectionError(path);
+                if ((Marshal.ReadInt32(buffer) & 0x101) != 0x101)
+                    throw new IOException("Linux did not return the required Core request identity.");
+                mode = unchecked((ushort)Marshal.ReadInt16(buffer, 28));
+                identity = string.Format(CultureInfo.InvariantCulture, "linux:{0:x8}:{1:x8}:{2:x16}",
+                    Marshal.ReadInt32(buffer, 136), Marshal.ReadInt32(buffer, 140), Marshal.ReadInt64(buffer, 32));
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                if ((file == null ? LStat64(path, buffer) : FStat64(file, buffer)) != 0) throw InspectionError(path);
+                mode = unchecked((ushort)Marshal.ReadInt16(buffer, 4));
+                identity = string.Format(CultureInfo.InvariantCulture, "darwin:{0:x8}:{1:x16}",
+                    Marshal.ReadInt32(buffer, 0), Marshal.ReadInt64(buffer, 8));
+            }
+            else throw new PlatformNotSupportedException("Core request identity requires Windows, Linux or macOS.");
+            if ((mode & 0xF000) != (directory ? 0x4000u : 0x8000u))
+                throw new IOException("Core request identity requires a non-link regular file or directory.");
+            return identity;
+        }
+        finally { Marshal.FreeHGlobal(buffer); }
+    }
+
+    private static IOException InspectionError(string path)
+        => new IOException("Could not inspect Core request identity '" + path + "'.", new Win32Exception(Marshal.GetLastWin32Error()));
+    // Ansi marshals as UTF-8 on Unix and is available in MSBuild's netstandard facade.
+    [DllImport("libc", EntryPoint = "statx", CharSet = CharSet.Ansi, SetLastError = true)]
+    private static extern int Statx(int directory, string path, int flags, uint mask, IntPtr buffer);
+    [DllImport("libc", EntryPoint = "lstat64", CharSet = CharSet.Ansi, SetLastError = true)]
+    private static extern int LStat64(string path, IntPtr buffer);
+    [DllImport("libc", EntryPoint = "fstat64", SetLastError = true)]
+    private static extern int FStat64(SafeFileHandle file, IntPtr buffer);
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(SafeFileHandle file, int informationClass, IntPtr buffer, uint size);
     private static void EnsureDirectory(string path)
     {
         for (var directory = new DirectoryInfo(path); directory != null; directory = directory.Parent)

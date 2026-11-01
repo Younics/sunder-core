@@ -145,7 +145,10 @@ internal static class PackageStoreFileSystem
         var buffer = Marshal.AllocHGlobal(512);
         try
         {
-            if (LStat(path, buffer) != 0)
+            // Darwin's unsuffixed lstat uses the legacy inode32 ABI on Intel.
+            // The mode offset below belongs to stat64 on both macOS architectures.
+            var result = OperatingSystem.IsMacOS() ? LStatMacOs(path, buffer) : LStat(path, buffer);
+            if (result != 0)
             {
                 throw new IOException(
                     $"Could not inspect package storage snapshot entry '{path}'.",
@@ -176,6 +179,9 @@ internal static class PackageStoreFileSystem
 
     [DllImport("libc", EntryPoint = "lstat", SetLastError = true)]
     private static extern int LStat(string path, nint buffer);
+
+    [DllImport("libc", EntryPoint = "lstat64", SetLastError = true)]
+    private static extern int LStatMacOs(string path, nint buffer);
 }
 
 internal sealed class PackageStoreJournalFileSystem(

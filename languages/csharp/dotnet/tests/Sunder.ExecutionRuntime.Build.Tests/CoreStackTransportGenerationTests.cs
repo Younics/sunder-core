@@ -237,6 +237,26 @@ public sealed partial class CoreStackTransportGenerationTests
         if (kind == "symbolic") Assert.NotNull(new FileInfo(request.Path).LinkTarget);
     }
 
+    [Fact]
+    public void PhysicalIdentity_IsStableAcrossChildWritesAndRejectsSameByteSameTimestampReplacements()
+    {
+        using var tree = new CoreTree();
+        var directory = tree.Temp.CreateDirectory("identity");
+        var identity = EngineeringFileOperations.ObserveDirectory(directory);
+        var path = Path.Combine(directory, "request");
+        File.WriteAllText(path, "same bytes");
+        Assert.Equal(identity, EngineeringFileOperations.ObserveDirectory(directory));
+        var before = EngineeringFileOperations.ObserveFile(path);
+        File.Move(path, Path.Combine(directory, "original"));
+        File.WriteAllText(path, "same bytes");
+        File.SetCreationTimeUtc(path, before.CreatedUtc);
+        File.SetLastWriteTimeUtc(path, before.WrittenUtc);
+        Assert.NotEqual(before.Identity, EngineeringFileOperations.ObserveFile(path).Identity);
+        Directory.Move(directory, directory + "-original");
+        Directory.CreateDirectory(directory);
+        Assert.NotEqual(identity, EngineeringFileOperations.ObserveDirectory(directory));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -803,8 +823,7 @@ public sealed partial class CoreStackTransportGenerationTests
     private static CoreStackTransportRequestFile Proof(string path)
     {
         var stamp = EngineeringFileOperations.ObserveFile(path);
-        return new(path, Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))),
-            FormattableString.Invariant($"{stamp.Length}:{stamp.CreatedUtc.Ticks}:{stamp.WrittenUtc.Ticks}"));
+        return new(path, Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))), stamp.Proof);
     }
 
     private static void Link(string source, string destination, string kind)
@@ -827,7 +846,8 @@ public sealed partial class CoreStackTransportGenerationTests
         var runtime = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
         var references = PlatformContractSourceOperations.ReferencePaths()
             .Append(Path.Combine(runtime, "System.Security.Cryptography.dll"))
-            .Append(Path.Combine(runtime, "System.Runtime.InteropServices.dll"))
+             .Append(Path.Combine(runtime, "System.Runtime.InteropServices.dll"))
+            .Append(Path.Combine(runtime, "System.ComponentModel.Primitives.dll"))
             .Append(Path.Combine(runtime, "System.Text.RegularExpressions.dll"))
             .Where(path => Path.GetFileName(path) != "Sunder.Sdk.dll")
             .Append(typeof(IBuildEngine).Assembly.Location).Append(typeof(Microsoft.Build.Utilities.Task).Assembly.Location);

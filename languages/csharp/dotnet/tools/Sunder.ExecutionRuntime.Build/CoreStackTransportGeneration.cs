@@ -39,7 +39,7 @@ internal static class CoreStackTransportGeneration
             var observed = EngineeringFileOperations.ObserveFile(requestFile.Path);
             var bytes = requestInputs.Read(requestFile.Path, 1_048_576, "evaluated Core transport request");
             if (requestFile.Sha256 != Convert.ToHexStringLower(SHA256.HashData(bytes))
-                || requestFile.Stamp != FormattableString.Invariant($"{observed.Length}:{observed.CreatedUtc.Ticks}:{observed.WrittenUtc.Ticks}")
+                || requestFile.Stamp != observed.Proof
                 || EngineeringFileOperations.ObserveFile(requestFile.Path) != observed)
                 throw new IOException("Core transport request no longer matches the private writer's ownership proof.");
             ownedRequest = observed;
@@ -87,7 +87,7 @@ internal static class CoreStackTransportGeneration
             if (GeneratedOutputPathSafety.PathExists(output)) return Reuse();
             Directory.CreateDirectory(parent);
             GeneratedOutputPathSafety.EnsureRegularDirectory(parent, "Core transport configuration directory");
-            var parentCreated = Directory.GetCreationTimeUtc(parent);
+            var parentIdentity = EngineeringFileOperations.ObserveDirectory(parent);
             string? stage = null;
             using var lease = GeneratedOutputLock.Acquire([output], cancellationToken: cancellationToken);
             VerifyInputs();
@@ -95,14 +95,14 @@ internal static class CoreStackTransportGeneration
 
             var staged = new SunderRpcInputSnapshot();
             var stageRecorded = false;
-            DateTime stageCreated = default;
+            string? stageIdentity = null;
             EngineeringFileOperations.FileStamp? sourceStamp = null, markerStamp = null;
             try
             {
                 stage = Path.Combine(parent, ".stage-" + Guid.NewGuid().ToString("N"));
                 EngineeringFileOperations.EnsureAbsent(stage);
                 Directory.CreateDirectory(stage);
-                stageCreated = Directory.GetCreationTimeUtc(stage);
+                stageIdentity = EngineeringFileOperations.ObserveDirectory(stage);
                 WriteNew(Path.Combine(stage, sourceName), generated);
                 WriteNew(Path.Combine(stage, MarkerName), marker);
                 ReadTree(stage, staged, generated, marker, sourceName);
@@ -114,7 +114,7 @@ internal static class CoreStackTransportGeneration
                 beforeMove?.Invoke(output);
                 VerifyInputs();
                 GeneratedOutputPathSafety.EnsureRegularDirectory(parent, "Core transport configuration directory");
-                if (Directory.GetCreationTimeUtc(parent) != parentCreated)
+                if (EngineeringFileOperations.ObserveDirectory(parent) != parentIdentity)
                     throw new IOException("Core transport configuration directory changed during generation.");
                 VerifyStage();
                 cancellationToken.ThrowIfCancellationRequested();
@@ -133,7 +133,7 @@ internal static class CoreStackTransportGeneration
                         EngineeringFileOperations.TryDeleteOwnedFile(Path.Combine(stage, sourceName), sourceStamp, sha256);
                         EngineeringFileOperations.TryDeleteOwnedFile(Path.Combine(stage, MarkerName), markerStamp, Convert.ToHexStringLower(SHA256.HashData(marker)));
                         GeneratedOutputPathSafety.EnsureRegularDirectory(stage, "Core transport stage cleanup");
-                        if (Directory.GetCreationTimeUtc(stage) == stageCreated) Directory.Delete(stage);
+                        if (EngineeringFileOperations.ObserveDirectory(stage) == stageIdentity) Directory.Delete(stage);
                     }
                     catch (IOException) { /* Preserve foreign or interrupted stages rather than deleting unproven bytes. */ }
                     catch (InvalidDataException) { }
@@ -168,7 +168,7 @@ internal static class CoreStackTransportGeneration
             }
             void VerifyStage()
             {
-                if (!stageRecorded || stage is null || Directory.GetCreationTimeUtc(stage) != stageCreated)
+                if (!stageRecorded || stage is null || EngineeringFileOperations.ObserveDirectory(stage) != stageIdentity)
                     throw new IOException("Core transport stage changed during generation.");
                 CheckMembers(stage, sourceName);
                 staged.Verify();
