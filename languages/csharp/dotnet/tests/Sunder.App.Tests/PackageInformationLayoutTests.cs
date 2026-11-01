@@ -15,6 +15,29 @@ namespace Sunder.App.Tests;
 [Collection(HeadlessAppCollection.Name)]
 public sealed class PackageInformationLayoutTests
 {
+    [Fact]
+    public async Task PlatformSectionWrapsAllDeclaredTargetsInANarrowPane()
+    {
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
+        await ui.Dispatch(() =>
+        {
+            var targets = new[] { "app", "runtime" }.SelectMany(role => SunderPackageFormat.SupportedRuntimeIdentifiers.Select(rid => (role, rid)));
+            var view = new PackagePlatformsView { DataContext = PackagePlatformsViewModel.Create(targets, "osx-arm64", "2.0.0") };
+            var scroll = new ScrollViewer { Content = view, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+            var window = new Window { Width = 360, Height = 500, Content = scroll };
+            window.Show();
+            try
+            {
+                window.UpdateLayout();
+                Assert.Single(view.GetVisualDescendants().OfType<Expander>()).IsExpanded = true;
+                window.UpdateLayout();
+                Assert.InRange(scroll.Extent.Width, 0, scroll.Viewport.Width + 1);
+                Assert.Contains(view.GetVisualDescendants().OfType<TextBlock>(), text => text.IsEffectivelyVisible && text.Text == "Supported platforms");
+            }
+            finally { window.Close(); }
+        }, default);
+    }
+
     [Theory]
     [InlineData(360)]
     [InlineData(900)]

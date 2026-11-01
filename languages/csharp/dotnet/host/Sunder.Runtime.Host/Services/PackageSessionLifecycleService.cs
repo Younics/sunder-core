@@ -326,7 +326,7 @@ internal sealed partial class PackageSessionLifecycleService
                 throw;
             }
             _logger.LogError(exception, "Failed to commit package lifecycle stage {StageId}", stageId);
-            const string message = "Package lifecycle stage could not be committed.";
+            var message = DescribeWorkerStartupFailure(exception, "Package lifecycle stage could not be committed.");
             _sessions.MarkStageFailed(stageId, message);
             return PackageLifecycleOperationResult.Failed(message, _sessions.State.GetActivePackages(), errors: [message], impactedPackageIds: stage.ImpactedPackageIds);
         }
@@ -404,7 +404,7 @@ internal sealed partial class PackageSessionLifecycleService
         {
             if (exception is RuntimeRequiredProviderException) throw;
             _logger.LogError(exception, "Failed to start package background services");
-            const string message = "Package lifecycle load failed while starting background services.";
+            var message = DescribeWorkerStartupFailure(exception, "Package lifecycle load failed while starting background services.");
             return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message], impacted);
         }
         var committed = _sessions.GetSnapshot();
@@ -465,7 +465,7 @@ internal sealed partial class PackageSessionLifecycleService
         {
             if (exception is RuntimeRequiredProviderException) throw;
             _logger.LogError(exception, "Failed to start background services for merged package session");
-            const string message = "Package session load failed while starting background services.";
+            var message = DescribeWorkerStartupFailure(exception, "Package session load failed while starting background services.");
             return new PackageSessionOperationResult(false, message, warnings, [message], impactedPackageIds, null);
         }
         return new PackageSessionOperationResult(true, successMessage, warnings, [], impactedPackageIds, await GetStatusAsync(statusPackageId, CancellationToken.None))
@@ -473,6 +473,10 @@ internal sealed partial class PackageSessionLifecycleService
             CommittedStamp = publication.Stamp,
         };
     }
+
+    internal static string DescribeWorkerStartupFailure(Exception exception, string fallback)
+        // Only Host-authored, bounded diagnostics are safe to return to the App.
+        => exception is ExecutionRuntimeGuardianLaunchException ? exception.Message : fallback;
 
     private static async Task AddDevOverlayAsync(
         PackageSessionSourceSnapshot sources,

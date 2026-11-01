@@ -946,9 +946,9 @@ function collectTemplates() {
         protocol: "no authored Protocol project or artifact",
       },
       roleMetadataSources: [
-        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/Sunder.Package.Template.csproj`),
-        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.standalone.cs`),
-        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.dependency.cs`),
+        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/Sunder.Package.Template.csproj.in`),
+        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.standalone.cs.in`),
+        sourceFingerprint(`${dotnetRoot}/Sunder.Package.Template/PackageMetadata.dependency.cs.in`),
       ],
       packedBehaviorGate: "Sunder.Package.Templates.Tests.PackageTemplateTests",
     },
@@ -1211,7 +1211,7 @@ function relativePath(path) {
 function isTextSource(path) {
   return new Set([
     ".cs", ".csproj", ".json", ".md", ".mjs", ".js", ".ts", ".tsx", ".props", ".targets",
-    ".sh", ".ps1", ".yml", ".yaml", ".xml", ".axaml", ".html", ".css", ".txt",
+    ".sh", ".ps1", ".yml", ".yaml", ".xml", ".axaml", ".html", ".css", ".txt", ".in",
   ]).has(extname(path).toLowerCase()) || path.endsWith("LICENSE");
 }
 

@@ -55,10 +55,7 @@ internal static partial class SunderRpcCSharpImportPrepass
     public static SunderRpcCSharpImportPrepassResult Prepare(SunderRpcContractLock contractLock, string cacheRoot)
     {
         ArgumentNullException.ThrowIfNull(contractLock);
-        SunderRpcPlatformCatalogCache.ValidateToolRange(contractLock);
-        var catalogs = SunderRpcPlatformCatalogCache.Resolve(contractLock, cacheRoot);
-
-        var cache = SunderRpcContractCache.Resolve(contractLock, cacheRoot);
+        var (cache, catalogs) = SunderRpcContractCacheSelection.Resolve(contractLock, cacheRoot);
         var contracts = new Dictionary<string, SunderRpcCSharpImportedContract>(StringComparer.Ordinal);
         var sources = new List<SunderRpcCSharpSourceFile>();
         var naturalNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

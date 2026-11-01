@@ -31,13 +31,14 @@
 
   <ItemGroup>
     <Content Include="templates\**\*"
-             Exclude="templates\sunder-package\.template.config\template.json"
-             Pack="true"
-             PackagePath="content" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <AvaloniaResource Include="templates\sunder-package\Sunder.Package.Template\Assets\icon.png" />
+              Exclude="templates\**\*.in;templates\**\bin\**;templates\**\obj\**;templates\sunder-package\.template.config\template.json"
+              Pack="true"
+              PackagePath="content" />
+    <!-- Tokenized sources are payload, not a nested buildable project or XAML
+         owned by this packaging project. Emit ordinary filenames in the nupkg so
+         the template engine and generated projects keep their normal semantics. -->
+    <_SunderTemplatePayload Include="templates\**\*.in"
+                            Exclude="templates\**\bin\**;templates\**\obj\**" />
   </ItemGroup>
 
   <UsingTask TaskName="ReplaceSunderTemplateToken"
@@ -104,6 +105,7 @@
       <_SunderTemplateConfigurationDirectory>$(IntermediateOutputPath)sunder-template-content\sunder-package\.template.config</_SunderTemplateConfigurationDirectory>
       <_SunderTemplateConfigurationVersioned>$(_SunderTemplateConfigurationDirectory)\template.versioned.json</_SunderTemplateConfigurationVersioned>
       <_SunderTemplateConfigurationOutput>$(_SunderTemplateConfigurationDirectory)\template.json</_SunderTemplateConfigurationOutput>
+      <_SunderTemplatePayloadDirectory>$(IntermediateOutputPath)sunder-template-payload</_SunderTemplatePayloadDirectory>
     </PropertyGroup>
 
     <Error Condition="'$(PackageVersion)' == ''"
@@ -120,6 +122,16 @@
                                  Token="__SUNDER_COORDINATED_PACKAGE_VERSION_RANGE__"
                                  Value="$(_SunderTemplatePackageVersionRange)" />
     <ItemGroup>
+      <_SunderTemplatePayload Update="@(_SunderTemplatePayload)">
+        <StagedPath>$(_SunderTemplatePayloadDirectory)\%(RecursiveDir)%(Filename)</StagedPath>
+        <PackedPath>content\%(RecursiveDir)%(Filename)</PackedPath>
+      </_SunderTemplatePayload>
+    </ItemGroup>
+    <Copy SourceFiles="@(_SunderTemplatePayload)"
+          DestinationFiles="@(_SunderTemplatePayload->'%(StagedPath)')" SkipUnchangedFiles="true" />
+    <ItemGroup>
+      <Content Include="%(_SunderTemplatePayload.StagedPath)" Pack="true"
+               PackagePath="%(_SunderTemplatePayload.PackedPath)" />
       <Content Include="$(_SunderTemplateConfigurationOutput)"
                Pack="true"
                PackagePath="content\sunder-package\.template.config\template.json" />

@@ -72,7 +72,7 @@ public sealed class RuntimeStackContractMapperTests
         var mapped = RuntimeStackContractMapper.ToPackageRequirements(
         [
             new StackPackageRequirement("test.package", "latest", MinimumVersion: "1.10.0", Required: false),
-            new StackPackageRequirement("test.package", "LATEST", MinimumVersion: "2.0.0-beta.1"),
+            new StackPackageRequirement("test.package", "latest", MinimumVersion: "2.0.0-beta.1"),
             new StackPackageRequirement("test.package", "latest", MinimumVersion: "2.0.0"),
         ]);
 

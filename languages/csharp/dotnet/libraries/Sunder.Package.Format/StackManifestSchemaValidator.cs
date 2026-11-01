@@ -22,16 +22,8 @@ internal static class StackManifestSchemaValidator
             return;
         }
 
-        if (manifest.SchemaVersion != SunderStackFormat.CurrentSchemaVersion)
-        {
-            errors.Add($"Stack manifest must declare schemaVersion {SunderStackFormat.CurrentSchemaVersion}.");
-        }
-
-        if (manifest.MinReaderVersion is not null && manifest.MinReaderVersion > SunderStackFormat.CurrentReaderVersion)
-        {
-            errors.Add($"Stack manifest requires reader version {manifest.MinReaderVersion}, but this Sunder reader supports {SunderStackFormat.CurrentReaderVersion}.");
-        }
-
+        foreach (var error in SunderStackMetadataReader.GetCompatibilityErrors(manifest)) errors.Add(error);
+        if (manifest.MinReaderVersion is <= 0) errors.Add("Stack minReaderVersion must be positive when specified.");
         ValidateFeatures(manifest.Features, manifest.RequiredFeatures, warnings, errors);
 
         if (string.IsNullOrWhiteSpace(manifest.StackId) || !StackIdRegex.IsMatch(manifest.StackId))
@@ -72,17 +64,6 @@ internal static class StackManifestSchemaValidator
             if (!SunderStackFormat.SupportedFeatures.Contains(feature))
             {
                 warnings.Add($"Stack declares unknown optional feature '{feature}', which this reader will ignore.");
-            }
-        }
-        foreach (var feature in requiredFeatures ?? [])
-        {
-            if (feature is null)
-            {
-                continue;
-            }
-            if (!SunderStackFormat.SupportedFeatures.Contains(feature))
-            {
-                errors.Add($"Stack requires unsupported feature '{feature}'.");
             }
         }
     }

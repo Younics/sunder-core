@@ -112,7 +112,7 @@
     <AggregateSunderPackageTask TargetLeaves="@(_SunderPackedRid)" OutputPath="$(SunderDevOutputPath)" OutputDiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
                                 ContractLockPath="$(SunderContractLockPath)" ContractCacheRoot="$(SunderContractCacheRoot)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                 ProjectDirectory="$(MSBuildProjectDirectory)" TargetDirectory="$(_SunderDispatchOutput)" ExpectedPackageVersion="$(Version)" />
-    <PropertyGroup><_SunderPackCheckRid>$([System.String]::Copy('$(_SunderPackRids)').Split(';').GetValue(0))</_SunderPackCheckRid></PropertyGroup>
+    <PropertyGroup><_SunderPackCheckRid>$(_SunderPackRids.Split(';').GetValue(0))</_SunderPackCheckRid></PropertyGroup>
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="_PackSunderPackageAggregateForRid" BuildInParallel="false" StopOnFirstFailure="true"
              Properties="Configuration=$(Configuration);TargetFramework=$(TargetFramework);RuntimeIdentifier=$(_SunderPackCheckRid);SunderPackageRidBuild=true;SunderPackageAuthoringOutputRoot=$(_SunderDispatchOutput);SunderPackageAuthoringIntermediateRoot=$(_SunderDispatchIntermediate);SunderPackageAuthoringPackInput=$(SunderDevOutputPath);SunderPackageAuthoringPackOutput=$(SunderPackageOutputPath);IntermediateOutputPath=$(_SunderDispatchIntermediate)sunder-analysis/$(_SunderPackCheckRid)/;OutputPath=$(_SunderDispatchOutput);AppendRuntimeIdentifierToOutputPath=false"
              RemoveProperties="OutDir;SunderPackageCompilationRole;SunderPackageInnerBuild" />
@@ -186,6 +186,4 @@
   <Target Name="GetSunderPackageRoleReference">
     <Error Text="package-authoring.reference-role-invalid: Select SunderPackageReferenceRole=worker or app." />
   </Target>
-  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.References.targets"
-          Condition="'$(SunderPackageReferenceRole)' != ''" />
 </Project>

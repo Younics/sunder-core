@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
@@ -235,6 +236,71 @@ public sealed class SunderPackageArchiveInstallerTests
 
         Assert.False(result.Success);
         Assert.Contains("unsafe", result.Errors[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InstallFromPathAsync_RejectsForeignArchitectureOrOsWithoutRecordingPackage(bool sameOs)
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+            var store = new InstalledPackageStore(paths);
+            var current = PackageTargetSelection.GetCurrentRuntimeIdentifier();
+            var os = current.Split('-')[0];
+            var foreign = SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid =>
+                rid != current && rid.StartsWith(os + "-", StringComparison.Ordinal) == sameOs);
+            var archive = CreatePackageArchive(root, "test.foreign", "1.0.0", runtimeIdentifiers: [foreign]);
+
+            var result = await ExecuteAsync(paths, store, new SunderPackageArchiveInstaller(paths),
+                new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archive));
+
+            Assert.False(result.Success);
+            Assert.Contains(result.Errors, error => error.Contains($"'{current}'", StringComparison.Ordinal)
+                && error.Contains(foreign, StringComparison.Ordinal));
+            Assert.Empty(await store.ListAsync());
+            Assert.False(Directory.Exists(paths.GetInstalledPackagePath("test.foreign", "1.0.0")));
+            Assert.Empty(Directory.EnumerateDirectories(paths.StagingRootPath));
+        }
+        finally { TryDeleteDirectory(root); }
+    }
+
+    [Fact]
+    public async Task InstallFromPathAsync_WithOtherPlatformAppRole_RecordsOnlyCurrentTargets()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+            var current = PackageTargetSelection.GetCurrentRuntimeIdentifier();
+            var foreign = SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid => rid != current);
+            var source = CanonicalPackageTestBuilder.WriteExplodedPackage(Path.Combine(root, "source"), "test.partial", "1.0.0",
+                typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, runtimeIdentifiers: [current, foreign]);
+            var manifestPath = Path.Combine(source, "manifest", "sunder-package.json");
+            var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!;
+            var targets = manifest["targets"]!.AsArray();
+            targets.Remove(targets.Single(target => target!["role"]!.GetValue<string>() == "app" && target["rid"]!.GetValue<string>() == current));
+            await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+            CanonicalPackageTestBuilder.WriteContentIndex(source);
+            var archive = Path.Combine(root, "partial.sunderpkg");
+            ZipFile.CreateFromDirectory(source, archive);
+
+            var store = new InstalledPackageStore(paths);
+            var result = await ExecuteAsync(paths, store, new SunderPackageArchiveInstaller(paths),
+                new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: archive));
+
+            Assert.True(result.Success, string.Join(" | ", result.Errors));
+            var installed = Assert.Single(await store.ListAsync());
+            Assert.Equal(new InstalledPackageTargetRecord("runtime", current), Assert.Single(installed.AcquiredTargets!));
+            var validation = await InstalledPackageProjection.ValidateAsync(installed);
+            Assert.True(validation.Success, string.Join(" | ", validation.Errors));
+            Assert.Equal(3, validation.Manifest!.Targets!.Count);
+            Assert.Equal(PackageHostRoles.Runtime, store.ToDescriptor(installed).HostRoles);
+            Assert.Empty(Directory.EnumerateDirectories(paths.StagingRootPath));
+        }
+        finally { TryDeleteDirectory(root); }
     }
 
     [Fact]

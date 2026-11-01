@@ -17,7 +17,12 @@ internal static class PackageInformationProjection
             facts.PublicBindings.Select(value => new PackagePublicBindingDescriptor(value.ContractId, value.Version, value.Kind,
                 value.Providers.Select(provider => new PackagePublicProviderDescriptor(provider.Role, provider.ProviderId)).ToArray())).ToArray(),
             facts.PublicUses.Select(value => new PackagePublicUseDescriptor(value.Role, value.ContractId, value.Version, value.Required, value.Actions)).ToArray())
-        { Summary = source.Manifest.Summary };
+        {
+            Summary = source.Manifest.Summary,
+            DeclaredTargets = SunderPackageTargetResolver.EnumerateTargets(source.Manifest)
+                .OrderBy(value => value.Role, StringComparer.Ordinal).ThenBy(value => value.Rid, StringComparer.Ordinal)
+                .Select(value => new PackagePlatformTargetDescriptor(value.Role, value.Rid)).ToArray(),
+        };
     }
 }
 

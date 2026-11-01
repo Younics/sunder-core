@@ -587,6 +587,7 @@ type public sealed class Sunder.Runtime.Contracts.PackageInformationDescriptor :
   method public .ctor(System.String PackageId, System.String Version, System.String ContentIdentity, Sunder.Runtime.Contracts.PackageSourceKind SourceKind, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRelationshipDescriptor> Dependencies, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses)
   property Sunder.Runtime.Contracts.PackageSourceKind SourceKind { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor>? DeclaredTargets { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings { public get; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses { public get; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRelationshipDescriptor> Dependencies { public get; }
@@ -736,6 +737,18 @@ type public sealed class Sunder.Runtime.Contracts.PackageOperationResult : Syste
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageOperationResult? left, Sunder.Runtime.Contracts.PackageOperationResult? right)
   method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageOperationResult? left, Sunder.Runtime.Contracts.PackageOperationResult? right)
+type public sealed class Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor>
+  method public .ctor(System.String Role, System.String Rid)
+  property System.String Rid { public get; public init; }
+  property System.String Role { public get; public init; }
+  method public Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor <Clone>$()
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid)
+  method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor? left, Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor? right)
+  method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor? left, Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor? right)
 type public sealed class Sunder.Runtime.Contracts.PackagePublicBindingDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor>
   method public .ctor(System.String ContractId, System.String Version, System.String Kind, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicProviderDescriptor> Providers)
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicProviderDescriptor> Providers { public get; }
@@ -3759,6 +3772,7 @@ type public enum Sunder.Runtime.Contracts.RuntimeStackImportOutcome : System.Int
   field public System.Int32 value__
 type public sealed class Sunder.Runtime.Contracts.RuntimeStackImportPreviewRequest : System.IEquatable<Sunder.Runtime.Contracts.RuntimeStackImportPreviewRequest>
   method public .ctor(System.String UploadId, System.Collections.Generic.IReadOnlyList<System.String> SelectedFragmentIds, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps)
+  property System.Boolean UseDefaultFragments { public get; public init; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> IdRemaps { public get; }
   property System.Collections.Generic.IReadOnlyDictionary<System.String, System.String> InputValues { public get; }
   property System.Collections.Generic.IReadOnlyList<System.String> SelectedFragmentIds { public get; }

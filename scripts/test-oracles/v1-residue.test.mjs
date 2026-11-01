@@ -83,9 +83,11 @@ test("residue scan covers additional authored text formats and special filenames
     await mkdir(join(root, "languages", "sample"), { recursive: true });
     await writeFile(join(root, "languages", "sample", "view.razor"), "Requires rpc.v2.\n");
     await writeFile(join(root, "languages", "sample", "Dockerfile"), "# Requires worker-protocol.v3.\n");
+    await writeFile(join(root, "languages", "sample", "package.csproj.in"), "<SelfContained>true</SelfContained>\n");
 
     assert.deepEqual(await findV1Residue(root), [
       "languages/sample/Dockerfile:1: contains forbidden worker-capability-v3 residue",
+      "languages/sample/package.csproj.in:1: contains forbidden package-self-contained residue",
       "languages/sample/view.razor:1: contains forbidden rpc-capability-v2 residue",
     ]);
   });

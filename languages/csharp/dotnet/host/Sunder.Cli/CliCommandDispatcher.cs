@@ -131,7 +131,7 @@ internal sealed class CliCommandDispatcher(
         => new(runtime, runtime, registry, _archives, output, progress, browser, options, credentials);
 
     private RuntimeStackCommandHandler RuntimeStackHandler()
-        => new(RequireRuntime(), _archives, output, progress);
+        => new(RequireRuntime(), RequireRuntime(), RequireRuntime(), _archives, output, progress, options, secretValues);
 
     private ExecutionRuntimeCommandHandler ExecutionRuntimeHandler()
         => new(RequireRuntime(), output, progress);

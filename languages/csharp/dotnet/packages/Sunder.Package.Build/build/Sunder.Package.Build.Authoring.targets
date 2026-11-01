@@ -227,6 +227,11 @@
   <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.Outer.targets"
           Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == '' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'" />
 
+  <!-- Reference negotiation is also needed by editors, which never import the
+       build dispatcher. Resolve the selected role without emitting a combined DLL. -->
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Authoring.References.targets"
+          Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == '' and '$(SunderPackageReferenceRole)' != '' and '$(IsCrossTargetingBuild)' != 'true'" />
+
   <Target Name="_CleanSunderPackageRoleDevOutput" AfterTargets="Clean" DependsOnTargets="_PrepareSunderPackageBuildTasks"
           Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true'">
     <CleanSunderPackageOutputTask IsTargetLeaf="true" OutputPath="$([System.IO.Path]::Combine('$(TargetDir)', 'sunder-dev'))"

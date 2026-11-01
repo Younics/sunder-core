@@ -238,7 +238,7 @@ public sealed class AppPackageResourceAssemblyRegistry
 
     private sealed class AppPackageAvaloniaResourceCatalog
     {
-        private static readonly Type? AssemblyDescriptorType = typeof(Avalonia.Platform.IAssetLoader)
+        private static readonly Type? AssemblyDescriptorType = typeof(Avalonia.Platform.AssetLoader)
             .Assembly
             .GetType("Avalonia.Platform.Internal.AssemblyDescriptor");
 

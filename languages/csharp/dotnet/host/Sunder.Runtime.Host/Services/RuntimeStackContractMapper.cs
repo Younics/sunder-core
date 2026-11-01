@@ -1,6 +1,5 @@
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
-using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 
@@ -114,50 +113,14 @@ internal static class RuntimeStackContractMapper
             StringComparer.OrdinalIgnoreCase);
 
     public static IReadOnlyList<SunderStackPackageRequirement> ToPackageRequirements(IEnumerable<StackPackageRequirement> requirements)
-        => requirements
-            .Where(requirement => !string.IsNullOrWhiteSpace(requirement.PackageId))
-            .GroupBy(requirement => requirement.PackageId, StringComparer.OrdinalIgnoreCase)
-            .Select(group =>
-            {
-                var first = group.First();
-                var installTags = group
-                    .Select(requirement => string.IsNullOrWhiteSpace(requirement.InstallTag) ? "latest" : requirement.InstallTag.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToArray();
-                if (installTags.Length != 1)
-                {
-                    throw new InvalidDataException(
-                        $"Stack package '{first.PackageId}' declares conflicting install tags: {string.Join(", ", installTags)}.");
-                }
-
-                string? minimumVersion = null;
-                SemanticVersion? strongestMinimum = null;
-                foreach (var candidate in group.Select(requirement => requirement.MinimumVersion)
-                             .Where(value => !string.IsNullOrWhiteSpace(value)))
-                {
-                    if (!SemanticVersion.TryParse(candidate, out var parsed))
-                    {
-                        throw new InvalidDataException(
-                            $"Stack package '{first.PackageId}' declares invalid minimum version '{candidate}'.");
-                    }
-                    if (strongestMinimum is null || parsed.ComparePrecedenceTo(strongestMinimum.Value) > 0)
-                    {
-                        strongestMinimum = parsed;
-                        minimumVersion = candidate;
-                    }
-                }
-
-                return new SunderStackPackageRequirement
-                {
-                    PackageId = first.PackageId,
-                    InstallTag = installTags[0],
-                    CreatedWithVersion = first.CreatedWithVersion,
-                    MinimumVersion = minimumVersion,
-                    Required = group.Any(requirement => requirement.Required),
-                };
-            })
-            .OrderBy(requirement => requirement.PackageId, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        => SunderStackPackageRequirements.Merge(requirements.Select(value => new SunderStackPackageRequirement
+        {
+            PackageId = value.PackageId,
+            InstallTag = value.InstallTag,
+            CreatedWithVersion = value.CreatedWithVersion,
+            MinimumVersion = value.MinimumVersion,
+            Required = value.Required,
+        }));
 
     public static SunderStackFragmentPreview ToPreview(
         string sourceItemId,

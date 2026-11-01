@@ -43,12 +43,19 @@ public sealed partial class ImplementationFirstRpcBuildTests
               <PropertyGroup><TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
               <ItemGroup>
                 <ProjectReference Include="{{SecurityElement.Escape(packageProject)}}" Targets="GetSunderPackageRoleReference"
+                                  ReferenceOutputAssembly="false" OutputItemType="Reference" ResolveableAssembly="false"
                                   AdditionalProperties="SunderPackageReferenceRole=worker" Aliases="Worker" />
                 <ProjectReference Include="{{SecurityElement.Escape(packageProject)}}" Targets="GetSunderPackageRoleReference"
+                                  ReferenceOutputAssembly="false" OutputItemType="Reference" ResolveableAssembly="false"
                                   AdditionalProperties="SunderPackageReferenceRole=app" Aliases="App" />
               </ItemGroup>
               <Target Name="RecordRoleReferences" AfterTargets="ResolveProjectReferences">
-                <WriteLinesToFile File="$(MSBuildProjectDirectory)/resolved.txt" Lines="@(_ResolvedProjectReferencePaths)" Overwrite="true" />
+                <WriteLinesToFile File="$(MSBuildProjectDirectory)/resolved.txt" Lines="@(Reference->WithMetadataValue('Targets', 'GetSunderPackageRoleReference')->'%(FullPath)|%(Aliases)')" Overwrite="true" />
+                <WriteLinesToFile File="$(MSBuildProjectDirectory)/project-references.txt" Lines="@(_ResolvedProjectReferencePaths)" Overwrite="true" />
+                <WriteLinesToFile File="$(MSBuildProjectDirectory)/reference-metadata.txt" Lines="@(ProjectReference->'%(ReferenceOutputAssembly)|%(OutputItemType)|%(ResolveableAssembly)|%(Aliases)')" Overwrite="true" />
+              </Target>
+              <Target Name="RecordRoleCompilerReferences" AfterTargets="ResolveAssemblyReferences">
+                <WriteLinesToFile File="$(MSBuildProjectDirectory)/compiler-references.txt" Lines="@(ReferencePath->WithMetadataValue('Targets', 'GetSunderPackageRoleReference')->'%(FullPath)|%(Aliases)|%(ReferenceSourceTarget)')" Overwrite="true" />
               </Target>
             </Project>
             """);
@@ -64,8 +71,12 @@ public sealed partial class ImplementationFirstRpcBuildTests
             }
             """);
         AssertSuccess(await RunDotnetAsync(root, ["restore", project, "--disable-parallel", "--nologo"]));
+        await AssertDesignTimeReferencesAsync();
+        Assert.False(File.Exists(worker));
+        Assert.False(File.Exists(app));
         AssertSuccess(await Build(false));
         AssertResolvedRoles();
+        AssertCompilerRoles();
         using (var deps = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(root, "bin/Debug/net10.0/RoleConsumer.deps.json"))))
         {
             var runtimeAssets = deps.RootElement.GetProperty("targets").EnumerateObject().SelectMany(target => target.Value.EnumerateObject())
@@ -94,6 +105,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
             await File.WriteAllTextAsync(sourcePath, "invalid uncompiled package source");
             AssertSuccess(await Build(true));
             AssertResolvedRoles();
+            AssertCompilerRoles();
+            await AssertDesignTimeReferencesAsync();
             Assert.Equal(times, new[] { File.GetLastWriteTimeUtc(worker), File.GetLastWriteTimeUtc(app) });
             foreach (var role in new[] { "", "combined" })
             {
@@ -108,11 +121,32 @@ public sealed partial class ImplementationFirstRpcBuildTests
 
         Task<ProcessResult> Build(bool noReferences) => RunDotnetAsync(root,
             ["build", project, "--no-restore", "--disable-build-servers", "-p:BuildProjectReferences=" + (!noReferences).ToString().ToLowerInvariant(), "--nologo", "-v:quiet"]);
+        async Task AssertDesignTimeReferencesAsync()
+        {
+            // Editors may negotiate references before the first Build, and must
+            // never compile the combined authoring source or rebuild role outputs.
+            foreach (var buildReferences in new[] { "false", "true" })
+            {
+                AssertSuccess(await RunDotnetAsync(root,
+                    ["msbuild", project, "-t:" + (File.Exists(worker) ? "ResolveReferences" : "ResolveProjectReferences"), "-p:DesignTimeBuild=true",
+                     "-p:BuildProjectReferences=" + buildReferences, "-nodeReuse:false", "-nologo", "-v:quiet"]));
+                AssertResolvedRoles();
+                if (File.Exists(worker)) AssertCompilerRoles();
+            }
+        }
         void AssertResolvedRoles()
         {
-            Assert.Equal(new[] { worker, app }.Order(StringComparer.Ordinal),
-                File.ReadAllLines(Path.Combine(root, "resolved.txt")).Order(StringComparer.Ordinal));
+            Assert.Equal(new[] { worker + "|Worker", app + "|App" }.Order(StringComparer.Ordinal),
+                 File.ReadAllLines(Path.Combine(root, "resolved.txt")).Order(StringComparer.Ordinal));
+            Assert.Empty(File.ReadAllLines(Path.Combine(root, "project-references.txt")));
+            Assert.Equal(new[] { "false|Reference|false|App", "false|Reference|false|Worker" },
+                File.ReadAllLines(Path.Combine(root, "reference-metadata.txt")).Order(StringComparer.Ordinal));
             Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(packageProject)!, "bin/Debug/net10.0/SingleProject.dll")));
+        }
+        void AssertCompilerRoles()
+        {
+            Assert.Equal(new[] { worker + "|Worker|ResolveAssemblyReference", app + "|App|ResolveAssemblyReference" }.Order(StringComparer.Ordinal),
+                File.ReadAllLines(Path.Combine(root, "compiler-references.txt")).Order(StringComparer.Ordinal));
         }
     }
 }

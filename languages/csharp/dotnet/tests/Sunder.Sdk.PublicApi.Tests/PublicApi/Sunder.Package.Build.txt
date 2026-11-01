@@ -403,6 +403,7 @@ type public sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsT
 type public sealed class Sunder.Package.Build.Tasks.RestoreSunderContractsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method public .ctor()
   property System.Boolean AllowDevelopmentRegistryOrigin { public get; public set; }
+  property System.Boolean VerifyOnly { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] CandidateArchives { public get; public set; }
   property System.String ContractCacheRoot { public get; public set; }
   property System.String ContractLockPath { public get; public set; }

@@ -567,6 +567,21 @@ public sealed partial class StacksWindowViewModel
                 return null;
             }
 
+            if (stack.Compatibility is { } compatibility)
+            {
+                var errors = SunderStackMetadataReader.GetCompatibilityErrors(new SunderStackManifest
+                {
+                    SchemaVersion = compatibility.SchemaVersion,
+                    MinReaderVersion = compatibility.MinReaderVersion,
+                    RequiredFeatures = compatibility.RequiredFeatures,
+                });
+                if (errors.Count > 0)
+                {
+                    StatusText = string.Join(" ", errors);
+                    return null;
+                }
+            }
+
             await registryClient.DownloadStackAsync(stack.Artifact, stack.StackId, tempPath, cancellationToken);
             var item = await Local.ImportAsync(tempPath, cancellationToken);
             StatusText = launchKind == AppLaunchRequestKind.StackUse

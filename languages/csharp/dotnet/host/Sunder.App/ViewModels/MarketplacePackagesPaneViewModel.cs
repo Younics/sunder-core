@@ -102,7 +102,8 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
 
     public bool RuntimePlanCanApply => RuntimePreflightLoaded
                                        && (_runtimePreflight?.Plan.Success == true || _runtimePreflight?.Plan.RuntimePrerequisites is { Satisfied: false, Requirements.Count: > 0 })
-                                       && _runtimePreflight?.Plan.Conflicts.Count == 0
+                                        && _runtimePreflight?.Plan.Conflicts.Count == 0
+                                        && _runtimePreflight?.Plan.CompatibilityConflicts.Count == 0
                                        && ExecutionRuntimeRequirements.All(static runtime => !runtime.IsBlocked);
 
     public string PackageDownloadText => RuntimePreflightLoading
@@ -132,7 +133,8 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
                 return "One review covers the runtimes and package. Runtimes install first; the package waits in the queue.";
             if (!_runtimePreflight.Plan.Success)
             {
-                return _runtimePreflight.Plan.Errors.FirstOrDefault()
+                return _runtimePreflight.Plan.Conflicts.Select(conflict => conflict.Message).FirstOrDefault(message => !string.IsNullOrWhiteSpace(message))
+                       ?? _runtimePreflight.Plan.Errors.FirstOrDefault()
                        ?? $"This package is not compatible with {CurrentRid}.";
             }
             if (!HasExecutionRuntimeRequirements) return "No shared execution runtime is required for this version.";

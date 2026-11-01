@@ -111,7 +111,7 @@
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
     <Setter Property="BorderThickness" Value="1" />
   </Style>
-  <Style Selector="TextBox /template/ TextBlock#PART_Watermark">
+  <Style Selector="TextBox /template/ TextBlock#PART_Placeholder">
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
     <Setter Property="Opacity" Value="0.95" />
   </Style>

@@ -16,6 +16,23 @@ internal sealed partial class CliOutput
     private readonly List<CliStructuredError> _errors = [];
     private readonly HashSet<CliStructuredError> _uniqueErrors = [];
     private object? _data;
+    private readonly HashSet<string> _protectedValues = new(StringComparer.Ordinal);
+
+    internal void ProtectValues(IEnumerable<string> values)
+    {
+        foreach (var value in values.Where(value => !string.IsNullOrEmpty(value))) _protectedValues.Add(value);
+    }
+
+    private string RedactValues(string? message)
+    {
+        if (message is null) return string.Empty;
+        foreach (var value in _protectedValues.OrderByDescending(value => value.Length))
+            message = message.Replace(value, "[REDACTED]", StringComparison.Ordinal);
+        return message;
+    }
+
+    private string Safe(string? message, int maxLength = 1000)
+        => CliText.Sanitize(RedactValues(message), maxLength);
 
     public CliOutput(TextWriter stdout, TextWriter stderr, bool json, string commandPath = "")
     {
@@ -28,8 +45,8 @@ internal sealed partial class CliOutput
     public void Line(string message = "")
     {
         if (_json) return;
-        foreach (var line in message.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
-            _stdout.WriteLine(CliText.Sanitize(line));
+        foreach (var line in RedactValues(message).Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n'))
+            _stdout.WriteLine(Safe(line));
     }
 
     public void Info(string message) => WriteMessage("info", message, error: false);
@@ -39,9 +56,9 @@ internal sealed partial class CliOutput
 
     public void Error(string message, string code, string? correlationId = null)
     {
-        var safeMessage = CliText.Sanitize(message);
-        var safeCode = CliText.SanitizeToken(code) ?? "cli.operation.failed";
-        var safeCorrelationId = CliText.SanitizeToken(correlationId);
+        var safeMessage = Safe(message);
+        var safeCode = CliText.SanitizeToken(RedactValues(code)) ?? "cli.operation.failed";
+        var safeCorrelationId = CliText.SanitizeToken(RedactValues(correlationId));
         var structured = new CliStructuredError(safeCode, safeMessage, safeCorrelationId);
         if (_uniqueErrors.Add(structured)) _errors.Add(structured);
 
@@ -55,7 +72,7 @@ internal sealed partial class CliOutput
 
     public void Progress(string message)
     {
-        if (!_json) _stderr.WriteLine(CliText.Sanitize(message));
+        if (!_json) _stderr.WriteLine(Safe(message));
     }
 
     public void Data(object? data) => _data = data;
@@ -89,7 +106,7 @@ internal sealed partial class CliOutput
 
     private void WriteMessage(string level, string message, bool error)
     {
-        var safe = CliText.Sanitize(message);
+        var safe = Safe(message);
         var cliMessage = new CliMessage(level, safe);
         if (!_uniqueMessages.Add(cliMessage)) return;
         if (_json)
@@ -100,7 +117,7 @@ internal sealed partial class CliOutput
         (error ? _stderr : _stdout).WriteLine(safe);
     }
 
-    private static void SanitizeNode(JsonNode? node)
+    private void SanitizeNode(JsonNode? node)
     {
         if (node is JsonObject obj)
         {
@@ -118,7 +135,7 @@ internal sealed partial class CliOutput
         }
         if (node is JsonValue value && value.TryGetValue<string>(out var text))
         {
-            value.ReplaceWith(JsonValue.Create(CliText.Sanitize(text, 16 * 1024)));
+            value.ReplaceWith(JsonValue.Create(Safe(text, 16 * 1024)));
         }
     }
 

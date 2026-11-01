@@ -8,7 +8,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class StacksWindowViewModelTests
+public sealed partial class StacksWindowViewModelTests
 {
     [Fact]
     public async Task SearchRegistryStacksCommand_PopulatesRegistryStackResults()
@@ -1396,6 +1396,7 @@ public sealed class StacksWindowViewModelTests
             "Team Stack",
             includeFragment: true,
             includePackage: true,
+            includeRequiredInput: true,
             fragmentDefaultSelected: true,
             installTag: "preview",
             minimumVersion: "2.3.0",
@@ -1471,7 +1472,7 @@ public sealed class StacksWindowViewModelTests
                 "plan-1",
                 DateTimeOffset.UtcNow.AddMinutes(15),
                 [new RuntimeStackImportActionDescriptor("action-key", "younics.ai.agent", "agent", "profile", "Agent profile", "Profile", DefaultSelected: true, "Import profile.")],
-                [],
+                [new RuntimeStackRequiredInputDescriptor("input-key", "younics.ai.agent", "agent", "api-key", "API key", RuntimeStackInputSensitivity.Secret, true)],
                 [],
                 [],
                 []),
@@ -1483,6 +1484,7 @@ public sealed class StacksWindowViewModelTests
                 [],
                 []),
             RegistryPlan = runtimeInstallPlan,
+            RegistryPlanAfterApply = new(true, [], [], [], [], [], ResolutionFingerprint: new string('f', 64)),
             PackageStoreStageOperationResult = SuccessPackageOperation() with
             {
                 ImpactedPackageIds = ["younics.ai.agent"],
@@ -1505,15 +1507,21 @@ public sealed class StacksWindowViewModelTests
 
         var packageRow = Assert.Single(viewModel.PackageRows);
         Assert.Equal("Will install 1.2.0", packageRow.StatusText);
-        Assert.True(viewModel.CanApply);
+        Assert.False(viewModel.CanApply);
         var resolveRequirement = Assert.Single(runtimeApiClient.LastRegistryPlanRequest!.Packages);
         Assert.Equal("preview", resolveRequirement.Tag);
         Assert.Equal(">=2.3.0", resolveRequirement.VersionRange);
         Assert.False(resolveRequirement.Required);
 
+        Assert.Single(viewModel.RequiredInputs).Value = "fresh-install-value";
+        Assert.True(viewModel.CanApply);
         await viewModel.ApplyCommand.ExecuteAsync(null);
 
-        Assert.Equal(["install", "presentation:1", "preview", "import"], runtimeApiClient.Events);
+        Assert.Null(runtimeApiClient.LastImportRequest);
+        Assert.Contains("Review the refreshed", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.Equal("fresh-install-value", runtimeApiClient.LastPreviewRequest!.InputValues["input-key"]);
+        await viewModel.ApplyCommand.ExecuteAsync(null);
+        Assert.Equal(["install", "presentation:1", "preview", "preview", "preview", "import"], runtimeApiClient.Events);
         var appliedRequirement = Assert.Single(runtimeApiClient.LastRegistryApplyRequest!.Packages);
         Assert.Equal("preview", appliedRequirement.Tag);
         Assert.Equal(">=2.3.0", appliedRequirement.VersionRange);
@@ -1873,7 +1881,9 @@ public sealed class StacksWindowViewModelTests
 
         public Func<string, CancellationToken, Task>? DiscardStackImportPlanFactory { get; init; }
 
-        public RuntimeRegistryResolveInstallPlanResponse RegistryPlan { get; init; } = new(true, [], [], [], [], []);
+        public RuntimeRegistryResolveInstallPlanResponse RegistryPlan { get; set; } = new(true, [], [], [], [], []);
+
+        public RuntimeRegistryResolveInstallPlanResponse? RegistryPlanAfterApply { get; init; }
 
         public PackageOperationResult PackageStoreStageOperationResult { get; init; } = SuccessPackageOperation();
 
@@ -1970,7 +1980,7 @@ public sealed class StacksWindowViewModelTests
         {
             LastRegistryApplyRequest = request;
             Events.Add("install");
-            return Task.FromResult(new RuntimeRegistryPackageChangeResult(
+            var result = new RuntimeRegistryPackageChangeResult(
                 true,
                 RuntimeRegistryErrorCode.None,
                 "Installed packages.",
@@ -1982,7 +1992,9 @@ public sealed class StacksWindowViewModelTests
                 RegistryPlan.Items)
             {
                 CommittedStamp = new RuntimePackageStamp(Guid.Parse("00000000-0000-0000-0000-000000000001"), 1),
-            });
+            };
+            if (RegistryPlanAfterApply is not null) RegistryPlan = RegistryPlanAfterApply;
+            return Task.FromResult(result);
         }
 
         public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)

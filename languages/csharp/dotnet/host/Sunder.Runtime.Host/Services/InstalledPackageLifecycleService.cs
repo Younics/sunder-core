@@ -462,7 +462,6 @@ internal sealed partial class InstalledPackageLifecycleService
             const string message = "Installed package lifecycle load failed while starting background services.";
             return PackageLifecycleOperationResult.Failed(message, currentPackages, warnings, [message]);
         }
-        throw new InvalidOperationException("Installed package publication did not complete.");
     }
 
     public async Task<PackageOperationResult> SetEnabledAsync(string packageId, bool enabled, CancellationToken cancellationToken = default)

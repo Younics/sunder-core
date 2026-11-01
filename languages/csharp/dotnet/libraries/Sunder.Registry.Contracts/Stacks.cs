@@ -34,7 +34,16 @@ public sealed record RegistryStackDetails(
 {
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public RegistryStackPolicySnapshot? Policy { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryStackCompatibility? Compatibility { get; init; }
 }
+
+/// <summary>Stack system-format requirements, independent of publication revisions and fragment schemas.</summary>
+public sealed record RegistryStackCompatibility(
+    int SchemaVersion,
+    int? MinReaderVersion,
+    IReadOnlyList<string> RequiredFeatures);
 
 public sealed record RegistryStackStats(
     long TotalDownloads,

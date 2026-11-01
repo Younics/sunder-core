@@ -208,9 +208,9 @@ public sealed partial class CreateStackWizardViewModel
         return new SunderStackManifest
         {
             SchemaVersion = generatedManifest.SchemaVersion ?? _editManifest?.SchemaVersion ?? SunderStackFormat.CurrentSchemaVersion,
-            MinReaderVersion = generatedManifest.MinReaderVersion ?? _editManifest?.MinReaderVersion ?? SunderStackFormat.CurrentReaderVersion,
-            Features = _editManifest?.Features ?? generatedManifest.Features,
-            RequiredFeatures = _editManifest?.RequiredFeatures ?? generatedManifest.RequiredFeatures,
+            MinReaderVersion = Math.Max(generatedManifest.MinReaderVersion ?? 1, _editManifest?.MinReaderVersion ?? 1),
+            Features = (generatedManifest.Features ?? []).Concat(_editManifest?.Features ?? []).Distinct(StringComparer.Ordinal).ToArray(),
+            RequiredFeatures = (generatedManifest.RequiredFeatures ?? []).Concat(_editManifest?.RequiredFeatures ?? []).Distinct(StringComparer.Ordinal).ToArray(),
             StackId = StackId.Trim(),
             Name = StackName.Trim(),
             Summary = NormalizeOptionalText(StackShortDescription),
@@ -229,20 +229,7 @@ public sealed partial class CreateStackWizardViewModel
         IReadOnlyList<SunderStackPackageRequirement> generatedPackages,
         IEnumerable<SunderStackPackageRequirement> preservedPackages)
     {
-        var packages = new Dictionary<string, SunderStackPackageRequirement>(StringComparer.OrdinalIgnoreCase);
-        foreach (var package in preservedPackages.Concat(generatedPackages))
-        {
-            if (string.IsNullOrWhiteSpace(package.PackageId) || packages.ContainsKey(package.PackageId!))
-            {
-                continue;
-            }
-
-            packages[package.PackageId!] = package;
-        }
-
-        return packages.Values
-            .OrderBy(package => package.PackageId, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        return SunderStackPackageRequirements.Merge(generatedPackages.Concat(preservedPackages));
     }
 
     private IReadOnlyList<string> BuildPreservedArchivePaths(IReadOnlyList<SunderStackFragmentManifest> preservedFragments)

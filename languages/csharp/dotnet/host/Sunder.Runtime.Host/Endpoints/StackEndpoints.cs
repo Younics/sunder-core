@@ -28,8 +28,7 @@ internal static class StackEndpoints
             async (RuntimeStackImportPreviewRequest request, RuntimeStackImportService stackImport, CancellationToken cancellationToken) =>
             {
                 var operation = await stackImport.PreviewAsync(request, cancellationToken);
-                if (operation.Failure is not null) RuntimeEndpointErrors.ThrowFailure(operation.Failure);
-                return Results.Ok(operation.Response);
+                return PreviewResult(operation);
             });
 
         group.MapPost(
@@ -46,5 +45,13 @@ internal static class StackEndpoints
                 stackImport.DiscardPlan(planId) ? Results.NoContent() : Results.NotFound());
 
         return endpoints;
+    }
+
+    internal static IResult PreviewResult(RuntimeStackOperationResult<RuntimeStackImportPreviewResponse> operation)
+    {
+        // Expected preview rejection is a structured review result, not a transport failure.
+        if (operation.Failure is { Category: not (RuntimeStackFailureCategory.PackageValidation or RuntimeStackFailureCategory.Validation or RuntimeStackFailureCategory.NotFound) } failure)
+            RuntimeEndpointErrors.ThrowFailure(failure);
+        return Results.Ok(operation.Response);
     }
 }

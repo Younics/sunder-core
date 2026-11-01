@@ -239,7 +239,8 @@ public sealed class PackagesWindowViewModelTests
                 started.TrySetResult();
                 return late.Task; // deliberately ignores cancellation
             }
-            var info = InformationFor(id, "runtime", "example." + id, "1.0.0");
+            var info = InformationFor(id, "runtime", "example." + id, "1.0.0") with
+            { DeclaredTargets = [new("runtime", "linux-x64"), new("runtime", "osx-arm64")] };
             return Task.FromResult<PackageInformationDescriptor?>(info);
         };
         using var vm = CreateViewModel(runtime);
@@ -250,12 +251,14 @@ public sealed class PackagesWindowViewModelTests
         late.SetResult(InformationFor("alpha", "runtime", "example.stale", "1.0.0"));
         await Task.Yield();
         Assert.Equal("example.beta", Assert.Single(vm.Information.ServiceAccess).ContractId);
+        Assert.Contains("Linux x64", vm.Platforms.Summary, StringComparison.Ordinal);
 
         runtime.Information = (id, _) => Task.FromResult<PackageInformationDescriptor?>(InformationFor(id, "runtime", "example." + id, "1.0.0") with { Version = "9.0.0" });
         vm.SelectedInstalledPackage = vm.Installed.Packages.Single(value => value.PackageId == "alpha");
         await WaitForConditionAsync(() => vm.Information.HasStatus && !vm.Information.Status.StartsWith("Loading", StringComparison.Ordinal));
         Assert.False(vm.Information.HasNoPublicBindings);
         Assert.Empty(vm.Information.ServiceAccess);
+        Assert.Null(vm.Platforms.SupportsCurrentPlatform);
     }
 
     [Fact]
@@ -981,6 +984,60 @@ public sealed class PackagesWindowViewModelTests
         Assert.False(viewModel.Information.HasNoPublicBindings);
         Assert.False(viewModel.CanInstallSelectedMarketplacePackage);
         Assert.Contains("unavailable", viewModel.Information.Status, StringComparison.Ordinal);
+        Assert.Null(viewModel.Platforms.SupportsCurrentPlatform);
+    }
+
+    [Fact]
+    public async Task MarketplaceVersionSwitch_ClearsPlatformsAndBlocksAnUnsupportedUiOnlyVersion()
+    {
+        var rid = AppPackageTargetEnvironment.CurrentRid;
+        var alternate = SunderPackageFormat.SupportedRuntimeIdentifiers.First(value => value != rid);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var registry = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage("test.platforms")],
+            PackageDetails = (id, _) => Task.FromResult<RegistryPackageDetails?>(CreateRegistryPackageDetails(id, "1.0.0") with
+            { Versions = [new("1.0.0", false, null, DateTimeOffset.UtcNow), new("2.0.0", false, null, DateTimeOffset.UtcNow)] }),
+            VersionDetails = async (id, version, token) =>
+            {
+                if (version == "2.0.0") await release.Task.WaitAsync(token);
+                return CreateRegistryPackageVersionDetails(id, version,
+                    targets: [new("app", version == "1.0.0" ? rid : alternate, "avalonia", "lib/App.dll", "net10.0", "1.1.0", [])]);
+            },
+        };
+        using var view = CreateViewModel(new FakeRuntimeApiClient([]), _ => registry, TimeSpan.FromMilliseconds(40));
+        view.RegistryUrlText = "https://registry.example/";
+        await view.SearchMarketplaceCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => view.Marketplace.RuntimePreflightLoaded);
+        Assert.True(view.CanInstallSelectedMarketplacePackage);
+        Assert.True(view.Platforms.SupportsCurrentPlatform);
+
+        view.SelectedMarketplaceVersion = view.Marketplace.Versions.Single(version => version.Version == "2.0.0");
+        Assert.Null(view.Platforms.SupportsCurrentPlatform);
+        Assert.False(view.CanInstallSelectedMarketplacePackage);
+        release.SetResult();
+        await WaitForConditionAsync(() => view.Marketplace.RuntimePreflightLoaded);
+        Assert.True(view.Platforms.IsUnsupported);
+        Assert.Equal("For version 2.0.0", view.Platforms.VersionText);
+        Assert.False(view.CanInstallSelectedMarketplacePackage);
+    }
+
+    [Fact]
+    public async Task MarketplaceCompatibility_PreservesTheAffectedDependencyConflictMessage()
+    {
+        const string message = "Package 'test.dependency' 1.0.0 does not provide required exact target 'runtime/osx-arm64'.";
+        var runtime = new FakeRuntimeApiClient([])
+        {
+            RegistryPlanResult = new(false, [], [], [], [new("test.dependency", null, ">=1.0.0", "test.root",
+                RegistryV1ErrorCodes.PackageTargetUnavailable, message)], []),
+        };
+        var registry = new FakeRegistryApiClient { SearchResults = _ => [CreateRegistryPackage("test.root")] };
+        using var view = CreateViewModel(runtime, _ => registry, TimeSpan.FromMilliseconds(40));
+        view.RegistryUrlText = "https://registry.example/";
+        await view.SearchMarketplaceCommand.ExecuteAsync(null);
+        await WaitForConditionAsync(() => view.Marketplace.RuntimePreflightLoaded);
+        Assert.Equal(message, view.Marketplace.RuntimeCompatibilitySummary);
+        Assert.False(view.CanInstallSelectedMarketplacePackage);
     }
 
     [Fact]

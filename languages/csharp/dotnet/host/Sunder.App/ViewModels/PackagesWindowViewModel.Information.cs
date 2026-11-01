@@ -18,6 +18,9 @@ public sealed partial class PackagesWindowViewModel
     [ObservableProperty]
     private PackageInformationViewModel _information = PackageInformationViewModel.Unavailable();
 
+    [ObservableProperty]
+    private PackagePlatformsViewModel _platforms = PackagePlatformsViewModel.Unavailable();
+
     public bool CanGoBackInPackageDetails => _informationHistory.Count > 0;
 
     private async Task LoadInstalledInformationAsync(PackageCatalogItemViewModel item)
@@ -37,6 +40,7 @@ public sealed partial class PackagesWindowViewModel
         using var request = _informationRequest.Start(_tasks.Token);
         _informationSource = source;
         Information = PackageInformationViewModel.Loading();
+        Platforms = PackagePlatformsViewModel.Loading();
         try
         {
             var details = await _runtimeApiClient.GetPackageInformationAsync(item.PackageId, request.Token);
@@ -45,9 +49,12 @@ public sealed partial class PackagesWindowViewModel
                 || identity is not null && details.ContentIdentity != identity)
             {
                 Information = PackageInformationViewModel.Unavailable();
+                Platforms = PackagePlatformsViewModel.Unavailable();
                 return;
             }
             _informationFacts = PackageInformationViewModel.FromRuntime(details);
+            Platforms = PackagePlatformsViewModel.Create(details.DeclaredTargets?.Select(target => (target.Role, target.Rid)),
+                AppPackageTargetEnvironment.CurrentRid, details.Version);
             _informationDependencyState = dependencyState;
             _informationSummary = details.Summary;
             SelectedPackageSummary = _informationSummary ?? "Package features, dependencies and public integrations.";
@@ -59,7 +66,10 @@ public sealed partial class PackagesWindowViewModel
         catch (Exception error)
         {
             if (!_disposed && request.IsCurrent && ReferenceEquals(Installed.SelectedPackage, item))
+            {
                 Information = PackageInformationViewModel.Unavailable();
+                Platforms = PackagePlatformsViewModel.Unavailable();
+            }
             AppSessionLog.WriteError($"Could not load package information for '{item.PackageId}'.", error);
         }
     }

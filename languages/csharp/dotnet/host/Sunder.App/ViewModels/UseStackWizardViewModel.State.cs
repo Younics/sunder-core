@@ -21,6 +21,7 @@ public sealed partial class UseStackWizardViewModel(
     private readonly MarketplacePackageProfileViewModel _stackProfile = BuildStackProfile(stack);
     private readonly object _lifecycleGate = new();
     private IReadOnlyList<SunderStackPackageRequirement> _packageRequirements = [];
+    private SunderStackManifest? _stackManifest;
     private bool _manifestLoaded;
     private bool _installPlanReady;
     private bool _installPlanHasErrors;
@@ -28,6 +29,7 @@ public sealed partial class UseStackWizardViewModel(
     private readonly LatestAsyncRequest _previewRequest = new();
     private readonly OwnedTaskObserver _tasks = new(nameof(UseStackWizardViewModel));
     private string? _importPlanId;
+    private IReadOnlyDictionary<string, string> _importPlanInputValues = new Dictionary<string, string>();
     private TaskCompletionSource? _planOperationsDrained;
     private Task? _cleanupTask;
     private int _activePlanOperations;
@@ -177,6 +179,8 @@ public sealed partial class UseStackWizardViewModel(
         }
 
         var cancellationToken = _tasks.Token;
+        var reviewedActions = ImportActions.Select(action => (action.ActionId, action.DisplayName, action.Subtitle, action.Description)).ToArray();
+        var installedPackages = false;
         var missingRequiredInput = RequiredInputs.FirstOrDefault(input => input.IsMissingRequiredValue);
         if (missingRequiredInput is not null)
         {
@@ -217,6 +221,7 @@ public sealed partial class UseStackWizardViewModel(
                     NotifyWizardStateChanged();
                     return;
                 }
+                installedPackages = true;
 
                 if (installResult.ImpactedPackageIds.Count > 0 && installResult.CommittedStamp is not null)
                 {
@@ -244,11 +249,21 @@ public sealed partial class UseStackWizardViewModel(
             }
 
             await RefreshInstallPlanAsync(cancellationToken);
+            if (_installPlanHasErrors || HasInstallPlanItems) return;
         }
 
         await RefreshImportPreviewCoreAsync(cancellationToken);
         if (_disposed || cancellationToken.IsCancellationRequested)
         {
+            return;
+        }
+
+        if (HasSelectedSetupItems && (installedPackages
+            || !SameValues(_importPlanInputValues, GetInputValues(RequiredInputs))
+            || !reviewedActions.SequenceEqual(ImportActions.Select(action => (action.ActionId, action.DisplayName, action.Subtitle, action.Description)))))
+        {
+            StatusText = "Review the refreshed Stack setup actions and inputs, then apply again.";
+            NotifyWizardStateChanged();
             return;
         }
 

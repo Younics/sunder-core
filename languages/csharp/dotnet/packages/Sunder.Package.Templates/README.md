@@ -7,6 +7,13 @@ and optional Avalonia views. Sunder generates typed APIs, composition and isolat
 Worker/App outputs. Node/React presets use `npm create sunder-package@latest` and the
 same package/runtime model.
 
+Repository contributors: tokenized project, C# and XAML inputs under `templates/`
+use a `.in` suffix. They are not buildable projects or Avalonia resources of this
+packaging project. Packing removes that suffix from content entry names; generated
+projects use ordinary `.csproj`, `.cs`, `.props` and `.axaml` files. Validate changes
+through `Sunder.Package.Templates.Tests`, including actual generated-project builds,
+rather than restoring or compiling the raw payload.
+
 ## Install And Create
 
 ```powershell

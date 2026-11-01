@@ -32,9 +32,9 @@
     <_SunderPackageBuildProjectFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageBuildProject)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildProjectFullPath>
     <_SunderPackageBuildTaskProjectDirectory>$([System.IO.Path]::GetDirectoryName('$(_SunderPackageBuildProjectFullPath)'))</_SunderPackageBuildTaskProjectDirectory>
     <SunderPackageBuildTaskContractKey Condition="'$(SunderPackageBuildTaskContractKey)' == ''">source-contract-v3</SunderPackageBuildTaskContractKey>
-    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $([System.String]::Copy('$(NETCoreSdkRuntimeIdentifier)').EndsWith('-x86'))">x86</SunderPackageBuildTaskHostArchitecture>
-    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $([System.String]::Copy('$(NETCoreSdkRuntimeIdentifier)').EndsWith('-x64'))">x64</SunderPackageBuildTaskHostArchitecture>
-    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $([System.String]::Copy('$(NETCoreSdkRuntimeIdentifier)').EndsWith('-arm64'))">arm64</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $(NETCoreSdkRuntimeIdentifier.EndsWith('-x86'))">x86</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $(NETCoreSdkRuntimeIdentifier.EndsWith('-x64'))">x64</SunderPackageBuildTaskHostArchitecture>
+    <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == '' and $(NETCoreSdkRuntimeIdentifier.EndsWith('-arm64'))">arm64</SunderPackageBuildTaskHostArchitecture>
     <SunderPackageBuildTaskHostArchitecture Condition="'$(SunderPackageBuildTaskHostArchitecture)' == ''">CurrentArchitecture</SunderPackageBuildTaskHostArchitecture>
     <SunderPackageBuildTaskBootstrapConfiguration Condition="'$(SunderPackageBuildTaskBootstrapConfiguration)' == '' and '$(_SunderPackageBuildTaskAssemblyWasSpecified)' == 'true'">$(Configuration)</SunderPackageBuildTaskBootstrapConfiguration>
     <SunderPackageBuildTaskBootstrapConfiguration Condition="'$(SunderPackageBuildTaskBootstrapConfiguration)' == '' and !Exists('$(_SunderPackageBuildProjectFullPath)')">$(Configuration)</SunderPackageBuildTaskBootstrapConfiguration>
@@ -826,6 +826,12 @@
                                   OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)"
                                   ContractCacheRoot="$(SunderContractCacheRoot)" ProjectDirectory="$(MSBuildProjectDirectory)"
                                   IntermediateOutputPath="$(IntermediateOutputPath)" />
+  </Target>
+
+  <Target Name="CheckSunderContractCache" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
+    <RestoreSunderContractsTask ProjectDirectory="$(MSBuildProjectDirectory)" ContractLockPath="$(SunderContractLockPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractCacheRoot="$(SunderContractCacheRoot)" VerifyOnly="true" />
   </Target>
 
   <Target Name="RestoreSunderContracts" DependsOnTargets="_ValidateSunderContractCommandProject;_PrepareSunderPackageBuildTasks">
@@ -1690,7 +1696,7 @@
   <Target Name="_GetSunderPackageAppContractUses"
           Returns="@(SunderUsesContract)"
           KeepDuplicateOutputs="true">
-    <Error Condition="'@(SunderUsesContract)' != '' and !$([System.String]::Copy('%(SunderUsesContract.Role)').Trim().Equals('app'))"
+    <Error Condition="'@(SunderUsesContract)' != '' and !$([System.String]::Concat('%(SunderUsesContract.Role)').Trim().Equals('app'))"
            Text="SunderPackageAppProject contract uses must explicitly declare Role=app." />
   </Target>
 

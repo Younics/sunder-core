@@ -46,6 +46,7 @@ public sealed class CliCommandTreeTests
         { ["stack", "download", "demo", "-o", "demo.sunderstack"], typeof(DownloadStackCommand), "stack download" },
         { ["stack", "open", "demo"], typeof(OpenStackCommand), "stack open" },
         { ["stack", "import", "--file", "demo.sunderstack", "--dry-run"], typeof(ImportStackCommand), "stack import" },
+        { ["stack", "import", "--file", "demo.sunderstack", "--yes", "--fragment", "one", "--fragment", "two", "--input-env", "scoped=VALUE"], typeof(ImportStackCommand), "stack import" },
         { ["stack", "export", "demo", "--output", "demo.sunderstack"], typeof(ExportStackCommand), "stack export" },
         { ["registry", "auth", "login"], typeof(AuthLoginCommand), "registry auth login" },
         { ["registry", "auth", "status"], typeof(AuthStatusCommand), "registry auth status" },
@@ -100,6 +101,18 @@ public sealed class CliCommandTreeTests
 
         Assert.Null(result.Invocation);
         Assert.NotEmpty(result.Errors);
+    }
+
+    [Theory]
+    [InlineData("--yes", "--dry-run")]
+    [InlineData("--yes", "--no-fragments", "--fragment", "one")]
+    [InlineData("--yes", "--no-actions", "--action", "one")]
+    [InlineData("--yes", "--inputs-stdin", "--input-env", "scoped=VALUE")]
+    public void Stack_import_rejects_conflicting_approval_or_selection_options(params string[] options)
+    {
+        var result = new CliCommandParser().Parse(["stack", "import", "--file", "demo.sunderstack", .. options]);
+        Assert.NotEmpty(result.Errors);
+        Assert.Null(result.Invocation);
     }
 
     [Fact]

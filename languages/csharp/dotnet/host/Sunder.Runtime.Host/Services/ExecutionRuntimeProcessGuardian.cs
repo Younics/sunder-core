@@ -79,6 +79,9 @@ internal static class ExecutionRuntimeProcessGuardian
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
             };
+            // DOTNET_ROOT bootstraps only this Host-owned helper. Packages must
+            // retain their sanitized environment and exact execution-runtime recipe.
+            ExecutionRuntimeGuardianEnvironment.Clear(startInfo.Environment);
             for (var index = 0; index < argumentCount; index++)
             {
                 startInfo.ArgumentList.Add(arguments[6 + index]);

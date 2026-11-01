@@ -290,6 +290,8 @@ Registry installation accepts exactly the shared projection plus the selected ro
 
 Installed projection validation checks the whole manifest's metadata/import graph and the complete acquired payload, including entry points, hashes and .NET Worker dependencies. Unacquired target payload is not required, and extra role/RID payload is rejected. Runtime bindings, activation, active uses, permissions and App snapshots are restricted to the recorded acquisition scope; a declaration in the source manifest alone does not authorize loading that target. Local sideload first validates the complete universal archive, then performs equivalent current-RID acquisition. The private Registry composition handoff and installed catalog supply this validation scope; ordinary `.sunderpkg` validation and publication still require a complete archive and never infer acquisition from missing files.
 
+Platform support is version-specific and derived from declared `(role, rid)` targets. Normal Registry installation requires the Host's exact RID for every requested role the package declares. Local sideload rejects an executable package with no current-RID target, while retaining its existing ability to acquire current-RID roles from a fully validated archive that also declares other-platform roles. Neither path falls back across architectures. Worker-only and App-only packages remain valid, and targetless contract packages require only shared content. The Registry and App show friendly platform names with per-role technical details; the App identifies partial role coverage separately from full platform support. The installed information endpoint exposes the complete source declarations separately from acquired targets; these facts grant no additional activation authority. Platform support alone does not confirm dependency, SDK/capability, or execution-runtime readiness, which the existing installation plan checks.
+
 ## Build Outputs
 
 One authored .NET Library project with `SunderPackageProject=true` produces isolated
@@ -328,6 +330,14 @@ Extraction writes to a temporary sibling and publishes atomically only after val
 A canonical `.sunderstack` uses `manifest/sunder-stack.json`, `manifest/content-index.json`, and only `payload/fragments/`, `payload/files/`, and `payload/media/` content. The same ZIP path, entry-count, expansion, metadata, and atomic-extraction limits apply as package archives. The exact content index rejects missing, extra, duplicate, case-colliding, hash-mismatched, size-mismatched, or unsafe entries.
 
 Stack manifest schema version `1` requires at least one package requirement or fragment. Unknown optional features produce warnings; unknown required features fail validation. Fragment JSON must be one object no larger than 4 MiB. Media is limited to signature-matched PNG, JPEG, WebP, or GIF files no larger than 10 MiB and 8192 by 8192 pixels. Required inputs explicitly declare `Public` or `Secret`; secret inputs cannot carry portable defaults.
+
+The current write versions and supported reader versions are separate. Manifest/index
+readers currently implement version `1` only; future versions require explicit readers,
+not reinterpretation as V1. Minimum supported versions control retirement independently
+of the writer. `minReaderVersion`, when present, must be positive and no newer than the
+reader; unsupported schemas, indexes, reader requirements, and required features are
+reported as incompatibility rather than malformed JSON. Registry metadata readers may
+retain known retired schemas for historical display without re-admitting their archives.
 
 The validator also performs bounded heuristic secret scanning of UTF-8 text. A finding rejects the archive, but no scanner can prove that an archive contains no secret or that imported content is safe. Treat every Stack as untrusted input after structural validation and require a side-effect-free preview before apply.
 

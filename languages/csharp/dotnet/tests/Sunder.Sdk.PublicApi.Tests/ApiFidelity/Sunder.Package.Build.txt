@@ -288,6 +288,7 @@ type Sunder.Package.Build.Tasks.RestoreSunderContractsTask
   property System.String ContractLockPath { public get; public set; }
   property System.String PlatformCatalogPath { public get; public set; }
   property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property System.Boolean VerifyOnly { public get; public set; }
 type Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask
   property System.String DevOutputPath { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.String DiscoveryRoot { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]

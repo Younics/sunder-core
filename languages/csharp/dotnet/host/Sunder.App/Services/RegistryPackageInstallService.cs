@@ -54,10 +54,16 @@ public sealed class RegistryPackageInstallService : IDisposable
     }
 
     internal Task<PreparedRegistryPackageInstallation?> PrepareBatchAsync(IReadOnlyList<SunderStackPackageRequirement> packages,
-        IRegistryClient registry, IRuntimeRegistryPackageClient client, CancellationToken token)
+        IRegistryClient registry, IRuntimeRegistryPackageClient client, CancellationToken token, string? expectedResolutionFingerprint = null)
     {
         var request = Batch(packages, registry.RegistryUrl);
-        return PrepareAsync(client, cancellation => PreviewBatchAsync(client, request, cancellation),
+        return PrepareAsync(client, async cancellation =>
+        {
+            var preview = await PreviewBatchAsync(client, request, cancellation).ConfigureAwait(false);
+            if (expectedResolutionFingerprint is not null && preview.Plan.ResolutionFingerprint != expectedResolutionFingerprint)
+                throw new InvalidOperationException("The Stack package plan changed. Refresh and review it before installation.");
+            return preview;
+        },
             (preview, ready, cancellation) => client.ApplyRegistryPackagePlanAsync(request with
             {
                 CapabilityConsents = preview.Plan.RequiredCapabilityConsents,
@@ -179,8 +185,8 @@ public sealed class RegistryPackageInstallService : IDisposable
     public Task<RegistryPackageInstallExecutionResult> InstallPackagesAsync(IReadOnlyList<SunderStackPackageRequirement> packages,
         IRegistryClient registryClient, IRuntimeRegistryPackageClient runtimeApiClient, Action<RegistryPackageInstallProgress>? progress = null,
         CancellationToken cancellationToken = default, string? expectedResolutionFingerprint = null)
-        => ExecuteAsync(PrepareBatchAsync(packages, registryClient, runtimeApiClient, cancellationToken),
-            "Install Stack packages", PackageOperationKind.InstallMarketplace, null, progress, cancellationToken);
+        => ExecuteAsync(PrepareBatchAsync(packages, registryClient, runtimeApiClient, cancellationToken, expectedResolutionFingerprint),
+             "Install Stack packages", PackageOperationKind.InstallMarketplace, null, progress, cancellationToken);
 
     public Task<RegistryPackageInstallExecutionResult> UpdateAllAsync(IRuntimeRegistryPackageClient runtimeApiClient,
         Action<RegistryPackageInstallProgress>? progress = null, CancellationToken cancellationToken = default)

@@ -44,8 +44,17 @@ public sealed partial class PackageTemplateTests
 
             var packagePath = Path.Combine(root, $"Sunder.Package.Templates.{TestVersion}.nupkg");
             Assert.True(File.Exists(packagePath), $"Template package was not created: {packagePath}");
+            var payload = Path.Combine(Path.GetDirectoryName(packageProject)!, "templates", "sunder-package", "Sunder.Package.Template");
+            Assert.True(File.Exists(Path.Combine(payload, "Sunder.Package.Template.csproj.in")));
+            Assert.True(File.Exists(Path.Combine(payload, "Views", "DefaultPackageView.axaml.in")));
+            Assert.Empty(Directory.GetFiles(payload, "*.csproj", SearchOption.AllDirectories));
+            Assert.Empty(Directory.GetFiles(payload, "*.cs", SearchOption.AllDirectories));
+            Assert.Empty(Directory.GetFiles(payload, "*.axaml", SearchOption.AllDirectories));
             using (var archive = ZipFile.OpenRead(packagePath))
             {
+                Assert.DoesNotContain(archive.Entries, entry => entry.FullName.EndsWith(".in", StringComparison.Ordinal));
+                Assert.Single(archive.Entries, entry => entry.FullName.EndsWith("/Sunder.Package.Template.csproj", StringComparison.Ordinal));
+                Assert.Single(archive.Entries, entry => entry.FullName.EndsWith("/Views/DefaultPackageView.axaml", StringComparison.Ordinal));
                 var configuration = Assert.Single(
                     archive.Entries,
                     entry => entry.FullName == "content/sunder-package/.template.config/template.json");
@@ -208,6 +217,9 @@ public sealed partial class PackageTemplateTests
                 packageName,
                 view.Descendants().Single(element => element.Name.LocalName == "TextBlock"
                     && element.Attribute("FontSize") is not null).Attribute("Text")?.Value);
+            var nameInput = Assert.Single(view.Descendants(), element => element.Name.LocalName == "TextBox");
+            Assert.Equal("Your name", nameInput.Attribute("PlaceholderText")?.Value);
+            Assert.Null(nameInput.Attribute("Watermark"));
 
             Assert.Contains(
                 "VersionRange = \">=3.2.0 <4.0.0\"",

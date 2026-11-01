@@ -16,7 +16,7 @@ evidence in `core-large-object-characterization.json`.
 ```text
 node scripts/test-oracles/check-core-test-policy.mjs
 node scripts/test-oracles/run-core-test-lane.mjs --primary-lane host-platform
-node scripts/test-oracles/run-core-test-lane.mjs --test Sunder.Package.Build.Tests.PackageBuildManifestTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable
+node scripts/test-oracles/run-core-test-lane.mjs --test Sunder.Package.Build.Tests.PackageOutputLockTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable
 ```
 
 Primary lanes remain a disjoint execution partition. `dotnet-linux` owns

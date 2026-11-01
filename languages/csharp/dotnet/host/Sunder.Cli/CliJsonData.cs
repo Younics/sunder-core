@@ -105,6 +105,7 @@ internal static class CliJsonData
     public static object StackDetails(RegistryStackDetails stack) => new
     {
         stackId = stack.StackId,
+        compatibility = stack.Compatibility,
         name = stack.Name,
         summary = stack.Summary,
         packages = stack.Packages.Select(package => new
@@ -119,6 +120,9 @@ internal static class CliJsonData
         {
             fragmentId = fragment.FragmentId,
             ownerPackageId = fragment.OwnerPackageId,
+            contributorId = fragment.ContributorId,
+            schemaId = fragment.SchemaId,
+            schemaVersion = fragment.SchemaVersion,
             displayName = fragment.DisplayName,
             defaultSelected = fragment.DefaultSelected,
         }).ToArray(),
@@ -345,6 +349,12 @@ internal static class CliJsonData
             minReaderVersion = result.Manifest.MinReaderVersion,
             packageCount = result.Manifest.Packages?.Count ?? 0,
             fragmentCount = result.Manifest.Fragments?.Count ?? 0,
+            packages = result.Manifest.Packages,
+            fragments = result.Manifest.Fragments?.Select(fragment => new
+            {
+                fragment.FragmentId, fragment.OwnerPackageId, fragment.ContributorId, fragment.SchemaId,
+                fragment.SchemaVersion, fragment.DisplayName, fragment.DefaultSelected,
+            }),
         },
         warnings = result.Warnings,
         errors = result.Errors,

@@ -62,13 +62,25 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                         sourceValidation.Errors));
             }
 
+            var currentRid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
+            // Reject wholly foreign archives before projection can turn them into
+            // shared-only acquisitions. A validated full archive may also declare
+            // roles for other platforms; retain the existing current-RID scope.
+            if (registryProjectionTargets is null)
+            {
+                var targets = SunderPackageTargetResolver.EnumerateTargets(sourceValidation.Manifest);
+                if (targets.Count > 0 && !targets.Any(target => target.Rid == currentRid))
+                    throw new InvalidDataException(
+                        $"Package '{sourceValidation.Manifest.Id}' {sourceValidation.Manifest.Version} does not provide a target for current RID '{currentRid}'. "
+                        + $"Supported targets: {string.Join(", ", targets.Select(target => target.ToString()).Order(StringComparer.Ordinal))}.");
+            }
             var sourceContentIdentity = ComputeContentIdentity(sourceStagingPath);
             var validation = await PackageProjectionMaterializer.MaterializeCurrentRidInstallPackageAsync(
                 sourceStagingPath,
                 stagingPath,
                 sourceValidation.Manifest,
                 sourceValidation.ContentIndex,
-                PackageTargetSelection.GetCurrentRuntimeIdentifier(),
+                currentRid,
                 cancellationToken,
                 registryProjectionTargets);
             TryDeleteDirectory(sourceStagingPath);
@@ -94,7 +106,7 @@ internal sealed class SunderPackageArchiveInstaller(RuntimePackagePaths paths)
                 SourcePackageContentIdentity = provenance.SourceKind == InstalledPackageSourceKind.Registry
                     ? provenance.SourceIdentity : sourceContentIdentity,
                 AcquiredTargets = (registryProjectionTargets ?? SunderPackageTargetResolver.EnumerateTargets(manifest)
-                    .Where(key => key.Rid == PackageTargetSelection.GetCurrentRuntimeIdentifier()).ToArray())
+                    .Where(key => key.Rid == currentRid).ToArray())
                     .OrderBy(key => key.Role, StringComparer.Ordinal).ThenBy(key => key.Rid, StringComparer.Ordinal)
                     .Select(key => new InstalledPackageTargetRecord(key.Role, key.Rid)).ToArray(),
             };

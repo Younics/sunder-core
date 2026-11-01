@@ -351,6 +351,9 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
         {
             startInfo.Environment[pair.Key] = pair.Value;
         }
+        ExecutionRuntimeGuardianEnvironment.Configure(
+            startInfo.Environment,
+            RuntimeEnvironment.GetRuntimeDirectory());
         startInfo.ArgumentList.Add(ExecutionRuntimeProcessGuardian.InvocationArgument);
         startInfo.ArgumentList.Add(Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
         startInfo.ArgumentList.Add(generation.ToString("N"));
@@ -393,7 +396,7 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             cancellationToken.ThrowIfCancellationRequested();
             if (guardian.HasExited)
             {
-                throw new IOException("The execution-runtime process guardian exited before containment was established.");
+                throw new ExecutionRuntimeGuardianLaunchException(guardian.ExitCode);
             }
             if (UnixProcessGroups.GetProcessGroupId(guardian.Id) == guardian.Id)
             {
@@ -620,7 +623,7 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
                 cancellationToken.ThrowIfCancellationRequested();
                 if (_guardian.HasExited)
                 {
-                    throw new IOException("The execution-runtime process guardian exited before starting its payload.");
+                    throw new ExecutionRuntimeGuardianLaunchException(_guardian.ExitCode);
                 }
                 if (Stopwatch.GetElapsedTime(started) >= LaunchTimeout)
                 {

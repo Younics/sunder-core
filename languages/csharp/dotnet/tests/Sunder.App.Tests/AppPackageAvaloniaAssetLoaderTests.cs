@@ -15,55 +15,181 @@ public sealed class AppPackageAvaloniaAssetLoaderTests
     [Fact]
     public void OpenAndGetAssembly_WhenPackageAssemblyRegistered_UsesRegisteredAssemblyBeforeFallback()
     {
-        var fallback = new FallbackAssetLoader();
-        var packageResources = new AppPackageResourceAssemblyRegistry();
-        var loader = new AppPackageAvaloniaAssetLoader(fallback, packageResources);
-        var appAssembly = typeof(App).Assembly;
-        packageResources.RegisterPackageAssembly("agent", appAssembly);
+        WithInstalledLoader((fallback, packageResources) =>
+        {
+            var appAssembly = typeof(App).Assembly;
+            packageResources.RegisterPackageAssembly("agent", appAssembly);
 
-        using var stream = loader.Open(PackageResourceUri);
-        var (assemblyStream, assembly) = loader.OpenAndGetAssembly(PackageResourceUri);
-        using var _ = assemblyStream;
+            using var stream = AssetLoader.Open(PackageResourceUri);
+            var (assemblyStream, assembly) = AssetLoader.OpenAndGetAssembly(PackageResourceUri);
+            using var _ = assemblyStream;
 
-        Assert.Same(appAssembly, assembly);
-        Assert.True(stream.ReadByte() >= 0);
-        Assert.False(fallback.WasOpened);
+            Assert.Same(appAssembly, assembly);
+            Assert.True(stream.ReadByte() >= 0);
+            Assert.False(fallback.WasOpened);
+        });
     }
 
     [Fact]
     public void Open_WhenRegisteredPackageAssemblyMissesResource_DoesNotFallBackToStaleAssembly()
     {
-        var fallback = new FallbackAssetLoader();
-        var packageResources = new AppPackageResourceAssemblyRegistry();
-        var loader = new AppPackageAvaloniaAssetLoader(fallback, packageResources);
-        packageResources.RegisterPackageAssembly("agent", typeof(App).Assembly);
-        var missingResourceUri = new Uri("avares://Sunder.App/Assets/Images/missing-package-resource.png");
+        WithInstalledLoader((fallback, packageResources) =>
+        {
+            packageResources.RegisterPackageAssembly("agent", typeof(App).Assembly);
+            var missingResourceUri = new Uri("avares://Sunder.App/Assets/Images/missing-package-resource.png");
 
-        Assert.False(loader.Exists(missingResourceUri));
-        Assert.Throws<FileNotFoundException>(() => loader.Open(missingResourceUri));
-        Assert.False(fallback.WasOpened);
+            Assert.False(AssetLoader.Exists(missingResourceUri));
+            Assert.Throws<FileNotFoundException>(() => AssetLoader.Open(missingResourceUri));
+            Assert.False(fallback.WasOpened);
+        });
     }
 
     [Fact]
     public void Open_WhenDependencyAssemblyRegistersAfterEntryAssembly_KeepsEntryAssemblyResources()
     {
-        var fallback = new FallbackAssetLoader();
-        var packageResources = new AppPackageResourceAssemblyRegistry();
-        var loader = new AppPackageAvaloniaAssetLoader(fallback, packageResources);
-        var appAssembly = typeof(App).Assembly;
-        var dependencyAssembly = typeof(AppPackageAvaloniaAssetLoaderTests).Assembly;
-        packageResources.RegisterPackageAssembly("agent", appAssembly);
-        packageResources.RegisterPackageAssembly("agent", dependencyAssembly);
+        WithInstalledLoader((fallback, packageResources) =>
+        {
+            var appAssembly = typeof(App).Assembly;
+            var dependencyAssembly = typeof(AppPackageAvaloniaAssetLoaderTests).Assembly;
+            packageResources.RegisterPackageAssembly("agent", appAssembly);
+            packageResources.RegisterPackageAssembly("agent", dependencyAssembly);
 
-        var (stream, assembly) = loader.OpenAndGetAssembly(PackageResourceUri);
-        using var _ = stream;
+            var (stream, assembly) = AssetLoader.OpenAndGetAssembly(PackageResourceUri);
+            using var _ = stream;
 
-        Assert.Same(appAssembly, assembly);
-        Assert.False(fallback.WasOpened);
+            Assert.Same(appAssembly, assembly);
+            Assert.False(fallback.WasOpened);
+        });
     }
 
     [Fact]
     public void Install_ReplacesAvaloniaAssetLoaderService()
+    {
+        WithInstalledLoader((fallback, packageResources) =>
+        {
+            packageResources.RegisterPackageAssembly("agent", typeof(App).Assembly);
+
+            using var stream = AssetLoader.Open(PackageResourceUri);
+
+            Assert.True(stream.ReadByte() >= 0);
+            Assert.False(fallback.WasOpened);
+
+            // Reinstallation retains the platform loader, not a chain of routers.
+            Assert.True(AppPackageAvaloniaAssetLoader.Install(packageResources));
+            Assert.True(AppPackageAvaloniaAssetLoader.Install(new AppPackageResourceAssemblyRegistry()));
+            using var shellStream = AssetLoader.Open(new Uri("avares://Unregistered.Shell/asset.png"));
+            Assert.Equal(0x42, shellStream.ReadByte());
+            Assert.Equal(1, fallback.OpenCount);
+        });
+    }
+
+    [Fact]
+    public void StaticFacade_WhenForwarding_UsesCapturedPlatformForEveryOperation()
+    {
+        WithInstalledLoader((fallback, _) =>
+        {
+            var uri = new Uri("avares://Unregistered.Shell/asset.png");
+            AssetLoader.SetDefaultAssembly(typeof(App).Assembly);
+            Assert.Same(typeof(App).Assembly, fallback.DefaultAssembly);
+            Assert.True(AssetLoader.Exists(uri));
+            Assert.Same(typeof(FallbackAssetLoader).Assembly, AssetLoader.GetAssembly(uri));
+            Assert.Equal([uri], AssetLoader.GetAssets(uri, null));
+            using (var stream = AssetLoader.Open(uri)) Assert.Equal(0x42, stream.ReadByte());
+            var (pairedStream, assembly) = AssetLoader.OpenAndGetAssembly(uri);
+            using (pairedStream) Assert.Equal(0x42, pairedStream.ReadByte());
+            Assert.Same(typeof(FallbackAssetLoader).Assembly, assembly);
+            AssetLoader.InvalidateAssemblyCache("Unregistered.Shell");
+            AssetLoader.InvalidateAssemblyCache();
+
+            Assert.Equal(1, fallback.DefaultAssemblyCount);
+            Assert.Equal(1, fallback.ExistsCount);
+            Assert.Equal(1, fallback.GetAssemblyCount);
+            Assert.Equal(1, fallback.GetAssetsCount);
+            Assert.Equal(2, fallback.OpenCount);
+            Assert.Equal(["Unregistered.Shell", null], fallback.InvalidatedAssemblyNames);
+        });
+    }
+
+    [Fact]
+    public void StaticFacade_WhenPlatformLoaderReenters_PackageResolutionIsNotBypassed()
+    {
+        WithInstalledLoader((fallback, packageResources) =>
+        {
+            packageResources.RegisterPackageAssembly("agent", typeof(App).Assembly);
+            var missing = new Uri("avares://Sunder.App/Assets/Images/missing-package-resource.png");
+            fallback.OnOpen = () => Assert.False(AssetLoader.Exists(missing));
+
+            using var stream = AssetLoader.Open(new Uri("avares://Unregistered.Shell/asset.png"));
+
+            Assert.Equal(0x42, stream.ReadByte());
+            Assert.Equal(1, fallback.OpenCount);
+            Assert.Equal(0, fallback.ExistsCount);
+        });
+    }
+
+    [Fact]
+    public void StaticFacade_WhenPlatformOpenIsBlocked_ConcurrentPackageReadKeepsItsGeneration()
+    {
+        WithInstalledLoader((fallback, packageResources) =>
+        {
+            packageResources.RegisterPackageAssembly("agent", typeof(App).Assembly);
+            using var entered = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            fallback.OnOpen = () =>
+            {
+                entered.Set();
+                Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            };
+            var platformRead = Task.Run(() =>
+            {
+                using var stream = AssetLoader.Open(new Uri("avares://Unregistered.Shell/asset.png"));
+                return stream.ReadByte();
+            });
+            try
+            {
+                Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+                var (stream, assembly) = AssetLoader.OpenAndGetAssembly(PackageResourceUri);
+                using var _ = stream;
+                Assert.Same(typeof(App).Assembly, assembly);
+                Assert.True(stream.ReadByte() >= 0);
+                Assert.Equal(1, fallback.OpenCount);
+            }
+            finally
+            {
+                release.Set();
+                Assert.Equal(0x42, platformRead.WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult());
+            }
+        });
+    }
+
+    [Fact]
+    public void PlatformDispatch_WhenOperationThrowsBeforeResolution_ClearsPendingCall()
+    {
+        var platform = new FallbackAssetLoader();
+        var package = new FallbackAssetLoader();
+        var dispatch = new AppPackageAssetLoaderDispatch(platform);
+
+        Assert.Throws<IOException>(() => dispatch.Invoke<int>(() => throw new IOException("Before service resolution.")));
+
+        Assert.Same(package, dispatch.Resolve(package));
+    }
+
+    [Fact]
+    public void Install_WhenPlatformLoaderIsAbsent_RejectsInvalidStartupWithoutCreatingOne()
+    {
+        lock (LocatorSync)
+        {
+            using var scope = EnterAvaloniaLocatorScope();
+            BindAvaloniaAssetLoader(null);
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                AppPackageAvaloniaAssetLoader.Install(new AppPackageResourceAssemblyRegistry()));
+
+            Assert.Contains("initialize its platform asset loader", error.Message, StringComparison.Ordinal);
+        }
+    }
+
+    private static void WithInstalledLoader(Action<FallbackAssetLoader, AppPackageResourceAssemblyRegistry> action)
     {
         lock (LocatorSync)
         {
@@ -71,14 +197,8 @@ public sealed class AppPackageAvaloniaAssetLoaderTests
             var fallback = new FallbackAssetLoader();
             BindAvaloniaAssetLoader(fallback);
             var packageResources = new AppPackageResourceAssemblyRegistry();
-
             Assert.True(AppPackageAvaloniaAssetLoader.Install(packageResources));
-            packageResources.RegisterPackageAssembly("agent", typeof(App).Assembly);
-
-            using var stream = AssetLoader.Open(PackageResourceUri);
-
-            Assert.True(stream.ReadByte() >= 0);
-            Assert.False(fallback.WasOpened);
+            action(fallback, packageResources);
         }
     }
 
@@ -93,7 +213,7 @@ public sealed class AppPackageAvaloniaAssetLoaderTests
             ?? throw new InvalidOperationException("Avalonia service locator did not return a scope."));
     }
 
-    private static void BindAvaloniaAssetLoader(IAssetLoader assetLoader)
+    private static void BindAvaloniaAssetLoader(IAssetLoader? assetLoader)
     {
         var locatorType = GetAvaloniaLocatorType();
         var currentMutable = locatorType.GetProperty(
@@ -121,17 +241,32 @@ public sealed class AppPackageAvaloniaAssetLoaderTests
     private sealed class FallbackAssetLoader : IAssetLoader
     {
         public bool WasOpened { get; private set; }
+        public int OpenCount { get; private set; }
+        public int DefaultAssemblyCount { get; private set; }
+        public int ExistsCount { get; private set; }
+        public int GetAssemblyCount { get; private set; }
+        public int GetAssetsCount { get; private set; }
+        public Assembly? DefaultAssembly { get; private set; }
+        public List<string?> InvalidatedAssemblyNames { get; } = [];
+        public Action? OnOpen { get; set; }
 
         public void SetDefaultAssembly(Assembly assembly)
         {
+            DefaultAssemblyCount++;
+            DefaultAssembly = assembly;
         }
 
         public bool Exists(Uri uri, Uri? baseUri = null)
-            => true;
+        {
+            ExistsCount++;
+            return true;
+        }
 
         public Stream Open(Uri uri, Uri? baseUri = null)
         {
             WasOpened = true;
+            OpenCount++;
+            OnOpen?.Invoke();
             return new MemoryStream(new byte[] { 0x42 });
         }
 
@@ -139,17 +274,25 @@ public sealed class AppPackageAvaloniaAssetLoaderTests
             => (Open(uri, baseUri), typeof(FallbackAssetLoader).Assembly);
 
         public Assembly? GetAssembly(Uri uri, Uri? baseUri = null)
-            => typeof(FallbackAssetLoader).Assembly;
+        {
+            GetAssemblyCount++;
+            return typeof(FallbackAssetLoader).Assembly;
+        }
 
         public IEnumerable<Uri> GetAssets(Uri uri, Uri? baseUri)
-            => [uri];
+        {
+            GetAssetsCount++;
+            return [uri];
+        }
 
         public void InvalidateAssemblyCache(string name)
         {
+            InvalidatedAssemblyNames.Add(name);
         }
 
         public void InvalidateAssemblyCache()
         {
+            InvalidatedAssemblyNames.Add(null);
         }
     }
 }

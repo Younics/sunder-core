@@ -32,8 +32,11 @@
            Text="package-authoring.reference-role-unavailable: Build the selected $(SunderPackageReferenceRole) role for $(_SunderReferenceRid) before using BuildProjectReferences=false." />
   </Target>
   <Target Name="GetTargetPathWithTargetPlatformMoniker" DependsOnTargets="_GetSunderPackageRoleReferencePath" Returns="@(_SunderPackageRoleReference)" />
-  <Target Name="GetSunderPackageRoleReference" DependsOnTargets="_ValidateSunderPackageReferenceRole;Build;_GetSunderPackageRoleReferencePath" Returns="@(_SunderPackageRoleReference)">
-    <Error Condition="!Exists('$(_SunderReferencePath)')"
+  <PropertyGroup>
+    <_SunderPackageRoleReferenceBuildTarget Condition="'$(DesignTimeBuild)' != 'true'">Build</_SunderPackageRoleReferenceBuildTarget>
+  </PropertyGroup>
+  <Target Name="GetSunderPackageRoleReference" DependsOnTargets="_ValidateSunderPackageReferenceRole;$(_SunderPackageRoleReferenceBuildTarget);_GetSunderPackageRoleReferencePath" Returns="@(_SunderPackageRoleReference)">
+    <Error Condition="'$(DesignTimeBuild)' != 'true' and !Exists('$(_SunderReferencePath)')"
            Text="package-authoring.reference-role-unavailable: The package has no built $(SunderPackageReferenceRole) role for $(_SunderReferenceRid)." />
   </Target>
 </Project>

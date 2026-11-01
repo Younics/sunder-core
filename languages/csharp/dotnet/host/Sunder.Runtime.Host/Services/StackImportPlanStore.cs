@@ -1,5 +1,6 @@
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Stacks;
+using Sunder.Package.Format;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -151,4 +152,8 @@ internal sealed record StackImportPlan(
     IReadOnlyList<StackContributorBinding> Contributors,
     IReadOnlyList<RuntimeStackImportActionDescriptor> Actions,
     IReadOnlyList<RuntimeStackImportConflictDescriptor> Conflicts,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset ExpiresAtUtc)
+{
+    public IReadOnlyList<SunderStackPackageRequirement> PackageRequirements { get; init; } = [];
+    public IReadOnlyList<RuntimeStackRequiredInputDescriptor> RequiredInputs { get; init; } = [];
+}

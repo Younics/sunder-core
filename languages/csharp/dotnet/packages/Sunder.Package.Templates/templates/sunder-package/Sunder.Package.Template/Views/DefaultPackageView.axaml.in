@@ -14,7 +14,7 @@
       <TextBlock Text="Start replacing this view with your package UI."
                  TextWrapping="Wrap" />
       <TextBlock Text="{Binding PackageId, StringFormat='Package id: {0}'}" />
-      <TextBox x:Name="NameInput" Text="Sunder" Watermark="Your name" MaxLength="120" />
+      <TextBox x:Name="NameInput" Text="Sunder" PlaceholderText="Your name" MaxLength="120" />
       <Button Content="Create greeting" Click="GreetOnClick" />
       <TextBlock x:Name="StatusText" TextWrapping="Wrap" />
     </StackPanel>

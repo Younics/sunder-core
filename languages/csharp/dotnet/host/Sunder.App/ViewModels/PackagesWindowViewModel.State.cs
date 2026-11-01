@@ -309,6 +309,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && Marketplace.SelectedPackage is { IsYanked: false }
         && Marketplace.SelectedVersion is { IsYanked: false }
         && Marketplace.VersionDetailsLoaded
+        && Platforms.SupportsCurrentPlatform == true
         && Marketplace.RuntimePlanCanApply
         && !Operations.SelectedPackageHasActiveOperation;
 
@@ -320,6 +321,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         && GetPackageUpdate(Marketplace.SelectedPackage.PackageId) is { } update
         && string.Equals(selectedVersion.Version, update.AvailableVersion, StringComparison.Ordinal)
         && Marketplace.VersionDetailsLoaded
+        && Platforms.SupportsCurrentPlatform == true
         && Marketplace.RuntimePlanCanApply
         && !Operations.SelectedPackageHasActiveOperation;
 
@@ -414,6 +416,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         _informationRequest.Invalidate();
         _marketplaceVersionDetailsRequest.Invalidate();
         Information = PackageInformationViewModel.Loading();
+        Platforms = PackagePlatformsViewModel.Loading();
         OnPropertyChanged(nameof(IsMarketplaceMode));
         OnPropertyChanged(nameof(IsInstalledMode));
         OnPropertyChanged(nameof(SearchPlaceholder));

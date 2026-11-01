@@ -121,6 +121,13 @@ copies and verifies complete descriptor/receipt pairs under that lease, then
 compiles from detached bytes. It never performs recovery, downloads or repair.
 An incomplete publication produces an actionable restore diagnostic.
 
+For C#, `dotnet msbuild Package.csproj -t:CheckSunderContractCache` uses those same
+verified readers without publishing cache evidence. Build and check report the
+effective cache root and all missing selected descriptors/receipts, model projections
+and catalogs, including inventory members a provider does not directly call. NuGet
+restore does not populate this cache. Supply the exact candidate/catalog to explicit
+contract restore; same-version rebuilt bytes and inferred Registries are not substitutes.
+
 Cache bytes establish integrity only. Registry publication, compatible installation,
 development preparation and Runtime grants have their own admission checks.
 

@@ -35,7 +35,7 @@
             </StackPanel>
             <Button Grid.Column="2"
                     Classes="toast-close-button"
-                    Command="{Binding $parent[ItemsControl].DataContext.DismissToastNotificationCommand}"
+                    Command="{Binding $parent[ItemsControl].((vm:MainWindowViewModel)DataContext).DismissToastNotificationCommand}"
                     CommandParameter="{Binding}"
                     ToolTip.Tip="Dismiss notification">
               <Path Width="10"

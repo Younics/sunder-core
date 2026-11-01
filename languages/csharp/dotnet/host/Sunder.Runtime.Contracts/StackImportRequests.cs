@@ -8,6 +8,9 @@ public sealed record RuntimeStackImportPreviewRequest(
     IReadOnlyDictionary<string, string> InputValues,
     IReadOnlyDictionary<string, string> IdRemaps)
 {
+    /// <summary>When true, an empty selection uses archive defaults. Set false for an explicit empty selection.</summary>
+    public bool UseDefaultFragments { get; init; } = true;
+
     public IReadOnlyList<string> SelectedFragmentIds { get; }
         = RuntimeContractCollections.Freeze(SelectedFragmentIds);
     public IReadOnlyDictionary<string, string> InputValues { get; }

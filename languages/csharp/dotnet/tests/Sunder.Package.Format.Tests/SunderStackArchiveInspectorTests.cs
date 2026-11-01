@@ -22,9 +22,10 @@ public sealed class SunderStackArchiveInspectorTests
             Path.Combine(root, "manifest-version-staging"));
 
         Assert.False(result.Success);
-        Assert.Contains(
-            $"Stack manifest must declare schemaVersion {SunderStackFormat.CurrentSchemaVersion}.",
-            result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains(version == 0
+            ? "positive integer schemaVersion" : "Unsupported Stack schemaVersion 2", StringComparison.Ordinal));
+        Assert.Equal(version == 0 ? SunderStackArchiveErrorCategory.Validation : SunderStackArchiveErrorCategory.UnsupportedFormat,
+            Assert.Single(result.ErrorCategories));
     }
 
     [Theory]
@@ -38,9 +39,34 @@ public sealed class SunderStackArchiveInspectorTests
             Path.Combine(root, "content-index-version-staging"));
 
         Assert.False(result.Success);
-        Assert.Contains(
-            $"Stack content index must declare schemaVersion {SunderStackFormat.CurrentContentIndexVersion}.",
-            result.Errors);
+        Assert.Contains(result.Errors, error => error.Contains(version == 0
+            ? "positive integer schemaVersion" : "Unsupported Stack content-index schemaVersion 2", StringComparison.Ordinal));
+        Assert.Equal(version == 0 ? SunderStackArchiveErrorCategory.Validation : SunderStackArchiveErrorCategory.UnsupportedFormat,
+            Assert.Single(result.ErrorCategories));
+    }
+
+    [Fact]
+    public void MetadataReader_DispatchesByVersionBeforeInterpretingVersionSpecificFields()
+    {
+        Assert.Equal(1, SunderStackMetadataReader.ReadManifest("{\"schemaVersion\":1}").SchemaVersion);
+        Assert.Throws<NotSupportedException>(() => SunderStackMetadataReader.ReadManifest("{\"schemaVersion\":2,\"futureShape\":true}"));
+        Assert.Throws<JsonException>(() => SunderStackMetadataReader.ReadManifest("{\"schemaVersion\":1,\"futureShape\":true}"));
+        Assert.Throws<JsonException>(() => SunderStackMetadataReader.ReadManifest("{\"schemaVersion\":1,\"schemaVersion\":2}"));
+        Assert.All(SunderStackFormat.SupportedSchemaVersions, version => Assert.True(SunderStackFormat.SupportsSchemaVersion(version)));
+        Assert.True(SunderStackFormat.SupportsSchemaVersion(SunderStackFormat.CurrentSchemaVersion));
+        Assert.True(SunderStackFormat.SupportsContentIndexVersion(SunderStackFormat.CurrentContentIndexVersion));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task ExtractAndValidateAsync_RejectsNonpositiveReaderVersion(int version)
+    {
+        var root = CreateTempDirectory();
+        var result = await SunderStackArchiveInspector.ExtractAndValidateAsync(
+            CreateStackArchive(root, CreateManifest(minReaderVersion: version)), Path.Combine(root, "reader-version-staging"));
+        Assert.False(result.Success);
+        Assert.Contains("Stack minReaderVersion must be positive when specified.", result.Errors);
     }
 
     [Fact]

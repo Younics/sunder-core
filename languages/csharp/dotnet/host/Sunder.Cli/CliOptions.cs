@@ -37,6 +37,7 @@ internal sealed record CliOptions(
         var settings = appSettings ?? CliAppSettings.Load();
         var environment = getEnvironmentVariable ?? Environment.GetEnvironmentVariable;
         var needsRegistry = requirements.HasFlag(CliConfigurationRequirements.RegistryApi)
+                            || requirements.HasFlag(CliConfigurationRequirements.OptionalRegistryApi)
                             || requirements.HasFlag(CliConfigurationRequirements.RegistryWeb);
         var environmentApi = needsRegistry ? environment("SUNDER_REGISTRY_API_URL") : null;
         var environmentWeb = requirements.HasFlag(CliConfigurationRequirements.RegistryWeb)
@@ -62,7 +63,8 @@ internal sealed record CliOptions(
 
         var registryApi = requirements.HasFlag(CliConfigurationRequirements.RegistryApi)
             ? NormalizeUrl(RequireUrl(apiValue, "Registry API", "SUNDER_REGISTRY_API_URL", "--registry-api-url"), "Registry API")
-            : null;
+            : requirements.HasFlag(CliConfigurationRequirements.OptionalRegistryApi) && !string.IsNullOrWhiteSpace(apiValue)
+                ? NormalizeUrl(apiValue, "Registry API") : null;
         var registryWeb = requirements.HasFlag(CliConfigurationRequirements.RegistryWeb)
             ? NormalizeUrl(RequireUrl(webValue, "Registry web", "SUNDER_REGISTRY_WEB_URL", "--registry-web-url"), "Registry web")
             : null;

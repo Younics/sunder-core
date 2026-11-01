@@ -262,16 +262,46 @@ Preview a local Stack import through Runtime without applying package or contrib
 sunder stack import --file .\agent.sunderstack --dry-run
 ```
 
-Noninteractive apply is intentionally unavailable until fragment/action selection and Public/Secret input sources can be supplied without exposing sensitive values. The CLI discards the preview plan after rendering its actions, inputs, and blockers.
+Apply requires `--yes`; it cannot be combined with `--dry-run`. Default fragments/actions
+are used unless explicit selections are supplied:
+
+```powershell
+sunder stack import --file .\agent.sunderstack --yes
+sunder stack import --file .\agent.sunderstack --yes --fragment agent-profile.example --action <scoped-action-id> --input-env <scoped-input-id>=AGENT_KEY
+```
+
+Repeat `--fragment`, `--action`, or `--input-env` for multiple selections. Obtain scoped
+action/input ids from the preview; they are not contributor-local ids. `--inputs-stdin`
+instead reads a bounded JSON object mapping scoped input ids to string values from
+redirected stdin. Raw values are never command arguments. Supplied values are omitted
+from output and redacted from returned diagnostic text. Public defaults are rebound
+through a fresh preview, not injected after a plan is approved.
+
+When a Registry is configured, package requirements go through normal package/runtime
+preflight, exact resolution fingerprints, and sensitive-capability consent. Use
+`--approve-sensitive-capabilities` only after reviewing that preflight. Without a Registry,
+Runtime requires compatible active local packages and installs nothing. `--no-actions`
+can install packages and reveal the fresh setup preview without applying setup; this is
+useful when contributors are not available for the initial dry run. `--no-fragments`
+selects package requirements only. Package installation is not rolled back if later
+contributor setup fails. Plans are discarded after use or preview.
 
 Export Runtime-discovered default Stack content, or explicitly include all discovered items and details:
 
 ```powershell
 sunder stack export example.agent-stack --output .\agent.sunderstack
 sunder stack export example.agent-stack --all --output .\agent-full.sunderstack --force
+sunder stack export example.agent-stack --dry-run --json
+sunder stack export example.agent-stack --item younics.ai.agent/younics.ai.agent.profiles/example --output .\selected.sunderstack
 ```
 
 Runtime owns discovery and archive creation. The CLI sends item identities rather than projecting discovered values and verifies the bounded download before replacing the destination.
+
+Export dry run lists item selection ids and detail metadata without exporting content or
+printing discovered values. Repeat `--item` to choose exact items; `--all` includes all
+their details rather than defaults. Local `dev stack inspect --json` also exposes fragment
+ids and schemas without executing contributors. Stack info includes system-format requirements,
+which are independent of Registry publication revisions and package versions.
 
 ## Local Artifact Validation
 

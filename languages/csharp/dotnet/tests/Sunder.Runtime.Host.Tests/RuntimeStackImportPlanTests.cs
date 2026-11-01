@@ -11,7 +11,7 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed class RuntimeStackImportPlanTests
+public sealed partial class RuntimeStackImportPlanTests
 {
     [Fact]
     public async Task PreviewAsync_WhenUploadHandleIsMissing_ReturnsTypedStaleFailure()
@@ -372,6 +372,7 @@ public sealed class RuntimeStackImportPlanTests
             Clock = clock;
             Contributors = contributors;
             Service = new RuntimeStackImportService(owner, transfers, rpcBroker, clock, policy);
+            ExportService = new RuntimeStackExportService(owner, transfers, paths, rpcBroker, clock, policy);
         }
 
         public RuntimePackagePaths Paths { get; }
@@ -382,6 +383,7 @@ public sealed class RuntimeStackImportPlanTests
         public TestTimeProvider Clock { get; }
         public IReadOnlyList<TestContributor> Contributors { get; }
         public RuntimeStackImportService Service { get; }
+        public RuntimeStackExportService ExportService { get; }
 
         public static Task<StackImportFixture> CreateAsync(params TestContributor[] contributors)
             => CreateCoreAsync(policy: null, contributors);
@@ -457,7 +459,8 @@ public sealed class RuntimeStackImportPlanTests
             RpcCatalog.ActivateSession(session, Owner.Generation);
         }
 
-        public async Task<RuntimeStackImportPreviewResponse> PreviewAsync(IReadOnlyList<string> selectedFragmentIds)
+        public async Task<RuntimeStackImportPreviewResponse> PreviewAsync(IReadOnlyList<string> selectedFragmentIds,
+            IReadOnlyList<SunderStackPackageRequirement>? requirements = null, bool includeInputValues = true, bool useDefaultFragments = true)
         {
             var archivePath = Path.Combine(Paths.RootPath, $"{Guid.NewGuid():N}.sunderstack");
             Directory.CreateDirectory(Paths.RootPath);
@@ -491,7 +494,7 @@ public sealed class RuntimeStackImportPlanTests
                 Name = "Test Stack",
                 CreatedAtUtc = Clock.GetUtcNow(),
                 UpdatedAtUtc = Clock.GetUtcNow(),
-                Packages = [],
+                Packages = requirements ?? [],
                 Fragments = fragments,
             }, archivePath, payloads);
             await using var stream = File.OpenRead(archivePath);
@@ -524,8 +527,8 @@ public sealed class RuntimeStackImportPlanTests
             var operation = await Service.PreviewAsync(new RuntimeStackImportPreviewRequest(
                 upload.UploadId,
                 selectedFragmentIds,
-                inputValues,
-                remaps));
+                includeInputValues ? inputValues : new Dictionary<string, string>(),
+                remaps) { UseDefaultFragments = useDefaultFragments });
             return operation.Response;
         }
 
@@ -563,7 +566,7 @@ public sealed class RuntimeStackImportPlanTests
             {
                 Id = contributor.PackageId,
                 Name = contributor.PackageId,
-                Version = "1.0.0",
+                Version = contributor.PackageVersion,
                 ContractBundles =
                 [
                     new SunderPackageContractBundleManifest
@@ -590,7 +593,7 @@ public sealed class RuntimeStackImportPlanTests
                 new ActivePackageDescriptor(
                     contributor.PackageId,
                     contributor.PackageId,
-                    "1.0.0",
+                    contributor.PackageVersion,
                     PackageHostRoles.Runtime,
                     null,
                     true,
@@ -637,11 +640,14 @@ public sealed class RuntimeStackImportPlanTests
         bool duplicateAction = false,
         bool duplicateInput = false,
         bool reportsCommittedItemOnFailure = false,
-        Func<CancellationToken, Task>? appliedAction = null) : IPackageStackImporter, IPackageStackImportAppliedHandler
+        Func<CancellationToken, Task>? appliedAction = null,
+        string packageVersion = "1.0.0",
+        IReadOnlyList<StackPackageRequirement>? exportRequirements = null) : IPackageStackImporter, IPackageStackImportAppliedHandler, IPackageStackExporter
     {
         private readonly Func<CancellationToken, Task>? _appliedAction = appliedAction;
 
         public string PackageId => "test.package." + contributorId;
+        public string PackageVersion => packageVersion;
         public string ContributorId => contributorId;
         public string DisplayName => contributorId;
         public int ImportCount { get; private set; }
@@ -650,6 +656,12 @@ public sealed class RuntimeStackImportPlanTests
         public string ActionId { get; } = actionId ?? contributorId + "-action";
         public string InputId { get; } = inputId ?? "input";
         public IReadOnlyList<string> LastSelectedActionIds { get; private set; } = [];
+
+        public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(StackExportDiscoveryContext context, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>([new("item", "Item", "test")]);
+
+        public ValueTask<StackExportContribution> ExportAsync(StackExportRequest request, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new StackExportContribution([new("fragment", "test/item", 1, "Item", "{}", SourceItemId: "item")], exportRequirements ?? [], []));
 
         public ValueTask<StackImportPreview> PreviewImportAsync(
             StackImportPreviewRequest request,

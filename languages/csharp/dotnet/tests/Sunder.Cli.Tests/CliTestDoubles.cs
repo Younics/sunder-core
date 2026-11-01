@@ -119,6 +119,8 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Func<RuntimeRegistryPackageBatchRequest, CancellationToken, Task<RuntimeRegistryResolveInstallPlanResponse>> ResolveRegistry { get; set; }
         = (_, _) => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(
             true, [], [], [], [], [], ResolutionFingerprint: new string('f', 64)));
+    public Func<RuntimeRegistryPackageBatchRequest, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> ApplyRegistryPlan { get; set; }
+        = (_, _) => throw new NotSupportedException();
     public Func<RuntimeRegistryUpdateRequest, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> UpdateRegistry { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<RuntimeRegistrySourceAdoptionRequest, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> AdoptRegistrySource { get; set; }
@@ -170,6 +172,8 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Func<string, CancellationToken, Task<ContentUploadDescriptor>> StackUpload { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<RuntimeStackImportPreviewRequest, CancellationToken, Task<RuntimeStackImportPreviewResponse>> StackPreview { get; set; }
+        = (_, _) => throw new NotSupportedException();
+    public Func<RuntimeStackImportRequest, CancellationToken, Task<RuntimeStackImportResponse>> StackImport { get; set; }
         = (_, _) => throw new NotSupportedException();
     public Func<string, CancellationToken, Task> StackDiscard { get; set; }
         = (_, _) => Task.CompletedTask;
@@ -227,6 +231,7 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Task<RuntimeRegistryAuthStatus> LogoutRegistryAsync(string origin, CancellationToken token) => Logout(origin, token);
     public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken token) => InstallRegistry(request, token);
     public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token) => ResolveRegistry(request, token);
+    public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token) => ApplyRegistryPlan(request, token);
     public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken token) => UpdateRegistry(request, token);
     public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token) => AdoptRegistrySource(request, token);
     public Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, CancellationToken token) => ApplyLocal(path, packageId, allowDowngrade, reinstall, token);
@@ -255,6 +260,7 @@ internal sealed class FakeRuntimeClient : ICliRuntimeClient
     public Task<PackageAuthStatusResponse> DisconnectPackageAuthAsync(string packageId, CancellationToken token) => PackageAuthDisconnect(packageId, token);
     public Task<ContentUploadDescriptor> UploadStackAsync(string filePath, CancellationToken token) => StackUpload(filePath, token);
     public Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken token) => StackPreview(request, token);
+    public Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken token) => StackImport(request, token);
     public Task DiscardStackImportPlanAsync(string planId, CancellationToken token) => StackDiscard(planId, token);
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token) => StackExportItems(token);
     public Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token) => StackExport(request, token);

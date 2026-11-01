@@ -1,13 +1,14 @@
 using System.Text.Json;
-using Microsoft.Extensions.Logging.Abstractions;
-using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Rpc;
 using Xunit;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcBrokerFixture;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcTestPackages;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed partial class RuntimeRpcBrokerTests
+[Collection("Runtime RPC broker")]
+public sealed class RuntimeRpcActivationRetirementTests
 {
     [Fact]
     public async Task FailedScopeContentCleanupCompletesItsOriginalTeardownWithoutLosingTheFailure()
@@ -160,45 +161,5 @@ public sealed partial class RuntimeRpcBrokerTests
     private sealed class FailingDisposalStream : MemoryStream
     {
         protected override void Dispose(bool disposing) => throw new IOException("Resource release was not acknowledged.");
-    }
-
-    private sealed class RetiringRpcFixture : IAsyncDisposable
-    {
-        internal RpcFixture Raw { get; } = new();
-        internal ActivePolicyTestContext Policy { get; } = new();
-        internal AppPolicyPeer Peer { get; } = new(123, null);
-        internal AppProcessPolicySessions Policies { get; private set; } = null!;
-        internal RuntimeRpcAppSessionManager Manager { get; private set; } = null!;
-        internal RuntimeRpcBroker Broker { get; private set; } = null!;
-        internal RuntimeAppPolicySessionRequest Session { get; private set; } = null!;
-        private RuntimePackageSource _source = null!;
-        private PackageTargetDescriptor _target = null!;
-        private RuntimeRpcPermissionStore _permissions = null!;
-        private RuntimeContentTransferStore _content = null!;
-        internal static async Task<RetiringRpcFixture> CreateAsync(TestHandler handler, IAppPolicyProcessController? process = null)
-        {
-            var value = new RetiringRpcFixture();
-            var published = await value.Raw.PublishAsync(handler, webCaller: true, callerSourceKind: PackageSourceKind.Dev,
-                transform: package => package.Descriptor.PackageId == "caller.package" ? package with { Source = package.Source with { ContentIdentity = new('c', 64) } } : package);
-            value._source = published.Session.LoadedPackageMap["caller.package"].Source;
-            value._target = PackageTargetSelection.ToDescriptor(value._source.Manifest!.Targets!.Single()!);
-            value._permissions = new(value.Policy.Paths);
-            value._content = new(value.Policy.Paths);
-            var protocol = new RuntimeProtocolDescriptor();
-            value.Policies = new(value.Policy.Paths, protocol, new RequiredProviderSnapshots(value._source), new(value.Policy.Cache), value.Policy.Cache,
-                value.Policy.Clock, value.Policy.Time, process ?? new RequiredProviderProcess(), NullLogger<AppProcessPolicySessions>.Instance, value.Raw.Owner.State, new(value._permissions));
-            var identity = new RuntimeAppProcessIdentity(123, "birth", new('a', 64), "test", Guid.NewGuid(), protocol.RuntimeInstanceId);
-            var session = await value.Policies.OpenAsync(new(identity), value.Peer, default);
-            value.Session = new(session.SessionId, identity.AppGenerationId, protocol.RuntimeInstanceId);
-            value.Manager = new(value.Raw.Owner.State, new(), value.Policies);
-            value.Broker = new(value.Raw.Catalog, value._permissions, value.Raw.Owner.State, value.Raw.Owner, appSessions: value.Manager, contentStore: value._content);
-            return value;
-        }
-        internal Task<RuntimeAppPackageLoadPermitResult> PermitAsync(Guid id) => Policies.PermitAsync(new(Session, PackageUiSnapshotStore.PolicySubject(_source)!)
-            { SnapshotId = new('a', 32), AppActivationId = id, AppTarget = _target }, Peer, default);
-        internal RuntimeRpcAppSessionOpenRequest OpenRequest(Guid id, RuntimeAppPackageLoadPermitResult permit)
-            => new(_source.PackageId, "1.0.0", RuntimeRpcPackageMetadata.GetManifestSha256(_source.ContentIndex!), _target, Raw.Owner.Generation, id) { LoadPermitId = permit.PermitId };
-        internal Task<RuntimeRpcAppSessionDescriptor> OpenAsync(Guid id, RuntimeAppPackageLoadPermitResult permit) => Manager.OpenAsync(OpenRequest(id, permit), default, Peer);
-        public async ValueTask DisposeAsync() { Manager.Dispose(); Policies.Dispose(); _content.Dispose(); _permissions.Dispose(); await Raw.DisposeAsync(); Policy.Dispose(); }
     }
 }

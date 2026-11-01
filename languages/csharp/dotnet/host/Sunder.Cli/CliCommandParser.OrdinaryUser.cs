@@ -381,17 +381,36 @@ internal sealed partial class CliCommandParser
 
     private void AddStackImportCommand(Command stack)
     {
-        var import = Leaf(stack, "import", "Validate and preview a local Stack import without applying changes.");
+        var import = Leaf(stack, "import", "Preview or apply a local Stack through Runtime-owned package and setup plans.");
         var file = RequiredValueOption("--file", "Local .sunderstack archive.", "path");
         var dryRun = Flag("--dry-run", "Preview default selections without changing package state.");
+        var yes = Flag("--yes", "Approve package installation and selected Stack setup actions.");
+        var fragments = StackSelections("--fragment", "Import only this archive fragment id; repeat for multiple fragments.");
+        var actions = StackSelections("--action", "Apply only this Host-scoped preview action id; repeat for multiple actions.");
+        var noFragments = Flag("--no-fragments", "Select package requirements only, without setup fragments.");
+        var noActions = Flag("--no-actions", "Install required packages and preview setup, but apply no setup actions.");
+        var inputs = StackSelections("--input-env", "Read an input from scoped-input-id=ENVIRONMENT_VARIABLE; never supply raw values here.");
+        var stdin = Flag("--inputs-stdin", "Read a bounded JSON object of scoped input ids and values from redirected stdin.");
+        var consent = Flag("--approve-sensitive-capabilities", "Approve the exact sensitive package capabilities shown in preflight.");
         import.Options.Add(file);
         import.Options.Add(dryRun);
+        import.Options.Add(yes); import.Options.Add(fragments); import.Options.Add(actions);
+        import.Options.Add(noFragments); import.Options.Add(noActions); import.Options.Add(inputs);
+        import.Options.Add(stdin); import.Options.Add(consent);
         import.Validators.Add(result =>
         {
-            if (!result.GetValue(dryRun))
-                result.AddError("Stack import apply is not available in the noninteractive CLI. Specify '--dry-run'.");
+            if (result.GetValue(dryRun) == result.GetValue(yes))
+                result.AddError("Stack import requires exactly one of '--dry-run' or '--yes'.");
+            if (result.GetValue(noFragments) && (result.GetValue(fragments)?.Length ?? 0) > 0)
+                result.AddError("Select '--fragment' or '--no-fragments', not both.");
+            if (result.GetValue(noActions) && (result.GetValue(actions)?.Length ?? 0) > 0)
+                result.AddError("Select '--action' or '--no-actions', not both.");
+            if (result.GetValue(stdin) && (result.GetValue(inputs)?.Length ?? 0) > 0)
+                result.AddError("Select '--input-env' or '--inputs-stdin', not both.");
         });
-        Bind(import, "stack import", result => new ImportStackCommand(result.GetRequiredValue(file)!));
+        Bind(import, "stack import", result => new ImportStackCommand(result.GetRequiredValue(file)!, result.GetValue(dryRun),
+            result.GetValue(fragments), result.GetValue(actions), result.GetValue(noFragments), result.GetValue(noActions),
+            result.GetValue(inputs), result.GetValue(stdin), result.GetValue(consent)));
     }
 
     private void AddStackExportCommand(Command stack)
@@ -403,19 +422,39 @@ internal sealed partial class CliCommandParser
         var output = ValueOption("--output", "Exact destination file.", "path", aliases: ["-o"]);
         var all = Flag("--all", "Export all discovered items and details instead of defaults.");
         var force = Flag("--force", "Replace an existing destination file.");
+        var items = StackSelections("--item", "Export only package-id/contributor-id/item-id; repeat for multiple items.");
+        var dryRun = Flag("--dry-run", "List export item ids and selections without exporting content or values.");
         export.Arguments.Add(stackId);
         export.Options.Add(name);
         export.Options.Add(summary);
         export.Options.Add(output);
         export.Options.Add(all);
         export.Options.Add(force);
+        export.Options.Add(items);
+        export.Options.Add(dryRun);
         Bind(export, "stack export", result => new ExportStackCommand(
             result.GetRequiredValue(stackId),
             result.GetValue(name),
             result.GetValue(summary),
             result.GetValue(output),
             result.GetValue(all),
-            result.GetValue(force)));
+            result.GetValue(force), result.GetValue(items), result.GetValue(dryRun)));
+    }
+
+    private static Option<string[]> StackSelections(string name, string description)
+    {
+        var option = new Option<string[]>(name)
+        {
+            Description = description,
+            Arity = ArgumentArity.OneOrMore,
+            AllowMultipleArgumentsPerToken = false,
+        };
+        option.Validators.Add(result =>
+        {
+            if (result.Tokens.Count > 128 || result.Tokens.Any(token => string.IsNullOrWhiteSpace(token.Value) || token.Value.Length > 4096))
+                result.AddError($"Option '{name}' accepts at most 128 nonempty selections of at most 4096 characters.");
+        });
+        return option;
     }
 
     private void AddPackageIdLeaf(

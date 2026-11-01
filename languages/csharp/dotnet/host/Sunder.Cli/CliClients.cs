@@ -150,6 +150,7 @@ internal interface ICliRuntimePackageClient : ICliRuntimeClientRole
     Task<RuntimePackageSnapshot> GetPackageSnapshotAsync(CancellationToken token);
     Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken token);
     Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token);
+    Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token);
     Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken token);
     Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token);
     Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, CancellationToken token);
@@ -181,6 +182,7 @@ internal interface ICliRuntimeStackClient : ICliRuntimeClientRole
 {
     Task<ContentUploadDescriptor> UploadStackAsync(string filePath, CancellationToken token);
     Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken token);
+    Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken token);
     Task DiscardStackImportPlanAsync(string planId, CancellationToken token);
     Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token);
     Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token);
@@ -298,6 +300,7 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
     public Task<RuntimeRegistryAuthStatus> LogoutRegistryAsync(string origin, CancellationToken token) => _client.LogoutRegistryAsync(origin, token);
     public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken token) => _client.InstallRegistryPackageAsync(request, token);
     public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token) => _client.ResolveRegistryPackagePlanAsync(request, token);
+    public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken token) => _client.ApplyRegistryPackagePlanAsync(request, token);
     public Task<RuntimeRegistryPackageChangeResult> UpdateRegistryPackagesAsync(RuntimeRegistryUpdateRequest request, CancellationToken token) => _client.UpdateRegistryPackagesAsync(request, token);
     public Task<RuntimeRegistryPackageChangeResult> AdoptRegistryPackageSourceAsync(RuntimeRegistrySourceAdoptionRequest request, CancellationToken token) => _client.AdoptRegistryPackageSourceAsync(request, token);
     public Task<PackageOperationResult> ApplyLocalPackageAsync(string path, string packageId, bool allowDowngrade, bool reinstall, CancellationToken token) => _client.ApplyLocalPackageAsync(path, packageId, allowDowngrade, reinstall, token);
@@ -323,6 +326,7 @@ internal sealed class CliRuntimeClient : ICliRuntimeClient
     public Task<PackageAuthStatusResponse> DisconnectPackageAuthAsync(string packageId, CancellationToken token) => _client.DisconnectPackageAuthAsync(packageId, token);
     public Task<ContentUploadDescriptor> UploadStackAsync(string filePath, CancellationToken token) => _client.UploadStackAsync(filePath, token);
     public Task<RuntimeStackImportPreviewResponse> PreviewStackImportAsync(RuntimeStackImportPreviewRequest request, CancellationToken token) => _client.PreviewStackImportAsync(request, token);
+    public Task<RuntimeStackImportResponse> ImportStackAsync(RuntimeStackImportRequest request, CancellationToken token) => _client.ImportStackAsync(request, token);
     public Task DiscardStackImportPlanAsync(string planId, CancellationToken token) => _client.DiscardStackImportPlanAsync(planId, token);
     public Task<RuntimeStackExportDiscoveryResponse> ListStackExportItemsAsync(CancellationToken token) => _client.ListStackExportItemsAsync(token);
     public Task<RuntimeStackExportResponse> ExportStackAsync(RuntimeStackExportRequest request, CancellationToken token) => _client.ExportStackAsync(request, token);

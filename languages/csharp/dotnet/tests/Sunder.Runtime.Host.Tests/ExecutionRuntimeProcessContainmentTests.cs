@@ -685,6 +685,15 @@ public sealed class ExecutionRuntimeProcessContainmentTests
         Directory.CreateDirectory(root);
         await File.WriteAllTextAsync(Path.Combine(root, "mode.txt"), "containment-echo");
         var startInfo = TestWorkerFixture.CreateProcessStartInfo(root);
+        startInfo.Environment.Clear();
+        foreach (var variable in WorkerProcessEnvironment.CreateBaseline(
+                     Environment.GetEnvironmentVariable,
+                     root,
+                     WorkerProcessEnvironment.GetCurrentPlatform(),
+                     allowDockerEnvironment: false))
+        {
+            startInfo.Environment[variable.Key] = variable.Value;
+        }
         var generation = Guid.NewGuid();
         var reportPath = Path.Combine(root, "payload.report");
         var controller = new SystemExecutionRuntimeProcessContainmentController(

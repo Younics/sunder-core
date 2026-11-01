@@ -1825,9 +1825,23 @@ type public sealed class Sunder.Registry.Contracts.RegistryStackArtifact : Syste
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryStackArtifact? left, Sunder.Registry.Contracts.RegistryStackArtifact? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryStackArtifact? left, Sunder.Registry.Contracts.RegistryStackArtifact? right)
+type public sealed class Sunder.Registry.Contracts.RegistryStackCompatibility : System.IEquatable<Sunder.Registry.Contracts.RegistryStackCompatibility>
+  method public .ctor(System.Int32 SchemaVersion, System.Int32? MinReaderVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredFeatures)
+  property System.Int32 SchemaVersion { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<System.String> RequiredFeatures { public get; public init; }
+  property System.Int32? MinReaderVersion { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryStackCompatibility <Clone>$()
+  method public System.Void Deconstruct(out System.Int32 SchemaVersion, out System.Int32? MinReaderVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredFeatures)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryStackCompatibility? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryStackCompatibility? left, Sunder.Registry.Contracts.RegistryStackCompatibility? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryStackCompatibility? left, Sunder.Registry.Contracts.RegistryStackCompatibility? right)
 type public sealed class Sunder.Registry.Contracts.RegistryStackDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryStackDetails>
   method public .ctor(System.String StackId, System.String Name, System.String? Summary, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackPackageRequirement> Packages, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackFragmentSummary> Fragments, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryStackRequiredInput> RequiredInputs, Sunder.Registry.Contracts.RegistryStackArtifact Artifact, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryStackStats? Stats = null, Sunder.Registry.Contracts.RegistryStackProfile? Profile = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers = null)
   property Sunder.Registry.Contracts.RegistryStackArtifact Artifact { public get; public init; }
+  property Sunder.Registry.Contracts.RegistryStackCompatibility? Compatibility { public get; public init; }
   property Sunder.Registry.Contracts.RegistryStackPolicySnapshot? Policy { public get; public init; }
   property Sunder.Registry.Contracts.RegistryStackProfile? Profile { public get; public init; }
   property Sunder.Registry.Contracts.RegistryStackStats? Stats { public get; public init; }

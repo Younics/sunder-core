@@ -26,7 +26,7 @@ internal static class RuntimeStackImportSupport
 
     public static RuntimeStackImportOutcome GetOutcome(IReadOnlyList<RuntimeStackImportContributorResultDescriptor> results)
     {
-        if (results.Count > 0 && results.All(result => result.Outcome == RuntimeStackImportOutcome.Completed))
+        if (results.All(result => result.Outcome == RuntimeStackImportOutcome.Completed))
         {
             return RuntimeStackImportOutcome.Completed;
         }

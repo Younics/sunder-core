@@ -1,12 +1,15 @@
-using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Services;
 using Xunit;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcBrokerFixture;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcTestPackages;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed partial class RuntimeRpcBrokerTests
+[Collection("Runtime RPC broker")]
+public sealed class RuntimeRpcOptionalReferenceTests
 {
     // Exercises the SDK marshalling boundary against the actual broker/catalog and
     // invocation authority. Generated Worker framing is covered by the Build suite.
@@ -160,6 +163,7 @@ public sealed partial class RuntimeRpcBrokerTests
     }
 
     private sealed record OptionalHostPayload(ServiceReference<OptionalHostTarget>? Optional, ServiceReference<OptionalHostTarget>? Required);
+
     private sealed record OptionalHostTarget(CancellationToken RetirementToken);
 
     private static void ConfigureOptionalHost(SunderRpcMarshallingContext context, SunderRpcServiceBindingLifetime bindings, SunderRpcContractDescriptor descriptor)

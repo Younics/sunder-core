@@ -179,6 +179,8 @@ public sealed partial class StacksWindowViewModel
         SelectedRegistryStackSummary = string.IsNullOrWhiteSpace(details.Summary) ? string.Empty : details.Summary;
         SelectedRegistryStackContentText = $"{details.Packages.Count} package{(details.Packages.Count == 1 ? string.Empty : "s")} · {details.Fragments.Count} fragment{(details.Fragments.Count == 1 ? string.Empty : "s")}";
         SelectedRegistryStackUpdatedText = $"Updated {details.UpdatedAtUtc.LocalDateTime:g}";
+        if (details.Compatibility is { } compatibility)
+            SelectedRegistryStackUpdatedText += $" · Stack format {compatibility.SchemaVersion}";
         ApplySelectedRegistryStackStats(details.Stats);
         ApplyRegistryStackProfile(details.Profile);
         ApplyRegistryAttributions(details.Creator, details.Maintainers ?? []);

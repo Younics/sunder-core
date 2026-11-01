@@ -93,6 +93,8 @@ internal static class CliRenderers
     {
         output.Line($"Stack: {stack.StackId}");
         output.Line($"Name: {stack.Name}");
+        if (stack.Compatibility is { } compatibility)
+            output.Line($"Stack format: {compatibility.SchemaVersion}; minimum reader: {compatibility.MinReaderVersion?.ToString() ?? "unspecified"}");
         if (!string.IsNullOrWhiteSpace(stack.Summary)) output.Line($"Summary: {stack.Summary}");
         output.Line($"Created (UTC): {stack.CreatedAtUtc.UtcDateTime:O}");
         output.Line($"Updated (UTC): {stack.UpdatedAtUtc.UtcDateTime:O}");

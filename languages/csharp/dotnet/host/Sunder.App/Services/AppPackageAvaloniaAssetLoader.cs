@@ -5,32 +5,39 @@ namespace Sunder.App.Services;
 
 internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
 {
-    private readonly IAssetLoader _fallback;
+    private readonly AppPackageAssetLoaderDispatch _platformDispatch;
     private readonly AppPackageResourceAssemblyRegistry _packageResources;
 
     internal AppPackageAvaloniaAssetLoader(IAssetLoader fallback, AppPackageResourceAssemblyRegistry packageResources)
     {
-        _fallback = fallback;
+        _platformDispatch = new AppPackageAssetLoaderDispatch(fallback);
         _packageResources = packageResources;
     }
 
     public static bool Install(AppPackageResourceAssemblyRegistry packageResources)
     {
-        var current = GetCurrentAssetLoader();
+        // AppBuilder initializes the platform services before App.Initialize.
+        // Preserve that loader (including platform/designer configuration), rather
+        // than constructing the obsolete StandardAssetLoader or silently masking
+        // an invalid startup order. The service factory distinguishes an ordinary
+        // package lookup from the next thread-local static facade forwarding call.
+        var current = GetCurrentAssetLoader()
+            ?? throw new InvalidOperationException("Avalonia must initialize its platform asset loader before package asset loading is installed.");
         if (current is AppPackageAvaloniaAssetLoader existing && ReferenceEquals(existing._packageResources, packageResources))
         {
             return true;
         }
 
         var fallback = current is AppPackageAvaloniaAssetLoader existingLoader
-            ? existingLoader._fallback
-            : current ?? new StandardAssetLoader();
-        BindAssetLoader(new AppPackageAvaloniaAssetLoader(fallback, packageResources));
+            ? existingLoader._platformDispatch.PlatformLoader
+            : current;
+        var loader = new AppPackageAvaloniaAssetLoader(fallback, packageResources);
+        BindAssetLoader(() => loader._platformDispatch.Resolve(loader));
         return true;
     }
 
     public void SetDefaultAssembly(Assembly assembly)
-        => _fallback.SetDefaultAssembly(assembly);
+        => _platformDispatch.Invoke(() => AssetLoader.SetDefaultAssembly(assembly));
 
     public bool Exists(Uri uri, Uri? baseUri = null)
     {
@@ -40,7 +47,7 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
         {
             PackageAssetResolution.Found => true,
             PackageAssetResolution.RegisteredAssemblyMissingAsset => false,
-            _ => _fallback.Exists(uri, baseUri),
+            _ => _platformDispatch.Invoke(() => AssetLoader.Exists(uri, baseUri)),
         };
     }
 
@@ -54,7 +61,7 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
         {
             PackageAssetResolution.Found => (stream, assembly),
             PackageAssetResolution.RegisteredAssemblyMissingAsset => throw new FileNotFoundException($"The resource {uri} could not be found."),
-            _ => _fallback.OpenAndGetAssembly(uri, baseUri),
+            _ => _platformDispatch.Invoke(() => AssetLoader.OpenAndGetAssembly(uri, baseUri)),
         };
     }
 
@@ -66,14 +73,14 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
             return assembly;
         }
 
-        return _fallback.GetAssembly(resolvedUri ?? uri, baseUri);
+        return _platformDispatch.Invoke(() => AssetLoader.GetAssembly(resolvedUri ?? uri, baseUri));
     }
 
     public IEnumerable<Uri> GetAssets(Uri uri, Uri? baseUri)
     {
         if (!TryResolveAvaresUri(uri, baseUri, out _, out var assemblyName, out var path))
         {
-            return _fallback.GetAssets(uri, baseUri);
+            return _platformDispatch.Invoke(() => AssetLoader.GetAssets(uri, baseUri));
         }
 
         if (_packageResources.TryGetAvaloniaResourceUris(assemblyName, path, out var uris, out var assemblyRegistered))
@@ -86,14 +93,14 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
             return [];
         }
 
-        return _fallback.GetAssets(uri, baseUri);
+        return _platformDispatch.Invoke(() => AssetLoader.GetAssets(uri, baseUri));
     }
 
     public void InvalidateAssemblyCache(string name)
-        => _fallback.InvalidateAssemblyCache(name);
+        => _platformDispatch.Invoke(() => AssetLoader.InvalidateAssemblyCache(name));
 
     public void InvalidateAssemblyCache()
-        => _fallback.InvalidateAssemblyCache();
+        => _platformDispatch.Invoke(AssetLoader.InvalidateAssemblyCache);
 
     internal static void TryInvalidateAssemblyCache(IEnumerable<string> assemblyNames)
     {
@@ -123,7 +130,7 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
         return getService.Invoke(current, [typeof(IAssetLoader)]) as IAssetLoader;
     }
 
-    private static void BindAssetLoader(IAssetLoader assetLoader)
+    private static void BindAssetLoader(Func<IAssetLoader> resolveAssetLoader)
     {
         var locatorType = GetAvaloniaLocatorType();
         var currentMutable = GetAvaloniaLocatorProperty("CurrentMutable").GetValue(null)
@@ -134,12 +141,12 @@ internal sealed class AppPackageAvaloniaAssetLoader : IAssetLoader
             ?? throw new InvalidOperationException("Mutable Avalonia service locator does not expose Bind<T>().");
         var registration = bind.MakeGenericMethod(typeof(IAssetLoader)).Invoke(currentMutable, null)
             ?? throw new InvalidOperationException("Avalonia service locator did not return a registration helper.");
-        var toConstant = registration.GetType().GetMethod(
-            "ToConstant",
+        var toFunc = registration.GetType().GetMethod(
+            "ToFunc",
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
-            ?? throw new InvalidOperationException("Avalonia service registration helper does not expose ToConstant<T>().");
+            ?? throw new InvalidOperationException("Avalonia service registration helper does not expose ToFunc<T>().");
 
-        toConstant.MakeGenericMethod(typeof(IAssetLoader)).Invoke(registration, [assetLoader]);
+        toFunc.MakeGenericMethod(typeof(IAssetLoader)).Invoke(registration, [resolveAssetLoader]);
     }
 
     private static PropertyInfo GetAvaloniaLocatorProperty(string propertyName)

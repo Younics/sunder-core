@@ -17,7 +17,8 @@ public sealed class PackageInformationContractTests
         var value = new PackageInformationDescriptor("example.package", "1.0.0", new('a', 64), PackageSourceKind.Dev,
             [new("runtime", "osx-arm64", "storage.v1")],
             [new("example.agent", ">=1.0.0", "optional", [new("runtime", "example.tools", "2.0.0", "implements")])],
-            [new("example.tools", "2.0.0", "service", [new("runtime", "tools")])], []);
+            [new("example.tools", "2.0.0", "service", [new("runtime", "tools")])], [])
+        { DeclaredTargets = [new("runtime", "osx-arm64"), new("runtime", "win-x64")] };
         using var handler = new Handler(request =>
         {
             if (request.RequestUri!.AbsolutePath == "/api/handshake")
@@ -32,6 +33,7 @@ public sealed class PackageInformationContractTests
         var copy = await client.GetPackageInformationAsync("example.package");
         Assert.Equal(value.ContentIdentity, copy.ContentIdentity);
         Assert.Equal(PackageSourceKind.Dev, copy.SourceKind);
+        Assert.Equal(value.DeclaredTargets, copy.DeclaredTargets);
         var dependency = Assert.Single(copy.Dependencies);
         Assert.Equal("optional", dependency.Presence);
         Assert.Equal("implements", Assert.Single(dependency.Bindings).Kind);
@@ -53,6 +55,25 @@ public sealed class PackageInformationContractTests
         var copy = JsonSerializer.Deserialize<RegistryPackageInformation>(JsonSerializer.Serialize(registry, json), json)!;
         Assert.Equal("optional", Assert.Single(copy.Dependencies).Presence);
         Assert.Throws<NotSupportedException>(() => ((IList<RegistryPackageIntegration>)copy.Dependencies[0].Bindings).Clear());
+    }
+
+    [Fact]
+    public void DeclaredTargetsAreBoundedImmutableAndDistinguishUnknownFromContractOnly()
+    {
+        var targets = new List<PackagePlatformTargetDescriptor> { new("app", "win-x64") };
+        var value = new PackageInformationDescriptor("example.package", "1.0.0", new('a', 64), PackageSourceKind.Installed, [], [], [], [])
+        { DeclaredTargets = targets };
+        targets.Clear();
+        Assert.Single(value.DeclaredTargets!);
+        Assert.Throws<NotSupportedException>(() => ((IList<PackagePlatformTargetDescriptor>)value.DeclaredTargets!).Clear());
+        Assert.Throws<ArgumentException>(() => value with
+        { DeclaredTargets = Enumerable.Repeat(new PackagePlatformTargetDescriptor("app", "win-x64"), 13).ToArray() });
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var unknown = value with { DeclaredTargets = null };
+        Assert.DoesNotContain("declaredTargets", JsonSerializer.Serialize(unknown, json), StringComparison.Ordinal);
+        Assert.Null(JsonSerializer.Deserialize<PackageInformationDescriptor>(JsonSerializer.Serialize(unknown, json), json)!.DeclaredTargets);
+        var shared = value with { DeclaredTargets = [] };
+        Assert.Empty(JsonSerializer.Deserialize<PackageInformationDescriptor>(JsonSerializer.Serialize(shared, json), json)!.DeclaredTargets!);
     }
 
     private static HttpResponseMessage Reply<T>(T value) => new(HttpStatusCode.OK) { Content = JsonContent.Create(value) };

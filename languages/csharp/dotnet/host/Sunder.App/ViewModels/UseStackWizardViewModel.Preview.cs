@@ -33,7 +33,6 @@ public sealed partial class UseStackWizardViewModel
         string? pendingPlanId = null;
         string? adoptedPlanId = null;
         var existingInputs = RequiredInputs.ToArray();
-        var existingInputValues = GetInputValues(existingInputs, includeEmptyValues: true);
         var existingActionSelections = ImportActions.ToDictionary(
             action => action.ActionId,
             action => action.IsSelected,
@@ -56,12 +55,7 @@ public sealed partial class UseStackWizardViewModel
             }
 
             StatusText = "Previewing Stack setup actions...";
-            var upload = await runtimeApiClient.UploadStackAsync(stack.LocalPath, request.Token);
-            var preview = await runtimeApiClient.PreviewStackImportAsync(new RuntimeStackImportPreviewRequest(
-                upload.UploadId,
-                GetSelectedFragmentIds(),
-                existingInputValues.Where(pair => !string.IsNullOrWhiteSpace(pair.Value)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
-                new Dictionary<string, string>()), request.Token);
+            var (preview, planInputs) = await PreviewWithBoundInputsAsync(existingInputs, request.Token);
             pendingPlanId = preview.PlanId;
             if (!request.IsCurrent)
             {
@@ -111,6 +105,7 @@ public sealed partial class UseStackWizardViewModel
 
             if (preview.Success && !string.IsNullOrWhiteSpace(pendingPlanId))
             {
+                _importPlanInputValues = planInputs;
                 adoptedPlanId = pendingPlanId;
                 pendingPlanId = null;
                 var supersededPlanId = Interlocked.Exchange(ref _importPlanId, adoptedPlanId);
@@ -145,8 +140,45 @@ public sealed partial class UseStackWizardViewModel
         }
     }
 
+    private async Task<(RuntimeStackImportPreviewResponse Preview, IReadOnlyDictionary<string, string> Inputs)> PreviewWithBoundInputsAsync(
+        IReadOnlyList<UseStackRequiredInputValueViewModel> existingInputs,
+        CancellationToken token)
+    {
+        var values = GetInputValues(existingInputs);
+        var preview = await Preview(values);
+        // Manifest inputs have no Host-scoped ids before contributors are available.
+        // Re-preview with their resolved ids; never display a value that is absent from the plan.
+        var boundValues = new Dictionary<string, string>(values, StringComparer.OrdinalIgnoreCase);
+        foreach (var input in preview.RequiredInputs)
+        {
+            var value = existingInputs.FirstOrDefault(existing => existing.Matches(input))?.Value ?? input.DefaultValue;
+            if (!string.IsNullOrWhiteSpace(value)) boundValues[input.InputId] = value;
+        }
+        if (!SameValues(values, boundValues))
+        {
+            await TryDiscardImportPlanAsync(preview.PlanId);
+            preview = await Preview(boundValues);
+            return (preview, boundValues);
+        }
+        return (preview, values);
+
+        async Task<RuntimeStackImportPreviewResponse> Preview(IReadOnlyDictionary<string, string> inputs)
+        {
+            var upload = await runtimeApiClient.UploadStackAsync(stack.LocalPath, token);
+            return await runtimeApiClient.PreviewStackImportAsync(new RuntimeStackImportPreviewRequest(
+                upload.UploadId, GetSelectedFragmentIds(), inputs, new Dictionary<string, string>())
+            { UseDefaultFragments = false }, token);
+        }
+    }
+
+    private static bool SameValues(IReadOnlyDictionary<string, string> first, IReadOnlyDictionary<string, string> second)
+        => first.Count == second.Count && first.All(pair => second.TryGetValue(pair.Key, out var value) && value == pair.Value);
+
     private string? DetachCurrentImportPlan()
-        => Interlocked.Exchange(ref _importPlanId, null);
+    {
+        _importPlanInputValues = new Dictionary<string, string>();
+        return Interlocked.Exchange(ref _importPlanId, null);
+    }
 
     private async Task DiscardCurrentImportPlanAsync()
         => await DiscardImportPlanAsync(DetachCurrentImportPlan());
@@ -215,6 +247,12 @@ public sealed partial class UseStackWizardViewModel
 
     private void OnSetupItemSelectionChanged()
     {
+        if (_stackManifest is not null && (!_installPlanReady || HasInstallPlanItems))
+        {
+            ApplyManifestRequiredInputs(_stackManifest);
+            NotifyWizardStateChanged();
+            return;
+        }
         NotifyWizardStateChanged();
         if (!IsBusy && !_disposed)
         {

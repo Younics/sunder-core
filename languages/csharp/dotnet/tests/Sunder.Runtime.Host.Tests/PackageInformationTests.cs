@@ -32,6 +32,7 @@ public sealed class PackageInformationTests
             Assert.Equal(PackageSourceKind.Dev, info.SourceKind);
             Assert.Equal("Current development source", info.Summary);
             Assert.Equal(new string('b', 64), info.ContentIdentity);
+            Assert.Equal(new PackagePlatformTargetDescriptor("runtime", "osx-arm64"), Assert.Single(info.DeclaredTargets!));
             Assert.Equal("optional", Assert.Single(info.Dependencies).Presence);
             Assert.Empty(state.GetActivePackages());
             Assert.False(state.GetPackageInformation("absent.package").HasSource);
@@ -45,10 +46,15 @@ public sealed class PackageInformationTests
         var source = new RuntimePackageSource("example.package", PackageSourceKind.Installed, "unused", ContentIdentity: new('a', 64),
             Manifest: new SunderPackageManifest { Id = "example.package", Version = "1.0.0", Targets = [
                 new() { Role = "app", Rid = "osx-arm64", RequiredHostCapabilities = ["views.v1"] },
-                new() { Role = "runtime", Rid = "osx-arm64", RequiredHostCapabilities = ["secrets.v1"] }] })
+                new() { Role = "runtime", Rid = "osx-arm64", RequiredHostCapabilities = ["secrets.v1"] },
+                new() { Role = "runtime", Rid = "win-x64", RequiredHostCapabilities = ["secrets.v1"] }] })
         { AcquiredTargets = [new("runtime", "osx-arm64")] };
         var info = Assert.IsType<PackageInformationDescriptor>(PackageInformationProjection.FromSource(source));
         Assert.Equal("secrets.v1", Assert.Single(info.Features).Capability);
+        Assert.Equal(3, info.DeclaredTargets!.Count);
+        Assert.Contains(new PackagePlatformTargetDescriptor("app", "osx-arm64"), info.DeclaredTargets);
+        Assert.Contains(new PackagePlatformTargetDescriptor("runtime", "win-x64"), info.DeclaredTargets);
+        Assert.Single(source.AcquiredTargets!); // Declaration metadata does not expand acquisition or activation.
         Assert.Null(PackageInformationProjection.FromSource(source with { ContentIdentity = null }));
     }
 }

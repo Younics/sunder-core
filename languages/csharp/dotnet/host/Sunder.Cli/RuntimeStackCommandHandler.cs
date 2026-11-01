@@ -4,11 +4,15 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.Cli;
 
-internal sealed class RuntimeStackCommandHandler(
+internal sealed partial class RuntimeStackCommandHandler(
     ICliRuntimeStackClient runtime,
+    ICliRuntimePackageClient packages,
+    ICliRuntimeExecutionRuntimeClient executionRuntimes,
     ArchiveValidationService archives,
     CliOutput output,
-    ICliProgress progress)
+    ICliProgress progress,
+    CliOptions options,
+    IPackageSecretValueReader inputReader)
 {
     public async Task<int> ExecuteAsync(ImportStackCommand command, CancellationToken token)
     {
@@ -18,28 +22,75 @@ internal sealed class RuntimeStackCommandHandler(
             return CliRenderers.StackValidation(output, validation);
 
         var manifest = validation.Manifest;
-        var selectedFragments = (manifest.Fragments ?? [])
-            .Where(fragment => fragment.DefaultSelected != false && !string.IsNullOrWhiteSpace(fragment.FragmentId))
-            .Select(fragment => fragment.FragmentId!)
-            .ToArray();
-        progress.Report($"Uploading and previewing Stack '{manifest.StackId}'...");
-        var upload = await runtime.UploadStackAsync(fullPath, token).ConfigureAwait(false);
+        var availableFragments = (manifest.Fragments ?? []).Select(fragment => fragment.FragmentId!).ToArray();
+        var selectedFragments = command.NoFragments ? [] : command.FragmentIds is { Count: > 0 }
+            ? SelectKnown(command.FragmentIds, availableFragments, "fragment")
+            : (manifest.Fragments ?? []).Where(fragment => fragment.DefaultSelected != false).Select(fragment => fragment.FragmentId!).ToArray();
+        var inputValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         RuntimeStackImportPreviewResponse? preview = null;
         try
         {
+            inputValues = await ReadInputsAsync(command, token).ConfigureAwait(false);
+            output.ProtectValues(inputValues.Values);
+            var preparation = await PreparePackageRequirementsAsync(manifest, command, token).ConfigureAwait(false);
+            if (preparation.ExitCode != CliExitCodes.Success) return preparation.ExitCode;
+            progress.Report($"Uploading and previewing Stack '{manifest.StackId}'...");
+            var upload = await runtime.UploadStackAsync(fullPath, token).ConfigureAwait(false);
             preview = await runtime.PreviewStackImportAsync(
                 new RuntimeStackImportPreviewRequest(
                     upload.UploadId,
                     selectedFragments,
-                    new Dictionary<string, string>(),
-                    new Dictionary<string, string>()),
+                    inputValues,
+                    new Dictionary<string, string>()) { UseDefaultFragments = false },
                 token).ConfigureAwait(false);
 
-            var selectedActions = preview.Actions.Where(action => action.DefaultSelected).ToArray();
-            var blockers = BuildImportBlockers(manifest, preview);
+            var defaults = preview.RequiredInputs.Where(input => input.Sensitivity == RuntimeStackInputSensitivity.Public
+                && input.DefaultValue is not null && !inputValues.ContainsKey(input.InputId)).ToArray();
+            if (defaults.Length > 0)
+            {
+                if (!string.IsNullOrWhiteSpace(preview.PlanId))
+                    await runtime.DiscardStackImportPlanAsync(preview.PlanId, token).ConfigureAwait(false);
+                foreach (var input in defaults) inputValues.Add(input.InputId, input.DefaultValue!);
+                output.ProtectValues(inputValues.Values);
+                var reboundUpload = await runtime.UploadStackAsync(fullPath, token).ConfigureAwait(false);
+                preview = await runtime.PreviewStackImportAsync(new RuntimeStackImportPreviewRequest(
+                    reboundUpload.UploadId, selectedFragments, inputValues, new Dictionary<string, string>())
+                { UseDefaultFragments = false }, token).ConfigureAwait(false);
+            }
+
+            var selectedActionIds = command.NoActions ? [] : command.ActionIds is { Count: > 0 }
+                ? SelectKnown(command.ActionIds, preview.Actions.Select(action => action.ActionId).ToArray(), "action")
+                : preview.Actions.Where(action => action.DefaultSelected).Select(action => action.ActionId).ToArray();
+            var selectedActions = preview.Actions.Where(action => selectedActionIds.Contains(action.ActionId, StringComparer.OrdinalIgnoreCase)).ToArray();
+            var blockers = preview.Errors.Concat(preview.Conflicts.Where(conflict => conflict.Severity == "Error").Select(conflict => conflict.Message)).ToList();
+            foreach (var input in preview.RequiredInputs.Where(input => input.Required && selectedActions.Any(action =>
+                         action.OwnerPackageId == input.OwnerPackageId && action.ContributorId == input.ContributorId)))
+                if (!inputValues.TryGetValue(input.InputId, out var value) || string.IsNullOrWhiteSpace(value))
+                    blockers.Add($"Provide required input '{input.InputId}' through '--input-env' or '--inputs-stdin'.");
+            output.Line($"Stack import preview: {manifest.Name} ({manifest.StackId})");
+            output.Line($"Selected fragments: {selectedFragments.Length}");
+            output.Line($"Selected actions: {selectedActions.Length}/{preview.Actions.Count}");
+            output.Line($"Required inputs: {preview.RequiredInputs.Count}");
+            foreach (var action in preview.Actions)
+                output.Line($"  {(selectedActionIds.Contains(action.ActionId, StringComparer.OrdinalIgnoreCase) ? "apply" : "skip ")} {action.DisplayName} ({action.Kind})");
+            foreach (var input in preview.RequiredInputs)
+                output.Line($"  input {input.InputId}: {input.Label} ({input.Sensitivity.ToString().ToLowerInvariant()}{(input.Required ? ", required" : string.Empty)})");
+            foreach (var warning in preview.Warnings) output.Warning(warning);
+            foreach (var conflict in preview.Conflicts) output.Warning(conflict.Message);
+            foreach (var blocker in blockers) output.Info($"Apply blocker: {blocker}");
+            foreach (var error in preview.Errors) output.Error(error, "runtime.stack.preview.failed");
+            RuntimeStackImportResponse? applied = null;
+            if (!command.DryRun && preview.Success && blockers.Count == 0 && selectedActions.Length > 0)
+            {
+                if (string.IsNullOrWhiteSpace(preview.PlanId))
+                    blockers.Add("Runtime did not return an import plan.");
+                else
+                    applied = await runtime.ImportStackAsync(new(preview.PlanId, selectedFragments, selectedActionIds), token).ConfigureAwait(false);
+            }
             output.Data(new
             {
-                dryRun = true,
+                dryRun = command.DryRun,
+                packagePreflight = preparation.Preflight,
                 stackId = manifest.StackId,
                 name = manifest.Name,
                 selectedFragmentIds = selectedFragments,
@@ -57,7 +108,7 @@ internal sealed class RuntimeStackCommandHandler(
                     contributorId = action.ContributorId,
                     displayName = action.DisplayName,
                     kind = action.Kind,
-                    selected = action.DefaultSelected,
+                    selected = selectedActionIds.Contains(action.ActionId, StringComparer.OrdinalIgnoreCase),
                     description = action.Description,
                 }).ToArray(),
                 inputs = preview.RequiredInputs.Select(input => new
@@ -83,22 +134,27 @@ internal sealed class RuntimeStackCommandHandler(
                 selectedActionCount = selectedActions.Length,
                 blockers,
                 warnings = preview.Warnings,
+                outcome = applied?.Outcome.ToString(),
+                importedItems = applied?.ImportedItems,
+                contributorResults = applied?.ContributorResults.Select(result => new
+                {
+                    result.OwnerPackageId, result.ContributorId, result.FragmentIds,
+                    outcome = result.Outcome.ToString(), result.ImportedItems, result.Warnings, result.Errors,
+                }),
+                errors = applied?.Errors ?? preview.Errors,
             });
-            output.Line($"Stack import preview: {manifest.Name} ({manifest.StackId})");
-            output.Line($"Default fragments: {selectedFragments.Length}");
-            output.Line($"Default actions: {selectedActions.Length}/{preview.Actions.Count}");
-            output.Line($"Required inputs: {preview.RequiredInputs.Count}");
-            foreach (var action in preview.Actions)
-                output.Line($"  {(action.DefaultSelected ? "apply" : "skip ")} {action.DisplayName} ({action.Kind})");
-            foreach (var input in preview.RequiredInputs)
-                output.Line($"  input {input.InputId}: {input.Label} ({input.Sensitivity.ToString().ToLowerInvariant()}{(input.Required ? ", required" : string.Empty)})");
-            foreach (var warning in preview.Warnings) output.Warning(warning);
-            foreach (var conflict in preview.Conflicts) output.Warning(conflict.Message);
-            foreach (var blocker in blockers) output.Info($"Apply blocker: {blocker}");
-            return CliExitCodes.Success;
+            if (applied is not null)
+            {
+                foreach (var warning in applied.Warnings) output.Warning(warning);
+                foreach (var error in applied.Errors) output.Error(error, "runtime.stack.import.failed");
+                output.Line($"Stack import: {applied.Outcome} ({applied.ImportedItems.Count} imported items)");
+                return applied.Outcome == RuntimeStackImportOutcome.Completed ? CliExitCodes.Success : CliExitCodes.Failure;
+            }
+            return !preview.Success || !command.DryRun && blockers.Count > 0 ? CliExitCodes.Conflict : CliExitCodes.Success;
         }
         finally
         {
+            inputValues.Clear();
             if (!string.IsNullOrWhiteSpace(preview?.PlanId))
             {
                 using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(2));
@@ -116,10 +172,6 @@ internal sealed class RuntimeStackCommandHandler(
 
     public async Task<int> ExecuteAsync(ExportStackCommand command, CancellationToken token)
     {
-        var destination = ResolveOutput(command.Output, command.StackId);
-        if (File.Exists(destination) && !command.Force)
-            throw new CliConflictException($"Destination file '{destination}' already exists. Use '--force' to replace it.");
-
         progress.Report("Discovering Runtime Stack export items...");
         var discovery = await runtime.ListStackExportItemsAsync(token).ConfigureAwait(false);
         foreach (var warning in discovery.Warnings) output.Warning(warning);
@@ -129,12 +181,31 @@ internal sealed class RuntimeStackCommandHandler(
             return CliExitCodes.Failure;
         }
 
+        var requestedItems = command.ItemIds is { Count: > 0 }
+            ? SelectKnown(command.ItemIds, discovery.Items.Select(item => $"{item.OwnerPackageId}/{item.ContributorId}/{item.ItemId}").ToArray(), "export item").ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : null;
         var selected = discovery.Items
-            .Where(item => command.IncludeAll || item.DefaultSelected)
+            .Where(item => requestedItems is not null ? requestedItems.Contains($"{item.OwnerPackageId}/{item.ContributorId}/{item.ItemId}") : command.IncludeAll || item.DefaultSelected)
             .Select(item => CreateSelection(item, command.IncludeAll))
             .Where(selection => selection is not null)
             .Select(selection => selection!)
             .ToArray();
+        if (command.DryRun)
+        {
+            output.Data(new
+            {
+                dryRun = true,
+                items = discovery.Items.Select(item => new
+                {
+                    selectionId = $"{item.OwnerPackageId}/{item.ContributorId}/{item.ItemId}",
+                    item.OwnerPackageId, item.ContributorId, item.ItemId, item.DisplayName, item.Kind, item.DefaultSelected,
+                    selected = selected.Any(selection => selection.OwnerPackageId == item.OwnerPackageId && selection.ContributorId == item.ContributorId && selection.ItemId == item.ItemId),
+                    details = item.Details?.Select(detail => new { detail.DetailId, detail.Label, detail.DefaultSelected, detail.IsEditable, detail.SupportsAskOnImport, detail.Sensitivity }),
+                }),
+            });
+            foreach (var item in discovery.Items) output.Line($"{item.OwnerPackageId}/{item.ContributorId}/{item.ItemId}: {item.DisplayName}");
+            return CliExitCodes.Success;
+        }
         if (selected.Length == 0)
         {
             output.Error(
@@ -144,6 +215,10 @@ internal sealed class RuntimeStackCommandHandler(
                 "runtime.stack.export.empty");
             return CliExitCodes.Conflict;
         }
+
+        var destination = ResolveOutput(command.Output, command.StackId);
+        if (File.Exists(destination) && !command.Force)
+            throw new CliConflictException($"Destination file '{destination}' already exists. Use '--force' to replace it.");
 
         progress.Report($"Exporting {selected.Length} Stack item(s)...");
         var result = await runtime.ExportStackAsync(new RuntimeStackExportRequest(
@@ -174,23 +249,13 @@ internal sealed class RuntimeStackCommandHandler(
         return CliExitCodes.Success;
     }
 
-    private static IReadOnlyList<string> BuildImportBlockers(
-        SunderStackManifest manifest,
-        RuntimeStackImportPreviewResponse preview)
+    private static string[] SelectKnown(IReadOnlyList<string> selected, IReadOnlyList<string> available, string kind)
     {
-        var blockers = new List<string>
-        {
-            "Noninteractive apply is deferred until package, fragment, action, and input selections can be supplied explicitly.",
-        };
-        if ((manifest.Packages?.Count ?? 0) > 0)
-            blockers.Add("Package requirement installation and version selection are not part of the Runtime Stack import endpoint.");
-        if ((manifest.Fragments ?? []).Any(fragment => fragment.DefaultSelected == false))
-            blockers.Add("The archive contains fragments excluded by default and the CLI does not yet accept fragment selections.");
-        if (preview.Actions.Any(action => !action.DefaultSelected))
-            blockers.Add("The preview contains actions excluded by default and the CLI does not yet accept action selections.");
-        if (preview.RequiredInputs.Count > 0)
-            blockers.Add("The preview requires input values and the CLI does not yet provide a scoped safe input-source syntax.");
-        return blockers;
+        var known = available.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (selected.Any(id => !known.Contains(id))) throw new CliUsageException($"Unknown Stack {kind} selection. Inspect the archive or refresh the preview first.");
+        if (selected.Any(id => available.Count(value => string.Equals(value, id, StringComparison.OrdinalIgnoreCase)) != 1))
+            throw new CliUsageException($"Ambiguous Stack {kind} selection. Use the Runtime API with separate owner, contributor, and item ids.");
+        return selected.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static RuntimeStackExportSelection? CreateSelection(RuntimeStackExportItemDescriptor item, bool includeAll)

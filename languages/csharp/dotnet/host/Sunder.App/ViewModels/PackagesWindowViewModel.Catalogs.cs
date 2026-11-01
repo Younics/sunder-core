@@ -245,6 +245,7 @@ public sealed partial class PackagesWindowViewModel
     {
         _informationRequest.Invalidate();
         Information = PackageInformationViewModel.Unavailable();
+        Platforms = PackagePlatformsViewModel.Unavailable();
         InvalidateMarketplaceSelectionLoad();
         Installed.SelectedPackage = null;
         OnPropertyChanged(nameof(SelectedInstalledPackage));
@@ -261,6 +262,7 @@ public sealed partial class PackagesWindowViewModel
     {
         _informationRequest.Invalidate();
         Information = PackageInformationViewModel.Loading();
+        Platforms = PackagePlatformsViewModel.Loading();
         cancellationToken.ThrowIfCancellationRequested();
         var selectionVersion = _marketplace.SelectionLoader.StartSelection();
         foreach (var package in Marketplace.Packages)
@@ -424,6 +426,7 @@ public sealed partial class PackagesWindowViewModel
     private void SelectMarketplaceVersion(RegistryPackageVersionItemViewModel? item)
     {
         Information = item is null ? PackageInformationViewModel.Unavailable() : PackageInformationViewModel.Loading();
+        Platforms = item is null ? PackagePlatformsViewModel.Unavailable() : PackagePlatformsViewModel.Loading();
         foreach (var version in Marketplace.Versions)
         {
             version.IsSelected = ReferenceEquals(version, item);
@@ -488,6 +491,8 @@ public sealed partial class PackagesWindowViewModel
             }
 
             Marketplace.SetVersionDetailsLoaded(true);
+            Platforms = PackagePlatformsViewModel.Create(details.Targets.Select(target => (target.Role, target.Rid)),
+                AppPackageTargetEnvironment.CurrentRid, details.Version);
             Information = details.Information is null ? PackageInformationViewModel.Unavailable()
                 : PackageInformationViewModel.Create(PackageInformationViewModel.FromRegistry(details.Information), AppPackageTargetEnvironment.CurrentRid,
                     ResolveDependencyState, NavigateToDependency);
@@ -529,6 +534,7 @@ public sealed partial class PackagesWindowViewModel
                 if (!Marketplace.VersionDetailsLoaded)
                 {
                     Information = PackageInformationViewModel.Unavailable();
+                    Platforms = PackagePlatformsViewModel.Unavailable();
                 }
                 Marketplace.FailRuntimePreflightLoad(ex.Message);
                 NotifyCommandStateChanged();
@@ -542,6 +548,7 @@ public sealed partial class PackagesWindowViewModel
     private void ClearMarketplaceSelection()
     {
         Information = PackageInformationViewModel.Unavailable();
+        Platforms = PackagePlatformsViewModel.Unavailable();
         InvalidateMarketplaceSelectionLoad();
         Marketplace.SelectedPackage = null;
         OnPropertyChanged(nameof(SelectedMarketplacePackage));

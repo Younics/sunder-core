@@ -9,7 +9,8 @@ internal sealed class StackImportArchiveReader
         string stackPath,
         IReadOnlyList<string> selectedIds,
         string stagingPath,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool useDefaultFragments = true)
     {
         var validation = await SunderStackArchiveInspector.ExtractAndValidateAsync(stackPath, stagingPath, cancellationToken);
         if (!validation.Success || validation.Manifest is null)
@@ -39,7 +40,7 @@ internal sealed class StackImportArchiveReader
                 RuntimeStackFailureCategory.PackageValidation);
         }
 
-        var selected = selectedIds.Count == 0
+        var selected = selectedIds.Count == 0 && useDefaultFragments
             ? (validation.Manifest.Fragments ?? [])
                 .Where(fragment => fragment.DefaultSelected != false)
                 .Select(fragment => fragment.FragmentId!)
@@ -61,7 +62,10 @@ internal sealed class StackImportArchiveReader
                 fragment.Description,
                 ResolveFiles(stagingPath, fragment.FragmentId)));
         }
-        return new StackFragmentLoadResult(true, fragments.AsReadOnly(), selected.ToArray(), validation.Warnings, [], null);
+        return new StackFragmentLoadResult(true, fragments.AsReadOnly(), selected.ToArray(), validation.Warnings, [], null)
+        {
+            PackageRequirements = validation.Manifest.Packages ?? [],
+        };
     }
 
     private static IReadOnlyList<StackImportPayloadHandle> ResolveFiles(string stagingPath, string fragmentId)
@@ -95,4 +99,7 @@ internal sealed record StackFragmentLoadResult(
     IReadOnlyList<string> SelectedFragmentIds,
     IReadOnlyList<string> Warnings,
     IReadOnlyList<string> Errors,
-    RuntimeStackFailureCategory? FailureCategory);
+    RuntimeStackFailureCategory? FailureCategory)
+{
+    public IReadOnlyList<SunderStackPackageRequirement> PackageRequirements { get; init; } = [];
+}

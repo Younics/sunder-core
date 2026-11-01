@@ -1,0 +1,27 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Sunder.App.ViewModels"
+             x:Class="Sunder.App.Views.Controls.PackagePlatformsView"
+             x:DataType="vm:PackagePlatformsViewModel">
+  <Border Classes="card-surface">
+    <StackPanel Spacing="6">
+      <TextBlock Classes="section-title" Text="Supported platforms" />
+      <TextBlock Classes="caption" Text="{Binding VersionText}" />
+      <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" />
+      <TextBlock Text="{Binding DeviceSummary}" IsVisible="{Binding HasDeviceSummary}" TextWrapping="Wrap" />
+      <TextBlock Classes="caption" Text="Installation also checks dependencies and runtime requirements."
+                 IsVisible="{Binding HasDeviceSummary}" TextWrapping="Wrap" />
+      <Expander IsExpanded="{Binding IsUnsupported}" IsVisible="{Binding HasRoles}">
+        <Expander.Header><TextBlock Text="Target details" /></Expander.Header>
+        <ItemsControl ItemsSource="{Binding Roles}">
+          <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:PackagePlatformRoleViewModel">
+            <StackPanel Spacing="4" Margin="0,6">
+              <TextBlock FontWeight="SemiBold" Text="{Binding Role}" />
+              <TextBlock Classes="caption" Text="{Binding Platforms}" TextWrapping="Wrap" />
+            </StackPanel>
+          </DataTemplate></ItemsControl.ItemTemplate>
+        </ItemsControl>
+      </Expander>
+    </StackPanel>
+  </Border>
+</UserControl>

@@ -1,16 +1,19 @@
 using System.Text.Json;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Sunder.Runtime.Host.Infrastructure.Storage;
-using Sunder.Sdk.Settings;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Runtime.Host.Services;
 using Xunit;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcBrokerFixture;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcTestPackages;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed partial class RuntimeRpcBrokerTests
+[Collection("Runtime RPC broker")]
+public sealed class RuntimeRpcRequiredProviderTests
 {
     [Fact]
     public async Task DeclaredButUnacquiredAppTargetCannotCreateRpcOrProjectionAuthority()
@@ -381,21 +384,5 @@ public sealed partial class RuntimeRpcBrokerTests
             Assert.False(File.Exists(persistedPath));
         }
         finally { await runtime.ClearActiveSessionAsync(); }
-    }
-
-    private sealed class RequiredProviderSnapshots(RuntimePackageSource source) : IAppPolicySnapshotSource
-    {
-        internal RuntimePackageSource? Source { get; set; } = source;
-        public RuntimePackageSource? PolicySource(string snapshotId) => snapshotId == new string('a', 32) ? Source : null;
-    }
-
-    private sealed class RequiredProviderProcess : IAppPolicyProcessController, IAppPolicyProcessHandle
-    {
-        internal AppPolicyProcessState State = AppPolicyProcessState.Alive;
-        internal int Terminations;
-        public IAppPolicyProcessHandle Attach(RuntimeAppProcessIdentity identity, AppPolicyPeer peer, bool recovery) => this;
-        public AppPolicyProcessState Probe() => State;
-        public void Terminate() => Terminations++;
-        public void Dispose() { }
     }
 }

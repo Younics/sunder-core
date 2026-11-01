@@ -44,12 +44,13 @@
               <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
               <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
               <Button Classes="primary-action compact-action" Content="{Binding ActionText}" IsVisible="{Binding CanRepair}"
-                      HorizontalAlignment="Left" Command="{Binding $parent[ItemsControl].DataContext.RepairExecutionRuntimeCommand}" CommandParameter="{Binding}" />
+                      HorizontalAlignment="Left" Command="{Binding $parent[ItemsControl].((vm:PackagesWindowViewModel)DataContext).RepairExecutionRuntimeCommand}" CommandParameter="{Binding}" />
             </StackPanel>
           </DataTemplate></ItemsControl.ItemTemplate>
         </ItemsControl>
       </Expander>
     </Border>
+    <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
     <controls:PackageInformationView DataContext="{Binding Information}" />
     <Expander IsExpanded="False" IsVisible="{Binding SelectedInstalledPackage.ShowHistoricalError}">
       <Expander.Header><TextBlock Text="Last recorded failure" /></Expander.Header>

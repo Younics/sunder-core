@@ -12,6 +12,7 @@ public sealed class RestoreSunderContractsTask : Microsoft.Build.Utilities.Task
     public ITaskItem[] CandidateArchives { get; set; } = [];
     public string PlatformCatalogPath { get; set; } = string.Empty;
     public bool AllowDevelopmentRegistryOrigin { get; set; }
+    public bool VerifyOnly { get; set; }
 
     public override bool Execute()
     {
@@ -30,6 +31,14 @@ public sealed class RestoreSunderContractsTask : Microsoft.Build.Utilities.Task
             using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
             var lockPath = Path.GetFullPath(string.IsNullOrWhiteSpace(ContractLockPath) ? "sunder-contracts.lock.json" : ContractLockPath, ProjectDirectory);
             var cacheRoot = string.IsNullOrWhiteSpace(ContractCacheRoot) ? SunderRpcContractCache.DefaultRoot : Path.GetFullPath(ContractCacheRoot, ProjectDirectory);
+            Log.LogMessage(MessageImportance.High, "Sunder contract cache: {0}", cacheRoot);
+            if (VerifyOnly)
+            {
+                var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, AllowDevelopmentRegistryOrigin);
+                _ = SunderRpcContractCacheSelection.Resolve(contractLock, cacheRoot);
+                Log.LogMessage(MessageImportance.High, "Verified exact contract-cache readiness; no cache evidence or lock selections were changed.");
+                return true;
+            }
             var count = new SunderRpcContractRestore(http, allowDevelopmentRegistryOrigin: AllowDevelopmentRegistryOrigin).RestoreAsync(lockPath, cacheRoot,
                 CandidateArchives.Select(candidate => Path.GetFullPath(candidate.ItemSpec, ProjectDirectory)).ToArray(),
                 platformCatalog: string.IsNullOrEmpty(PlatformCatalogPath) ? null : Path.GetFullPath(PlatformCatalogPath, ProjectDirectory)).GetAwaiter().GetResult();
@@ -38,7 +47,7 @@ public sealed class RestoreSunderContractsTask : Microsoft.Build.Utilities.Task
         }
         catch (Exception error)
         {
-            Log.LogError("Contract restore failed: {0}", error is InvalidDataException ? error.Message : error.GetType().Name);
+            Log.LogError("Contract {0} failed: {1}", VerifyOnly ? "cache check" : "restore", error is InvalidDataException ? error.Message : error.GetType().Name);
             return false;
         }
     }

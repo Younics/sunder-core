@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Format;
+using Sunder.Package.Build.Tasks;
 using Xunit;
 
 namespace Sunder.Package.Build.Tests;
@@ -21,12 +22,33 @@ public sealed partial class SunderRpcImportedBuildTests
         foreach (var artifact in locked["packageArtifacts"]!.AsObject()) artifact.Value!.AsObject().Remove("registryOrigin");
         var platform = PlatformFixture();
         locked["platformImports"] = ReadJson(LockPath)["platformImports"]!.DeepClone();
-        foreach (var import in locked["platformImports"]!.AsObject()) import.Value!.AsObject().Remove("registryOrigin");
+        foreach (var import in locked["platformImports"]!.AsObject())
+        {
+            import.Value!.AsObject().Remove("registryOrigin");
+            import.Value["authorityReleaseRange"] = SunderRpcPlatformCatalogCache.ToolRange;
+        }
         WriteJson(LockPath, locked);
         var before = File.ReadAllBytes(LockPath);
         using var handler = new RestoreHandler(_ => throw new InvalidOperationException("Local restore attempted HTTP."));
         using var http = new HttpClient(handler);
         var cache = Path.Combine(_root, "combined-local-cache");
+        var engine = new TestBuildEngine();
+        var check = new RestoreSunderContractsTask
+        {
+            BuildEngine = engine, ProjectDirectory = _root, ContractLockPath = LockPath,
+            ContractCacheRoot = cache, VerifyOnly = true,
+        };
+        Assert.False(check.Execute());
+        var diagnostic = Assert.Single(engine.Errors);
+        Assert.Contains(cache, diagnostic, StringComparison.Ordinal);
+        Assert.Contains("descriptor for contract", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("descriptor receipt for contract", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("model projection for package", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("model projection receipt for package", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("selected platform catalog", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("selected platform catalog receipt", diagnostic, StringComparison.Ordinal);
+        Assert.Contains("no Registry is inferred", diagnostic, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(cache));
         var incomplete = await Assert.ThrowsAsync<InvalidDataException>(() => new SunderRpcContractRestore(http)
             .RestoreAsync(LockPath, cache, [], platformCatalog: platform.Path));
         Assert.Contains("contract-cache.entry-missing", incomplete.Message, StringComparison.Ordinal);
@@ -35,6 +57,25 @@ public sealed partial class SunderRpcImportedBuildTests
         var selected = SunderRpcAuthoringDocuments.ReadContractLock(LockPath);
         Assert.Equal(2, SunderRpcContractCache.Resolve(selected, cache).EntriesByDescriptorSha256.Count);
         Assert.Single(SunderRpcPlatformCatalogCache.Resolve(selected, cache));
+        Assert.Equal(before, File.ReadAllBytes(LockPath)); Assert.Equal(0, handler.Requests);
+
+        // Reproduce a partially prepared shared cache: multiple independent kinds
+        // of selected evidence must be reported together, then restored exactly.
+        File.Delete(SunderRpcContractCache.GetReceiptPath(cache, _descriptor.Sha256));
+        File.Delete(SunderRpcContractCache.GetModelProjectionPath(cache, selected.PackageArtifacts[DependencyId].ModelProjectionSha256));
+        var partial = Snapshot(cache);
+        var missing = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(selected, cache));
+        Assert.Contains("descriptor receipt for contract", missing.Message, StringComparison.Ordinal);
+        Assert.Contains("model projection for package", missing.Message, StringComparison.Ordinal);
+        Assert.Equal(partial, Snapshot(cache));
+        await new SunderRpcContractRestore(http).RestoreAsync(LockPath, cache, [archive], platformCatalog: platform.Path);
+        Assert.True(check.Execute());
+        var restored = Snapshot(cache);
+        var timestamps = Directory.GetFiles(cache, "*", SearchOption.AllDirectories).ToDictionary(path => path, File.GetLastWriteTimeUtc);
+        await new SunderRpcContractRestore(http).RestoreAsync(LockPath, cache, [archive], platformCatalog: platform.Path);
+        Assert.True(check.Execute());
+        Assert.Equal(restored, Snapshot(cache));
+        Assert.All(timestamps, item => Assert.Equal(item.Value, File.GetLastWriteTimeUtc(item.Key)));
         Assert.Equal(before, File.ReadAllBytes(LockPath)); Assert.Equal(0, handler.Requests);
     }
 

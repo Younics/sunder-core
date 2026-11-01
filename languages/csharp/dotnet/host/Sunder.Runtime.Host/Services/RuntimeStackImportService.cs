@@ -1,4 +1,6 @@
 using Sunder.Runtime.Contracts;
+using Sunder.Package.Format;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Sunder.Sdk.Stacks;
 using static Sunder.Runtime.Host.Services.RuntimeStackImportSupport;
@@ -50,7 +52,7 @@ internal sealed class RuntimeStackImportService : IDisposable
         var retainedByPlan = false;
         try
         {
-            var loaded = await _archiveReader.LoadAsync(upload.FilePath, request.SelectedFragmentIds, stagingPath, linked.Token);
+            var loaded = await _archiveReader.LoadAsync(upload.FilePath, request.SelectedFragmentIds, stagingPath, linked.Token, request.UseDefaultFragments);
             if (!loaded.Success)
             {
                 return FailedPreview(
@@ -59,6 +61,10 @@ internal sealed class RuntimeStackImportService : IDisposable
             }
 
             var errors = new List<string>();
+            var warnings = loaded.Warnings.ToList();
+            ValidatePackageRequirements(loaded.PackageRequirements, lease, warnings, errors);
+            if (errors.Count > 0)
+                return FailedPreview(PreviewFailure(warnings, errors), RuntimeStackFailureCategory.PackageValidation);
             RuntimeStackFailureCategory? failureCategory = null;
             var priorErrorCount = errors.Count;
             var contributors = await RuntimeStackContributorCatalog.GetImportersAsync(
@@ -75,7 +81,6 @@ internal sealed class RuntimeStackImportService : IDisposable
             var actions = new List<RuntimeStackImportActionDescriptor>();
             var inputs = new List<RuntimeStackRequiredInputDescriptor>();
             var conflicts = new List<RuntimeStackImportConflictDescriptor>();
-            var warnings = loaded.Warnings.ToList();
             priorErrorCount = errors.Count;
             RuntimeStackContributorCatalog.ValidateScopedValues(inputValues, RuntimeStackScopedKey.InputKind, contributors, "input", errors);
             CaptureFailureCategory(
@@ -186,6 +191,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                 actions.ToArray(),
                 conflicts.ToArray(),
                 _plans.ExpiresAtUtc);
+            plan = plan with { PackageRequirements = loaded.PackageRequirements, RequiredInputs = inputs.ToArray() };
             if (!_plans.TryAdd(plan))
             {
                 return FailedPreview(
@@ -250,6 +256,16 @@ internal sealed class RuntimeStackImportService : IDisposable
                 return ImportFailure("Stack import plan is stale because the Runtime generation changed.", plan.IdRemaps);
             }
 
+            var requirementErrors = new List<string>();
+            ValidatePackageRequirements(plan.PackageRequirements, lease, [], requirementErrors);
+            foreach (var input in plan.RequiredInputs.Where(input => input.Required && plan.Actions.Any(action =>
+                         action.OwnerPackageId == input.OwnerPackageId && action.ContributorId == input.ContributorId
+                         && request.SelectedActionIds.Contains(action.ActionId, StringComparer.OrdinalIgnoreCase))))
+                if (!plan.InputValues.TryGetValue(input.InputId, out var value) || string.IsNullOrWhiteSpace(value))
+                    requirementErrors.Add($"Stack import is missing required input '{input.Label}'. Preview again with its value.");
+            if (requirementErrors.Count > 0)
+                return ImportFailure(string.Join(" ", requirementErrors), plan.IdRemaps);
+
             if (!string.Equals(await ComputeHashAsync(plan.Upload.FilePath, linked.Token), plan.ArchiveContentHash, StringComparison.OrdinalIgnoreCase))
             {
                 return ImportFailure("Stack import plan is stale because its archive changed.", plan.IdRemaps);
@@ -295,6 +311,7 @@ internal sealed class RuntimeStackImportService : IDisposable
                     .Where(selected => binding.Actions.Any(action => string.Equals(action.ActionId, selected, StringComparison.OrdinalIgnoreCase)))
                     .Select(selected => binding.Actions.First(action => string.Equals(action.ActionId, selected, StringComparison.OrdinalIgnoreCase)).LocalActionId)
                     .ToArray();
+                if (selectedActionIds.Length == 0) continue;
                 RegisteredStackImportFragments? registered = null;
                 await using var callScope = await _rpcClient.CreateCallScopeAsync(
                     cancellationToken: linked.Token).ConfigureAwait(false);
@@ -423,6 +440,28 @@ internal sealed class RuntimeStackImportService : IDisposable
     public bool DiscardPlan(string planId)
     {
         return _plans.Discard(planId);
+    }
+
+    private void ValidatePackageRequirements(
+        IReadOnlyList<SunderStackPackageRequirement> requirements,
+        PackageSessionLease lease,
+        ICollection<string> warnings,
+        ICollection<string> errors)
+    {
+        foreach (var requirement in requirements)
+        {
+            var package = _sessions.State.GetLoadedPackage(lease, requirement.PackageId!);
+            if (package is null)
+            {
+                var message = $"Stack package '{requirement.PackageId}' is not active. Install or enable it before importing setup.";
+                (requirement.Required != false ? errors : warnings).Add(message);
+                continue;
+            }
+            if (requirement.MinimumVersion is { Length: > 0 } minimum
+                && (!SemanticVersion.TryParse(package.Descriptor.Version, out var version)
+                    || version.ComparePrecedenceTo(SemanticVersion.Parse(minimum)) < 0))
+                errors.Add($"Stack package '{requirement.PackageId}' requires at least {minimum}; active version is {package.Descriptor.Version}.");
+        }
     }
 
     internal void SweepExpired()

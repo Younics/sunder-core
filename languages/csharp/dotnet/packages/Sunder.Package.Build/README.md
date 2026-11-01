@@ -251,10 +251,12 @@ generated role with the standard `ProjectReference` target and global-property m
   <ProjectReference Include="../MyPackage/MyPackage.csproj"
                     Targets="GetSunderPackageRoleReference"
                     AdditionalProperties="SunderPackageReferenceRole=worker"
+                    ReferenceOutputAssembly="false" OutputItemType="Reference" ResolveableAssembly="false"
                     Aliases="Worker" />
   <ProjectReference Include="../MyPackage/MyPackage.csproj"
                     Targets="GetSunderPackageRoleReference"
                     AdditionalProperties="SunderPackageReferenceRole=app"
+                    ReferenceOutputAssembly="false" OutputItemType="Reference" ResolveableAssembly="false"
                     Aliases="App" />
 </ItemGroup>
 ```
@@ -262,6 +264,10 @@ generated role with the standard `ProjectReference` target and global-property m
 Use `extern alias Worker;` / `extern alias App;` when testing both role-local type
 identities. The explicit target builds the canonical package and returns only the
 selected role DLL for the evaluated RID (the native SDK RID when omitted).
+The assembly-output metadata retains the build dependency without exposing the
+canonical project's combined editor compilation as a source-project reference.
+`ResolveableAssembly` is MSBuild's spelling; it prevents the design-time
+`BuildProjectReferences=true` path from also returning a project reference.
 `BuildProjectReferences=false` resolves that already-built role through `GetTargetPath`
 without rebuilding it. Missing role outputs and values other than `worker`/`app` fail
 with `package-authoring.reference-role-unavailable` / `reference-role-invalid`.
@@ -368,6 +374,13 @@ dotnet msbuild Package.csproj -t:RestoreSunderContracts `
 ```
 
 Restore verifies exact committed metadata and leaves every lock byte unchanged.
+After preparation, `dotnet msbuild Package.csproj -t:CheckSunderContractCache`
+verifies the same selected descriptors, receipts, model projections and platform
+catalogs used by Build without publishing cache evidence or changing locks. Missing
+input diagnostics report the effective cache root and all missing selected file
+kinds. NuGet restore is separate and does not hydrate this cache; local recovery
+requires the exact locked candidate and, where selected, `SunderPlatformCatalogPath`.
+Normal Build never fetches evidence or infers a Registry to repair a cache miss.
 `SunderContractCacheRoot` overrides the default `~/.sunder/contracts/v1/sha256`
 location. Readers and writers share the cross-language cache lease. Explicit
 restore recovers interrupted publication and quarantines corrupt regular files

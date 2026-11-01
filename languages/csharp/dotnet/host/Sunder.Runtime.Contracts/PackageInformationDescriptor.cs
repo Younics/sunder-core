@@ -12,12 +12,21 @@ public sealed record PackageInformationDescriptor(
     IReadOnlyList<PackagePublicUseDescriptor> PublicUses)
 {
     public string? Summary { get; init; }
+    private IReadOnlyList<PackagePlatformTargetDescriptor>? _declaredTargets;
+    /// <summary>All role/RID declarations in this source version, not acquired or authorized targets. Null means unavailable.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<PackagePlatformTargetDescriptor>? DeclaredTargets
+    {
+        get => _declaredTargets;
+        init => _declaredTargets = value is null ? null : RuntimeContractCollections.FreezeBounded(value, 12);
+    }
     public IReadOnlyList<PackageFeatureDescriptor> Features { get; } = RuntimeContractCollections.FreezeBounded(Features, 4096);
     public IReadOnlyList<PackageRelationshipDescriptor> Dependencies { get; } = RuntimeContractCollections.FreezeBounded(Dependencies, 128);
     public IReadOnlyList<PackagePublicBindingDescriptor> PublicBindings { get; } = RuntimeContractCollections.FreezeBounded(PublicBindings, 128);
     public IReadOnlyList<PackagePublicUseDescriptor> PublicUses { get; } = RuntimeContractCollections.FreezeBounded(PublicUses, 128);
 }
 
+public sealed record PackagePlatformTargetDescriptor(string Role, string Rid);
 public sealed record PackageFeatureDescriptor(string Role, string Rid, string Capability);
 public sealed record PackageIntegrationDescriptor(string Role, string ContractId, string Version, string Kind);
 public sealed record PackageRelationshipDescriptor(string PackageId, string VersionRange, string Presence, IReadOnlyList<PackageIntegrationDescriptor> Bindings)

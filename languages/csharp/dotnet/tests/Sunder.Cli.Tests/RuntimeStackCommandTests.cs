@@ -4,7 +4,7 @@ using Sunder.Runtime.Contracts;
 
 namespace Sunder.Cli.Tests;
 
-public sealed class RuntimeStackCommandTests
+public sealed partial class RuntimeStackCommandTests
 {
     [Fact]
     public async Task Stack_import_dry_run_uses_runtime_preview_defaults_and_discards_the_plan()

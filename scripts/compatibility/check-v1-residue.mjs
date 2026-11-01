@@ -135,7 +135,8 @@ const exactFiles = new Map([
 
 const allowedMatches = new Map([
   allowance("languages/csharp/dotnet/tests/Sunder.Core.TestSupport.Tests/TestSupportFaultProbeTests.cs", "manifest-v3-v4", 3, "negative manifest fixtures"),
-  allowance("languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/PackageBuildManifestTests.cs", "worker-capability-v3", 4, "negative build fixtures and assertions"),
+  allowance("languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/PackageWorkerManifestTests.cs", "worker-capability-v3", 2, "negative Worker manifest fixture and assertion"),
+  allowance("languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/PackageAggregationTests.cs", "worker-capability-v3", 2, "negative aggregation fixture and assertion"),
   allowance("languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/SunderPackageArchiveInspectorTests.cs", "worker-capability-v3", 1, "negative archive fixture"),
   allowance("languages/csharp/dotnet/tests/Sunder.Package.Templates.Tests/PackageTemplateTests.cs", "worker-capability-v3", 1, "negative template assertion"),
   allowance("languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/RuntimeArchitectureRatchetTests.cs", "worker-wire-v3", 1, "negative architecture inventory"),
@@ -152,7 +153,7 @@ const allowedMatches = new Map([
 ]);
 
 const sourceExtensions = new Set([
-  ".axaml", ".cjs", ".cs", ".cshtml", ".csproj", ".css", ".hcl", ".html", ".js", ".json",
+  ".axaml", ".cjs", ".cs", ".cshtml", ".csproj", ".css", ".hcl", ".html", ".in", ".js", ".json",
   ".jsx", ".md", ".mjs", ".proj", ".props", ".proto", ".ps1", ".py", ".razor", ".resx",
   ".ruleset", ".sh", ".slnx", ".sql", ".swift", ".targets", ".tf", ".toml", ".ts", ".tsx",
   ".txt", ".xaml", ".xml", ".yaml", ".yml",

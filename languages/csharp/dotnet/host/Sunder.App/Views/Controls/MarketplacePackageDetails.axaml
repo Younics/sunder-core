@@ -58,6 +58,8 @@
       </Border>
     </Grid>
 
+    <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
+
     <Border Classes="card-surface">
       <Expander IsExpanded="{Binding Marketplace.HasRuntimePreflightError}">
         <Expander.Header>

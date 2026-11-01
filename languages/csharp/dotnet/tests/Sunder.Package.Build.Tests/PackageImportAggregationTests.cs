@@ -2,10 +2,13 @@ using System.Text.Json.Nodes;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
 using Xunit;
+using static Sunder.Package.Build.Tests.PackageManifestFixture;
+using static Sunder.Package.Build.Tests.PackageOutputFixture;
 
 namespace Sunder.Package.Build.Tests;
 
-public sealed partial class PackageBuildManifestTests
+[Collection("Package build artifacts")]
+public sealed class PackageImportAggregationTests
 {
     [Theory]
     [InlineData(false)]

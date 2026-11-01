@@ -16,9 +16,9 @@ internal static class StackContentIndexValidator
             return;
         }
 
-        if (contentIndex.SchemaVersion != SunderStackFormat.CurrentContentIndexVersion)
+        if (!SunderStackFormat.SupportsContentIndexVersion(contentIndex.SchemaVersion))
         {
-            errors.Add($"Stack content index must declare schemaVersion {SunderStackFormat.CurrentContentIndexVersion}.");
+            errors.Add($"Unsupported Stack content-index schemaVersion {contentIndex.SchemaVersion}.");
         }
 
         if (contentIndex.Files is null)

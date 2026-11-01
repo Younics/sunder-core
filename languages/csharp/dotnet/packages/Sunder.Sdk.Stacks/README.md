@@ -19,7 +19,7 @@ its exporter/importer/applied interfaces on a partial class and bind that class 
 `[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`
 from `Sunder.Sdk.Services`. Ordinary package composition registers it automatically;
 advanced explicit composition can use `contributor.CreateSunderRpcProviderRegistration()`.
-The [template contributor](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs)
+The [template contributor](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs.in)
 provides a complete example.
 
 Explicitly select the platform contract; private-only source needs no Accept/Freeze:
@@ -64,6 +64,12 @@ source derivation preserves all 48 definitions and both issued descriptor/ABI ha
 See [platform imports](https://github.com/Younics/sunder-core/blob/main/docs/package-development/PLATFORM-CONTRACT-IMPORTS.md).
 
 Import preview must be side-effect free. The Runtime owns the resulting expiring, single-use plan and binds it to the validated archive, Runtime generation, exact provider activation, schema versions, selected fragments, inputs, remaps, actions, and conflicts. Import receives the immutable fragment/input/remap snapshot from that plan.
+
+Stack content is latest-by-identity, not author-versioned. The archive's system format,
+your fragment schema versions, and the exact contributor RPC contract are independent.
+Your importer may support multiple fragment versions. Unsupported selected versions
+must produce a blocking fragment-specific conflict, never a successful empty preview
+or import. Core separately controls its supported archive reader set and retirement floor.
 
 Required inputs explicitly use `StackValueSensitivity.Public` or `Secret`. Public values remain visible in import review; secret values are masked, must not have portable defaults, and must never be written to logs or contributor diagnostics.
 

@@ -15,6 +15,7 @@ public sealed partial class UseStackWizardViewModel
         SunderStackManifest manifest,
         IReadOnlyDictionary<string, StackPackageInfo> packageInfo)
     {
+        _stackManifest = manifest;
         _packageRequirements = manifest.Packages ?? [];
         PackageRows.Clear();
         foreach (var package in _packageRequirements)
@@ -81,18 +82,14 @@ public sealed partial class UseStackWizardViewModel
 
     private void ApplyManifestRequiredInputs(SunderStackManifest manifest)
     {
+        var existingInputs = RequiredInputs.ToArray();
+        var selected = GetSelectedFragmentIds().ToHashSet(StringComparer.OrdinalIgnoreCase);
         RequiredInputs.Clear();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var input in (manifest.Fragments ?? []).SelectMany(fragment => (fragment.RequiredInputs ?? []).Select(input => (Input: input, OwnerPackageId: fragment.OwnerPackageId, ContributorId: fragment.ContributorId ?? fragment.OwnerPackageId ?? "stack"))))
+        foreach (var input in (manifest.Fragments ?? []).Where(fragment => selected.Contains(fragment.FragmentId!))
+                     .SelectMany(fragment => (fragment.RequiredInputs ?? []).Select(input => (Input: input, OwnerPackageId: fragment.OwnerPackageId, ContributorId: fragment.ContributorId ?? fragment.OwnerPackageId ?? "stack"))))
         {
             var inputId = input.Input.InputId ?? input.Input.Label ?? "input";
-            if (!seen.Add(inputId))
-            {
-                continue;
-            }
-
-            RequiredInputs.Add(new UseStackRequiredInputValueViewModel(
-                new RuntimeStackRequiredInputDescriptor(
+            var descriptor = new RuntimeStackRequiredInputDescriptor(
                     string.Empty,
                     input.OwnerPackageId ?? "unknown.package",
                     input.ContributorId,
@@ -103,8 +100,11 @@ public sealed partial class UseStackWizardViewModel
                         : RuntimeStackInputSensitivity.Secret,
                     input.Input.Required != false,
                     input.Input.Description,
-                    input.Input.DefaultValue),
-                null,
+                    input.Input.DefaultValue);
+            if (RequiredInputs.Any(existing => existing.Matches(descriptor))) continue;
+            RequiredInputs.Add(new UseStackRequiredInputValueViewModel(
+                descriptor,
+                existingInputs.FirstOrDefault(existing => existing.Matches(descriptor))?.Value,
                 OnRequiredInputChanged));
         }
     }

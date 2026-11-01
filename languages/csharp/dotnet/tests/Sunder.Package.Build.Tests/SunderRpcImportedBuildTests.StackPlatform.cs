@@ -211,7 +211,7 @@ public sealed partial class SunderRpcImportedBuildTests
         ClearCatalogGcLock(); File.Delete(Path.Combine(_root, "Provider.cs"));
         var template = Path.Combine(RepositoryRoot(), "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template");
         foreach (var name in new[] { "Services/SampleService.cs", "Stacks/StackSupport.cs" })
-            File.WriteAllText(Path.Combine(_root, Path.GetFileName(name)), File.ReadAllText(Path.Combine(template, name))
+            File.WriteAllText(Path.Combine(_root, Path.GetFileName(name)), File.ReadAllText(Path.Combine(template, name + ".in"))
                 .Replace("SUNDER_PACKAGE_ID_CSHARP", "example.owner", StringComparison.Ordinal)
                 .Replace("SUNDER_PACKAGE_ID_TEXT", "example.owner", StringComparison.Ordinal)
                 .Replace("SUNDER_PACKAGE_NAME_CSHARP", "Stack sample", StringComparison.Ordinal));

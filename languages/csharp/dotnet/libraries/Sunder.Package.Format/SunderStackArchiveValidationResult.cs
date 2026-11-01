@@ -37,13 +37,14 @@ public sealed record SunderStackArchiveValidationResult
 
     public IReadOnlyList<string> Errors { get; }
 
-    internal IReadOnlyList<SunderStackArchiveErrorCategory> ErrorCategories { get; }
+    public IReadOnlyList<SunderStackArchiveErrorCategory> ErrorCategories { get; }
 
     public bool Success => Manifest is not null && Errors.Count == 0;
 }
 
-internal enum SunderStackArchiveErrorCategory
+public enum SunderStackArchiveErrorCategory
 {
     Validation,
     MissingEntry,
+    UnsupportedFormat,
 }

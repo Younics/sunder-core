@@ -521,6 +521,11 @@ type public sealed class Sunder.Package.Format.SunderPackageWebViewManifest
   property System.String? Icon { public get; public init; }
   property System.String? Route { public get; public init; }
   property System.String? ViewId { public get; public init; }
+type public enum Sunder.Package.Format.SunderStackArchiveErrorCategory : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
+  field public const Sunder.Package.Format.SunderStackArchiveErrorCategory MissingEntry = 1
+  field public const Sunder.Package.Format.SunderStackArchiveErrorCategory UnsupportedFormat = 2
+  field public const Sunder.Package.Format.SunderStackArchiveErrorCategory Validation = 0
+  field public System.Int32 value__
 type public static class Sunder.Package.Format.SunderStackArchiveInspector
   method public static System.Threading.Tasks.Task<Sunder.Package.Format.SunderStackArchiveValidationResult> ExtractAndValidateAsync(System.String stackPath, System.String stagingPath, Sunder.Package.Format.SunderArchiveExtractionOptions options)
   method public static System.Threading.Tasks.Task<Sunder.Package.Format.SunderStackArchiveValidationResult> ExtractAndValidateAsync(System.String stackPath, System.String stagingPath, System.Threading.CancellationToken cancellationToken = null)
@@ -531,6 +536,7 @@ type public sealed class Sunder.Package.Format.SunderStackArchiveValidationResul
   method public .ctor(Sunder.Package.Format.SunderStackManifest? manifest, System.Collections.Generic.IReadOnlyList<System.String> warnings, System.Collections.Generic.IReadOnlyList<System.String> errors)
   property System.Boolean Success { public get; }
   property Sunder.Package.Format.SunderStackManifest? Manifest { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderStackArchiveErrorCategory> ErrorCategories { public get; }
   property System.Collections.Generic.IReadOnlyList<System.String> Errors { public get; }
   property System.Collections.Generic.IReadOnlyList<System.String> Warnings { public get; }
   method public Sunder.Package.Format.SunderStackArchiveValidationResult <Clone>$()
@@ -581,11 +587,17 @@ type public static class Sunder.Package.Format.SunderStackFormat
   field public const System.String ManifestPath = "manifest/sunder-stack.json"
   field public const System.String MediaFeature = "media.v1"
   field public const System.String MediaPayloadRoot = "payload/media/"
+  field public const System.Int32 MinimumSupportedContentIndexVersion = 1
+  field public const System.Int32 MinimumSupportedSchemaVersion = 1
   field public const System.String PayloadRoot = "payload/"
   field public const System.String RequiredInputsFeature = "required-inputs.v1"
+  property System.Collections.Generic.IReadOnlySet<System.Int32> SupportedContentIndexVersions { public static get; }
+  property System.Collections.Generic.IReadOnlySet<System.Int32> SupportedSchemaVersions { public static get; }
   property System.Collections.Generic.IReadOnlySet<System.String> SupportedFeatures { public static get; }
   method public static System.Boolean IsAllowedArchivePath(System.String path)
   method public static System.Boolean IsContentIndexPath(System.String path)
+  method public static System.Boolean SupportsContentIndexVersion(System.Int32 version)
+  method public static System.Boolean SupportsSchemaVersion(System.Int32? version)
   method public static System.String BuildStackFileName(System.String stackId)
 type public sealed class Sunder.Package.Format.SunderStackFragmentDisplayDetail
   method public .ctor()
@@ -633,6 +645,11 @@ type public sealed class Sunder.Package.Format.SunderStackMediaManifest
   property System.String? ContentType { public get; public init; }
   property System.String? FileName { public get; public init; }
   property System.String? Path { public get; public init; }
+type public static class Sunder.Package.Format.SunderStackMetadataReader
+  method public static Sunder.Package.Format.SunderStackContentIndex ReadContentIndex(System.String json)
+  method public static Sunder.Package.Format.SunderStackManifest ReadManifest(System.String json)
+  method public static Sunder.Package.Format.SunderStackManifest ReadRetainedManifest(System.String json)
+  method public static System.Collections.Generic.IReadOnlyList<System.String> GetCompatibilityErrors(Sunder.Package.Format.SunderStackManifest manifest, System.Boolean allowRetiredSchema = false)
 type public sealed class Sunder.Package.Format.SunderStackPackageRequirement
   method public .ctor()
   property System.Boolean? Required { public get; public init; }
@@ -640,6 +657,8 @@ type public sealed class Sunder.Package.Format.SunderStackPackageRequirement
   property System.String? InstallTag { public get; public init; }
   property System.String? MinimumVersion { public get; public init; }
   property System.String? PackageId { public get; public init; }
+type public static class Sunder.Package.Format.SunderStackPackageRequirements
+  method public static System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderStackPackageRequirement> Merge(System.Collections.Generic.IEnumerable<Sunder.Package.Format.SunderStackPackageRequirement> requirements)
 type public sealed class Sunder.Package.Format.SunderStackRequiredInputManifest
   method public .ctor()
   property System.Boolean? Required { public get; public init; }

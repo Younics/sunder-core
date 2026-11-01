@@ -1,10 +1,13 @@
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Rpc;
 using Xunit;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcBrokerFixture;
+using static Sunder.Runtime.Host.Tests.RuntimeRpcTestPackages;
 
 namespace Sunder.Runtime.Host.Tests;
 
-public sealed partial class RuntimeRpcBrokerTests
+[Collection("Runtime RPC broker")]
+public sealed class RuntimeRpcCatalogPublicationTests
 {
     [Fact]
     public async Task ForeignPublicationCannotRetireTheReceivingOwnersRpcActivations()
@@ -101,11 +104,5 @@ public sealed partial class RuntimeRpcBrokerTests
         using var reopened = fixture.Owner.State.AcquireRpcLease(new(previous, fixture.Owner.Generation, activationGeneration: 1));
         Assert.NotNull(reopened);
         Assert.Same(activation.Session, reopened.Session);
-    }
-
-    private sealed class PublicationWorker : TestRuntimePackageWorker
-    {
-        private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public override Task GenerationCompletion => _completion.Task;
     }
 }

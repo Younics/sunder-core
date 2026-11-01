@@ -73,8 +73,9 @@ internal sealed class RuntimeStackExportService
         using var linked = lease.CreateLinkedCancellation(cancellationToken);
         if (string.IsNullOrWhiteSpace(request.StackId)) return Failed("Stack id is required.");
         if (string.IsNullOrWhiteSpace(request.Name)) return Failed("Stack name is required.");
-        var packageRequirements = BuildSelectedPackageRequirements(lease, request.SelectedPackages ?? []).ToList();
-        if (request.SelectedItems.Count == 0 && packageRequirements.Count == 0) return Failed("Select at least one package or setup item to export.");
+        var packageRequirements = new List<StackPackageRequirement>();
+        var selectedPackages = request.SelectedPackages ?? [];
+        if (request.SelectedItems.Count == 0 && selectedPackages.Count == 0) return Failed("Select at least one package or setup item to export.");
         await using var callScope = await _rpcClient.CreateCallScopeAsync(
             cancellationToken: linked.Token).ConfigureAwait(false);
 
@@ -120,7 +121,6 @@ internal sealed class RuntimeStackExportService
                 var contribution = await scopedClient.ExportAsync(
                     new StackExportRequest(selections),
                     linked.Token).ConfigureAwait(false);
-                packageRequirements.Add(BuildPackageRequirement(lease, registration.PackageId));
                 foreach (var fragment in contribution.Fragments)
                 {
                     var owned = RuntimeStackContractMapper.OwnExportFragment(
@@ -155,6 +155,11 @@ internal sealed class RuntimeStackExportService
                 RuntimeStackFailureCategory.Validation,
                 response.Errors.FirstOrDefault());
         }
+        // Authored requirements win. Host fallbacks only fill missing owner/selected packages.
+        var declaredPackages = packageRequirements.Select(value => value.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        packageRequirements.AddRange(BuildSelectedPackageRequirements(lease,
+            selectedPackages.Concat(fragments.Select(fragment => fragment.OwnerPackageId))
+                .Where(packageId => !declaredPackages.Contains(packageId)).ToArray()));
         if (fragments.Count == 0 && packageRequirements.Count == 0)
         {
             return Failed("Selected setup items did not produce Stack content.");
@@ -176,9 +181,6 @@ internal sealed class RuntimeStackExportService
         IReadOnlyList<string> packageIds)
         => packageIds.Where(value => !string.IsNullOrWhiteSpace(value)).Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(packageId => new StackPackageRequirement(packageId, CreatedWithVersion: _sessions.State.GetLoadedPackage(lease, packageId)?.Descriptor.Version)).ToArray();
-
-    private StackPackageRequirement BuildPackageRequirement(PackageSessionLease lease, string packageId)
-        => new(packageId, CreatedWithVersion: _sessions.State.GetLoadedPackage(lease, packageId)?.Descriptor.Version, MinimumVersion: "1.0.0");
 
     private static RuntimeStackOperationResult<RuntimeStackExportResponse> Failed(string message)
     {

@@ -93,14 +93,25 @@ internal sealed record SetDistTagCommand(string PackageId, string Tag, string? V
 internal sealed record SearchStacksCommand(string? Query, int Skip, int Take) : CliCommand;
 internal sealed record StackInfoCommand(string StackId) : CliCommand;
 internal sealed record DownloadStackCommand(string StackId, string? Output, bool Force) : CliCommand;
-internal sealed record ImportStackCommand(string File) : CliCommand;
+internal sealed record ImportStackCommand(
+    string File,
+    bool DryRun = true,
+    IReadOnlyList<string>? FragmentIds = null,
+    IReadOnlyList<string>? ActionIds = null,
+    bool NoFragments = false,
+    bool NoActions = false,
+    IReadOnlyList<string>? InputEnvironmentSources = null,
+    bool InputsFromStdin = false,
+    bool ApproveSensitiveCapabilities = false) : CliCommand;
 internal sealed record ExportStackCommand(
     string StackId,
     string? Name,
     string? Summary,
     string? Output,
     bool IncludeAll,
-    bool Force) : CliCommand;
+    bool Force,
+    IReadOnlyList<string>? ItemIds = null,
+    bool DryRun = false) : CliCommand;
 internal sealed record PublishStackCommand(
     string File,
     bool DevLocal,
@@ -138,6 +149,7 @@ internal enum CliConfigurationRequirements
     RegistryApi = 1,
     RegistryWeb = 2,
     Runtime = 4,
+    OptionalRegistryApi = 8,
 }
 
 [Flags]
@@ -189,8 +201,11 @@ internal sealed record CliCommandPlan(
             or SetPackageConfigCommand or UnsetPackageConfigCommand
             or PackageSecretStatusCommand or SetPackageSecretCommand or UnsetPackageSecretCommand
             or PackageAuthStatusCommand or PackageAuthLoginCommand or PackageAuthLogoutCommand
-            or ImportStackCommand or ExportStackCommand => new(
+             or ExportStackCommand => new(
             CliConfigurationRequirements.Runtime,
+             CliClientRequirements.Runtime),
+        ImportStackCommand => new(
+            CliConfigurationRequirements.Runtime | CliConfigurationRequirements.OptionalRegistryApi,
             CliClientRequirements.Runtime),
         EnsureExecutionRuntimeCommand or InstallExecutionRuntimeCommand => new(
             CliConfigurationRequirements.Runtime,

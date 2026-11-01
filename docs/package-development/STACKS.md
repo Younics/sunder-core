@@ -6,6 +6,35 @@ Stacks export selected setup from active packages into a portable archive and im
 
 The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md#stack-archive-validation) is the normative source for Stack archive paths, JSON/media/payload limits, feature handling, extraction safety, and secret scanning. This guide covers contributor behavior and intentionally does not restate those format rules.
 
+## Content Identity And System Versions
+
+A Stack has a stable `stackId`, not a content SemVer. Republishing advances its current
+Registry content. Registry publication revisions pin reviewed downloads and retain prior
+bytes; they are not package-style versions that authors choose. A downloaded local Stack
+is a snapshot, not a subscription to subsequent edits.
+
+System compatibility has three separate boundaries:
+
+- The archive's `schemaVersion`, content-index version, `minReaderVersion`, and required
+  features describe the Stack format. Core owns these readers and writers.
+- Each fragment's `schemaId` and `schemaVersion` describe package-owned content. The
+  contributor decides which versions it understands and converts them to its current model.
+- The exact contributor RPC contract (`sunder.stack.contributor` `2.0.0`) describes the
+  calls between Runtime and packages. It is independent of both archive and fragment versions.
+
+Core's current writer emits format 1, and its implemented reader set is `{1}`. Reader
+admission is independent of the current writer: introducing format 2 must add its real
+reader while retaining reader 1, rather than changing one equality constant. Raising the
+minimum supported schema/index version retires new import/publication of an old format.
+Known retained Registry metadata and immutable download bytes are not rewritten or deleted.
+An unknown future format is rejected before interpreting its version-specific fields.
+
+A contributor can handle several fragment versions in its existing importer; no new
+global Stack format is needed when only that package's JSON changes. An unsupported or
+invalid selected fragment must return an error-severity `StackImportConflict` identifying
+the fragment, not an empty successful preview. Reject it again at apply rather than
+reporting a successful no-op. Users may explicitly deselect unsupported content.
+
 ## Add Stack Support
 
 Generate a contributor stub:
@@ -46,7 +75,7 @@ providers.Add(contributor.CreateSunderRpcProviderRegistration());
 
 A single class may implement multiple local contracts, which all derive from `IPackageStackContributor`. Its marker selects the local semantic adapter, not platform authority. Generation uses the authenticated platform lock to produce private wire types, dispatch and registration for `sunder.stack.contributor` `2.0.0`; authors do not copy descriptor versions or hashes. Runtime discovers only exact descriptor-compatible endpoints. Contributor ids are stable and unique only within the owner package. Duplicate exporter/importer ids for one package are rejected case-insensitively.
 
-The generated template's [Stack stub](../../languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs) has packed-template bootstrap checks and Registry-catalog generation/behavior coverage. Production Registry publication/bootstrap and Runtime acceptance remain separate gates; catalog signing setup is not required.
+The generated template's [Stack stub](../../languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs.in) has packed-template bootstrap checks and Registry-catalog generation/behavior coverage. Production Registry publication/bootstrap and Runtime acceptance remain separate gates; catalog signing setup is not required.
 
 ## Export Lifecycle
 
@@ -75,6 +104,12 @@ Every `StackPackageRequirement` identifies:
 
 A compatible installed version satisfies the requirement without resolving the dist tag. An optional absent requirement may be skipped, but any installed or selected version must satisfy the minimum. Requirements for the same package are merged: conflicting install tags or invalid minimum versions fail export, the strongest minimum wins, and any required declaration makes the merged requirement required.
 
+Install tags are case-sensitive. Runtime adds an owner/selected-package fallback only
+when no contributor supplied that package's requirement; it never invents a `1.0.0`
+minimum or overrides an authored tag. App editing uses the same merge rules as export.
+The current RPC requirement model expresses a minimum, not a bounded package range;
+`CreatedWithVersion` is descriptive, not an exact pin or an upper compatibility bound.
+
 ## Import Lifecycle
 
 1. Runtime validates and extracts the uploaded Stack into bounded temporary storage.
@@ -84,6 +119,18 @@ A compatible installed version satisfies the requirement without resolving the d
 5. Runtime creates an expiring, single-use plan bound to the archive hash, Runtime generation, exact provider endpoints, selected fragments, values/remaps, schema versions, available actions, and conflicts.
 6. Import consumes that plan, verifies each exact endpoint is still active, and calls it with fresh fenced content references and only selected local action ids.
 7. Runtime aggregates contributor outcomes and invokes `import-applied` on the same endpoint when items committed.
+
+Runtime enforces package availability/minimum versions before preview and again at apply.
+It does not silently install packages inside a contributor call. App and CLI use the
+existing package-plan APIs first, with their normal fingerprints and capability consent.
+Package installation and contributor import remain separate transactions: installed
+packages remain if later setup is rejected or cancelled.
+
+Expected preview rejections retain their structured conflicts, inputs, warnings, and
+errors over HTTP. A false `Success` cannot be applied. App refreshes the setup review
+after installing packages, and rebinds previously entered values to the contributor's
+Host-scoped input ids before creating the applied plan. Changed actions require review
+again. Runtime rejects missing required values for contributors whose actions are selected.
 
 Plans expire after 15 minutes and are consumed even when apply fails. They become stale if the Runtime generation, archive, exact provider activation, or selected fragment set changes. Apply may choose any subset of the plan's known actions; unknown action ids are rejected. Preview actions and required-input ids must be nonblank and case-insensitively unique within that contributor.
 
