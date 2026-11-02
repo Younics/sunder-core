@@ -173,6 +173,46 @@ test("project-scoped test selection excludes process cases from the fast lane an
   }
 });
 
+test(".NET reporter bounds expensive Build cases without relaxing fast-project or project deadlines", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-dotnet-timeouts-"));
+  try {
+    const log = resolve(root, "commands.jsonl");
+    const hook = resolve(root, "record-dotnet.mjs");
+    await writeFile(hook, `
+      import childProcess from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      import { appendFileSync } from "node:fs";
+      childProcess.spawnSync = (command, args, options) => {
+        appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command, args, timeout: options.timeout }) + "\\n");
+        return { status: 0 };
+      };
+      syncBuiltinESMExports();
+    `);
+    const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
+    for (const [project, lane, expected] of [
+      ["Sunder.Package.Build.Tests", "host-platform", "20m"],
+      ["Sunder.Package.Build.Tests", undefined, "20m"],
+      ["Sunder.Package.Build.Tests", "dotnet-linux", "5m"],
+      ["Sunder.Package.Templates.Tests", undefined, "10m"],
+      ["Sunder.Sdk.PublicApi.Tests", "dotnet-linux", "5m"],
+    ]) {
+      const result = spawnSync(process.execPath, ["--import", hook, runner,
+        "--project", project, ...(lane === undefined ? [] : ["--primary-lane", lane]),
+        "--results-directory", resolve(root, "results")], { cwd: repositoryRoot, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      const command = JSON.parse((await readFile(log, "utf8")).trim().split("\n").at(-1));
+      assert.equal(command.command, "dotnet");
+      assert.ok(command.args.includes("--blame-hang"));
+      assert.equal(command.args[command.args.indexOf("--blame-hang-timeout") + 1], expected);
+      assert.equal(command.timeout, 60 * 60 * 1000);
+      assert.ok(command.args.includes("--logger"));
+      assert.ok(command.args.includes("--no-build"));
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("lane entry retains the renamed process suspension regression and fails closed on missing release inputs", () => {
   const model = loadCoreTestModel();
   const suspension = model.policy.expectedSkips.find((item) => item.id === "node-process-suspension");

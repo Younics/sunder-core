@@ -62,7 +62,11 @@ changes. When source has not changed since compilation, omit `--build` to reuse 
 test binaries. Project-scoped reports go under `artifacts/test-results/local/` by
 default and do not remove other lanes' reports. Full runs have a bounded 60-minute
 project watchdog; `--timeout-ms 5400000` selects a bounded 90-minute project run when
-needed for a shared-generator checkpoint. Individual hang watchdogs remain unchanged.
+needed for a shared-generator checkpoint. VSTest's per-case hang watchdog is five
+minutes for ordinary/fast selections, ten for Templates, and twenty for Build
+selections containing `host-platform` integration cases (including full-project
+runs). Those multi-command cases retain their own fifteen-minute child-process
+deadlines; the outer project and CI job watchdogs remain separate and bounded.
 
 | Change | Validation to select |
 | --- | --- |

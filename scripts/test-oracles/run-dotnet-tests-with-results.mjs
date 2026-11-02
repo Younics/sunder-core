@@ -55,7 +55,13 @@ const failed = [];
 for (const projectPath of projectPaths) {
   const projectName = projectPath.split("/").at(-1).replace(/\.csproj$/u, "");
   const filter = primaryLane === undefined ? undefined : projectFilter(projectName, selectedTests, allDotnetTests);
-  const hangTimeout = projectName === "Sunder.Package.Templates.Tests" ? "10m" : "5m";
+  // Build integration cases run several builds/probes/rollback checks in one
+  // xUnit case, with independently bounded 15-minute child commands. Do not let
+  // VSTest's per-case watchdog kill those commands before their own deadline.
+  // Keep the fast Build selection (and ordinary unit projects) on five minutes.
+  const buildIntegration = projectName === "Sunder.Package.Build.Tests"
+    && selectedTests.some((test) => test.project === projectName && test.primaryLane === "host-platform");
+  const hangTimeout = buildIntegration ? "20m" : projectName === "Sunder.Package.Templates.Tests" ? "10m" : "5m";
   process.stdout.write(`\n=== ${projectName} ===\n`);
   const result = spawnSync("dotnet", [
     "test",

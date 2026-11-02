@@ -1979,12 +1979,7 @@ public sealed partial class ProcessRuntimeWorkerTests
         Assert.Equal(JsonValueKind.Null, result.GetProperty("statePath").ValueKind);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("path").ValueKind);
         Assert.Equal(JsonValueKind.Null, result.GetProperty("home").ValueKind);
-        Assert.Equal(
-            ExpectedWorkerEnvironmentNames(),
-            result.GetProperty("environmentNames")
-                .EnumerateArray()
-                .Select(static item => NormalizeEnvironmentName(item.GetString()!))
-                .Order(StringComparer.Ordinal));
+        WorkerEnvironmentAssertions.AssertObservedChild(result);
         Assert.True(Directory.Exists(fixture.Context.Storage.DataRootPath));
         Assert.Equal(fixture.Worker.WorkspaceRootPath, result.GetProperty("workspaceRoot").GetString());
         Assert.EndsWith("Z", result.GetProperty("deadlineUtc").GetString(), StringComparison.Ordinal);
@@ -2039,6 +2034,8 @@ public sealed partial class ProcessRuntimeWorkerTests
             ["LC_CTYPE"] = "UTF-8",
             ["__CF_USER_TEXT_ENCODING"] = "0x1F5:0x0:0x0",
             ["UNRELATED"] = "must-not-pass",
+            ["PROCESSOR_ARCHITECTURE"] = "must-not-pass",
+            ["PROCESSOR_ARCHITEW6432"] = "must-not-pass",
         };
 
         var environment = WorkerProcessEnvironment.CreateBaseline(
@@ -2178,9 +2175,9 @@ public sealed partial class ProcessRuntimeWorkerTests
         Assert.Equal(SunderToolchainPolicy.Development,
             JsonSerializer.Deserialize<Sunder.Sdk.Abstractions.SunderDevelopmentToolchain>(startInfo.Environment["SUNDER_DEVELOPMENT_TOOLCHAIN"]!));
         Assert.Equal(
-            ExpectedWorkerEnvironmentNames(),
+            WorkerEnvironmentAssertions.ExpectedLaunchNames(),
             startInfo.Environment.Keys
-                .Select(NormalizeEnvironmentName)
+                .Select(WorkerEnvironmentAssertions.NormalizeName)
                 .Order(StringComparer.Ordinal));
     }
 
@@ -2206,41 +2203,6 @@ public sealed partial class ProcessRuntimeWorkerTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("legacyDataPath").ValueKind);
         Assert.Equal(JsonValueKind.Null, root.GetProperty("legacyWorkingPath").ValueKind);
     }
-
-    private static string[] ExpectedWorkerEnvironmentNames()
-    {
-        var names = new List<string>
-        {
-            "SUNDER_ACTIVATION_ID",
-            "SUNDER_DEVELOPMENT_TOOLCHAIN",
-            "SUNDER_PACKAGE_CONTENT_ROOT",
-            "SUNDER_PACKAGE_ID",
-            "SUNDER_PACKAGE_VERSION",
-            "SUNDER_SESSION_ID",
-            "SUNDER_WORKER_OPERATIONAL_OUTCOMES_V1",
-            "SUNDER_WORKER_PROTOCOL",
-            "SUNDER_WORKER_TEMP_ROOT",
-            "TEMP",
-            "TMP",
-            "TMPDIR",
-        };
-        if (OperatingSystem.IsWindows())
-        {
-            names.Add("SystemRoot");
-            names.Add("WINDIR");
-        }
-        else if (OperatingSystem.IsMacOS())
-        {
-            names.Add("__CF_USER_TEXT_ENCODING");
-        }
-        return names
-            .Select(NormalizeEnvironmentName)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
-    }
-
-    private static string NormalizeEnvironmentName(string name)
-        => OperatingSystem.IsWindows() ? name.ToUpperInvariant() : name;
 
     [Theory]
     [InlineData("malformed-frame")]

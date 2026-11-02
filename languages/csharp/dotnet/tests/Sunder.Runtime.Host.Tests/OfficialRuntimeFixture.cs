@@ -512,7 +512,8 @@ public sealed class OfficialRuntimeFixture : IAsyncLifetime
               workspaceRoot: message.workspaceRootPath,
               workspaceEnvironment: process.env.SUNDER_PACKAGE_WORKSPACE_ROOT ?? null,
               legacyDataPath: process.env.SUNDER_PACKAGE_DATA_PATH ?? null,
-              environmentNames: Object.keys(process.env)
+              environmentNames: Object.keys(process.env),
+              processorArchitecture: process.env.PROCESSOR_ARCHITECTURE ?? null
             };
             fs.writeFileSync(path.join(temp, 'v1-environment.json'), JSON.stringify(status));
             write({ type: 'worker.activated', sessionGeneration: message.sessionGeneration });

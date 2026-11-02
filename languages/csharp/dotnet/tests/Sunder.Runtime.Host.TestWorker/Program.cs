@@ -537,6 +537,7 @@ while (true)
                 legacyDataPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_DATA_PATH"),
                 legacyWorkingPath = Environment.GetEnvironmentVariable("SUNDER_PACKAGE_WORKING_PATH"),
                 environmentNames = GetEnvironmentVariableNames(),
+                processorArchitecture = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE"),
             });
             continue;
         }
@@ -1134,6 +1135,7 @@ while (true)
                     path = Environment.GetEnvironmentVariable("PATH"),
                     home = Environment.GetEnvironmentVariable(OperatingSystem.IsWindows() ? "USERPROFILE" : "HOME"),
                     environmentNames = GetEnvironmentVariableNames(),
+                    processorArchitecture = Environment.GetEnvironmentVariable("PROCESSOR_ARCHITECTURE"),
                     workingPath = Environment.CurrentDirectory,
                     deadlineUtc = root.GetProperty("context").GetProperty("deadlineUtc").GetString(),
                     extendedDeadlineCapability = Environment.GetEnvironmentVariable("SUNDER_RPC_EXTENDED_DEADLINE_V1"),

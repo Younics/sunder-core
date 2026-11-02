@@ -7,6 +7,59 @@ namespace Sunder.Sdk.PublicApi.Tests;
 
 public sealed partial class SunderServiceBindingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequiredReference_RetirementBeforeCallbacksPreservesCallerFailureButCancelsProvider(bool providerSide)
+    {
+        var selected = ServiceResourceTestClient.Provider;
+        var client = new ServiceBindingTestClient(selected);
+        await using var bindings = new SunderRpcServiceBindingLifetime(client);
+        await bindings.DiscoverAsync(selected.ContractId);
+        var reference = bindings.CreateProvider(selected, CreateService).Reference;
+        await using var resources = new SunderRpcResourceLifetime(bindings);
+        await using var sending = await resources.CreateCallAsync(client, new("outer-source"));
+        Configure(sending, bindings);
+        var wire = await sending.SerializeAsync(reference,
+            static (context, value, token) => context.RegisterServiceReferenceAsync(value, token));
+        var invocation = new SunderRpcInvocationContext("caller.package", "1.0.0", selected,
+            DateTimeOffset.UtcNow.AddMinutes(1), 1, CancellationToken.None);
+        await using var receiving = SunderRpcMarshallingContext.ForInvocation(invocation, client, bindings);
+        Configure(receiving, bindings);
+        await receiving.DeserializeAsync<ServiceReference<BoundService>>(wire,
+            static (context, value, token) => context.PrepareServiceReferenceAsync<BoundService>(value, token));
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        // Cancellation callbacks run LIFO. Hold propagation to both resource owners
+        // after the binding is retired, instead of depending on thread scheduling.
+        using var callback = reference.RetirementToken.Register(() =>
+        {
+            callbackStarted.TrySetResult();
+            releaseCallback.Wait();
+        });
+        try
+        {
+            client.Publish(SunderRpcCatalogEventKind.Removed, selected);
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var operation = providerSide ? receiving : sending;
+            Assert.False(operation.CancellationToken.IsCancellationRequested);
+            if (providerSide)
+            {
+                var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await operation.SerializeAsync("late-response"));
+                Assert.True(error.CancellationToken.IsCancellationRequested);
+            }
+            else
+            {
+                var error = await Assert.ThrowsAsync<SunderRpcException>(async () => await operation.SerializeAsync("late-request"));
+                Assert.Equal(SunderRpcErrorKind.StaleEndpoint, error.Error.Kind);
+                Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, error.Error.DispatchState);
+                Assert.Equal(SunderRpcRetrySafety.Unsafe, error.Error.RetrySafety);
+                Assert.False(SunderRpcException.HasTrustedNoDispatchEvidence(error));
+            }
+        }
+        finally { releaseCallback.Set(); }
+    }
+
     [Fact]
     public async Task RequestReferenceRetirementCancelsSourceBeforeSourceCallsItsExecutionTarget()
     {

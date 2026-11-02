@@ -120,6 +120,13 @@ public sealed partial class SunderRpcMarshallingContext
             catch (SunderRpcException error)
             {
                 _ = _owner.DisposeAsync();
+                // On the provider side this is local participant cancellation,
+                // not a provider-authored infrastructure failure. The binding
+                // can retire before its asynchronous callbacks reach our token;
+                // surface the same cancellation in either ordering. Never grant
+                // Host authentication to an SDK-created stale-endpoint error.
+                if (_invocation is not null)
+                    throw new OperationCanceledException("A required RPC service participant retired.", error, _owner.Token);
                 // At this operation boundary effects may already have occurred.
                 // Keep the error classification without manufacturing safe retry.
                 throw error.WithDispatchMetadata(SunderRpcDispatchState.PossiblyDispatched, SunderRpcRetrySafety.Unsafe);

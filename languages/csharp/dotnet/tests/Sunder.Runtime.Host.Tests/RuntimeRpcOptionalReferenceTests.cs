@@ -47,6 +47,7 @@ public sealed class RuntimeRpcOptionalReferenceTests
         var providers = await bindings.DiscoverAsync(descriptor.ContractId);
         var target = providers.Providers.Single(provider => provider.PackageId == "healthy.package");
         var callee = providers.Providers.Single(provider => provider.PackageId == "provider.package");
+        var generation = fixture.Owner.Generation;
         var entry = bindings.CreateProvider(target, static (_, _, token) => new OptionalHostTarget(token));
         var first = entry.Reference;
         var second = entry.Reference; // Distinct wrappers, identical canonical locator.
@@ -84,6 +85,8 @@ public sealed class RuntimeRpcOptionalReferenceTests
             }
             return await receiving.SerializeAsync(new { accepted = true });
         };
+        // Deliberately isolate endpoint retirement from a session-generation fault,
+        // which would cancel the unrelated outer call even for optional references.
         void RetireTarget() => Assert.True(fixture.Catalog.DeactivatePackage(target.PackageId, target.ActivationId, faulted: false));
         if (!midflight)
         {
@@ -119,6 +122,9 @@ public sealed class RuntimeRpcOptionalReferenceTests
             var error = await Record.ExceptionAsync(async () => await call.WaitAsync(TimeSpan.FromSeconds(10)));
             Assert.True(error is SunderRpcException or OperationCanceledException, error?.ToString() ?? "Strict reference unexpectedly returned fallback.");
             if (!midflight) Assert.False(entered.Task.IsCompleted);
+            Assert.Equal(generation, fixture.Owner.Generation);
+            if (termination != "source")
+                Assert.Contains(fixture.Catalog.GetSnapshot().Providers, provider => provider.Endpoint == callee.Endpoint);
         }
         else
         {
@@ -131,6 +137,80 @@ public sealed class RuntimeRpcOptionalReferenceTests
             Assert.True(fixture.Catalog.DeactivatePackage(callee.PackageId, callee.ActivationId, faulted: false));
             await ObserveOptionalHostCancellation(calleeReference.RetirementToken);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => _ = await retained.ReadAsync(new byte[1]));
+        }
+    }
+
+    [Fact]
+    public async Task StrictReference_RetirementBeforeCancellationPropagationDoesNotFaultUnrelatedProvider()
+    {
+        await using var fixture = new RpcFixture();
+        var descriptor = OptionalHostContract();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var callbackStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var respond = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCallback = new ManualResetEventSlim();
+        CancellationTokenRegistration callback = default;
+        var source = new TestHandler();
+        var activation = await fixture.PublishAsync(source, providerUsesContract: true,
+            healthyHandler: new TestHandler(), callerContract: descriptor, providerContract: descriptor);
+        foreach (var action in new[] { SunderRpcProtocol.DiscoverAction, SunderRpcProtocol.InvokeAction })
+        {
+            await fixture.GrantAsync(action);
+            await fixture.GrantAsync("provider.package", action);
+        }
+        var client = fixture.CreateClient(activation.Caller);
+        var receiverClient = fixture.CreateClient(activation.Provider);
+        await using var bindings = new SunderRpcServiceBindingLifetime(client);
+        await using var receiverBindings = new SunderRpcServiceBindingLifetime(receiverClient);
+        var providers = await bindings.DiscoverAsync(descriptor.ContractId);
+        var target = providers.Providers.Single(provider => provider.PackageId == "healthy.package");
+        var callee = providers.Providers.Single(provider => provider.PackageId == "provider.package");
+        var reference = bindings.CreateProvider(target, static (_, _, token) => new OptionalHostTarget(token)).Reference;
+        await using var resources = new SunderRpcResourceLifetime(bindings);
+        await using var sending = await resources.CreateCallAsync(client, callee.Endpoint);
+        ConfigureOptionalHost(sending, bindings, descriptor);
+        var wire = await sending.SerializeAsync(new OptionalHostPayload(null, reference),
+            static (context, value, token) => context.RegisterServiceReferenceAsync(value.Required, token));
+        source.UnaryWithContext = async (invocation, value, token) =>
+        {
+            await using var receiving = SunderRpcMarshallingContext.ForInvocation(invocation, receiverClient, receiverBindings);
+            ConfigureOptionalHost(receiving, receiverBindings, descriptor);
+            var payload = await receiving.DeserializeAsync<OptionalHostPayload>(value,
+                static (context, json, cancellation) => context.PrepareServiceReferenceAsync<OptionalHostTarget>(json.GetProperty("required"), cancellation));
+            callback = payload.Required!.RetirementToken.Register(() =>
+            {
+                callbackStarted.TrySetResult();
+                releaseCallback.Wait();
+            });
+            entered.TrySetResult();
+            await respond.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(token.IsCancellationRequested);
+            Assert.False(receiving.CancellationToken.IsCancellationRequested);
+            return await receiving.SerializeAsync(new { accepted = true });
+        };
+        var generation = fixture.Owner.Generation;
+        // A caller may not yet have forwarded its own cancellation (e.g. Worker
+        // transport). Provider-side participant retirement must suffice on its own.
+        var call = client.InvokeAsync(callee.Endpoint, "messages", "send", wire).AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.True(fixture.Catalog.DeactivatePackage(target.PackageId, target.ActivationId, faulted: false));
+            await callbackStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            respond.TrySetResult();
+            var error = await Assert.ThrowsAsync<SunderRpcException>(() => call.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.Equal(SunderRpcErrorKind.Cancelled, error.Error.Kind);
+            Assert.Equal(SunderRpcDispatchState.PossiblyDispatched, error.Error.DispatchState);
+            Assert.Equal(SunderRpcRetrySafety.Unsafe, error.Error.RetrySafety);
+            Assert.Equal(generation, fixture.Owner.Generation);
+            Assert.Equal(callee.Endpoint, Assert.Single(fixture.Catalog.GetSnapshot().Providers).Endpoint);
+            Assert.DoesNotContain(fixture.OwnerLogger.Entries, entry => entry.EventId.Id == 2401);
+        }
+        finally
+        {
+            releaseCallback.Set();
+            respond.TrySetResult();
+            await callback.DisposeAsync();
         }
     }
 

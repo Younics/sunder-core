@@ -15,6 +15,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     internal const int MaxInitialReplayBytes = 8 * 1024 * 1024;
     private const int MaxInitialFileBytes = 2 * 1024 * 1024;
     private const int MaxReadBytesPerChange = 1024 * 1024;
+    private const int MaxDirectoryScanEntriesPerTurn = 128;
 
     private readonly object _gate = new();
     private readonly string _packageRootPath;
@@ -25,6 +26,9 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     private FileSystemWatcher? _watcher;
     private bool _starting;
     private bool _disposed;
+    private bool _directoryScanRunning;
+    private bool _directoryScanRequested;
+    private Task _directoryScanCompletion = Task.CompletedTask;
 
     public PackageLogStreamService()
         : this(new RuntimePackagePaths().PackageDataRootPath, Guid.NewGuid())
@@ -33,7 +37,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
 
     internal PackageLogStreamService(string packageRootPath, Guid? runtimeInstanceId = null)
     {
-        _packageRootPath = Path.GetFullPath(packageRootPath);
+        _packageRootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(packageRootPath));
         _runtimeInstanceId = runtimeInstanceId is { } value && value != Guid.Empty
             ? value
             : Guid.NewGuid();
@@ -58,7 +62,9 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             lock (_gate)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
-                _watcher = new FileSystemWatcher(_packageRootPath, "*.log")
+                // Directory events are essential: Linux can lose child-file
+                // events before installing a new recursive inotify watch.
+                _watcher = new FileSystemWatcher(_packageRootPath)
                 {
                     IncludeSubdirectories = true,
                     NotifyFilter = NotifyFilters.FileName | NotifyFilters.DirectoryName | NotifyFilters.LastWrite | NotifyFilters.Size,
@@ -117,7 +123,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         {
             if (_disposed)
             {
-                return ValueTask.CompletedTask;
+                return new ValueTask(_directoryScanCompletion);
             }
 
             _disposed = true;
@@ -128,11 +134,11 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             _feed.Complete();
         }
 
-        return ValueTask.CompletedTask;
+        return new ValueTask(_directoryScanCompletion);
     }
 
     private void OnChanged(object sender, FileSystemEventArgs e)
-        => ReadChangedFile(e.FullPath);
+        => ReadChangedPath(e.FullPath);
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
@@ -142,8 +148,18 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             {
                 _files[e.FullPath] = state;
             }
+            // A moved directory has no individual file rename notifications.
+            // Preserve offsets for files that were already being tailed.
+            var oldPrefix = Path.TrimEndingDirectorySeparator(e.OldFullPath) + Path.DirectorySeparatorChar;
+            foreach (var oldPath in _files.Keys.Where(path => path.StartsWith(oldPrefix, PathComparison)).ToArray())
+            {
+                var newPath = Path.Combine(e.FullPath, Path.GetRelativePath(e.OldFullPath, oldPath));
+                var previous = _files[oldPath];
+                _files.Remove(oldPath);
+                if (IsLogPath(newPath)) _files[newPath] = previous;
+            }
         }
-        ReadChangedFile(e.FullPath);
+        ReadChangedPath(e.FullPath);
     }
 
     private void OnDeleted(object sender, FileSystemEventArgs e)
@@ -151,34 +167,93 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         lock (_gate)
         {
             _files.Remove(e.FullPath);
+            var prefix = Path.TrimEndingDirectorySeparator(e.FullPath) + Path.DirectorySeparatorChar;
+            foreach (var path in _files.Keys.Where(path => path.StartsWith(prefix, PathComparison)).ToArray())
+                _files.Remove(path);
         }
     }
 
     private void OnError(object sender, ErrorEventArgs e)
-    {
-        if (!Directory.Exists(_packageRootPath))
-        {
-            return;
-        }
+        => RequestDirectoryReconciliation();
 
-        try
+    private void ReadChangedPath(string path)
+    {
+        if (Directory.Exists(path)) RequestDirectoryReconciliation();
+        else ReadChangedFile(path);
+    }
+
+    private void RequestDirectoryReconciliation()
+    {
+        lock (_gate)
         {
-            foreach (var filePath in Directory.EnumerateFiles(_packageRootPath, "*.log", SearchOption.AllDirectories))
-            {
-                ReadChangedFile(filePath);
-            }
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
+            if (_disposed) return;
+            _directoryScanRequested = true;
+            if (_directoryScanRunning) return;
+            _directoryScanRunning = true;
+            _directoryScanCompletion = ReconcileDirectoriesAsync();
         }
     }
+
+    private async Task ReconcileDirectoriesAsync()
+    {
+        // Coalesce directory storms into one streaming scan, not an unbounded
+        // queue of subtrees. Bound work between yields, reusing file-tail offsets
+        // and read continuations so reconciliation neither duplicates nor drops data.
+        await Task.Yield();
+        while (true)
+        {
+            lock (_gate)
+            {
+                if (_disposed) { _directoryScanRunning = false; return; }
+                _directoryScanRequested = false;
+            }
+            try
+            {
+                var entries = 0;
+                foreach (var path in Directory.EnumerateFileSystemEntries(_packageRootPath, "*", LogEnumerationOptions()))
+                {
+                    lock (_gate)
+                    {
+                        if (_disposed) { _directoryScanRunning = false; return; }
+                    }
+                    var log = IsLogPath(path);
+                    if (log) ReadChangedFile(path);
+                    if (log || ++entries >= MaxDirectoryScanEntriesPerTurn)
+                    {
+                        entries = 0;
+                        await Task.Yield();
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+            }
+            lock (_gate)
+            {
+                if (!_directoryScanRequested || _disposed)
+                {
+                    _directoryScanRunning = false;
+                    return;
+                }
+            }
+        }
+    }
+
+    private static EnumerationOptions LogEnumerationOptions()
+        => new()
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = true,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+            MatchCasing = MatchCasing.CaseInsensitive,
+        };
 
     private IReadOnlyList<InitialReplayFile> SelectInitialReplayFiles(CancellationToken cancellationToken)
     {
         var newest = new PriorityQueue<InitialReplayCandidate, DateTime>();
         try
         {
-            foreach (var path in Directory.EnumerateFiles(_packageRootPath, "*.log", SearchOption.AllDirectories))
+            foreach (var path in Directory.EnumerateFiles(_packageRootPath, "*.log", LogEnumerationOptions()))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 try
@@ -451,7 +526,19 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
 
         var fullPath = Path.GetFullPath(filePath);
         var rootPrefix = _packageRootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return fullPath.StartsWith(rootPrefix, PathComparison);
+        if (!fullPath.StartsWith(rootPrefix, PathComparison)) return false;
+        try
+        {
+            // Discovery must not follow package-controlled links outside the data
+            // root. Apply this to native file events as well as reconciliation.
+            for (var path = fullPath; !PathComparer.Equals(path, _packageRootPath); path = Path.GetDirectoryName(path)!)
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0) return false;
+            return (File.GetAttributes(fullPath) & FileAttributes.Directory) == 0;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private string ResolvePackageId(string filePath)

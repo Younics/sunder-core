@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -237,26 +238,84 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         }
     }
 
-    [Fact]
-    public async Task PackageLogs_WatcherObservesFileCreatedAfterReplaySetup()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PackageLogs_WatcherObservesFileCreatedAfterReplaySetup(bool movePopulatedDirectory)
     {
         var root = CreateTempDirectory();
+        var incoming = root + "-incoming";
         try
         {
+            if (movePopulatedDirectory)
+            {
+                Directory.CreateDirectory(Path.Combine(incoming, "logs"));
+                await File.WriteAllTextAsync(Path.Combine(incoming, "logs", "runtime.log"),
+                    $"level=info category=test msg=watcher-marker{Environment.NewLine}");
+                await File.WriteAllTextAsync(Path.Combine(incoming, "logs", "ignored.txt"),
+                    $"level=info category=test msg=not-a-log{Environment.NewLine}");
+            }
             await using var service = new PackageLogStreamService(root);
             service.Start();
             var logs = Path.Combine(root, "test.package", "logs");
-            Directory.CreateDirectory(logs);
-            await File.WriteAllTextAsync(
-                Path.Combine(logs, "runtime.log"),
-                $"level=info category=test msg=watcher-marker{Environment.NewLine}");
+            if (movePopulatedDirectory) Directory.Move(incoming, Path.GetDirectoryName(logs)!);
+            else
+            {
+                Directory.CreateDirectory(logs);
+                await File.WriteAllTextAsync(
+                    Path.Combine(logs, "runtime.log"),
+                    $"level=info category=test msg=watcher-marker{Environment.NewLine}");
+            }
 
             await WaitUntilAsync(() =>
                 service.GetSnapshot(limit: 10).Entries.Any(entry => entry.Message == "watcher-marker"));
+            await File.AppendAllTextAsync(Path.Combine(logs, "runtime.log"),
+                $"level=info category=test msg=watcher-append{Environment.NewLine}");
+            await WaitUntilAsync(() => service.GetSnapshot(limit: 10).Entries.Any(entry => entry.Message == "watcher-append"));
+            Assert.Equal(["watcher-marker", "watcher-append"], service.GetSnapshot(limit: 10).Entries.Select(entry => entry.Message));
         }
         finally
         {
             TryDeleteDirectory(root);
+            TryDeleteDirectory(incoming);
+        }
+    }
+
+    [UnixFact]
+    public async Task PackageLogs_DirectoryReconciliationContinuesBeyondOneBatchWithoutFollowingLinks()
+    {
+        var root = CreateTempDirectory();
+        var outside = CreateTempDirectory();
+        var incoming = root + "-incoming";
+        try
+        {
+            var outsideFile = Path.Combine(outside, "private.log");
+            await File.WriteAllTextAsync(outsideFile, "msg=outside-root\n");
+            Directory.CreateSymbolicLink(Path.Combine(root, "linked.package"), outside);
+            File.CreateSymbolicLink(Path.Combine(root, "linked.log"), outsideFile);
+            // A trailing separator must not break ancestor containment checks.
+            await using var service = new PackageLogStreamService(root + Path.DirectorySeparatorChar);
+            service.Start();
+            Assert.Empty(service.GetSnapshot().Entries);
+
+            Directory.CreateDirectory(incoming);
+            const int fileCount = 140; // More than one directory-discovery turn.
+            for (var index = 0; index < fileCount; index++)
+                await File.WriteAllTextAsync(Path.Combine(incoming, $"{index}.LOG"), $"msg=entry-{index}\n");
+            Directory.CreateSymbolicLink(Path.Combine(incoming, "linked-directory"), outside);
+            File.CreateSymbolicLink(Path.Combine(incoming, "linked-file.log"), outsideFile);
+            Directory.Move(incoming, Path.Combine(root, "test.package"));
+            await WaitUntilAsync(() => service.GetSnapshot(limit: 1000).Entries.Count == fileCount);
+            var entries = service.GetSnapshot(limit: 1000).Entries;
+            Assert.All(entries, entry => Assert.Equal("test.package", entry.PackageId));
+            Assert.Equal(fileCount, entries.Select(entry => entry.Message).Distinct().Count());
+            Assert.DoesNotContain(entries, entry => entry.Message == "outside-root");
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+            TryDeleteDirectory(incoming);
+            TryDeleteDirectory(outside);
         }
     }
 
