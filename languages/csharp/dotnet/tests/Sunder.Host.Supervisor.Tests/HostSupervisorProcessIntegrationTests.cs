@@ -20,9 +20,9 @@ public sealed class HostSupervisorProcessIntegrationTests
     private const string CorrelationHeader = "X-Correlation-ID";
 
     [Fact]
-    public async Task SupervisorProcess_GatewaysToNestedRuntimeAndOwnsResetDrain()
+    public Task SupervisorProcess_GatewaysToNestedRuntimeAndOwnsResetDrain()
+        => TemporaryDirectoryScope.RunAsync("sunder-host-process-tests", async scope =>
     {
-        await using var scope = TemporaryDirectoryScope.Create("sunder-host-process-tests");
         var root = scope.RootPath;
         var hostStateRoot = Path.Combine(root, "host");
         var runtimeStateRoot = Path.Combine(root, "runtime");
@@ -131,7 +131,7 @@ public sealed class HostSupervisorProcessIntegrationTests
             Assert.Equal(
                 RuntimeV1StateDescriptor.ResetCategories.Select(static category => category.Id),
                 reset.Categories.Select(static category => category.Category));
-            Assert.True(reset.Success);
+            Assert.True(reset.Success, JsonSerializer.Serialize(reset.Categories));
             Assert.False(File.Exists(staleTransfer));
             Assert.NotNull(reset.ReceiptRelativePath);
             Assert.True(File.Exists(Path.Combine(runtimeStateRoot, reset.ReceiptRelativePath)));
@@ -200,7 +200,7 @@ public sealed class HostSupervisorProcessIntegrationTests
                 $"Real Supervisor/Runtime integration failed.{Environment.NewLine}{process.Diagnostics}",
                 exception);
         }
-    }
+    });
 
     [Fact]
     public async Task SupervisorProcess_ForwardsTransferClassesAndRejectsOversizedOrdinaryBodiesBeforeRuntimeProxy()

@@ -63,7 +63,7 @@ jobs:
       matrix:
         include:
           - {lane: portable, os: ubuntu-24.04}
-          - {lane: win-x64, os: windows-2022}
+          - {lane: win-x64, os: windows-2025}
           - {lane: win-arm64, os: windows-11-arm}
           - {lane: linux-x64, os: ubuntu-24.04}
           - {lane: linux-arm64, os: ubuntu-24.04-arm}

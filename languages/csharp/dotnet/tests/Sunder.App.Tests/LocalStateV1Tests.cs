@@ -148,6 +148,75 @@ public sealed class LocalStateV1Tests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [WindowsFact]
+    [SupportedOSPlatform("windows")]
+    public async Task Reset_deletes_inherited_only_execution_runtime_descendants_without_stranding_access()
+    {
+        var root = CreateTempDirectory();
+        var runtimeRoot = Path.Combine(root, "runtime");
+        var tombstones = Path.Combine(runtimeRoot, RuntimeV1StateDescriptor.ExecutionRuntimeTombstonesDirectory);
+        var marks = Path.Combine(tombstones, "marks");
+        var nested = Path.Combine(marks, "nested");
+        var mark = Path.Combine(nested, "mark.json");
+        using var identity = WindowsIdentity.GetCurrent();
+        var user = Assert.IsType<SecurityIdentifier>(identity.User);
+        try
+        {
+            RuntimeLocalState.EnsureInitialized(runtimeRoot);
+            RuntimeOwnedFileSystem.CreateDirectory(tombstones);
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(mark, "derived");
+            foreach (var path in new[] { marks, nested, mark })
+            {
+                var directory = path != mark;
+                // Author only the owner of these freshly created fixture entries.
+                // Their DACLs must remain inherited-only, including on elevated runners.
+                FileSystemSecurity ownerOnly = directory
+                    ? new DirectoryInfo(path).GetAccessControl(AccessControlSections.Owner)
+                    : new FileInfo(path).GetAccessControl(AccessControlSections.Owner);
+                ownerOnly.SetOwner(user);
+                if (directory) new DirectoryInfo(path).SetAccessControl((DirectorySecurity)ownerOnly);
+                else new FileInfo(path).SetAccessControl((FileSecurity)ownerOnly);
+                FileSystemSecurity security = directory
+                    ? new DirectoryInfo(path).GetAccessControl()
+                    : new FileInfo(path).GetAccessControl();
+                Assert.Equal(user, security.GetOwner(typeof(SecurityIdentifier)));
+                Assert.False(security.AreAccessRulesProtected);
+                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier))
+                    .Cast<FileSystemAccessRule>().ToArray();
+                Assert.NotEmpty(rules);
+                Assert.All(rules, rule => Assert.True(rule.IsInherited));
+            }
+            File.SetAttributes(mark, File.GetAttributes(mark) | FileAttributes.ReadOnly);
+            var rootIdentity = RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(runtimeRoot);
+
+            var reset = await RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, runtimeRoot);
+
+            Assert.True(reset.Success, JsonSerializer.Serialize(reset.Categories));
+            Assert.False(Directory.Exists(tombstones));
+            Assert.Equal(rootIdentity, RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(runtimeRoot));
+            Assert.NotNull(reset.ReceiptRelativePath);
+            AssertCompletedReceipt(runtimeRoot, reset.ReceiptRelativePath);
+        }
+        finally
+        {
+            // A regression must report the reset assertion, not strand this known
+            // fixture's inherited-only children and replace it with a cleanup error.
+            if (Directory.Exists(tombstones))
+            {
+                var security = new DirectoryInfo(tombstones).GetAccessControl(AccessControlSections.Owner);
+                Assert.Equal(user, security.GetOwner(typeof(SecurityIdentifier)));
+                security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+                security.AddAccessRule(new FileSystemAccessRule(user, FileSystemRights.FullControl,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None, AccessControlType.Allow));
+                new DirectoryInfo(tombstones).SetAccessControl(security);
+            }
+            if (File.Exists(mark)) File.SetAttributes(mark, FileAttributes.Normal);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Fact]
     public void Nonempty_roots_without_compatible_metadata_are_rejected_without_touching_legacy_data()
     {

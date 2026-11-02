@@ -433,7 +433,7 @@ test("candidate-safe workflows retain lane gates, runtime reports, and compact e
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
   assert.match(workflow, /--primary-lane dotnet-linux/u);
   assert.match(host, /--primary-lane host-platform/u);
-  assert.match(host, /ubuntu-24\.04[\s\S]*windows-2022[\s\S]*macos-15/u);
+  assert.match(host, /rid: linux-x64, os: ubuntu-24\.04[\s\S]*rid: win-x64, os: windows-2025[\s\S]*rid: win-arm64, os: windows-11-arm[\s\S]*rid: osx-arm64, os: macos-15/u);
   assert.match(workflow, /--primary-lane node/u);
   assert.match(workflow, /run contracts:check[\s\S]*run typecheck[\s\S]*run package/u);
   assert.doesNotMatch(workflow, /run contracts:accept|run contracts:freeze/u);

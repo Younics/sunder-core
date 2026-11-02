@@ -31,6 +31,64 @@ public sealed class TestSupportFaultProbeTests
         Directory.Delete(scope.RootPath, recursive: true);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task TemporaryScope_PreservesActionAndCleanupFailures(bool failAction, bool failCleanup)
+    {
+        string? rootPath = null;
+        var actionFailure = new InvalidOperationException("seeded action fault");
+        var options = TemporaryDirectoryScopeOptions.Default with
+        {
+            CleanupAttempts = 1,
+            DeleteDirectory = (path, cancellationToken) => failCleanup
+                ? ValueTask.FromException(new IOException("seeded cleanup fault"))
+                : TemporaryDirectoryScopeOptions.Default.DeleteDirectory(path, cancellationToken),
+        };
+        try
+        {
+            var failure = await Record.ExceptionAsync(() => TemporaryDirectoryScope.RunAsync(
+                "sunder-test-support-action-probe",
+                scope =>
+                {
+                    rootPath = scope.RootPath;
+                    scope.WriteAllText("retained.txt", "fault probe");
+                    return failAction ? Task.FromException(actionFailure) : Task.CompletedTask;
+                },
+                options));
+
+            if (failAction && failCleanup)
+            {
+                var aggregate = Assert.IsType<AggregateException>(failure);
+                Assert.Equal(2, aggregate.InnerExceptions.Count);
+                Assert.Same(actionFailure, aggregate.InnerExceptions[0]);
+                var cleanup = Assert.IsType<TemporaryDirectoryCleanupException>(aggregate.InnerExceptions[1]);
+                Assert.Contains("seeded cleanup fault", cleanup.Message, StringComparison.Ordinal);
+                Assert.Contains("retained.txt", cleanup.Message, StringComparison.Ordinal);
+            }
+            else if (failAction)
+            {
+                Assert.Same(actionFailure, failure);
+            }
+            else if (failCleanup)
+            {
+                Assert.IsType<TemporaryDirectoryCleanupException>(failure);
+            }
+            else
+            {
+                Assert.Null(failure);
+            }
+            Assert.NotNull(rootPath);
+            Assert.Equal(failCleanup, Directory.Exists(rootPath));
+        }
+        finally
+        {
+            if (rootPath is not null && Directory.Exists(rootPath)) Directory.Delete(rootPath, recursive: true);
+        }
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     [Trait("Size", "Small")]

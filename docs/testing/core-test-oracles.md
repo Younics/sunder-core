@@ -124,6 +124,20 @@ parallel MSBuild inside each build; race-sensitive test collections retain their
 own serialization. Node artifact cleanup completes before Node outputs are rebuilt
 for .NET interop.
 
+Windows platform/process and App-output validation runs natively on both `win-x64`
+(`windows-2025`) and `win-arm64` (`windows-11-arm`), with RID-labelled jobs and
+report artifacts. The six native vendor-runtime checks remain separate required
+coverage. App release signing still uses an x64 runner for both Windows package
+targets because its signing client is x64. Hosted-runner allocation failures are
+infrastructure failures, not test passes or a reason to drop a required lane.
+
+The Supervisor reset/drain fixture uses `TemporaryDirectoryScope.RunAsync` so a
+cleanup failure cannot hide the original test/process diagnostics. Both failures
+are retained when action and cleanup fail; cleanup remains mandatory. Windows
+reset deletion grants inheritable user-only directory access while traversing
+validated owned trees, avoiding loss of inherited child access without changing
+foreign ownership or relaxing path/identity checks.
+
 App packaging evidence is summarized after an attempted packaging step, including
 a failed attempt, but not after a skipped step when an earlier platform test failed.
 This avoids a misleading missing-directory error without accepting missing reports:

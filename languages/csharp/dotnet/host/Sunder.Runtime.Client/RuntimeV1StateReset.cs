@@ -1047,7 +1047,9 @@ public static class RuntimeV1StateReset
         security.AddAccessRule(new FileSystemAccessRule(
             identity,
             FileSystemRights.FullControl,
-            InheritanceFlags.None,
+            // Windows propagates parent DACL replacement to unprotected children.
+            // Preserve their access until each planned entry is validated and made writable.
+            directory ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit : InheritanceFlags.None,
             PropagationFlags.None,
             AccessControlType.Allow));
         if (directory)

@@ -46,9 +46,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {runtime: win-x64, os: windows-2022}
+          - {runtime: win-x64, os: windows-2025}
           # The Azure signing tool runs on x64 while signing both Windows targets.
-          - {runtime: win-arm64, os: windows-2022}
+          - {runtime: win-arm64, os: windows-2025}
           - {runtime: linux-x64, os: ubuntu-24.04}
           - {runtime: linux-arm64, os: ubuntu-24.04-arm}
           - {runtime: osx-x64, os: macos-15-intel}

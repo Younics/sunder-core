@@ -32,6 +32,39 @@ public sealed class TemporaryDirectoryScope : IDisposable, IAsyncDisposable
         return new TemporaryDirectoryScope(root, options ?? TemporaryDirectoryScopeOptions.Default);
     }
 
+    public static async Task RunAsync(
+        string prefix,
+        Func<TemporaryDirectoryScope, Task> action,
+        TemporaryDirectoryScopeOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        var scope = Create(prefix, options);
+        Exception? actionFailure = null;
+        try
+        {
+            await action(scope).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            actionFailure = exception;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                await scope.DisposeAsync().ConfigureAwait(false);
+            }
+            catch (Exception cleanupFailure) when (actionFailure is not null)
+            {
+                throw new AggregateException(
+                    "Temporary directory action and cleanup both failed.",
+                    actionFailure,
+                    cleanupFailure);
+            }
+        }
+    }
+
     public string GetPath(params string[] segments)
     {
         ArgumentNullException.ThrowIfNull(segments);

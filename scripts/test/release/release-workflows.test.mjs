@@ -42,7 +42,7 @@ test("the six workflow entry points have valid Bash and pinned actions", async (
     for (const [, action] of source.matchAll(/uses:\s+([^\s#]+)/gu)) {
       assert.match(action, /^(?:\.\/\.github\/workflows\/sunder-[a-z-]+\.yml|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
     }
-    assert.doesNotMatch(source, /-m:1|macos-14|--clobber|overwrite:\s*true/u);
+    assert.doesNotMatch(source, /-m:1|macos-14|windows-2022|--clobber|overwrite:\s*true/u);
   }
 });
 
@@ -56,6 +56,11 @@ test("component tags finalize the same verified assets after their build and tes
     assert.match(source, /github_release\.py finalize/u);
     assert.match(source, /environment: sunder-github-release-promotion/u);
     assert.match(source, /needs: \[prepare, (?:package|stage, promote-npm)\]/u);
+    const coordinate = component === "app" ? "runtime" : component === "sdk" ? "lane" : "rid";
+    assert.match(source, new RegExp(`${coordinate}: win-x64, os: windows-2025`, "u"));
+    // App signing intentionally runs its x64 client for both Windows packages.
+    const armRunner = component === "app" ? "windows-2025" : "windows-11-arm";
+    assert.match(source, new RegExp(`${coordinate}: win-arm64, os: ${armRunner}`, "u"));
   }
 });
 
@@ -138,10 +143,23 @@ test("SDK corpus collection owns native context and transports evidence separate
 
 test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
   const source = await workflow("host-validation");
+  const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
+  assert.match(platform, /name: Platform\/process behavior \(\$\{\{ matrix\.rid \}\}\)/u);
+  assert.match(platform, /name: sunder-platform-\$\{\{ matrix\.rid \}\}/u);
+  assert.deepEqual([...platform.matchAll(/- \{rid: ([\w-]+), os: ([\w.-]+)\}/gu)].map((match) => match.slice(1)), [
+    ["linux-x64", "ubuntu-24.04"],
+    ["win-x64", "windows-2025"],
+    ["win-arm64", "windows-11-arm"],
+    ["osx-arm64", "macos-15"],
+  ]);
+  assert.match(platform, /--primary-lane host-platform/u);
+  assert.match(platform, /--primary-lane app-packaging/u);
+  const official = source.slice(source.indexOf("\n  official-runtimes:"), source.indexOf("\n  packaging:"));
   for (const rid of ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]) {
-    assert.match(source, new RegExp(`rid: ${rid}`, "u"));
+    assert.match(official, new RegExp(`rid: ${rid}`, "u"));
   }
-  assert.match(source, /rid: win-arm64, os: windows-11-arm/u);
+  assert.match(official, /rid: win-x64, os: windows-2025/u);
+  assert.match(official, /rid: win-arm64, os: windows-11-arm/u);
   assert.match(source, /rid: osx-arm64, os: macos-15/u);
   assert.match(source, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidDotNetRuntimeHostIntegrationTests\.OfficialCurrentRidDotNetRuntime_LaunchesThinWorkerAndRebindIsAtomic/u);
   assert.match(source, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidNodeRuntimeHostIntegrationTests\.OfficialCurrentRidNode24Runtime_LaunchesThinWorkerAndRoutesCrossLanguageRpc/u);
