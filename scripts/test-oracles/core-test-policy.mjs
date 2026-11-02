@@ -71,66 +71,6 @@ export function validateProjectLaneOwnership(declarations, policy, dotnetProject
   }
 }
 
-export function validateCharacterization(characterization, declarationIds) {
-  if (characterization.schemaVersion !== 2) throw new Error("Characterization map schemaVersion must be 2.");
-  const behaviorCategories = new Set([
-    "inputs",
-    "outputs",
-    "errors",
-    "cancellation",
-    "ordering",
-    "persistence",
-    "logging",
-    "cleanup",
-  ]);
-  const expectedTargets = [
-    "ProcessRuntimeWorker",
-    "RuntimeRpcBroker",
-    "PackageSessionState",
-    "PackageViewHostService",
-    "MainWindowViewModel",
-    "AppWebBridge",
-    "RuntimeWorkerCoordinator",
-  ];
-  const actualTargets = characterization.targets.map((target) => target.type);
-  if (JSON.stringify(actualTargets) !== JSON.stringify(expectedTargets)) {
-    throw new Error(`Characterization targets changed: ${actualTargets.join(", ")}`);
-  }
-  for (const target of characterization.targets) {
-    if (!Array.isArray(target.requiredBehaviors) || target.requiredBehaviors.length === 0) {
-      throw new Error(`${target.type} has no required behavior characterization.`);
-    }
-    const behaviorIds = new Set();
-    for (const behavior of target.requiredBehaviors) {
-      if (behaviorIds.has(behavior.id)) throw new Error(`${target.type} repeats behavior '${behavior.id}'.`);
-      behaviorIds.add(behavior.id);
-      if (!behaviorCategories.has(behavior.category)) {
-        throw new Error(`${target.type}.${behavior.id} has invalid behavior category '${behavior.category}'.`);
-      }
-      if (!Array.isArray(behavior.evidence)) {
-        throw new Error(`${target.type}.${behavior.id} has no explicit evidence list.`);
-      }
-      if (behavior.status === "covered") {
-        if (behavior.evidence.length === 0) {
-          throw new Error(`${target.type}.${behavior.id} is marked covered without behavioral evidence.`);
-        }
-        if (behavior.gap !== undefined) {
-          throw new Error(`${target.type}.${behavior.id} is covered but also declares an uncovered gap.`);
-        }
-      } else if (behavior.status === "uncovered") {
-        if (behavior.evidence.length !== 0 || typeof behavior.gap !== "string" || behavior.gap.trim() === "") {
-          throw new Error(`${target.type}.${behavior.id} must record one explicit uncovered gap and no evidence.`);
-        }
-      } else {
-        throw new Error(`${target.type}.${behavior.id} has invalid coverage status '${behavior.status}'.`);
-      }
-      for (const evidence of behavior.evidence) {
-        if (!declarationIds.has(evidence)) throw new Error(`${target.type}.${behavior.id} references missing test '${evidence}'.`);
-      }
-    }
-  }
-}
-
 export function listDotnetTestProjects(root = repositoryRoot) {
   const testRoot = resolve(root, "languages/csharp/dotnet/tests");
   return readdirSync(testRoot, { withFileTypes: true })

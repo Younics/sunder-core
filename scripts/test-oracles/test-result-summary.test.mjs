@@ -2,11 +2,52 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
 import {
+  auditCoreTestReports,
   buildCoreTestEvidence,
   materializeExpectedSkip,
   parseJunitReport,
   parseTrxReport,
 } from "./summarize-core-test-results.mjs";
+
+test("aggregate audit covers the union of owning jobs without requiring unselected external artifacts", () => {
+  const dotnet = (name, primaryLane, externalEnvironment) => ({
+    id: `Example.Tests.Cases.${name}`, framework: "dotnet", project: "Example.Tests", primaryLane, externalEnvironment,
+  });
+  const declarations = [
+    dotnet("Portable", "dotnet-linux"),
+    dotnet("WindowsProcess", "host-platform"),
+    dotnet("VendorRuntime", "official-runtime"),
+    dotnet("LiveRegistry", "release-artifact", "SUNDER_REQUIRE_LIVE_INSTALLATION"),
+    { framework: "python", source: "scripts/test/release/test_fixture.py", name: "test_fixture", primaryLane: "release-artifact" },
+  ];
+  const model = { declarations, policy: {
+    reports: { node: ["node.junit.xml"], releaseFixtures: "release-fixtures.junit.xml" },
+    projectLanes: { "Example.Tests": ["dotnet-linux", "host-platform", "official-runtime", "release-artifact"],
+      "scripts/test-oracles": ["node"], "scripts/test/release": ["release-artifact"] },
+  } };
+  const reports = declarations.slice(0, 3).map((declaration) => ({
+    source: `${declaration.primaryLane}/Example.Tests.trx`, discovered: 1,
+    results: [{ framework: "dotnet", declarationId: declaration.id, name: declaration.id, outcome: "Passed" }],
+  }));
+  reports.push(parseJunitReport('<testcase name="node case" file="scripts/test-oracles/fixture.test.mjs"/>', "core/node.junit.xml"));
+  reports.push(parseJunitReport('<testcase name="test_fixture" file="scripts/test/release/test_fixture.py" classname="python"/>', "core/release-fixtures.junit.xml"));
+  assert.deepEqual(auditCoreTestReports(reports, model), { discovered: 5, executed: 5, passed: 5, failed: 0, skipped: 0 });
+
+  for (const missing of reports) {
+    assert.throws(() => auditCoreTestReports(reports.filter((report) => report !== missing), model),
+      /omitted.*\.NET declaration|exactly one|Release fixture results omitted/u);
+  }
+  assert.throws(() => auditCoreTestReports([...reports, reports.at(-2)], model), /exactly one/u);
+  const failed = structuredClone(reports);
+  failed[0].results[0].outcome = "Failed";
+  assert.equal(auditCoreTestReports(failed, model).failed, 1);
+  const unknown = structuredClone(reports);
+  unknown[0].results[0].declarationId = "Unowned.Tests.Case";
+  assert.throws(() => auditCoreTestReports(unknown, model), /unowned \.NET test/u);
+  const missingFixture = structuredClone(reports);
+  missingFixture.at(-1).results[0].name = "not_the_fixture";
+  assert.throws(() => auditCoreTestReports(missingFixture, model), /Release fixture results omitted/u);
+});
 
 test("TRX and JUnit parsers retain expanded discovery, execution, and skip reasons", () => {
   const trx = parseTrxReport(`

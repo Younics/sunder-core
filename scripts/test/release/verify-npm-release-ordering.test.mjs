@@ -6,22 +6,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-sdk-release.yml");
 const verifierPath = resolve(repositoryRoot, "scripts/release/verify-npm-release.mjs");
 
-test("npm release consumes the coordinated CI artifact without repacking", async () => {
-  const workflow = await readFile(workflowPath, "utf8");
-  assert.match(workflow, /name: sunder-tested-sdk/u);
-  assert.match(workflow, /cp candidate\/sdk\/\*\.nupkg candidate\/npm\/\*\.tgz release-assets\//u);
-  assert.doesNotMatch(workflow, /npm pack|dotnet pack/u);
-});
-
 test("npm publication verifies each exact package before advancing and retains aggregate verification", async () => {
-  const workflow = await readFile(workflowPath, "utf8");
-  const job = workflow.slice(workflow.indexOf("\n  publish-npm:"), workflow.indexOf("\n  publish-nuget:"));
-  assert.match(job, /needs: \[prepare, stage\]/u);
-  assert.match(job, /id-token: write/u);
-  assert.match(job, /preflight-npm-trusted-publishing\.sh[\s\S]+publish-sdk\.sh npm/u);
   const script = await readFile(resolve(repositoryRoot, "scripts/release/publish-sdk.sh"), "utf8");
   const publicationLoop = script.slice(script.indexOf('elif [[ "$action" == npm ]]'), script.indexOf('elif [[ "$action" == promote ]]'));
   const existenceCheck = publicationLoop.indexOf('npm view "$package_id@$version" version');

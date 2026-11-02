@@ -35,13 +35,18 @@ SDK npm consumer channels are `latest` for stable versions and `next` for prerel
 SDK tags additionally require a release-specific qualification bundle before
 publication. The empty-ledger PR/dev success cannot satisfy that gate.
 
-Its complete-report audit also runs on the weekly schedule, manual dispatch and
-SDK tags. `sunder-host-validation.yml` is a reusable native lane: platform/process
+CI also runs on the weekly schedule, manual dispatch and SDK tags. On those runs,
+the final report audit consumes the successful owning jobs' TRX/JUnit reports without
+rebuilding or rerunning suites; the App web-bridge VM tests are required in the
+main job. Superseded PR runs are cancelled without cancelling release runs.
+`sunder-host-validation.yml` is a reusable native lane: platform/process
 and App bundle tests on Ubuntu, Windows and macOS; actual official .NET/Node
 installation and Worker launch on all six RIDs; exact native Worker archive
 installation; Linux AppImage, macOS DMG layout and Windows script checks.
 
-App and Host tags depend on native validation. CLI tags run the CLI suite and
+App and Host tags depend on native validation. Host tags disable the reusable
+lane's App bundle/installer checks; Core CI and App tags keep them enabled.
+CLI tags run the CLI suite and
 execute every produced binary for version/text-help/JSON-help checks. Host tags
 launch the produced Supervisor and nested Runtime with isolated state, require
 authenticated readiness, reject unauthenticated access, and stop the Runtime.

@@ -5,9 +5,14 @@
     "dotnet-linux",
     "host-platform",
     "node",
+    "official-runtime",
     "release-artifact"
   ],
   "dotnetLaneRules": [
+    {
+      "lane": "official-runtime",
+      "attributes": "Trait\\(\\s*\"Category\"\\s*,\\s*\"CurrentRidExecutionRuntime\""
+    },
     {
       "lane": "app-packaging",
       "source": "/Sunder.App.Tests/BundledBuildOutputTests\\.cs$"
@@ -50,7 +55,7 @@
     "Sunder.Package.Templates.Tests": ["host-platform", "release-artifact"],
     "Sunder.Registry.Contracts.Tests": ["dotnet-linux"],
     "Sunder.Runtime.Client.Tests": ["dotnet-linux", "host-platform"],
-    "Sunder.Runtime.Host.Tests": ["dotnet-linux", "host-platform", "release-artifact"],
+    "Sunder.Runtime.Host.Tests": ["dotnet-linux", "host-platform", "official-runtime", "release-artifact"],
     "Sunder.Sdk.PublicApi.Tests": ["dotnet-linux"],
     "Sunder.Sdk.Worker.Tests": ["dotnet-linux"],
     "create-sunder-package": ["node"],

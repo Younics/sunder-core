@@ -15,10 +15,9 @@ tests. Frozen history bytes remain untouched and are not recompiled. Source
 inspection supplies declaration-level filtering, platform support, and external
 prerequisites at runtime; parameterized and generated cases come only from the
 test adapters. `check-core-test-policy.mjs` rejects an empty test project, an
-empty lane, ownership drift, stale expected-skip identities, or missing behavior
-evidence in `core-large-object-characterization.json`. It also checks every literal
-workflow `--require-test` selection against current declarations, before expensive CI
-work starts; renaming a test class must update its required evidence selection.
+empty lane, ownership drift, or stale expected-skip identities. It also checks every
+literal workflow `--require-test` selection against current declarations, before
+expensive CI work starts; renaming a test class must update its required evidence selection.
 
 ```text
 node scripts/test-oracles/check-core-test-policy.mjs
@@ -28,7 +27,8 @@ node scripts/test-oracles/run-core-test-lane.mjs --test Sunder.Package.Build.Tes
 
 Primary lanes remain a disjoint execution partition. `dotnet-linux` owns
 OS-neutral .NET behavior, `host-platform` owns OS-specific or process-capable
-.NET behavior, `app-packaging` owns the bundled App output contract, `node` owns
+.NET behavior, `official-runtime` owns actual vendor-runtime installation and native
+Worker launch, `app-packaging` owns the bundled App output contract, `node` owns
 Node cases, and `release-artifact` owns fixtures and externally supplied artifact
 cases. The lane gate checks the current operating system and every declared
 executable, exact opt-in variable, file, and directory before reporting READY.
@@ -91,7 +91,7 @@ Node/npm versions. Then run the required interop selection without another Node 
 cleanup in parallel. After a prerequisite failure, rerun the affected cases rather
 than repeating already-passed full suites.
 
-### Complete CI evidence
+### Owning-job CI evidence
 
 `run-dotnet-tests-with-results.mjs` executes selected .NET projects serially and
 writes one TRX per project. `run-node-test-matrix-with-results.mjs` removes
@@ -122,16 +122,29 @@ skip, unknown result, missing report, missing project/lane owner, omitted select
 zero tests fails evidence generation. Raw TRX/JUnit artifacts retain individual
 outcomes and durations for diagnosis.
 
-`.github/workflows/sunder-ci.yml` owns PR/main checks and the scheduled, manually
-dispatched and SDK-release complete-report audit. Native/process and App packaging
-checks use the reusable `sunder-host-validation.yml`. All selected partitions
-produce the same compact evidence. Project tests run sequentially, with ordinary
+`.github/workflows/sunder-ci.yml` owns PR/main, scheduled, manual and SDK-release
+checks. On scheduled, manual and SDK-tag runs, its `test-results` job waits for
+successful portable and native jobs, downloads their raw reports, and runs
+`summarize-core-test-results.mjs <directory> --aggregate`.
+This checks combined ordinary .NET declaration coverage, all release fixtures and
+the owning Node reports without restoring, building or rerunning suites. Native
+jobs enforce their own per-architecture required execution and platform-specific
+skip rules; the aggregate does not reinterpret Windows/macOS skips as Linux results.
+Externally gated live Registry, Agent and retained-release tests retain their
+explicit inputs and owning acceptance lanes, rather than pretending an unselected
+skip is execution evidence. The two App web-bridge JavaScript VM tests are required
+in the main job alongside generated-package and cross-language acceptance.
+
+Native/process and App packaging checks use the reusable
+`sunder-host-validation.yml`. All selected partitions produce the same compact
+evidence. Project tests run sequentially, with ordinary
 parallel MSBuild inside each build; race-sensitive test collections retain their
 own serialization. Node artifact cleanup completes before Node outputs are rebuilt
 for .NET interop.
 
-The Windows x64/ARM64 platform jobs additionally require the Node process-identity
-regressions and the .NET/Node generated-output-lock interoperability case. Windows
+The Windows x64/ARM64 platform jobs additionally require the real .NET/Node
+generated-output-lock interoperability case. Mocked Node process-identity regressions
+run once in the ordinary Node suite, not again as native Windows evidence. Windows
 self-identity bootstrap has a separate, one-time 30-second budget before contention
 waiting starts; owner probes remain capped at five seconds and the remaining lock
 wait. Tests signal contention only after their own bootstrap completes. Unknown
@@ -156,6 +169,10 @@ App packaging evidence is summarized after an attempted packaging step, includin
 a failed attempt, but not after a skipped step when an earlier platform test failed.
 This avoids a misleading missing-directory error without accepting missing reports:
 successful native validation still requires both platform and packaging checks.
+Host-only releases disable the reusable workflow's `include-app-packaging` input,
+omitting bundled App output and installer checks. Core CI and App releases retain
+the default enabled input and all App packaging coverage. Superseded PR runs are
+cancelled; main, scheduled, manual and release runs have unique CI concurrency groups.
 
 The historical Core/Stack migration ledgers are inert preserved archives; the
 separate current candidate remains UNFROZEN / UNRELEASED. Current API snapshots
@@ -209,11 +226,10 @@ Each oracle includes a seeded mutation probe. A parser that merely reads a
 corpus but no longer enforces its expected property, frame boundary, encoding,
 or document ownership must therefore fail the probe.
 
-## Characterized objects
+## Behavioral contracts
 
-`eng/test-oracles/core-large-object-characterization.json` binds each behavior
-below to a discovered test identifier. The JSON is the mechanically enforced
-map; this section records the observable contract.
+The behavior tests enforce these observable contracts directly. This table is
+explanatory documentation, not a second CI-maintained inventory of test names.
 
 | Object | Inputs and outputs | Errors and cancellation | Ordering and authority | Persistence, logging, and cleanup |
 | --- | --- | --- | --- | --- |

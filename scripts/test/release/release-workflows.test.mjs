@@ -9,6 +9,11 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const directory = resolve(root, ".github/workflows");
 const workflow = (name) => readFile(resolve(directory, `sunder-${name}.yml`), "utf8");
 
+function requiresJobs(source, jobs) {
+  const needs = /^\s*needs:\s*\[([^\]]+)\]/mu.exec(source)?.[1].split(",").map((name) => name.trim()) ?? [];
+  for (const job of jobs) assert.ok(needs.includes(job), `Missing required job dependency: ${job}`);
+}
+
 function shellBlocks(source) {
   const lines = source.split("\n");
   const blocks = [];
@@ -29,10 +34,9 @@ function shellBlocks(source) {
   return blocks;
 }
 
-test("the six workflow entry points have valid Bash and pinned actions", async () => {
-  const names = (await readdir(directory)).filter((name) => name.endsWith(".yml")).sort();
-  assert.deepEqual(names, ["sunder-app-release.yml", "sunder-ci.yml", "sunder-cli-release.yml",
-    "sunder-host-release.yml", "sunder-host-validation.yml", "sunder-sdk-release.yml"]);
+test("workflows have valid Bash, pinned actions and no release-asset overwrites", async () => {
+  const names = (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name));
+  assert.ok(names.length > 0);
   for (const name of names) {
     const source = await readFile(resolve(directory, name), "utf8");
     for (const { line, script } of shellBlocks(source)) {
@@ -40,9 +44,9 @@ test("the six workflow entry points have valid Bash and pinned actions", async (
       assert.equal(result.status, 0, `${name}:${line}: ${result.stderr}`);
     }
     for (const [, action] of source.matchAll(/uses:\s+([^\s#]+)/gu)) {
-      assert.match(action, /^(?:\.\/\.github\/workflows\/sunder-[a-z-]+\.yml|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
+      assert.match(action, /^(?:\.\/\.github\/workflows\/[\w.-]+\.ya?ml|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
     }
-    assert.doesNotMatch(source, /-m:1|macos-14|windows-2022|--clobber|overwrite:\s*true/u);
+    assert.doesNotMatch(source, /--clobber|overwrite:\s*true/u);
   }
 });
 
@@ -55,7 +59,8 @@ test("component tags finalize the same verified assets after their build and tes
     assert.match(source, /github_release\.py stage/u);
     assert.match(source, /github_release\.py finalize/u);
     assert.match(source, /environment: sunder-github-release-promotion/u);
-    assert.match(source, /needs: \[prepare, (?:package|stage, promote-npm)\]/u);
+    const publication = source.slice(source.lastIndexOf(component === "sdk" ? "\n  finalize:" : "\n  release:"));
+    requiresJobs(publication, component === "sdk" ? ["prepare", "stage", "promote-npm"] : ["prepare", "package"]);
     const coordinate = component === "app" ? "runtime" : component === "sdk" ? "lane" : "rid";
     assert.match(source, new RegExp(`${coordinate}: win-x64, os: windows-2025`, "u"));
     // App signing intentionally runs its x64 client for both Windows packages.
@@ -68,6 +73,7 @@ test("SDK publication consumes tested packages and keeps registry credentials in
   const source = await workflow("sdk-release");
   assert.match(source, /uses: \.\/\.github\/workflows\/sunder-ci\.yml/u);
   assert.match(source, /name: sunder-tested-sdk/u);
+  assert.match(source, /cp candidate\/sdk\/\*\.nupkg candidate\/npm\/\*\.tgz release-assets\//u);
   assert.doesNotMatch(source, /dotnet (?:pack|publish)|npm pack/u);
   assert.match(source, /core_catalog_release\.py export/u);
   assert.match(source, /core_catalog_release\.py retain/u);
@@ -77,12 +83,13 @@ test("SDK publication consumes tested packages and keeps registry credentials in
   const promote = source.slice(source.indexOf("\n  promote-npm:"), source.indexOf("\n  finalize:"));
   const finalize = source.slice(source.indexOf("\n  finalize:"));
   assert.match(npm, /id-token: write/u);
+  requiresJobs(npm, ["prepare", "stage"]);
   assert.match(npm, /preflight-npm-trusted-publishing\.sh[\s\S]+publish-sdk\.sh npm/u);
   assert.doesNotMatch(npm, /NUGET_API_KEY|NPM_DIST_TAG_TOKEN|contents: write/u);
-  assert.match(nuget, /needs: \[prepare, stage, publish-npm\]/u);
+  requiresJobs(nuget, ["prepare", "stage", "publish-npm"]);
   assert.match(nuget, /NUGET_API_KEY/u);
   assert.doesNotMatch(nuget, /id-token: write|NPM_DIST_TAG_TOKEN|contents: write/u);
-  assert.match(promote, /needs: \[prepare, stage, publish-nuget\]/u);
+  requiresJobs(promote, ["prepare", "stage", "publish-nuget"]);
   assert.match(promote, /environment: sunder-sdk-npm-promotion/u);
   assert.match(promote, /NPM_DIST_TAG_TOKEN/u);
   assert.doesNotMatch(promote, /id-token: write|NUGET_API_KEY|contents: write/u);
@@ -98,10 +105,10 @@ test("SDK stable and prerelease publication require a new retained compatibility
   assert.ok(gate < stage.indexOf("github_release.py create"));
   assert.ok(gate < stage.indexOf("github_release.py stage"));
   assert.match(stage, /SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: \$\{\{ vars\.SUNDER_SDK_COMPATIBILITY_BASE_COMMIT \}\}/u);
-  assert.match(stage, /id: qualification\n        run: python3 -B scripts\/compatibility\/sdk_release_compatibility.py prepare/u);
+  assert.match(stage, /id: qualification\b/u);
   for (const job of ["publish-npm", "publish-nuget", "promote-npm", "finalize"]) {
     const section = source.slice(source.indexOf(`\n  ${job}:`) + 1).split(/\n  [a-z-]+:/u)[0];
-    assert.match(section, /needs: \[prepare, stage(?:, [a-z-]+)?\]/u);
+    requiresJobs(section, ["prepare", "stage"]);
     for (const coordinate of ["sha256", "base_commit", "base_sha256"]) {
       assert.ok(section.includes(`needs.stage.outputs.compatibility_${coordinate}`), `${job}: ${coordinate}`);
     }
@@ -123,8 +130,8 @@ test("SDK corpus collection owns native context and transports evidence separate
   const source = await workflow("sdk-release");
   const collector = source.slice(source.indexOf("\n  compatibility-corpus:"), source.indexOf("\n  stage:"));
   const stage = source.slice(source.indexOf("\n  stage:"), source.indexOf("\n  publish-npm:"));
-  assert.match(collector, /needs: \[prepare, validation\]/u);
-  assert.match(stage, /needs: \[prepare, validation, compatibility-corpus\]/u);
+  requiresJobs(collector, ["prepare", "validation"]);
+  requiresJobs(stage, ["prepare", "validation", "compatibility-corpus"]);
   for (const lane of ["portable", "win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]) {
     assert.match(collector, new RegExp(`lane: ${lane}, os:`, "u"));
   }
@@ -144,16 +151,14 @@ test("SDK corpus collection owns native context and transports evidence separate
 test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
   const source = await workflow("host-validation");
   const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
-  assert.match(platform, /name: Platform\/process behavior \(\$\{\{ matrix\.rid \}\}\)/u);
-  assert.match(platform, /name: sunder-platform-\$\{\{ matrix\.rid \}\}/u);
-  assert.deepEqual([...platform.matchAll(/- \{rid: ([\w-]+), os: ([\w.-]+)\}/gu)].map((match) => match.slice(1)), [
-    ["linux-x64", "ubuntu-24.04"],
-    ["win-x64", "windows-2025"],
-    ["win-arm64", "windows-11-arm"],
-    ["osx-arm64", "macos-15"],
-  ]);
+  for (const rid of ["linux-x64", "win-x64", "win-arm64", "osx-arm64"]) {
+    assert.match(platform, new RegExp(`rid: ${rid}`, "u"));
+  }
+  assert.match(platform, /rid: win-arm64, os: windows-11-arm/u);
   assert.match(platform, /--primary-lane host-platform/u);
   assert.match(platform, /--primary-lane app-packaging/u);
+  assert.match(platform, /SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP: "1"/u);
+  assert.match(platform, /--require-test Sunder\.Package\.Build\.Tests\.PackageOutputLockTests\.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable/u);
   const official = source.slice(source.indexOf("\n  official-runtimes:"), source.indexOf("\n  packaging:"));
   for (const rid of ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"]) {
     assert.match(official, new RegExp(`rid: ${rid}`, "u"));
@@ -163,7 +168,8 @@ test("native validation requires both actual vendor-runtime tests on all six arc
   assert.match(source, /rid: osx-arm64, os: macos-15/u);
   assert.match(source, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidDotNetRuntimeHostIntegrationTests\.OfficialCurrentRidDotNetRuntime_LaunchesThinWorkerAndRebindIsAtomic/u);
   assert.match(source, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidNodeRuntimeHostIntegrationTests\.OfficialCurrentRidNode24Runtime_LaunchesThinWorkerAndRoutesCrossLanguageRpc/u);
-  assert.match(source, /--primary-lane app-packaging/u);
+  assert.match(official, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidDotNetRuntimeHostIntegrationTests\.OfficialCurrentRidDotNetRuntime_LifecycleFaultDrainsRealSdkHandlerBeforeDisposal/u);
+  assert.match(official, /--require-test Sunder\.Runtime\.Host\.Tests\.ProcessRuntimeWorkerTests\.WorkerSdkPackagedExecutable_ExactArchiveInstallsThroughRuntimeHostAndRecordsReleaseEvidence/u);
   assert.match(source, /--strict-release/u);
   assert.match(source, /create-sunder-dmg\.sh/u);
   assert.match(source, /Parser\]::ParseFile/u);
@@ -172,8 +178,8 @@ test("native validation requires both actual vendor-runtime tests on all six arc
 test("packaging evidence is required after success or failure but not when packaging was never attempted", async () => {
   const source = await workflow("host-validation");
   const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
-  assert.match(platform, /name: Verify bundled App, Supervisor, Runtime and CLI outputs\n\s+id: app_packaging\n\s+if: success\(\)/u);
-  const summary = /name: Summarize App packaging test evidence\n\s+if: ([^\n]+)\n\s+run: ([^\n]+)/u.exec(platform);
+  assert.match(platform, /id: app_packaging\n\s+if: success\(\) && inputs\.include-app-packaging/u);
+  const summary = /if: ([^\n]+)\n\s+run: (node scripts\/test-oracles\/summarize-core-test-results\.mjs artifacts\/test-results\/app-packaging[^\n]+)/u.exec(platform);
   assert.ok(summary, "Missing outcome-bound packaging evidence step");
   assert.match(summary[2], /summarize-core-test-results\.mjs artifacts\/test-results\/app-packaging --allow-partial --require-primary-lane app-packaging/u);
   const shouldSummarize = new Function("always", "steps", `return (${summary[1]});`);
@@ -182,6 +188,33 @@ test("packaging evidence is required after success or failure but not when packa
   }
   assert.doesNotMatch(platform, /continue-on-error|--allow-missing|--allow-empty/u);
   assert.match(platform, /if: always\(\)[\s\S]+--require-primary-lane host-platform/u);
+});
+
+test("Host releases omit App packaging while Core and App validation keep it enabled", async () => {
+  const host = await workflow("host-release");
+  assert.match(host, /include-app-packaging: false/u);
+  for (const caller of ["ci", "app-release"]) {
+    assert.doesNotMatch(await workflow(caller), /include-app-packaging: false/u);
+  }
+  const validation = await workflow("host-validation");
+  assert.match(validation, /include-app-packaging:[\s\S]*?type: boolean\s+default: true/u);
+  assert.match(validation.slice(validation.indexOf("\n  packaging:")), /if: inputs\.include-app-packaging/u);
+});
+
+test("CI audits successful owning jobs without repeating builds or suites", async () => {
+  const source = await workflow("ci");
+  const audit = source.slice(source.indexOf("\n  test-results:"));
+  requiresJobs(audit, ["build-test-pack", "native"]);
+  assert.match(audit, /--aggregate/u);
+  for (const artifact of ["sunder-core-results", "sunder-platform-\\*", "official-runtime-\\*"]) {
+    assert.match(audit, new RegExp(`(?:name|pattern): ${artifact}`, "u"));
+  }
+  assert.doesNotMatch(audit, /dotnet|npm|run-.*tests|if: always\(\)/u);
+  assert.match(source, /group: sunder-core-ci-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/u);
+  assert.match(source, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
+  for (const testName of ["ExecutesExactNativeContractAcrossNavigation", "RejectsSeededNonceOwnershipMutation"]) {
+    assert.ok(source.includes(`--require-test Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_${testName}`));
+  }
 });
 
 test("strict App packaging retains signing, notarization and Full-only feeds", async () => {

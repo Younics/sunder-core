@@ -93,28 +93,8 @@ export function parseJunitReport(xml, source) {
 }
 
 export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), options = {}) {
-  if (reports.length === 0) throw new Error("Core test evidence contains no reports.");
-  for (const report of reports) assertNonzeroReport(report.source, report.discovered, report.results.length);
+  const results = ownedResults(reports, model);
   const operatingSystem = options.operatingSystem ?? currentOperatingSystem();
-  const declarationsById = new Map(model.declarations.map((item) => [item.id, item]));
-  const declarationsByRuntimeKey = new Map(model.declarations
-    .filter((item) => item.framework !== "dotnet")
-    .map((item) => [runtimeKey(item.framework, item.source, item.name), item]));
-  const results = reports.flatMap((report) => report.results).map((result) => {
-    const declaration = result.framework === "dotnet"
-      ? declarationsById.get(result.declarationId)
-      : declarationsByRuntimeKey.get(runtimeKey(result.framework, result.source, result.name));
-    if (result.framework === "dotnet" && declaration === undefined) {
-      throw new Error(`Runtime discovery found unowned .NET test '${result.declarationId}'.`);
-    }
-    const primaryLane = declaration?.primaryLane
-      ?? (result.framework === "node" ? "node" : "release-artifact");
-    const project = declaration?.project ?? result.project;
-    if (!(model.policy.projectLanes[project] ?? []).includes(primaryLane)) {
-      throw new Error(`Runtime result '${result.name}' has unowned project/lane '${project}/${primaryLane}'.`);
-    }
-    return { ...result, project, primaryLane, declaration };
-  });
 
   validateResultCoverage(reports, results, model, {
     ...options,
@@ -153,6 +133,46 @@ export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), opti
     lanes,
     expectedSkips,
   };
+}
+
+export function auditCoreTestReports(reports, model = loadCoreTestModel()) {
+  const results = ownedResults(reports, model);
+  for (const name of [...model.policy.reports.node, model.policy.reports.releaseFixtures]) {
+    if (reports.filter((report) => basename(report.source) === name).length !== 1) {
+      throw new Error(`Core aggregate requires exactly one '${name}' report from its owning job.`);
+    }
+  }
+  // Owning jobs validate platform-specific skips and required external-input
+  // selections. This cross-platform audit checks their combined discovery;
+  // unselected live/release artifacts are not ordinary CI prerequisites.
+  requireDotnetDeclarations(model.declarations.filter((item) =>
+    item.framework === "dotnet" && item.externalEnvironment === undefined), results);
+  requireFixtureDeclarations(model.declarations.filter((item) => ["python", "shell"].includes(item.framework)), results);
+  return counts(results);
+}
+
+function ownedResults(reports, model) {
+  if (reports.length === 0) throw new Error("Core test evidence contains no reports.");
+  for (const report of reports) assertNonzeroReport(report.source, report.discovered, report.results.length);
+  const declarationsById = new Map(model.declarations.map((item) => [item.id, item]));
+  const declarationsByRuntimeKey = new Map(model.declarations
+    .filter((item) => item.framework !== "dotnet")
+    .map((item) => [runtimeKey(item.framework, item.source, item.name), item]));
+  return reports.flatMap((report) => report.results).map((result) => {
+    const declaration = result.framework === "dotnet"
+      ? declarationsById.get(result.declarationId)
+      : declarationsByRuntimeKey.get(runtimeKey(result.framework, result.source, result.name));
+    if (result.framework === "dotnet" && declaration === undefined) {
+      throw new Error(`Runtime discovery found unowned .NET test '${result.declarationId}'.`);
+    }
+    const primaryLane = declaration?.primaryLane
+      ?? (result.framework === "node" ? "node" : "release-artifact");
+    const project = declaration?.project ?? result.project;
+    if (!(model.policy.projectLanes[project] ?? []).includes(primaryLane)) {
+      throw new Error(`Runtime result '${result.name}' has unowned project/lane '${project}/${primaryLane}'.`);
+    }
+    return { ...result, project, primaryLane, declaration };
+  });
 }
 
 export function validateResultCoverage(reports, results, model, options = {}) {
@@ -244,6 +264,9 @@ export function materializeExpectedSkip(result, policy, operatingSystem) {
 
 function main() {
   const arguments_ = process.argv.slice(2);
+  const aggregateIndex = arguments_.indexOf("--aggregate");
+  const aggregate = aggregateIndex >= 0;
+  if (aggregate) arguments_.splice(aggregateIndex, 1);
   const allowPartialIndex = arguments_.indexOf("--allow-partial");
   const allowPartial = allowPartialIndex >= 0;
   if (allowPartial) arguments_.splice(allowPartialIndex, 1);
@@ -258,8 +281,8 @@ function main() {
     (arguments_[index] === "--require-test" ? requiredTests : requiredPrimaryLanes).push(arguments_[index + 1]);
     arguments_.splice(index, 2);
   }
-  if (arguments_.length > 1) {
-    throw new Error("Usage: summarize-core-test-results.mjs [directory] [--allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
+  if (arguments_.length > 1 || aggregate && (allowPartial || requiredTests.length > 0 || requiredPrimaryLanes.length > 0)) {
+    throw new Error("Usage: summarize-core-test-results.mjs [directory] [--aggregate | --allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
   }
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
   if (!existsSync(directory)) throw new Error(`Test result directory '${directory}' does not exist.`);
@@ -270,6 +293,12 @@ function main() {
     const source = relative(directory, path).replaceAll("\\", "/");
     return path.endsWith(".trx") ? parseTrxReport(xml, source) : parseJunitReport(xml, source);
   }).sort((left, right) => ordinal(left.source, right.source));
+  if (aggregate) {
+    const outcomes = auditCoreTestReports(reports);
+    process.stdout.write(`Audited ${reports.length} owning-job reports: discovered=${outcomes.discovered}; passed=${outcomes.passed}; failed=${outcomes.failed}; skipped=${outcomes.skipped}\n`);
+    if (outcomes.failed > 0) process.exitCode = 1;
+    return;
+  }
   const evidence = buildCoreTestEvidence(reports, loadCoreTestModel(), {
     allowPartial,
     requiredTests,

@@ -14,6 +14,8 @@ env:
 jobs:
   validation:
     uses: ./.github/workflows/sunder-host-validation.yml
+    with:
+      include-app-packaging: false
     permissions:
       contents: read
 

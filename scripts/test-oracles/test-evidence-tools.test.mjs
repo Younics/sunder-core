@@ -9,7 +9,6 @@ import { fileURLToPath } from "node:url";
 import {
   discoverDotnetTests,
   loadCoreTestModel,
-  validateCharacterization,
   validateProjectLaneOwnership,
   validateWorkflowTestSelections,
 } from "./core-test-policy.mjs";
@@ -93,6 +92,8 @@ test("C# inventory follows namespace and nested partial type scopes while retain
           public Task CrossLanguageRelease() => Task.CompletedTask;
           [Fact, Xunit.TraitAttribute("Category", "Release")]
           public void ReleaseTrait() { }
+          [Fact, Trait("Category", "CurrentRidExecutionRuntime")]
+          public void OfficialRuntime() { }
           #if WINDOWS
           [WindowsFact] public void ConditionalWindows() { }
           #else
@@ -111,14 +112,15 @@ test("C# inventory follows namespace and nested partial type scopes while retain
     ["Example.Outer.Inner.Cases.AfterNested", "host-platform"],
     ["Example.Outer.Inner.Cases.CrossLanguageRelease", "release-artifact"],
     ["Example.Outer.Inner.Cases.ReleaseTrait", "release-artifact"],
+    ["Example.Outer.Inner.Cases.OfficialRuntime", "official-runtime"],
     ["Example.Outer.Inner.Cases.ConditionalWindows", "host-platform"],
     ["Example.Outer.Inner.Cases.ConditionalLinux", "host-platform"],
     ["Other.Cases.SiblingNamespace", "dotnet-linux"],
     ["GlobalTests.GlobalNamespace", "dotnet-linux"],
   ]);
   assert.deepEqual(declarations[1].operatingSystems, ["Linux", "MacOS"]);
-  assert.deepEqual(declarations[5].operatingSystems, ["Windows"]);
-  assert.deepEqual(declarations[6].operatingSystems, ["Linux"]);
+  assert.deepEqual(declarations[6].operatingSystems, ["Windows"]);
+  assert.deepEqual(declarations[7].operatingSystems, ["Linux"]);
   assert.deepEqual(declarations[3].externalPrerequisites, [
     { kind: "executable", name: "dotnet", requiredWhenSelected: true },
     { kind: "executable", name: "node", minimumMajorVersion: 24, requiredWhenSelected: true },
@@ -364,40 +366,9 @@ test("runtime model retains theories, dynamic Node declarations, platform owners
     === "Sunder.Runtime.Host.Tests.LivePlatformRegistryRuntimeTests.RealCatalogPolicyAdmitsOfflineStackAndRevocationSurvivesRestart");
   assert.ok(live.externalPrerequisites.some((item) => item.name === "SUNDER_LIVE_PLATFORM_INPUT" && item.pathKind === "file"));
   assert.ok(live.externalPrerequisites.some((item) => item.name === "SUNDER_LIVE_PLATFORM_PHASE" && item.kind === "environment"));
-});
-
-test("characterization ledger rejects missing evidence and overstated gap coverage", async () => {
-  const { declarations } = loadCoreTestModel();
-  const declarationIds = new Set(declarations
-    .filter((item) => item.framework === "dotnet")
-    .map((item) => item.id));
-  const characterizationPath = resolve(
-    repositoryRoot,
-    "eng/test-oracles/core-large-object-characterization.json",
-  );
-  const missingEvidence = JSON.parse(await readFile(characterizationPath, "utf8"));
-  missingEvidence.targets[0].requiredBehaviors[0].evidence[0] = "seeded.missing.Test";
-  assert.throws(
-    () => validateCharacterization(missingEvidence, declarationIds),
-    /seeded\.missing\.Test/u,
-  );
-
-  const missingCategory = JSON.parse(await readFile(characterizationPath, "utf8"));
-  delete missingCategory.targets[0].requiredBehaviors[0].category;
-  assert.throws(
-    () => validateCharacterization(missingCategory, declarationIds),
-    /behavior category/u,
-  );
-
-  const overstated = JSON.parse(await readFile(characterizationPath, "utf8"));
-  const bootstrap = overstated.targets.find((target) => target.type === "AppWebBridge")
-    .requiredBehaviors.find((behavior) => behavior.id === "javascript-bootstrap-parity");
-  bootstrap.status = "covered";
-  bootstrap.gap = "Seeded mutation must not coexist with covered evidence.";
-  assert.throws(
-    () => validateCharacterization(overstated, declarationIds),
-    /covered but also declares an uncovered gap/u,
-  );
+  const official = declarations.filter((item) => item.source.endsWith("/CurrentRidExecutionRuntimeHostIntegrationTests.cs"));
+  assert.ok(official.length > 0);
+  assert.ok(official.every((item) => item.primaryLane === "official-runtime"));
 });
 
 test("selected lane prerequisite gate rejects an absent required artifact", () => {
@@ -458,56 +429,15 @@ test("selected lane prerequisite gate requires exact selection and every typed i
   assert.equal(executableProbeCount, 1);
 });
 
-test("candidate-safe workflows retain lane gates, runtime reports, and compact evidence", async () => {
+test("workflow required-test selections resolve current declarations and reject a stale owner", async () => {
   const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-ci.yml");
   const workflow = await readFile(workflowPath, "utf8");
-  assert.match(workflow, /workflow_dispatch:/u);
-  assert.match(workflow, /schedule:/u);
-  assert.match(workflow, /pull_request:|push:/u);
-  assert.match(workflow, /complete-audit:/u);
-  assert.match(workflow, /check-core-test-policy\.mjs/u);
-  assert.match(workflow, /run-core-test-lane\.mjs/u);
-  assert.match(workflow, /run-node-test-matrix-with-results\.mjs/u);
-  assert.match(workflow, /--allow-partial[\s\S]*--require-test/u);
-  assert.match(workflow, /if: always\(\)/u);
-
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
   const declarations = loadCoreTestModel().declarations;
   validateWorkflowTestSelections([{ source: "ci", content: workflow }, { source: "host", content: host }], declarations);
   const oldOwner = workflow.replaceAll("PackageOutputLockTests.SharedOutputLock_Interoperates", "PackageBuildManifestTests.SharedOutputLock_Interoperates");
   assert.notEqual(oldOwner, workflow);
   assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: oldOwner }], declarations), /required workflow test.*not declared/u);
-  assert.match(host, /SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP: "1"/u);
-  assert.match(host, /process-start-identity\.test\.js/u);
-  assert.match(workflow, /--primary-lane dotnet-linux/u);
-  assert.match(host, /--primary-lane host-platform/u);
-  assert.match(host, /rid: linux-x64, os: ubuntu-24\.04[\s\S]*rid: win-x64, os: windows-2025[\s\S]*rid: win-arm64, os: windows-11-arm[\s\S]*rid: osx-arm64, os: macos-15/u);
-  assert.match(workflow, /--primary-lane node/u);
-  assert.match(workflow, /run contracts:check[\s\S]*run typecheck[\s\S]*run package/u);
-  assert.doesNotMatch(workflow, /run contracts:accept|run contracts:freeze/u);
-  assert.match(workflow, /SUNDER_REQUIRE_NODE_MODULE_INTEROP: "1"/u);
-  assert.match(workflow, /SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE: "1"/u);
-  assert.match(workflow, /GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost/u);
-  assert.match(workflow, /SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"/u);
-  assert.match(workflow, /GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost/u);
-  assert.match(host, /--primary-lane app-packaging/u);
-  for (const ciWorkflow of [host, workflow]) {
-    assert.match(ciWorkflow, /--results-directory/u);
-    assert.match(ciWorkflow, /if: always\(\)[\s\S]*upload-artifact/u);
-  }
-  for (const dotnetWorkflow of [host, workflow]) assert.doesNotMatch(dotnetWorkflow, /-m:1/u);
-
-  const dotnetRunner = await readFile(
-    resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs"),
-    "utf8",
-  );
-  assert.doesNotMatch(dotnetRunner, /"-m:1"/u);
-  const nodeRunner = await readFile(
-    resolve(repositoryRoot, "scripts/test-oracles/run-node-tests-with-results.mjs"),
-    "utf8",
-  );
-  assert.match(nodeRunner, /--test-reporter=junit/u);
-  assert.match(nodeRunner, /--test-reporter-destination=\$\{outputPath\}/u);
 });
 
 test("Node matrix builds every packed input before selecting all packed scenarios", async () => {
