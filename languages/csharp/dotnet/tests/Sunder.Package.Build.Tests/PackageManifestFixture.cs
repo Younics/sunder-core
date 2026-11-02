@@ -158,7 +158,6 @@ internal static class PackageManifestFixture
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Stage"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.ShutdownReason"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Number"),
-            new("Sunder.Package.Build.Tests.ImplementationFirstRpcBuildTests.SingleProject_NugetAndProjectAssetsStayWithinTheirRole"),
             new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.DeclarationOnlyCatalogPreservesSixNaturalSignaturesAndDispatchesExactForeignProvider"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.ImportedNaturalProviderNeedsNoContextUnitOrAuthoredTransportAdapter"),
             new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalCatalogEntriesAreLazyExactBoundAndRetiredWithTheirOwner"),

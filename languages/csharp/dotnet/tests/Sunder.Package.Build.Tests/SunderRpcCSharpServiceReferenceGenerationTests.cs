@@ -23,7 +23,7 @@ public sealed partial class SunderRpcCSharpServiceReferenceGenerationTests
         var sourcePath = Path.Combine(root, "Producer.cs");
         var lockPath = Path.Combine(root, "sunder-contracts.lock.json");
         const string runtimeUse = "[SunderRuntimeUse(Actions = [\"discover\", \"invoke\"])]";
-        var source = Source;
+        var source = Source.ReplaceLineEndings("\n");
         if (app)
             source = source.Replace("public interface TargetService", "[SunderAppUse(Actions = [\"discover\"])]\npublic interface TargetService", StringComparison.Ordinal)
                 + "\n[SunderPackageCodeRole(SunderPackageCodeRole.App)] public sealed class AppState { public string Title => \"Reference consumer\"; }\n";

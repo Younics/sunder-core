@@ -482,6 +482,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
         startInfo.Environment["DOTNET_NOLOGO"] = "1";
         startInfo.Environment["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1";
         startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        // The external telemetry collector outlives MSBuild and holds fixture
+        // working directories/DLLs on Windows. It is not part of compilation.
+        startInfo.Environment["AVALONIA_TELEMETRY_OPTOUT"] = "1";
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
 
         using var process = Process.Start(startInfo)

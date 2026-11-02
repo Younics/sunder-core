@@ -137,7 +137,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             var selected = JsonNode.Parse(await File.ReadAllBytesAsync(Path.Combine(fixtures, "authoring/conformance/valid/package-api-contract-lock.json")))!;
             selected["packageImports"]!["example.dependency"]!["consumerRoles"] = new JsonArray("app", "runtime");
             await File.WriteAllTextAsync(Path.Combine(root, "sunder-contracts.lock.json"), selected.ToJsonString(new JsonSerializerOptions
-                { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n");
+                { WriteIndented = true, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n");
             var cache = Path.Combine(root, ".sunder/imports"); Directory.CreateDirectory(cache); SunderRpcContractCacheStore.InitializeRoot(cache);
             var descriptor = SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(Path.Combine(fixtures, "conformance/valid/minimal.rpc.json")));
             await File.WriteAllBytesAsync(SunderRpcContractCache.GetDescriptorPath(cache, descriptor.Sha256), descriptor.GetCanonicalUtf8());

@@ -1,9 +1,13 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using Sunder.Package.Projections;
+using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Packaging;
 
 namespace Sunder.Runtime.Host.Services;
@@ -981,7 +985,7 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
         }
         PackageStorePathGuard.EnsureSafe(path, _layout.LeaseRootPath);
         RecordRecoveryFailureUnderFence(path);
-        Directory.CreateDirectory(_layout.QuarantineRootPath);
+        RuntimeOwnedFileSystem.CreateDirectory(_layout.QuarantineRootPath);
         var destination = _layout.CreateQuarantinePath("invalid-lease", _timeProvider.GetUtcNow());
         if (Directory.Exists(path))
         {
@@ -1001,7 +1005,7 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
         }
         var bytes = Encoding.UTF8.GetBytes(
             $"Execution-runtime lease ownership could not be recovered from '{Path.GetFileName(path)}'.{Environment.NewLine}");
-        using (var stream = new FileStream(
+        using (var stream = RuntimeOwnedFileSystem.CreateFile(
                    _layout.LeaseRecoveryFailurePath,
                    FileMode.CreateNew,
                    FileAccess.Write,
@@ -1271,7 +1275,7 @@ internal sealed class SystemExecutionRuntimeProcessController : IExecutionRuntim
             {
                 throw new InvalidOperationException($"Worker process {process.Id} exited before identity capture.");
             }
-            var executablePath = process.MainModule?.FileName;
+            var executablePath = GetExecutablePath(process);
             if (string.IsNullOrWhiteSpace(executablePath))
             {
                 throw new InvalidDataException($"Worker process {process.Id} executable identity is unavailable.");
@@ -1309,7 +1313,7 @@ internal sealed class SystemExecutionRuntimeProcessController : IExecutionRuntim
             {
                 return ExecutionRuntimeProcessProbe.BirthMismatch;
             }
-            var actualExecutablePath = process.MainModule?.FileName;
+            var actualExecutablePath = GetExecutablePath(process);
             return !string.IsNullOrWhiteSpace(actualExecutablePath)
                    && PathsEqual(actualExecutablePath, executablePath)
                 ? ExecutionRuntimeProcessProbe.Matching
@@ -1328,6 +1332,31 @@ internal sealed class SystemExecutionRuntimeProcessController : IExecutionRuntim
             return ExecutionRuntimeProcessProbe.Unavailable;
         }
     }
+
+    private static string? GetExecutablePath(Process process)
+    {
+        if (!OperatingSystem.IsWindows()) return process.MainModule?.FileName;
+        return GetWindowsExecutablePath(process);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static string GetWindowsExecutablePath(Process process)
+    {
+        // MainModule depends on loader/module enumeration and can be empty before
+        // the new process initializes. Query the image on its exact kernel handle.
+        var path = new StringBuilder(32768);
+        var length = (uint)path.Capacity;
+        if (!QueryFullProcessImageNameW(process.SafeHandle, 0, path, ref length))
+        {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError());
+        }
+        return path.ToString();
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageNameW(
+        SafeProcessHandle process, uint flags, StringBuilder executablePath, ref uint size);
 
     private static bool PathsEqual(string left, string right)
         => string.Equals(

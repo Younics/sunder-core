@@ -85,6 +85,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        NewLine = "\n",
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -13,12 +14,12 @@ internal static class DurableJsonDocument
         JsonSerializerOptions options,
         CancellationToken cancellationToken = default)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
             var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(document, options) + Environment.NewLine);
-            await using (var stream = new FileStream(
+            await using (var stream = RuntimeOwnedFileSystem.CreateFile(
                              temporaryPath,
                              FileMode.CreateNew,
                              FileAccess.Write,
@@ -65,7 +66,7 @@ internal static class DurableJsonDocument
     public static void CreateDirectory(string path)
     {
         var fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(fullPath);
+        RuntimeOwnedFileSystem.CreateDirectory(fullPath);
         var current = fullPath;
         while (true)
         {

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Sunder.Package.Format;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -126,7 +127,7 @@ internal sealed class ExecutionRuntimeStoreRecovery(
     {
         foreach (var path in layout.DurableRootPaths)
         {
-            Directory.CreateDirectory(path);
+            RuntimeOwnedFileSystem.CreateDirectory(path);
             PackageStorePathGuard.EnsureNotReparsePoint(path);
             layout.EnsureContained(path, layout.RootPath);
         }

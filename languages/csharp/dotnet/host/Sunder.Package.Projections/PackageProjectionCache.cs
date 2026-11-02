@@ -304,7 +304,7 @@ public sealed class PackageProjectionCache
     {
         var stagingPath = _layout.GetStagingPath(request.Role);
         var stagingRoot = Path.Combine(stagingPath, "root");
-        Directory.CreateDirectory(stagingRoot);
+        RuntimeOwnedFileSystem.CreateDirectory(stagingRoot);
         long bytesRead = 0;
         long bytesHashed = 0;
         long bytesCopied = 0;
@@ -317,7 +317,7 @@ public sealed class PackageProjectionCache
                 var sourcePath = ToPlatformPath(request.SourceRootPath, file.SourceRelativePath);
                 var destinationPath = ToPlatformPath(stagingRoot, file.ProjectionRelativePath);
                 EnsureSafeSourcePath(request.SourceRootPath, sourcePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+                RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
                 var metrics = await CopyAndValidateAsync(sourcePath, destinationPath, file, cancellationToken)
                     .ConfigureAwait(false);
                 bytesRead = checked(bytesRead + metrics.BytesRead);
@@ -355,7 +355,7 @@ public sealed class PackageProjectionCache
                     cancellationToken)
                 .ConfigureAwait(false);
             var entryPath = _layout.GetEntryPath(request.Role, request.CacheKey);
-            Directory.CreateDirectory(Path.GetDirectoryName(entryPath)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(entryPath)!);
             PackageProjectionDurableFile.MoveDirectory(stagingPath, entryPath);
             try
             {
@@ -1215,7 +1215,7 @@ public sealed class PackageProjectionCache
             throw new InvalidDataException(
                 $"Projection source file '{file.SourceRelativePath}' length changed before publication.");
         }
-        await using var destination = new FileStream(
+        await using var destination = RuntimeOwnedFileSystem.CreateFile(
             destinationPath,
             FileMode.CreateNew,
             FileAccess.Write,
@@ -1259,7 +1259,7 @@ public sealed class PackageProjectionCache
     {
         foreach (var root in _layout.DurableRootPaths)
         {
-            Directory.CreateDirectory(root);
+            RuntimeOwnedFileSystem.CreateDirectory(root);
             PackageProjectionLayout.EnsureContained(root, _layout.RuntimeStateRootPath);
             EnsureNotReparsePoint(root);
         }

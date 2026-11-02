@@ -82,7 +82,7 @@
   <Target Name="BuildTestWorkerAppHost"
           AfterTargets="Build"
           DependsOnTargets="_GetAppHostPaths;_GetAppHostCreationConfiguration"
-          Inputs="$(TestWorkerAssemblyPath);$(AppHostSourcePath)"
+           Inputs="$(MSBuildProjectFullPath);$(TestWorkerAssemblyPath);$(AppHostSourcePath)"
           Outputs="$(TargetDir)$(TestWorkerAppHostName)$(_NativeExecutableExtension)">
     <CreateAppHost AppHostSourcePath="$(AppHostSourcePath)"
                    AppHostDestinationPath="$(TargetDir)$(TestWorkerAppHostName)$(_NativeExecutableExtension)"
@@ -92,6 +92,8 @@
                    Retries="$(CopyRetryCount)"
                    RetryDelayMilliseconds="$(CopyRetryDelayMilliseconds)"
                    EnableMacOSCodeSign="$(_EnableMacOSCodeSign)"
-                   DisableCetCompat="$(_DisableCetCompat)" />
+                   DisableCetCompat="$(_DisableCetCompat)"
+                   DotNetSearchLocations="AppRelative"
+                   AppRelativeDotNet="." />
   </Target>
 </Project>

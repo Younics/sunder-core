@@ -26,7 +26,30 @@ internal static class TestWorkerFixture
         {
             File.SetUnixFileMode(target, File.GetUnixFileMode(source));
         }
+        // This synthetic runtime root must boot without DOTNET_ROOT or a global
+        // install, just like a real execution-runtime root. Copy only the running
+        // framework and matching hostfxr; never symlink or re-enable ambient lookup.
+        var runtime = new DirectoryInfo(Path.TrimEndingDirectorySeparator(RuntimeEnvironment.GetRuntimeDirectory()));
+        var dotNetRoot = Path.GetDirectoryName(DotNetHostPath)!;
+        CopyRuntimeTree(Path.Combine(dotNetRoot, "host", "fxr", runtime.Name),
+            Path.Combine(destination, "host", "fxr", runtime.Name));
+        CopyRuntimeTree(runtime.FullName, Path.Combine(destination, "shared", "Microsoft.NETCore.App", runtime.Name));
         return target;
+    }
+
+    private static void CopyRuntimeTree(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var path in Directory.EnumerateFiles(source))
+        {
+            var target = Path.Combine(destination, Path.GetFileName(path));
+            File.Copy(path, target);
+            if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(target, File.GetUnixFileMode(path));
+        }
+        foreach (var path in Directory.EnumerateDirectories(source))
+        {
+            CopyRuntimeTree(path, Path.Combine(destination, Path.GetFileName(path)));
+        }
     }
 
     internal static string DotNetHostPath

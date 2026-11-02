@@ -1419,6 +1419,7 @@ public sealed partial class ProcessRuntimeWorkerTests
     {
         await using var fixture = await WorkerFixture.CreateAsync("v1-package-data");
         var result = await fixture.ActivatePreparedPackageAsync();
+        Assert.True(result.Success, result.SessionPackage.LastError);
         var loaded = Assert.IsType<ActiveLoadedPackage>(result.LoadedPackage);
         var session = new ActivePackageSession(
             sessionFolder: null,
@@ -1465,6 +1466,7 @@ public sealed partial class ProcessRuntimeWorkerTests
         await using var fixture = await WorkerFixture.CreateAsync("normal");
         var resolver = new RecordingExecutionRuntimeLaunchResolver();
         var result = await fixture.ActivatePreparedPackageAsync(resolver);
+        Assert.True(result.Success, result.SessionPackage.LastError);
         var loaded = Assert.IsType<ActiveLoadedPackage>(result.LoadedPackage);
         var replacement = loaded.RecoveryFactory!();
         try
@@ -2701,6 +2703,7 @@ public sealed partial class ProcessRuntimeWorkerTests
                 ],
                 Provides = [ProviderManifest()],
             };
+            CanonicalPackageTestBuilder.WriteDescriptorOnlyModelProjection(shadow, manifest);
             var key = new SunderPackageTargetKey(SunderPackageFormat.RuntimeHostRole, rid);
             var source = new RuntimePackageSource(
                 "process.test",

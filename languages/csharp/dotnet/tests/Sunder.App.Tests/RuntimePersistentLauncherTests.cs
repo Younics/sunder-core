@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Sunder.App.Services;
 using Xunit;
@@ -649,11 +650,23 @@ public sealed class RuntimePersistentLauncherTests
 
         try
         {
+            // Hosted Windows agents can prohibit breakaway. That is a real
+            // durability boundary, not permission to launch an attached Host.
+            if (CurrentJobProhibitsBreakaway())
+            {
+                var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    launcher.ReconcileAndLaunchAsync(startInfo, false, CancellationToken.None));
+                Assert.Equal("The Sunder App is running inside a Windows job that does not allow a durable Host process. Launch Sunder outside that job.", error.Message);
+                Assert.False(File.Exists(Path.Combine(root, "process.json")));
+                Assert.True(await launcher.TryStopAsync(new HostServiceLaunchReceipt("windows-job", "sunder-host"), CancellationToken.None));
+                return;
+            }
             var receipt = await launcher.ReconcileAndLaunchAsync(startInfo, false, CancellationToken.None);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             HostServiceObservation observation;
             do
             {
-                observation = await launcher.ObserveAsync(receipt, CancellationToken.None);
+                observation = await launcher.ObserveAsync(receipt, timeout.Token);
                 if (!observation.IsTerminal)
                 {
                     await Task.Delay(10);
@@ -669,6 +682,39 @@ public sealed class RuntimePersistentLauncherTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    [SupportedOSPlatform("windows")]
+    private static bool CurrentJobProhibitsBreakaway()
+    {
+        Assert.True(IsProcessInJob(new IntPtr(-1), IntPtr.Zero, out var inJob));
+        if (!inJob) return false;
+        Assert.True(QueryInformationJobObject(IntPtr.Zero, 2, out var limits,
+            (uint)Marshal.SizeOf<WindowsJobBasicLimits>(), out _));
+        return (limits.LimitFlags & (0x800u | 0x1000u)) == 0;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct WindowsJobBasicLimits
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public nuint MinimumWorkingSetSize;
+        public nuint MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public nuint Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(IntPtr process, IntPtr job, [MarshalAs(UnmanagedType.Bool)] out bool result);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryInformationJobObject(IntPtr job, int informationClass,
+        out WindowsJobBasicLimits information, uint length, out uint returnLength);
 
     [UnixFact]
     public async Task HostServiceCommandRunner_ReturnsBoundedSanitizedOutputAndExitCode()

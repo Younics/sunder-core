@@ -61,7 +61,9 @@ export function parseTrxReport(xml, source) {
 
 export function parseJunitReport(xml, source) {
   const results = [];
-  for (const match of xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/gu)) {
+  // Node's JUnit reporter permits literal '>' inside quoted names (for example
+  // "Accept -> Check"). A tag ends only outside attribute quotes.
+  for (const match of xml.matchAll(/<testcase\b((?:"[^"]*"|'[^']*'|[^<>"'])*?)(?:\/>|>([\s\S]*?)<\/testcase>)/gu)) {
     const attributes = parseAttributes(match[1]);
     const body = match[2] ?? "";
     const name = decodeXml(attributes.name ?? "");
@@ -359,8 +361,8 @@ function listFiles(directory) {
 }
 
 function parseAttributes(value) {
-  return Object.fromEntries([...value.matchAll(/([A-Za-z_:][A-Za-z0-9_.:-]*)="([^"]*)"/gu)]
-    .map((match) => [match[1], match[2]]));
+  return Object.fromEntries([...value.matchAll(/([A-Za-z_:][A-Za-z0-9_.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu)]
+    .map((match) => [match[1], match[2] ?? match[3]]));
 }
 
 function decodeXml(value) {

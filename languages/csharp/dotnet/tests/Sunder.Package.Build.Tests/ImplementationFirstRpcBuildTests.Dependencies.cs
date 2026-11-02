@@ -1,6 +1,4 @@
 using System.Runtime.InteropServices;
-using System.Reflection;
-using System.Runtime.Loader;
 using System.Security;
 using System.Text.Json;
 using Sunder.Core.TestSupport;
@@ -96,13 +94,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var appDependencies = await File.ReadAllTextAsync(Path.Combine(app, "RestoreRoles.App.deps.json"));
         Assert.DoesNotContain("Sqlite", appDependencies, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Backend.Library", appDependencies, StringComparison.Ordinal);
-        var nativeProbe = new RoleDependencyLoadContext(worker);
-        try
-        {
-            var assembly = nativeProbe.LoadFromAssemblyPath(Path.Combine(worker, "Backend.Library.dll"));
-            Assert.Equal("native role closure", assembly.GetType("Backend.Engine", throwOnError: true)!.GetMethod("Render")!.Invoke(null, ["native role closure"]));
-        }
-        finally { nativeProbe.Unload(); }
+        await AssertRoleDependencyProbeAsync(scope.CreateDirectory("native probe"), worker);
         using (var plan = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(root, "obj/Debug/net10.0/sunder-analysis", RuntimeInformation.RuntimeIdentifier, "sunder-rpc/package-role-plan.v1.json"))))
         {
             Assert.Contains(plan.RootElement.GetProperty("workerDependencies").GetProperty("libraries").EnumerateArray(), value => value.GetString()!.StartsWith("SQLitePCLRaw.lib.e_sqlite3/", StringComparison.Ordinal));
@@ -120,21 +112,48 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.True(File.Exists(Path.Combine(worker, "Backend.Library.dll")));
     }
 
-    private sealed class RoleDependencyLoadContext(string root) : AssemblyLoadContext(isCollectible: true)
+    private static async Task AssertRoleDependencyProbeAsync(string root, string worker)
     {
-        protected override Assembly? Load(AssemblyName name)
-        {
-            var path = Path.Combine(root, name.Name + ".dll");
-            return File.Exists(path) ? LoadFromAssemblyPath(path) : null;
-        }
-        protected override nint LoadUnmanagedDll(string name)
-        {
-            foreach (var file in new[] { name, name + ".dll", "lib" + name + ".so", "lib" + name + ".dylib" })
+        // Native provider caches can outlive a collectible load context. A child
+        // process retains the real SQLite probe and releases every image handle
+        // before the subsequent build/clean race and strict directory cleanup.
+        var project = Path.Combine(root, "NativeProbe.csproj");
+        await File.WriteAllTextAsync(project, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework><OutputType>Exe</OutputType>
+                <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+                <UseAppHost>false</UseAppHost><NuGetAudit>false</NuGetAudit>
+              </PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(Path.Combine(root, "Program.cs"), """
+            using System.Reflection;
+            using System.Runtime.Loader;
+            var context = new RoleDependencyLoadContext(args[0]);
+            var assembly = context.LoadFromAssemblyPath(Path.Combine(args[0], "Backend.Library.dll"));
+            Console.WriteLine(assembly.GetType("Backend.Engine", throwOnError: true)!.GetMethod("Render")!.Invoke(null, ["native role closure"]));
+            sealed class RoleDependencyLoadContext(string root) : AssemblyLoadContext
             {
-                var path = Path.Combine(root, file);
-                if (File.Exists(path)) return LoadUnmanagedDllFromPath(path);
+                protected override Assembly? Load(AssemblyName name)
+                {
+                    var path = Path.Combine(root, name.Name + ".dll");
+                    return File.Exists(path) ? LoadFromAssemblyPath(path) : null;
+                }
+                protected override nint LoadUnmanagedDll(string name)
+                {
+                    foreach (var file in new[] { name, name + ".dll", "lib" + name + ".so", "lib" + name + ".dylib" })
+                    {
+                        var path = Path.Combine(root, file);
+                        if (File.Exists(path)) return LoadUnmanagedDllFromPath(path);
+                    }
+                    return 0;
+                }
             }
-            return 0;
-        }
+            """);
+        AssertSuccess(await RunDotnetAsync(root, ["build", project, "--disable-build-servers", "--nologo", "-v:quiet"]));
+        var result = await RunDotnetAsync(root, [Path.Combine(root, "bin/Debug/net10.0/NativeProbe.dll"), worker]);
+        AssertSuccess(result);
+        Assert.Equal("native role closure", result.StandardOutput.Trim());
     }
 }

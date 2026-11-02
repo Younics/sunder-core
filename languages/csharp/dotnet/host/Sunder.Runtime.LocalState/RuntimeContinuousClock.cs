@@ -47,5 +47,5 @@ internal static class RuntimeContinuousClock
     [DllImport("libSystem.dylib")] private static extern ulong mach_continuous_time();
     [DllImport("libSystem.dylib")] private static extern int mach_timebase_info(out Timebase value);
     [DllImport("ntdll.dll")] private static extern int NtQuerySystemInformation(int kind, out BootEnvironment value, uint size, out uint returned);
-    [DllImport("kernel32.dll")] private static extern void QueryInterruptTimePrecise(out ulong value);
+    [DllImport("api-ms-win-core-realtime-l1-1-1.dll")] private static extern void QueryInterruptTimePrecise(out ulong value);
 }

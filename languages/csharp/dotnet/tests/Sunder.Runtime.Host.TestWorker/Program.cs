@@ -1526,7 +1526,7 @@ static async Task ProbeAdmissionAsync(Stream input, Stream output, JsonElement i
         var value = response.RootElement.GetProperty("value");
         payloadHandle = value.GetProperty("handleId").GetString()!;
         payloadPath = value.GetProperty("filePath").GetString()!;
-        await File.WriteAllBytesAsync(payloadPath, "abc"u8.ToArray());
+        await WriteUploadPayloadAsync(payloadPath, "abc"u8.ToArray());
         break;
     }
     await WriteFrameAsync(output, new

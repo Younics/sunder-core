@@ -136,7 +136,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         }
         void AssertResolvedRoles()
         {
-            Assert.Equal(new[] { worker + "|Worker", app + "|App" }.Order(StringComparer.Ordinal),
+            Assert.Equal(new[] { Path.GetFullPath(worker) + "|Worker", Path.GetFullPath(app) + "|App" }.Order(StringComparer.Ordinal),
                  File.ReadAllLines(Path.Combine(root, "resolved.txt")).Order(StringComparer.Ordinal));
             Assert.Empty(File.ReadAllLines(Path.Combine(root, "project-references.txt")));
             Assert.Equal(new[] { "false|Reference|false|App", "false|Reference|false|Worker" },
@@ -145,7 +145,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         }
         void AssertCompilerRoles()
         {
-            Assert.Equal(new[] { worker + "|Worker|ResolveAssemblyReference", app + "|App|ResolveAssemblyReference" }.Order(StringComparer.Ordinal),
+            Assert.Equal(new[] { Path.GetFullPath(worker) + "|Worker|ResolveAssemblyReference", Path.GetFullPath(app) + "|App|ResolveAssemblyReference" }.Order(StringComparer.Ordinal),
                 File.ReadAllLines(Path.Combine(root, "compiler-references.txt")).Order(StringComparer.Ordinal));
         }
     }

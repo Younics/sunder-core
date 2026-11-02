@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.LocalState;
 using static Sunder.Runtime.Host.Services.OfficialRuntimeSourcePolicy;
 
 namespace Sunder.Runtime.Host.Services;
@@ -24,7 +25,7 @@ internal sealed class OfficialRuntimeMaterializer(IOfficialRuntimePlatformProbe 
         token = deadline.Token;
         if (Directory.Exists(rootPath) || File.Exists(verifiedPath))
             throw new InvalidDataException("Official materialization requires fresh private staging paths.");
-        Directory.CreateDirectory(rootPath);
+        RuntimeOwnedFileSystem.CreateDirectory(rootPath);
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(rootPath, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var (archiveHash, archiveSize) = await CaptureVerifiedArchiveAsync(artifact, sourcePath, verifiedPath, token).ConfigureAwait(false);
         var launcher = LauncherPath(artifact.Identity);
@@ -101,7 +102,7 @@ internal sealed class OfficialRuntimeMaterializer(IOfficialRuntimePlatformProbe 
         if (input.Length is <= 0 or > MaxArchiveBytes) throw new InvalidDataException("Official archive exceeds its byte bounds.");
         if (artifact.Distribution.DownloadSize is { } size && size != input.Length)
             throw new InvalidDataException("Official archive length differs from its metadata.");
-        await using var output = new FileStream(verifiedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+        await using var output = RuntimeOwnedFileSystem.CreateFile(verifiedPath, FileMode.CreateNew, FileAccess.Write, FileShare.None,
             128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
         using var vendor = IncrementalHash.CreateHash(VendorHash(artifact.Identity));
         using var local = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -211,9 +212,9 @@ internal sealed class OfficialRuntimeMaterializer(IOfficialRuntimePlatformProbe 
             var destination = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
             if (!destination.StartsWith(Path.GetFullPath(root) + Path.DirectorySeparatorChar, StringComparison.Ordinal))
                 throw new InvalidDataException("Official archive escapes private root.");
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destination)!);
             PackageStorePathGuard.EnsureSafe(destination, root);
-            await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            await using var output = RuntimeOwnedFileSystem.CreateFile(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None,
                 81920, FileOptions.Asynchronous | FileOptions.SequentialScan);
             using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
             var buffer = new byte[81920];

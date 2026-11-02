@@ -47,7 +47,7 @@ public static class RuntimeLocalState
         bool deleteStaleSchemaTemporaryFiles = true)
     {
         var root = Path.GetFullPath(rootPath ?? GetV1RootPath());
-        Directory.CreateDirectory(root);
+        RuntimeOwnedFileSystem.CreateDirectory(root);
         var schemaPath = Path.Combine(root, SchemaFileName);
         if (File.Exists(schemaPath))
         {
@@ -72,7 +72,7 @@ public static class RuntimeLocalState
             var bytes = JsonSerializer.SerializeToUtf8Bytes(
                 new StateSchema(Product, Api, SchemaVersion),
                 JsonOptions);
-            using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+            using (var stream = RuntimeOwnedFileSystem.CreateFile(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
             {
                 stream.Write(bytes);
                 stream.Flush(flushToDisk: true);

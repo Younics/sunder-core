@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Package.Projections;
 
@@ -23,12 +24,12 @@ internal static class PackageProjectionDurableFile
 {
     public static async Task WriteAsync<T>(string path, T value, CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporaryPath = path + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
             var bytes = PackageProjectionJson.SerializeCanonical(value);
-            await using (var stream = new FileStream(
+            await using (var stream = RuntimeOwnedFileSystem.CreateFile(
                              temporaryPath,
                              FileMode.CreateNew,
                              FileAccess.Write,
@@ -115,7 +116,7 @@ internal static class PackageProjectionDurableFile
 
     public static void MoveDirectory(string sourcePath, string destinationPath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         Directory.Move(sourcePath, destinationPath);
         SyncDirectory(Path.GetDirectoryName(sourcePath)!);
         SyncDirectory(Path.GetDirectoryName(destinationPath)!);
@@ -210,13 +211,13 @@ internal sealed class PackageProjectionFileLock : IDisposable
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(fullPath)!);
             while (true)
             {
                 timeoutSource.Token.ThrowIfCancellationRequested();
                 try
                 {
-                    var stream = new FileStream(
+                    var stream = RuntimeOwnedFileSystem.CreateFile(
                         fullPath,
                         FileMode.OpenOrCreate,
                         FileAccess.ReadWrite,
@@ -307,7 +308,7 @@ internal sealed class PackageProjectionFamilyLock : IDisposable
                 timeoutSource.Token.ThrowIfCancellationRequested();
                 try
                 {
-                    var stream = new FileStream(
+                    var stream = RuntimeOwnedFileSystem.CreateFile(
                         fullPath,
                         FileMode.OpenOrCreate,
                         FileAccess.ReadWrite,
@@ -353,7 +354,7 @@ internal sealed class PackageProjectionFamilyLock : IDisposable
                       ?? throw new InvalidDataException("The projection coordination lock is outside its trusted root.");
         }
         EnsureDirectory(trustedRoot);
-        Directory.CreateDirectory(parent);
+        RuntimeOwnedFileSystem.CreateDirectory(parent);
 
         current = parent;
         while (!PathsEqual(current, trustedRoot))

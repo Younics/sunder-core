@@ -16,6 +16,58 @@ internal static class RuntimeOwnedFileSystem
     private const uint SymbolicLinkType = 0xA000;
     private const uint GroupOrOtherWriteMask = 0x0012;
 
+    // Elevated Windows tokens may default new objects to the Administrators
+    // group. Author the user owner at creation, never repair an existing owner.
+    internal static void CreateDirectory(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var security = new DirectorySecurity();
+            security.SetOwner(identity.User
+                ?? throw new IOException("The current Windows user has no security identifier."));
+            security.AddAccessRule(new FileSystemAccessRule(identity.User, FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None, AccessControlType.Allow));
+            new DirectoryInfo(path).Create(security);
+        }
+        else
+        {
+            Directory.CreateDirectory(path);
+        }
+    }
+
+    internal static FileStream CreateFile(
+        string path,
+        FileMode mode,
+        FileAccess access,
+        FileShare share,
+        int bufferSize,
+        FileOptions options)
+    {
+        if (mode is not (FileMode.CreateNew or FileMode.OpenOrCreate))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode));
+        }
+        if (OperatingSystem.IsWindows())
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            var security = new FileSecurity();
+            security.SetOwner(identity.User
+                ?? throw new IOException("The current Windows user has no security identifier."));
+            security.AddAccessRule(new FileSystemAccessRule(identity.User, FileSystemRights.FullControl, AccessControlType.Allow));
+            var rights = access switch
+            {
+                FileAccess.Read => FileSystemRights.Read,
+                FileAccess.Write => FileSystemRights.Write,
+                FileAccess.ReadWrite => FileSystemRights.Read | FileSystemRights.Write,
+                _ => throw new ArgumentOutOfRangeException(nameof(access)),
+            };
+            return new FileInfo(path).Create(mode, rights | FileSystemRights.Synchronize, share, bufferSize, options, security);
+        }
+        return new FileStream(path, mode, access, share, bufferSize, options);
+    }
+
     internal static void ValidateMutableDirectory(string mountRootPath, string path)
         => ValidateMutableEntry(mountRootPath, path, DirectoryType, requireSingleLink: false);
 

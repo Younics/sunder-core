@@ -28,7 +28,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         contractLock["packageArtifacts"]!["example.dependency"]!.AsObject().Remove("registryOrigin");
         contractLock["providerImports"]!["minimalProvider"] = new JsonObject { ["packageId"] = "example.dependency", ["contractId"] = "example.rpc.v1.minimal" };
         await File.WriteAllTextAsync(Path.Combine(native, "sunder-contracts.lock.json"), contractLock.ToJsonString(new JsonSerializerOptions
-            { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n");
+            { WriteIndented = true, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n");
         var cache = Path.Combine(native, ".sunder/rpc-cache"); Directory.CreateDirectory(cache); SunderRpcContractCacheStore.InitializeRoot(cache);
         var descriptor = SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(Path.Combine(rpcFixtures, "conformance/valid/minimal.rpc.json")));
         await File.WriteAllBytesAsync(SunderRpcContractCache.GetDescriptorPath(cache, descriptor.Sha256), descriptor.GetCanonicalUtf8());
@@ -223,7 +223,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
                     app["contracts"]![0]!["appUse"] = new JsonObject { ["required"] = false, ["actions"] = new JsonArray("discover") };
                     app["uses"]![0]!["required"] = false; app["uses"]![0]!["actions"] = new JsonArray("discover");
                     changed["rolePlan"]!["roles"]![1]!["receipt"] = app.ToJsonString(new JsonSerializerOptions
-                        { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n";
+                        { WriteIndented = true, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }) + "\n";
                     var manifest = JsonNode.Parse(originalManifest)!;
                     var use = manifest["usesContracts"]!.AsArray().Single(value => value!["role"]!.GetValue<string>() == "app")!;
                     use["required"] = false; use["actions"] = new JsonArray("discover");

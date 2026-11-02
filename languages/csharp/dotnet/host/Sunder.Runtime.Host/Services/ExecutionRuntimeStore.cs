@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.LocalState;
 
 namespace Sunder.Runtime.Host.Services;
 
@@ -1072,7 +1073,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
             throw new ExecutionRuntimeRootInUseException(
                 $"Execution runtime root '{contentIdentity}' is actively leased and cannot be quarantined.");
         }
-        Directory.CreateDirectory(_layout.QuarantineRootPath);
+        RuntimeOwnedFileSystem.CreateDirectory(_layout.QuarantineRootPath);
         var destination = _layout.CreateQuarantinePath(label, _timeProvider.GetUtcNow());
         try
         {
@@ -1218,8 +1219,8 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
         var journalPrepared = false;
         try
         {
-            Directory.CreateDirectory(stagingPath);
-            Directory.CreateDirectory(transactionPath);
+            RuntimeOwnedFileSystem.CreateDirectory(stagingPath);
+            RuntimeOwnedFileSystem.CreateDirectory(transactionPath);
             Hit(ExecutionRuntimeStoreFaultPoint.ArchiveSourceOpening);
             var sourceArchivePath = SelectArchiveSource(plan, suppliedArchivePath);
             OfficialRuntimeMaterializationResult materialization;
@@ -1443,7 +1444,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
         var archivePath = Path.Combine(capturePath, "owned-source.archive");
         try
         {
-            Directory.CreateDirectory(capturePath);
+            RuntimeOwnedFileSystem.CreateDirectory(capturePath);
             await using var openedSource = stableSource is null
                 ? new FileStream(
                     Path.GetFullPath(suppliedArchivePath!),
@@ -1464,7 +1465,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
                 throw new ExecutionRuntimePlanMismatchException(
                     "The execution runtime archive size does not match its acquisition plan.");
             }
-            await using var destination = new FileStream(
+            await using var destination = RuntimeOwnedFileSystem.CreateFile(
                 archivePath,
                 FileMode.CreateNew,
                 FileAccess.Write,
@@ -1912,7 +1913,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
                 }
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
             try
             {
                 File.Move(stagedPath, destinationPath);
@@ -1966,7 +1967,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
                     }
                 }
 
-                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+                RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
                 try
                 {
                     Directory.Move(stagedRootPath, destinationPath);
@@ -2044,7 +2045,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
             }
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+        RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
         var stagedReceiptPath = destinationPath + ".candidate-" + Guid.NewGuid().ToString("N");
         await DurableJsonDocument.WriteAsync(
             stagedReceiptPath,
@@ -2507,7 +2508,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
         }
         var tombstoneId = Guid.NewGuid().ToString("N");
         var tombstonePath = _layout.GetTombstonePath(tombstoneId);
-        Directory.CreateDirectory(tombstonePath);
+        RuntimeOwnedFileSystem.CreateDirectory(tombstonePath);
         PackageStorePathGuard.EnsureSafe(tombstonePath, _layout.TombstoneRootPath);
         var document = new ExecutionRuntimeRootTombstoneV1(
             ExecutionRuntimeRootTombstoneV1.CurrentSchemaVersion,
@@ -2663,7 +2664,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
                 throw new ExecutionRuntimeStoreConflictException(
                     $"Execution runtime root '{document.ContentIdentity}' exists both live and tombstoned.");
             }
-            Directory.CreateDirectory(Path.GetDirectoryName(liveRootPath)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(liveRootPath)!);
             PackageStorePathGuard.EnsureSafe(liveRootPath, _layout.ContentRootPath);
             Directory.Move(tombstonedRootPath, liveRootPath);
             ExecutionRuntimeRootFileSystem.SealRootDirectory(liveRootPath);
@@ -2716,7 +2717,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
             return;
         }
 
-        Directory.CreateDirectory(Path.GetDirectoryName(livePath)!);
+        RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(livePath)!);
         File.Move(tombstonedPath, livePath);
     }
 
@@ -3043,7 +3044,7 @@ internal sealed partial class ExecutionRuntimeStore : IExecutionRuntimeRetention
         }
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(destinationPath)!);
             File.Move(sourcePath, destinationPath);
             return true;
         }

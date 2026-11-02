@@ -35,6 +35,23 @@ test("TRX and JUnit parsers retain expanded discovery, execution, and skip reaso
   assert.equal(junit.results[0].skipReason, "fixture unavailable");
 });
 
+test("JUnit quoted greater-than characters do not swallow adjacent testcases or hide failures", () => {
+  const report = parseJunitReport(`<testsuites>
+    <testcase name="Accept -> Check -> Freeze" classname="test" file="scripts/test-oracles/example.test.mjs"/>
+    <testcase name='required -> optional' classname='test' file='scripts/test-oracles/example.test.mjs'>
+      <failure message="observed > expected">failure evidence</failure>
+    </testcase>
+    <testcase name="still accounted for" classname="test" file="scripts/test-oracles/example.test.mjs"/>
+  </testsuites>`, "quoted.junit.xml");
+  assert.equal(report.discovered, 3);
+  assert.deepEqual(report.results.map(({ name, outcome }) => ({ name, outcome })), [
+    { name: "Accept -> Check -> Freeze", outcome: "Passed" },
+    { name: "required -> optional", outcome: "Failed" },
+    { name: "still accounted for", outcome: "Passed" },
+  ]);
+  assert.throws(() => parseJunitReport('<testcase name="missing -> source"/>', "invalid.junit.xml"), /without a name or source/u);
+});
+
 test("compact evidence records per-project and lane discovered/executed counts", () => {
   const model = loadCoreTestModel();
   const id = "Sunder.Core.TestSupport.Tests.TestSupportFaultProbeTests.ManualTime_DelayCannotCompleteBeforeItsClockBoundary";

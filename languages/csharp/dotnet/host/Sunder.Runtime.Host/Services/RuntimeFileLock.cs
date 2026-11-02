@@ -1,3 +1,5 @@
+using Sunder.Runtime.LocalState;
+
 namespace Sunder.Runtime.Host.Services;
 
 internal sealed class RuntimeFileLock : IDisposable
@@ -67,11 +69,11 @@ internal sealed class RuntimeFileLock : IDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         var fullPath = Path.GetFullPath(path);
-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+        RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(fullPath)!);
         PackageStorePathGuard.EnsureNotReparsePoint(fullPath);
         try
         {
-            var stream = new FileStream(
+            var stream = RuntimeOwnedFileSystem.CreateFile(
                 fullPath,
                 FileMode.OpenOrCreate,
                 FileAccess.ReadWrite,

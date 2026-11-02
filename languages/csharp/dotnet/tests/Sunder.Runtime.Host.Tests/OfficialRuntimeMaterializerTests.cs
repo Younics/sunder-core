@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -146,7 +147,7 @@ public sealed class OfficialRuntimeMaterializerTests
 
     private sealed class Archive(TemporaryDirectoryScope temporary, string path, RuntimeExecutionRuntimeVendorArtifact artifact) : IDisposable
     {
-        internal string Root => temporary.RootPath;
+        internal string Root => System.IO.Path.Combine(temporary.RootPath, "owned");
         internal string OutputRoot => System.IO.Path.Combine(Root, "root");
         internal string Path => path;
         internal RuntimeExecutionRuntimeVendorArtifact Artifact => artifact;
@@ -159,6 +160,8 @@ public sealed class OfficialRuntimeMaterializerTests
             var temporary = TemporaryDirectoryScope.Create("official-materialization");
             try
             {
+                var root = System.IO.Path.Combine(temporary.RootPath, "owned");
+                RuntimeOwnedFileSystem.CreateDirectory(root);
                 var version = source == ConfiguredOfficialSourceId.DotNet ? "10.0.12" : "24.21.0";
                 var windows = rid.StartsWith("win-", StringComparison.Ordinal);
                 var prefix = source == ConfiguredOfficialSourceId.Node ? $"node-v{version}-{OfficialRuntimeSourcePolicy.NodePlatform(rid)}/" : "";
@@ -166,8 +169,8 @@ public sealed class OfficialRuntimeMaterializerTests
                 var entries = new List<string> { prefix + launcher, prefix + (source == ConfiguredOfficialSourceId.DotNet
                     ? $"shared/Microsoft.NETCore.App/{version}/System.Private.CoreLib.dll" : "LICENSE") };
                 if (extraPath is not null) entries.Add(extraPath);
-                var path = System.IO.Path.Combine(temporary.RootPath, "source.archive");
-                await using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write))
+                var path = System.IO.Path.Combine(root, "source.archive");
+                await using (var stream = RuntimeOwnedFileSystem.CreateFile(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.None))
                 {
                     if (windows)
                     {
@@ -210,7 +213,7 @@ public sealed class OfficialRuntimeMaterializerTests
         }
         public void Dispose()
         {
-            ExecutionRuntimeRootFileSystem.TryDeleteOwnedTree(temporary.RootPath);
+            ExecutionRuntimeRootFileSystem.TryDeleteOwnedTree(Root);
             temporary.Dispose();
         }
     }

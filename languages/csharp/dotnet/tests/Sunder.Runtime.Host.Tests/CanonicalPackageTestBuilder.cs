@@ -188,7 +188,7 @@ internal static class CanonicalPackageTestBuilder
         return new RuntimePackageTargetSource(source, key, target!);
     }
 
-    private static void WriteDescriptorOnlyModelProjection(string root, SunderPackageManifest manifest)
+    internal static void WriteDescriptorOnlyModelProjection(string root, SunderPackageManifest manifest)
     {
         // This builder authors transport-only test descriptors, without source models.
         // Keep raw claims so intentionally invalid manifests still reach Format validation.

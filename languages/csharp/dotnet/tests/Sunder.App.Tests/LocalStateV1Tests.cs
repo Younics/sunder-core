@@ -1,6 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
 using System.Security.Cryptography;
+using System.Security.Principal;
 using System.Text.Json;
 using Sunder.App.Services;
 using Sunder.Package.Projections;
@@ -33,6 +36,43 @@ public sealed class LocalStateV1Tests
         AssertSchema(Path.Combine(appRoot, "schema.json"), "sunder.app.local-state");
         Assert.Empty(Directory.EnumerateFiles(runtimeRoot, "*.tmp"));
         Assert.Empty(Directory.EnumerateFiles(appRoot, "*.tmp"));
+    }
+
+    [WindowsFact]
+    [SupportedOSPlatform("windows")]
+    public void Runtime_creation_authors_user_ownership_but_never_repairs_existing_security()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var state = Path.Combine(root, "runtime");
+            RuntimeLocalState.EnsureInitialized(state);
+            using var identity = WindowsIdentity.GetCurrent();
+            var user = Assert.IsType<SecurityIdentifier>(identity.User);
+            Assert.Equal(user, new DirectoryInfo(state).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+            var schema = Path.Combine(state, RuntimeLocalState.SchemaFileName);
+            Assert.Equal(user, new FileInfo(schema).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+            RuntimeOwnedFileSystem.ValidateMutableDirectory(state, state);
+            RuntimeOwnedFileSystem.ValidateMutableRegularFile(state, schema);
+
+            var existing = Path.Combine(root, "existing");
+            Directory.CreateDirectory(existing);
+            var before = new DirectoryInfo(existing).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
+            RuntimeOwnedFileSystem.CreateDirectory(existing);
+            Assert.Equal(before, new DirectoryInfo(existing).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All));
+            // Elevated runners normally exercise this foreign default-owner branch.
+            if (!user.Equals(new DirectoryInfo(existing).GetAccessControl().GetOwner(typeof(SecurityIdentifier))))
+            {
+                Assert.Throws<InvalidDataException>(() => RuntimeOwnedFileSystem.ValidateMutableDirectory(existing, existing));
+            }
+            var existingFile = Path.Combine(existing, "lock");
+            File.WriteAllText(existingFile, "preserved");
+            var fileBefore = new FileInfo(existingFile).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
+            using (RuntimeOwnedFileSystem.CreateFile(existingFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None)) { }
+            Assert.Equal(fileBefore, new FileInfo(existingFile).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All));
+            Assert.Equal("preserved", File.ReadAllText(existingFile));
+        }
+        finally { Directory.Delete(root, recursive: true); }
     }
 
     [Fact]
