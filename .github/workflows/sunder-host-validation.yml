@@ -99,6 +99,7 @@ jobs:
           npm ci --prefix languages/typescript/node
           npm run build --prefix languages/typescript/node
           npm exec --prefix languages/typescript/node -- tsc -p languages/typescript/node/packages/package-tool/tsconfig.test.json
+          node --test languages/typescript/node/packages/package-tool/dist-test/test/rpc-runtime-inputs.test.js
           dotnet restore languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj --locked-mode
       - name: Pack the exact native Worker archive
         shell: pwsh

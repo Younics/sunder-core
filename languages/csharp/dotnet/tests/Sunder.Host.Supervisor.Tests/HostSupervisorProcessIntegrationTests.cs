@@ -101,8 +101,12 @@ public sealed class HostSupervisorProcessIntegrationTests
             Assert.Equal(RuntimeBootstrapState.Ready, system.State);
 
             var staleTransfer = Path.Combine(runtimeStateRoot, "transfers", $"{Guid.NewGuid():N}.download");
-            Directory.CreateDirectory(Path.GetDirectoryName(staleTransfer)!);
-            File.WriteAllText(staleTransfer, "stale");
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(staleTransfer)!);
+            using (var transfer = RuntimeOwnedFileSystem.CreateFile(staleTransfer, FileMode.CreateNew,
+                       FileAccess.Write, FileShare.None, 1, FileOptions.None))
+            {
+                transfer.Write("stale"u8);
+            }
 
             var challenge = await runtime.PrepareResetAsync(timeout.Token);
             Assert.False(string.IsNullOrWhiteSpace(challenge.Challenge));

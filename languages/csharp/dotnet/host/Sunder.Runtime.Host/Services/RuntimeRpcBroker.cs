@@ -1174,7 +1174,8 @@ internal sealed partial class RuntimeRpcBroker
                     frame.DeadlineUtc,
                     scope?.ContentAuthority
                     ?? new RuntimeRpcContentAuthority(
-                        "rpc-invocation-" + Guid.NewGuid().ToString("N")),
+                        "rpc-invocation-" + Guid.NewGuid().ToString("N"),
+                        (caller as RuntimeRpcAppCallerSession)?.Authority),
                     ownsContentAuthority: scope is null,
                     linked.Token,
                     acquiredProvider.Owner,

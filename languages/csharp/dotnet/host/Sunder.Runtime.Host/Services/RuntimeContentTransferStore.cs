@@ -26,7 +26,7 @@ internal readonly record struct RuntimeRpcContentEndpoint(
     string EndpointReference,
     Guid ActivationId);
 
-internal sealed class RuntimeRpcContentAuthority(string id)
+internal sealed class RuntimeRpcContentAuthority(string id, AppPolicyActivationAuthority? activation = null)
 {
     private int _revoked;
 
@@ -34,6 +34,12 @@ internal sealed class RuntimeRpcContentAuthority(string id)
     public bool IsRevoked => Volatile.Read(ref _revoked) != 0;
 
     public void Revoke() => Interlocked.Exchange(ref _revoked, 1);
+
+    public void Publish(Action publication)
+    {
+        if (activation is null) publication();
+        else activation.Publish(publication);
+    }
 }
 
 internal sealed record RuntimeRpcContentLease(
@@ -776,28 +782,36 @@ internal sealed partial class RuntimeContentTransferStore : IDisposable
         RuntimeRpcContentQuotaReservation reservation,
         CancellationToken cancellationToken)
     {
-        lock (_rpcContentGate)
+        // Always enter the activation fence before the content-store lock. Scope
+        // revocation/discard uses only the latter and never takes the activation gate.
+        if (authority is null) Publish();
+        else authority.Publish(Publish);
+
+        void Publish()
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (authority?.IsRevoked == true)
+            lock (_rpcContentGate)
             {
-                throw new OperationCanceledException(
-                    "The RPC content authority was revoked during registration.",
-                    cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (authority?.IsRevoked == true)
+                {
+                    throw new OperationCanceledException(
+                        "The RPC content authority was revoked during registration.",
+                        cancellationToken);
+                }
+                _rpcContent.Add(
+                    reference.Id,
+                    new RpcContentEntry(
+                        reference,
+                        filePath,
+                        ownerPackageId,
+                        audiencePackageId,
+                        generation,
+                        providerEndpoint,
+                        maximumUses,
+                        ownsFile,
+                        authority,
+                        reservation));
             }
-            _rpcContent.Add(
-                reference.Id,
-                new RpcContentEntry(
-                    reference,
-                    filePath,
-                    ownerPackageId,
-                    audiencePackageId,
-                    generation,
-                    providerEndpoint,
-                    maximumUses,
-                    ownsFile,
-                    authority,
-                    reservation));
         }
     }
 

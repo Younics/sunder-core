@@ -152,7 +152,11 @@ public sealed class CurrentRidDotNetRuntimeHostIntegrationTests(
                 successfulStage.StageId!,
                 static (_, _) => Task.CompletedTask);
             Assert.True(successfulCommit.Success, string.Join(Environment.NewLine, successfulCommit.Errors));
-            Assert.True(successfulCommit.RuntimeSessionApplied);
+            Assert.True(successfulCommit.RuntimeSessionApplied,
+                $"Runtime rebind was not applied. StoreCommitted={successfulCommit.StoreCommitted}; " +
+                $"ReconciliationPending={successfulCommit.RuntimeSessionReconciliationPending}; " +
+                $"Message={successfulCommit.Message}; Warnings={string.Join("; ", successfulCommit.Warnings)}" +
+                Environment.NewLine + CurrentRidRuntimeHostTestSupport.FormatLogs(logs));
             Assert.NotSame(sessionBeforeSuccessfulRebind, host.ActiveSession);
             await CurrentRidRuntimeHostTestSupport.AssertProcessesStoppedAsync(oldProcessIds);
             var rebound = Assert.Single(await installedStore.ListAsync());

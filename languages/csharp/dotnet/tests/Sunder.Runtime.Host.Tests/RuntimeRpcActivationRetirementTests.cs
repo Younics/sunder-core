@@ -70,10 +70,21 @@ public sealed class RuntimeRpcActivationRetirementTests
         await uploadSource.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var call = fixture.Broker.InvokeAppAsync(first.SessionId, endpoint, "messages", "send", JsonSerializer.SerializeToElement(new { message = "drain" }), null, default).AsTask();
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // CancelAsync propagates each transport's callbacks independently. Hold
+        // the second transport's callbacks so observing the first cancellation
+        // cannot accidentally hide a late publication by the pending upload.
+        using var releaseSecondCancellation = new ManualResetEventSlim();
+        var secondCancellationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var delayedCancellation = fixture.Manager.GetRequired(second.SessionId).RetirementToken.Register(() =>
+        {
+            secondCancellationEntered.TrySetResult();
+            releaseSecondCancellation.Wait();
+        });
         var retiring = fixture.Policies.RetireActivationAsync(new(fixture.Session, id, permit.PermitId!), fixture.Peer, default);
         try
         {
             await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await secondCancellationEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(retiring.IsCompleted);
             await Assert.ThrowsAsync<RuntimeAppPolicyException>(() => fixture.OpenAsync(id, permit));
             await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Broker.DiscoverAppAsync(second.SessionId, "example.rpc", default).AsTask());
@@ -81,9 +92,11 @@ public sealed class RuntimeRpcActivationRetirementTests
             finish.TrySetResult();
             await Assert.ThrowsAsync<SunderRpcException>(() => call);
             Assert.False(retiring.IsCompleted); // The uncooperative content registration is still executing.
+            uploadSource.Finish.TrySetResult();
+            var uploadFailure = await Assert.ThrowsAsync<SunderRpcException>(() => upload.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal("rpc.app-activation.retired", uploadFailure.Error.Code);
         }
-        finally { finish.TrySetResult(); uploadSource.Finish.TrySetResult(); }
-        await Assert.ThrowsAsync<SunderRpcException>(() => upload);
+        finally { finish.TrySetResult(); uploadSource.Finish.TrySetResult(); releaseSecondCancellation.Set(); }
         Assert.Equal("retired", (await retiring.WaitAsync(TimeSpan.FromSeconds(5))).State);
         Assert.True(scope.IsRevoked);
         Assert.Empty(Directory.GetFiles(fixture.Policy.Paths.TransferRootPath));

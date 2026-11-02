@@ -111,7 +111,7 @@ public sealed class OfficialRuntimeFixture : IAsyncLifetime
         => Layout.GetContentRootPath(receipt.ContentIdentity);
 
     internal string GetLauncherPath(ExecutionRuntimeReceiptV1 receipt)
-        => Path.Combine([GetRuntimeRoot(receipt), .. receipt.LauncherPath.Split('/')]);
+        => Path.GetFullPath(Path.Combine([GetRuntimeRoot(receipt), .. receipt.LauncherPath.Split('/')]));
 
     internal static InstalledPackageExecutionRuntimeBindingRecord CreateBinding(ExecutionRuntimeReceiptV1 receipt)
     {

@@ -27,6 +27,18 @@ internal sealed class AppPolicyActivationAuthority
         }
     }
 
+    internal void Publish(Action publication)
+    {
+        lock (_gate)
+        {
+            if (_retiring) throw SunderRpcException.Infrastructure(SunderRpcErrorKind.Unavailable,
+                "rpc.app-activation.retired", "The App activation is retiring or retired.");
+            // Cancellation callbacks on each transport are asynchronous. Publication
+            // must linearize against retirement itself, not its eventual propagation.
+            publication();
+        }
+    }
+
     internal Task RetireAsync()
     {
         lock (_gate)

@@ -37,15 +37,15 @@ public sealed class ExecutionRuntimeStoreTests
         RuntimeOwnedFileSystem.CreateDirectory(root);
         // Inherited-only files reproduce the ACL propagation boundary when the
         // publication root is made writable before its children are sealed.
-        var inherited = new FileSecurity();
-        inherited.SetOwner(GetWindowsOwner(root));
-        using (var output = new FileInfo(launcher).Create(FileMode.CreateNew,
-                   FileSystemRights.Write | FileSystemRights.Synchronize, FileShare.None, 1,
-                   FileOptions.None, inherited))
-        {
-            output.Write("worker"u8);
-        }
         var owner = GetWindowsOwner(root);
+        File.WriteAllText(launcher, "worker");
+        // An owner-only FileSecurity passed to Create supplies an empty DACL
+        // instead of producing inherited ACEs. This freshly created fixture file
+        // inherits normally; update only its owner (elevated tokens may default
+        // to Administrators), leaving that inherited DACL unchanged.
+        var ownerOnly = new FileInfo(launcher).GetAccessControl(AccessControlSections.Owner);
+        ownerOnly.SetOwner(owner);
+        new FileInfo(launcher).SetAccessControl(ownerOnly);
         try
         {
             var inheritedRules = new FileInfo(launcher).GetAccessControl(AccessControlSections.Access)

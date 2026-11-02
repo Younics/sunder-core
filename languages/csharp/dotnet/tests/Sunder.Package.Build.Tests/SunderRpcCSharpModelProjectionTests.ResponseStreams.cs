@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Xunit;
@@ -83,11 +82,17 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
         finally { load.Unload(); }
     }
 
-    private static IEnumerable<SunderRpcCSharpSourceFile> WorkerHarnessSources([CallerFilePath] string source = "")
+    private static IEnumerable<SunderRpcCSharpSourceFile> WorkerHarnessSources()
     {
-        var root = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(source)!, "../Sunder.Sdk.Worker.Tests/TestSupport"));
         foreach (var name in new[] { "WorkerHarness.cs", "AsyncByteStream.cs" })
-            yield return new(name, File.ReadAllText(Path.Combine(root, name)));
+        {
+            // CallerFilePath is a deterministic /_/ source identity in CI, not a
+            // runtime filesystem location. Embed the exact owning harness bytes.
+            using var stream = typeof(SunderRpcCSharpModelProjectionTests).Assembly.GetManifestResourceStream("WorkerHarnessSources." + name)
+                ?? throw new InvalidOperationException($"The shared Worker harness source '{name}' was not embedded.");
+            using var reader = new StreamReader(stream);
+            yield return new(name, reader.ReadToEnd());
+        }
     }
 
     private const string ResponseWorkerProbe = """

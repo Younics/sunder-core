@@ -25,6 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <EmbeddedResource Include="..\Sunder.Sdk.Worker.Tests\TestSupport\WorkerHarness.cs" LogicalName="WorkerHarnessSources.WorkerHarness.cs" />
+    <EmbeddedResource Include="..\Sunder.Sdk.Worker.Tests\TestSupport\AsyncByteStream.cs" LogicalName="WorkerHarnessSources.AsyncByteStream.cs" />
     <None Include="..\..\..\..\..\specs\generated-output\v1\conformance\documents.json"
           Link="GeneratedOutputConformance\documents.json"
           CopyToOutputDirectory="PreserveNewest" />

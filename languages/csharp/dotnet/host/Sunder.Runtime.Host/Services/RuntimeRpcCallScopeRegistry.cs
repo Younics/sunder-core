@@ -290,7 +290,7 @@ internal sealed class RuntimeRpcCallerScopeState
         DeadlineUtc = deadlineUtc;
         ParentFrame = parentFrame;
         RequirePermission = requirePermission;
-        ContentAuthority = new RuntimeRpcContentAuthority(id);
+        ContentAuthority = new RuntimeRpcContentAuthority(id, (caller as RuntimeRpcAppCallerSession)?.Authority);
         _revocation = CancellationTokenSource.CreateLinkedTokenSource(
             [
                 caller.RetirementToken,

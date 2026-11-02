@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { builtinModules } from "node:module";
 import { lstat, open, realpath } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep, posix, win32 } from "node:path";
 import { build as esbuild, type BuildOptions, type Loader, type OnLoadResult, type OnResolveArgs, type OnResolveResult, type Plugin } from "esbuild";
 import { NODE_TARGET } from "./toolchains.generated";
 
@@ -38,9 +38,7 @@ export async function captureOwnedRuntimeInputs(
     for (const base of generatedRoots) if (normalized.startsWith(`${base}/`) || normalized.startsWith(`${base}\\`)) return normalized.slice(base.length + 1).replaceAll("\\", "/");
     return undefined;
   };
-  // esbuild may canonicalize the OS-owned /var alias after a generated parent is
-  // materialized. Both spellings identify the already captured root, not new input.
-  const canonicalPath = (path: string): string => path === root || path.startsWith(root + "/") || path.startsWith(root + "\\") ? realRoot + path.slice(root.length) : path;
+  const canonicalPath = runtimePathIdentity(root, realRoot);
   const key = (args: OnResolveArgs): string => JSON.stringify([canonicalPath(args.path), canonicalPath(args.importer), args.namespace || "file", canonicalPath(args.resolveDir), args.kind]);
   const configParents = async (path: string): Promise<void> => {
     path = canonicalPath(path);
@@ -123,10 +121,10 @@ export async function captureOwnedRuntimeInputs(
           const identity = key(args);
           if (mode === "replay") {
             const edge = edges.get(identity);
-            if (!edge) throw new Error("RPC bundle requested an uncaptured runtime resolution.");
+            if (!edge) throw new Error(`RPC bundle requested an uncaptured runtime resolution (${identity}).`);
             return edge;
           }
-          const sourceEntry: OnResolveResult | undefined = args.namespace === "sunder-owned-rpc" && args.path === modulePath.replace(/\.[jt]s$/u, ".js")
+          const sourceEntry: OnResolveResult | undefined = args.namespace === "sunder-owned-rpc" && canonicalPath(args.path) === canonicalPath(modulePath.replace(/\.[jt]s$/u, ".js"))
             ? { path: modulePath, namespace: "file" } : undefined;
           const virtual = sourceEntry ?? generatedResolution(args) ?? await generatedImportAlias(args, mode === "capture");
           let resolved = virtual ?? await build.resolve(args.path, { importer: args.namespace === "sunder-owned-rpc" ? resolve(args.resolveDir, basename(args.importer)) : args.importer, namespace: args.namespace === "sunder-owned-rpc" ? "file" : args.namespace,
@@ -204,8 +202,13 @@ export async function captureOwnedRuntimeInputs(
     await scan("verify");
   };
   await revalidate();
+  const projectRelative = (path: string): string | undefined => {
+    const part = relative(realRoot, path);
+    return part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part) ? part : undefined;
+  };
   const logicalInput = (path: string): string => {
-    if (path.startsWith(`${realRoot}/`)) return relative(realRoot, path).replaceAll("\\", "/");
+    const part = projectRelative(path);
+    if (part !== undefined) return part.replaceAll("\\", "/");
     let directory = dirname(path);
     while (true) {
       const metadata = configs.get(resolve(directory, "package.json"));
@@ -226,9 +229,28 @@ export async function captureOwnedRuntimeInputs(
       files: [...inputs].map(([path, { bytes }]) => [logicalInput(path), createHash("sha256").update(bytes).digest("hex")]).sort(),
       configs: [...configs].map(([path, bytes]) => [logicalInput(path), bytes === undefined ? null : createHash("sha256").update(bytes).digest("hex")]).sort(),
     })).digest("hex"),
-    sourceFiles: [...inputs.keys()].filter((path) => path.startsWith(`${realRoot}/`) && !path.includes("/node_modules/") && /\.[cm]?[jt]sx?$/u.test(path))
-      .map((path) => resolve(root, path.slice(realRoot.length + 1)).replaceAll("\\", "/")),
+    sourceFiles: [...inputs.keys()].flatMap((path) => {
+      const part = projectRelative(path);
+      return part !== undefined && !part.split(sep).includes("node_modules") && /\.[cm]?[jt]sx?$/u.test(path)
+        ? [resolve(root, part).replaceAll("\\", "/")] : [];
+    }),
     plugin: (validate) => plugin("replay", validate), revalidate,
+  };
+}
+
+/** Tool-private identity for absolute filesystem paths, never import specifiers. */
+export function runtimePathIdentity(root: string, realRoot: string, paths = process.platform === "win32" ? win32 : posix): (path: string) => string {
+  return (path) => {
+    // The authoring compiler uses '/' on Windows while final esbuild callers use
+    // native separators. Normalize both without resolving bare/relative imports
+    // or virtual namespace names against an ambient working directory.
+    if (!paths.isAbsolute(path)) return path;
+    const normalized = paths.resolve(path);
+    const part = paths.relative(root, normalized);
+    // esbuild can also canonicalize the OS-owned /var alias after a generated
+    // parent is materialized. Only the two captured root spellings are aliases.
+    return part !== ".." && !part.startsWith(`..${paths.sep}`) && !paths.isAbsolute(part)
+      ? paths.resolve(realRoot, part) : normalized;
   };
 }
 
