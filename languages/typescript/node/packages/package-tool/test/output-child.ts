@@ -7,6 +7,7 @@ import {
   markerPath,
   stageGeneratedDirectory,
   withOutputLocks,
+  withOutputLeases,
 } from "../src/output";
 
 async function main(): Promise<void> {
@@ -15,7 +16,12 @@ async function main(): Promise<void> {
   const outputPath = resolve(rawOutputPath);
   if (mode === "hold") {
     if (readyPath === undefined || releasePath === undefined) throw new Error("hold requires ready and release paths.");
-    if (attemptingPath !== undefined) await writeSignal(attemptingPath);
+    if (attemptingPath !== undefined) {
+      // Signal real contention, not a process still starting PowerShell. The
+      // private warm-up lease initializes this producer's own identity first.
+      await withOutputLeases([`${outputPath}.bootstrap-${randomUUID()}`], async () => undefined);
+      await writeSignal(attemptingPath);
+    }
     await withOutputLocks([outputPath], async () => {
       await writeSignal(readyPath);
       while (!await isPresent(releasePath)) await delay(20);

@@ -223,13 +223,13 @@ public sealed class PackageOutputLockTests
         {
             holder = AcquireGeneratedOutputLock(output);
             node = StartCapturedNodeInTempRoot(Path.Combine(root, "node-job-temp"), helper, "hold", output, ready, release, attempting);
-            var nodeResult = node.WaitForExitAsync(TimeSpan.FromSeconds(15));
-            await FileSignal.WaitForAsync(attempting, TimeSpan.FromSeconds(5), () => $"ready={File.Exists(ready)}; {node.Diagnostics}");
+            var nodeResult = node.WaitForExitAsync(TimeSpan.FromSeconds(90));
+            await FileSignal.WaitForAsync(attempting, TimeSpan.FromSeconds(45), () => $"ready={File.Exists(ready)}; {node.Diagnostics}");
             await Eventually.AssertPendingAsync(nodeResult, () => $"attempting={File.Exists(attempting)}; ready={File.Exists(ready)}; {node.Diagnostics}");
             Assert.False(File.Exists(ready));
             holder.Dispose();
             holder = null;
-            await FileSignal.WaitForAsync(ready, TimeSpan.FromSeconds(5), () => node.Diagnostics);
+            await FileSignal.WaitForAsync(ready, TimeSpan.FromSeconds(45), () => node.Diagnostics);
             File.WriteAllText(release, "release");
             var result = await nodeResult;
             Assert.True(result.ExitCode == 0, result.CombinedOutput);
@@ -240,7 +240,7 @@ public sealed class PackageOutputLockTests
             using (CreateDeadOwnerLock(output))
             {
                 await using var nodeRecovery = StartCapturedNode(helper, "recover", output);
-                var recoveryResult = await nodeRecovery.WaitForExitAsync(TimeSpan.FromSeconds(10));
+                var recoveryResult = await nodeRecovery.WaitForExitAsync(TimeSpan.FromSeconds(45));
                 Assert.True(recoveryResult.ExitCode == 0, recoveryResult.CombinedOutput);
                 Assert.False(Directory.Exists(output + ".sunder-output.lock"));
             }
@@ -250,7 +250,7 @@ public sealed class PackageOutputLockTests
             var crashedAttempting = Path.Combine(root, "crashed-node.attempting");
             var crashedTemp = Path.Combine(root, "crashed-job-temp");
             crashedNode = StartCapturedNodeInTempRoot(crashedTemp, helper, "hold", output, crashedReady, crashedRelease, crashedAttempting);
-            await FileSignal.WaitForAsync(crashedReady, TimeSpan.FromSeconds(5), () => crashedNode.Diagnostics);
+            await FileSignal.WaitForAsync(crashedReady, TimeSpan.FromSeconds(45), () => crashedNode.Diagnostics);
             using var ownerDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(
                 output + GeneratedOutputLock.LockSuffix,
                 GeneratedOutputLock.OwnerFileName)));

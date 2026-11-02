@@ -48,6 +48,7 @@ jobs:
       - name: Verify toolchain and restore Node dependencies
         run: |
           node scripts/toolchains.mjs
+          node scripts/test-oracles/check-core-test-policy.mjs
           npm install --global "npm@$NPM_VERSION" --registry=https://registry.npmjs.org
           node scripts/release/check-sdk-version.mjs
           npm ci --prefix languages/typescript/node
@@ -174,7 +175,7 @@ jobs:
             --require-test Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.DotNetToNode_RealRuntimeHostRunsRuntimeBackedModuleUnaryStreamDataFaultAndShutdown \
             --require-test Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker \
             --require-test Sunder.Package.Format.Tests.NodePackageArchiveCompatibilityTests.NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector \
-            --require-test Sunder.Package.Build.Tests.PackageBuildManifestTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable
+            --require-test Sunder.Package.Build.Tests.PackageOutputLockTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable
       - name: Retain the tested candidate feed
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

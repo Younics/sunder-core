@@ -40,7 +40,7 @@ async function fixture() {
 }
 
 async function ready(path: string): Promise<Record<string, unknown>> {
-  const deadline = performance.now() + 10_000;
+  const deadline = performance.now() + 45_000;
   while (performance.now() < deadline) {
     try { return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>; }
     catch { await new Promise((done) => setTimeout(done, 20)); }
@@ -48,7 +48,7 @@ async function ready(path: string): Promise<Record<string, unknown>> {
   throw new Error(`Lock probe did not become ready: ${path}`);
 }
 
-test("generated output lock survives Worker temp-root replacement without reclaiming a current holder", { timeout: 20_000 }, async () => {
+test("generated output lock survives Worker temp-root replacement without reclaiming a current holder", { timeout: 120_000 }, async () => {
   const f = await fixture();
   try {
     const holder = await f.start("hold", "job-a", "held");
@@ -75,7 +75,7 @@ test("generated output lock survives Worker temp-root replacement without reclai
   } finally { await f.close(); }
 });
 
-test("normal shutdown cleans unused evidence but an unreleased lease retains evidence across restart", { timeout: 20_000 }, async () => {
+test("normal shutdown cleans unused evidence but an unreleased lease retains evidence across restart", { timeout: 120_000 }, async () => {
   const f = await fixture();
   try {
     const normal = await f.start("recover", "normal-temp", "normal");
@@ -95,7 +95,7 @@ test("normal shutdown cleans unused evidence but an unreleased lease retains evi
 });
 
 for (const damage of ["missing", "tampered", "arbitrary-path", "symlink", "foreign-host", "legacy-removed-temp", "symlink-root"] as const) {
-  test(`unverifiable ${damage} evidence produces an actionable failure and preserves selected paths`, { timeout: 20_000 }, async () => {
+  test(`unverifiable ${damage} evidence produces an actionable failure and preserves selected paths`, { timeout: 120_000 }, async () => {
     const f = await fixture();
     try {
       const abandoned = await f.start("abandon", "old-temp", "abandoned");
@@ -134,7 +134,7 @@ for (const damage of ["missing", "tampered", "arbitrary-path", "symlink", "forei
       assert.equal(result.code, 1, result.error);
       assert.match(result.error, damage === "symlink-root" ? /marker ancestor/ : /unverifiable ownership evidence/);
       if (damage !== "symlink-root") assert.match(result.error, /independently confirm/);
-      assert.ok(performance.now() - clock < 10_000, result.error);
+      assert.ok(performance.now() - clock < 45_000, result.error);
       assert.deepEqual(await readFile(lockOwner), before);
       assert.equal(await readFile(resolve(f.root, "output"), "utf8"), "user-selected output");
     } finally { await f.close(); }

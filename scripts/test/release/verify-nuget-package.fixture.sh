@@ -53,11 +53,15 @@ if bash "$verifier" "$unsigned_package" "$unsigned_package" > "$unsigned_failure
 fi
 
 cp "$unsigned_package" "$wrong_signer_package"
+# OpenSSL configurations can default to CA:TRUE. Combined with digitalSignature
+# alone that is an invalid CA on Linux, so signing fails before testing trust.
+# Use a valid, untrusted leaf; do not weaken the production verifier's trust rules.
 openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
   -keyout "$fixture_dir/wrong-signer.key" \
   -out "$fixture_dir/wrong-signer.crt" \
   -days 1 \
   -subj '/CN=Sunder Wrong Signer Fixture/O=Sunder Tests/C=US' \
+  -addext 'basicConstraints=critical,CA:FALSE' \
   -addext 'keyUsage=critical,digitalSignature' \
   -addext 'extendedKeyUsage=codeSigning' >/dev/null 2>&1
 openssl pkcs12 -export \
@@ -65,10 +69,15 @@ openssl pkcs12 -export \
   -inkey "$fixture_dir/wrong-signer.key" \
   -in "$fixture_dir/wrong-signer.crt" \
   -passout pass:sunder-fixture >/dev/null 2>&1
-dotnet nuget sign "$wrong_signer_package" \
+wrong_signer_signing_log="$fixture_dir/wrong-signer-signing.log"
+if ! dotnet nuget sign "$wrong_signer_package" \
   --certificate-path "$fixture_dir/wrong-signer.pfx" \
   --certificate-password sunder-fixture \
-  --overwrite >/dev/null
+  --overwrite > "$wrong_signer_signing_log" 2>&1; then
+  cat "$wrong_signer_signing_log" >&2
+  printf 'Failed to prepare the valid but untrusted leaf-signer fixture.\n' >&2
+  exit 1
+fi
 wrong_signer_failure_log="$fixture_dir/wrong-signer-verification.log"
 if bash "$verifier" "$unsigned_package" "$wrong_signer_package" > "$wrong_signer_failure_log" 2>&1; then
   printf 'NuGet verification unexpectedly trusted a signer not advertised by NuGet.org.\n' >&2

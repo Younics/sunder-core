@@ -16,7 +16,9 @@ inspection supplies declaration-level filtering, platform support, and external
 prerequisites at runtime; parameterized and generated cases come only from the
 test adapters. `check-core-test-policy.mjs` rejects an empty test project, an
 empty lane, ownership drift, stale expected-skip identities, or missing behavior
-evidence in `core-large-object-characterization.json`.
+evidence in `core-large-object-characterization.json`. It also checks every literal
+workflow `--require-test` selection against current declarations, before expensive CI
+work starts; renaming a test class must update its required evidence selection.
 
 ```text
 node scripts/test-oracles/check-core-test-policy.mjs
@@ -127,6 +129,14 @@ produce the same compact evidence. Project tests run sequentially, with ordinary
 parallel MSBuild inside each build; race-sensitive test collections retain their
 own serialization. Node artifact cleanup completes before Node outputs are rebuilt
 for .NET interop.
+
+The Windows x64/ARM64 platform jobs additionally require the Node process-identity
+regressions and the .NET/Node generated-output-lock interoperability case. Windows
+self-identity bootstrap has a separate, one-time 30-second budget before contention
+waiting starts; owner probes remain capped at five seconds and the remaining lock
+wait. Tests signal contention only after their own bootstrap completes. Unknown
+owners are preserved, not treated as dead, and the whole test/tool processes remain
+bounded. A local macOS pass is not native Windows qualification.
 
 Windows platform/process and App-output validation runs natively on both `win-x64`
 (`windows-2025`) and `win-arm64` (`windows-11-arm`), with RID-labelled jobs and

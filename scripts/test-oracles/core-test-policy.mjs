@@ -17,6 +17,16 @@ export function loadCoreTestModel(root = repositoryRoot, policyOverride) {
   return { policy, declarations };
 }
 
+export function validateWorkflowTestSelections(workflows, declarations) {
+  const ids = new Set(declarations.map((item) => item.id));
+  for (const { source, content } of workflows) {
+    for (const match of content.matchAll(/--require-test(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\]+))/gu)) {
+      const id = match[1] ?? match[2] ?? match[3];
+      if (!ids.has(id)) throw new Error(`${source}: required workflow test '${id}' is not declared.`);
+    }
+  }
+}
+
 export function discoverTestDeclarations(root, policy) {
   const declarations = [];
   const inertSources = validatedInertDotnetSources(root, policy);

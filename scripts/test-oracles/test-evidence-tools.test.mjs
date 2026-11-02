@@ -11,6 +11,7 @@ import {
   loadCoreTestModel,
   validateCharacterization,
   validateProjectLaneOwnership,
+  validateWorkflowTestSelections,
 } from "./core-test-policy.mjs";
 import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 
@@ -471,6 +472,13 @@ test("candidate-safe workflows retain lane gates, runtime reports, and compact e
   assert.match(workflow, /if: always\(\)/u);
 
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
+  const declarations = loadCoreTestModel().declarations;
+  validateWorkflowTestSelections([{ source: "ci", content: workflow }, { source: "host", content: host }], declarations);
+  const oldOwner = workflow.replaceAll("PackageOutputLockTests.SharedOutputLock_Interoperates", "PackageBuildManifestTests.SharedOutputLock_Interoperates");
+  assert.notEqual(oldOwner, workflow);
+  assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: oldOwner }], declarations), /required workflow test.*not declared/u);
+  assert.match(host, /SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP: "1"/u);
+  assert.match(host, /process-start-identity\.test\.js/u);
   assert.match(workflow, /--primary-lane dotnet-linux/u);
   assert.match(host, /--primary-lane host-platform/u);
   assert.match(host, /rid: linux-x64, os: ubuntu-24\.04[\s\S]*rid: win-x64, os: windows-2025[\s\S]*rid: win-arm64, os: windows-11-arm[\s\S]*rid: osx-arm64, os: macos-15/u);

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync, unlinkSync, type Stats } from "node:fs";
 import {
   lstat,
@@ -15,7 +14,7 @@ import {
 } from "node:fs/promises";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
-import { promisify } from "node:util";
+import { createProcessStartIdentityProbe, ProcessStartIdentityError } from "./process-start-identity";
 
 export const GENERATED_OUTPUT_MARKER_SUFFIX = ".sunder-generated-output";
 
@@ -122,6 +121,7 @@ export async function withOutputLeases<T>(
     unique.set(process.platform === "win32" ? path.toLowerCase() : path, path);
   }
   const keys = [...unique.values()].sort(pathOrder);
+  if (keys.length > 0) await currentProcessMarker();
   const locks: OwnedDirectory[] = [];
   const deadline = Date.now() + waitMilliseconds;
   let operationFailed = false;
@@ -304,7 +304,7 @@ async function acquireOutputLock(key: string, deadline: number, waitMilliseconds
       } else {
         await ensureRegularDirectory(lockPath, "generated output lock");
         const candidate = await readDirectoryOwner(lockPath);
-        const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate);
+        const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate, deadline);
         unverifiableSince = checkUnverifiableOwner(state, unverifiableSince, deadline, waitMilliseconds, lockPath);
         if (candidate !== undefined && state === "dead") {
           const current = await readDirectoryOwner(lockPath);
@@ -393,7 +393,7 @@ async function acquireTransitionGuard(
       throw new Error(`The generated output transition guard '${guardPath}' is not a regular directory.`);
     }
     const candidate = await readDirectoryOwner(guardPath);
-    const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate);
+    const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate, deadline);
     unverifiableSince = checkUnverifiableOwner(state, unverifiableSince, deadline, waitMilliseconds, guardPath);
     if (candidate !== undefined && state === "dead") {
       const current = await readDirectoryOwner(guardPath);
@@ -532,12 +532,12 @@ async function readLockOwner(path: string): Promise<LockOwner | undefined> {
   }
 }
 
-async function getOwnerState(owner: LockOwner): Promise<"alive" | "dead" | "unknown" | "unverifiable"> {
+async function getOwnerState(owner: LockOwner, deadline: number): Promise<"alive" | "dead" | "unknown" | "unverifiable"> {
   if (!await hasValidLocalProcessMarker(owner)) return "unverifiable";
-  const actualStartedAt = await processStartedAt(owner.pid);
-  if (actualStartedAt === null) return "dead";
-  if (actualStartedAt === undefined) return "unknown";
-  if (actualStartedAt !== owner.processStartedAt) return "dead";
+  const actual = await processIdentity.ownerIdentity(owner.pid, deadline - Date.now());
+  if (actual.state === "absent") return "dead";
+  if (actual.state === "unknown") return "unknown";
+  if (actual.identity !== owner.processStartedAt) return "dead";
   return owner.platform === "darwin" ? "unknown" : "alive";
 }
 
@@ -576,19 +576,25 @@ function checkUnverifiableOwner(state: string, since: number | undefined, deadli
   return started;
 }
 
-const execFileAsync = promisify(execFile);
-let currentProcessStartedAtPromise: Promise<string> | undefined;
+const processIdentity = createProcessStartIdentityProbe();
 let currentHostIdentityPromise: Promise<Pick<ProcessMarker, "hostname" | "platform" | "linuxBootId" | "linuxPidNamespace">> | undefined;
 let currentProcessMarkerPromise: Promise<ProcessMarkerRegistration> | undefined;
 
 function currentProcessMarker(): Promise<ProcessMarkerRegistration> {
-  currentProcessMarkerPromise ??= createProcessMarker();
+  if (currentProcessMarkerPromise === undefined) {
+    const pending = createProcessMarker();
+    currentProcessMarkerPromise = pending;
+    void pending.catch((error: unknown) => {
+      // Identity failed before createProcessMarker could write any marker.
+      if (error instanceof ProcessStartIdentityError && currentProcessMarkerPromise === pending) currentProcessMarkerPromise = undefined;
+    });
+  }
   return currentProcessMarkerPromise;
 }
 
 async function createProcessMarker(): Promise<ProcessMarkerRegistration> {
   const [processStartedAt, hostIdentity] = await Promise.all([
-    currentProcessStartedAt(),
+    processIdentity.currentIdentity(),
     currentHostIdentity(),
   ]);
   const token = randomUUID();
@@ -762,71 +768,6 @@ function cleanupProcessMarkerAtExit(registration: ProcessMarkerRegistration): vo
     if (marker.schemaVersion === 1 && marker.token === registration.marker.token) unlinkSync(registration.path);
   } catch {
     // A missing or replaced marker must not be modified during process shutdown.
-  }
-}
-
-function currentProcessStartedAt(): Promise<string> {
-  currentProcessStartedAtPromise ??= processStartedAt(process.pid).then((value) => {
-    if (value === null || value === undefined) {
-      throw new Error("Could not establish the current process start identity for generated output locking.");
-    }
-    return value;
-  });
-  return currentProcessStartedAtPromise;
-}
-
-async function processStartedAt(pid: number): Promise<string | null | undefined> {
-  try {
-    if (process.platform === "linux") {
-      const [statText, bootIdText] = await Promise.all([
-        readFile(`/proc/${pid}/stat`, "utf8"),
-        readFile("/proc/sys/kernel/random/boot_id", "utf8"),
-      ]);
-      const closingParenthesis = statText.lastIndexOf(")");
-      const fields = closingParenthesis < 0 ? [] : statText.slice(closingParenthesis + 1).trim().split(/\s+/u);
-      const startTicks = fields[19];
-      const bootId = bootIdText.trim().toLowerCase();
-      if (startTicks === undefined || !/^\d+$/u.test(startTicks) || !GUID_PATTERN.test(bootId)) return undefined;
-      return `linux:${bootId}:${startTicks}`;
-    }
-    if (process.platform === "win32") {
-      const script = [
-        "$ErrorActionPreference = 'Stop'",
-        `$p = [System.Diagnostics.Process]::GetProcessById(${pid})`,
-        "$p.StartTime.ToUniversalTime().Ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture)",
-      ].join("; ");
-      const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
-        encoding: "utf8",
-        timeout: 5_000,
-        windowsHide: true,
-      });
-      const ticks = stdout.trim();
-      return /^\d+$/u.test(ticks) ? `windows:${ticks}` : undefined;
-    }
-    if (process.platform === "darwin") {
-      const { stdout } = await execFileAsync("/bin/ps", ["-p", String(pid), "-o", "lstart="], {
-        encoding: "utf8",
-        env: { ...process.env, LANG: "C", LC_ALL: "C", TZ: "UTC" },
-        timeout: 5_000,
-      });
-      const value = Date.parse(`${stdout.trim()} UTC`);
-      if (!Number.isFinite(value)) return undefined;
-      return `darwin:${new Date(Math.floor(value / 1_000) * 1_000).toISOString()}`;
-    }
-    return undefined;
-  } catch {
-    const exists = processExists(pid);
-    return exists === false ? null : undefined;
-  }
-}
-
-function processExists(pid: number): boolean | undefined {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "ESRCH" ? false : code === "EPERM" ? true : undefined;
   }
 }
 
