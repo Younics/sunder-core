@@ -303,7 +303,8 @@ public static class RuntimeV1StateReset
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                return new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.WriteThrough);
+                return RuntimeOwnedFileSystem.CreateFile(
+                    leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.WriteThrough);
             }
             catch (IOException) when (timeProvider.GetUtcNow() < expiresAt)
             {
@@ -1070,7 +1071,7 @@ public static class RuntimeV1StateReset
         {
             RuntimeOwnedFileSystem.ValidateMutableDirectory(root, directory);
         }
-        Directory.CreateDirectory(directory);
+        RuntimeOwnedFileSystem.CreateDirectory(directory);
         RuntimeOwnedFileSystem.ValidateMutableDirectory(root, directory);
         if (IsReparsePoint(directory))
         {
@@ -1085,7 +1086,7 @@ public static class RuntimeV1StateReset
         try
         {
             var bytes = JsonSerializer.SerializeToUtf8Bytes(receipt, JsonOptions);
-            using (var stream = new FileStream(
+            using (var stream = RuntimeOwnedFileSystem.CreateFile(
                        temporaryPath,
                        FileMode.CreateNew,
                        FileAccess.Write,
@@ -1199,7 +1200,7 @@ public static class RuntimeV1StateReset
             }
         }
 
-        Directory.CreateDirectory(root);
+        RuntimeOwnedFileSystem.CreateDirectory(root);
         foreach (var directory in missingDirectories)
         {
             SyncDirectory(Path.GetDirectoryName(directory)!);

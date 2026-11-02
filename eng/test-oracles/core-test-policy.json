@@ -30,6 +30,13 @@
     }
   ],
   "defaultDotnetLane": "dotnet-linux",
+  "inertDotnetSources": [
+    {
+      "source": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/StackContributorRpcMigrationBaselineTests.cs",
+      "sha256Lf": "49761fda4bd75780a4e7e0046de2d1f249879047d56d0e22d920de6145a576cc",
+      "reason": "Frozen Stack migration oracle retained as inert history, explicitly removed from compilation. Current source parity, platform lifecycle and package artifact tests own executable coverage."
+    }
+  ],
   "projectLanes": {
     "Sunder.App.Tests": ["app-packaging", "dotnet-linux", "host-platform", "release-artifact"],
     "Sunder.Cli.Tests": ["dotnet-linux"],

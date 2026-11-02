@@ -6,7 +6,12 @@ authority. Raw reports stay in ignored local paths and CI artifacts.
 
 `eng/test-oracles/core-test-policy.json` is the small checked policy surface. It
 contains only allowed primary lanes, expected project/lane ownership, report
-groups, and explicit expected-skip rules with reasons and owners. Source
+groups, explicit expected-skip rules with reasons and owners, and audited inert
+.NET history entries. Each inert source is pinned by its LF-normalized SHA-256
+and reason and must still have an unconditional literal `Compile Remove` in its
+owning SDK project. Conditional, indirect or re-including project shapes fail
+closed; this is not a general MSBuild evaluator or an ignore list for runnable
+tests. Frozen history bytes remain untouched and are not recompiled. Source
 inspection supplies declaration-level filtering, platform support, and external
 prerequisites at runtime; parameterized and generated cases come only from the
 test adapters. `check-core-test-policy.mjs` rejects an empty test project, an
@@ -118,6 +123,11 @@ produce the same compact evidence. Project tests run sequentially, with ordinary
 parallel MSBuild inside each build; race-sensitive test collections retain their
 own serialization. Node artifact cleanup completes before Node outputs are rebuilt
 for .NET interop.
+
+App packaging evidence is summarized after an attempted packaging step, including
+a failed attempt, but not after a skipped step when an earlier platform test failed.
+This avoids a misleading missing-directory error without accepting missing reports:
+successful native validation still requires both platform and packaging checks.
 
 The historical Core/Stack migration ledgers are inert preserved archives; the
 separate current candidate remains UNFROZEN / UNRELEASED. Current API snapshots

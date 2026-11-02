@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -234,6 +235,72 @@ test("compact Core policy deterministically partitions every test project into o
     () => validateProjectLaneOwnership(mutation, first.policy),
     /project\/lane ownership drift/u,
   );
+});
+
+test("audited inert C# history is excluded only while its bytes and unconditional Compile Remove remain intact", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-inert-test-source-"));
+  const project = "Inventory.Tests";
+  const projectRoot = resolve(root, "languages/csharp/dotnet/tests", project);
+  const source = `languages/csharp/dotnet/tests/${project}/History.cs`;
+  const history = "namespace Archived; public class History { [Fact] public void Frozen() { } }\n";
+  const active = "namespace Current; public class Active { [Fact] public void Runs() { } }\n";
+  const projectXml = '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><Compile Remove="History.cs" /></ItemGroup></Project>';
+  const projectPath = resolve(projectRoot, `${project}.csproj`);
+  const fixturePolicy = {
+    ...structuredClone(policy),
+    primaryLanes: ["dotnet-linux"],
+    dotnetLaneRules: [],
+    projectLanes: { [project]: ["dotnet-linux"] },
+    expectedSkips: [],
+    inertDotnetSources: [{ source, sha256Lf: createHash("sha256").update(history).digest("hex"),
+      reason: "Frozen historical oracle, deliberately not compiled or executed." }],
+  };
+  try {
+    await mkdir(projectRoot, { recursive: true });
+    await writeFile(resolve(projectRoot, "Active.cs"), active);
+    await writeFile(resolve(root, source), history);
+    await writeFile(projectPath, projectXml);
+    assert.deepEqual(loadCoreTestModel(root, fixturePolicy).declarations.map((item) => item.id), ["Current.Active.Runs"]);
+    await writeFile(resolve(root, source), history.replaceAll("\n", "\r\n"));
+    assert.deepEqual(loadCoreTestModel(root, fixturePolicy).declarations.map((item) => item.id), ["Current.Active.Runs"]);
+
+    for (const xml of [
+      projectXml.replace('<Compile Remove="History.cs" />', ""),
+      projectXml.replace("<ItemGroup>", '<ItemGroup Condition="\'$(Configuration)\' == \'Release\'">'),
+      projectXml.replace('Remove="History.cs"', 'Remove="History.cs" Condition="\'$(Configuration)\' == \'Release\'"'),
+      projectXml.replace('<Compile Remove="History.cs" />', '<!-- <Compile Remove="History.cs" /> -->'),
+      projectXml.replace("</ItemGroup>", '<Compile Include="History.cs" /></ItemGroup>'),
+      projectXml.replace("</ItemGroup>", '<Compile Include="*.cs" /></ItemGroup>'),
+      projectXml.replace('Remove="History.cs"', 'Remove="*.cs"'),
+      projectXml.replace("</Project>", '<Import Project="Other.targets" /></Project>'),
+    ]) {
+      await writeFile(projectPath, xml);
+      assert.throws(() => loadCoreTestModel(root, fixturePolicy), /unconditional literal Compile Remove/u, xml);
+    }
+    await writeFile(projectPath, projectXml);
+    await writeFile(resolve(root, source), history + "// changed history\n");
+    assert.throws(() => loadCoreTestModel(root, fixturePolicy), /inert.*hash/iu);
+    await writeFile(resolve(root, source), history);
+    const hiddenActive = structuredClone(fixturePolicy);
+    hiddenActive.inertDotnetSources.push({ source: source.replace("History.cs", "Active.cs"),
+      sha256Lf: createHash("sha256").update(active).digest("hex"), reason: "Must not hide runnable tests." });
+    assert.throws(() => loadCoreTestModel(root, hiddenActive), /unconditional literal Compile Remove/u);
+    const missingReason = structuredClone(fixturePolicy);
+    missingReason.inertDotnetSources[0].reason = "";
+    assert.throws(() => loadCoreTestModel(root, missingReason), /inert.*reason/iu);
+    const duplicate = structuredClone(fixturePolicy);
+    duplicate.inertDotnetSources.push(duplicate.inertDotnetSources[0]);
+    assert.throws(() => loadCoreTestModel(root, duplicate), /inert.*unique/iu);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("current inventory never selects the retained noncompiled Stack migration oracle", () => {
+  const model = loadCoreTestModel();
+  assert.ok(model.policy.inertDotnetSources.some((item) => item.source.endsWith("/StackContributorRpcMigrationBaselineTests.cs")));
+  assert.ok(!model.declarations.some((item) => item.id.startsWith("Sunder.Sdk.PublicApi.Tests.StackContributorRpcMigrationBaselineTests.")));
+  assert.ok(model.declarations.some((item) => item.project === "Sunder.Sdk.PublicApi.Tests"));
 });
 
 test("runtime model retains theories, dynamic Node declarations, platform ownership, and release fixtures", () => {

@@ -40,7 +40,7 @@ public sealed class LocalStateV1Tests
 
     [WindowsFact]
     [SupportedOSPlatform("windows")]
-    public void Runtime_creation_authors_user_ownership_but_never_repairs_existing_security()
+    public async Task Runtime_creation_authors_user_ownership_but_never_repairs_existing_security()
     {
         var root = CreateTempDirectory();
         try
@@ -55,6 +55,37 @@ public sealed class LocalStateV1Tests
             RuntimeOwnedFileSystem.ValidateMutableDirectory(state, state);
             RuntimeOwnedFileSystem.ValidateMutableRegularFile(state, schema);
 
+            // Reset has its own first-use root, lease and receipt publication
+            // paths. Elevated Windows tokens must author the user owner there too.
+            var resetRoot = Path.Combine(root, "reset", "v1");
+            var receiptDirectory = Path.Combine(resetRoot, RuntimeV1StateDescriptor.ResetReceiptDirectory);
+            var reset = await RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, resetRoot, afterStarted: () =>
+            {
+                var startedReceipt = Assert.Single(Directory.EnumerateFiles(receiptDirectory, "*.json"));
+                Assert.Equal(user, new FileInfo(startedReceipt).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+                RuntimeOwnedFileSystem.ValidateMutableRegularFile(resetRoot, startedReceipt);
+            });
+            Assert.True(reset.Success);
+            Assert.NotNull(reset.ReceiptRelativePath);
+            foreach (var directory in new[] { resetRoot, receiptDirectory })
+            {
+                Assert.Equal(user, new DirectoryInfo(directory).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+                RuntimeOwnedFileSystem.ValidateMutableDirectory(resetRoot, directory);
+            }
+            var resetLease = Path.Combine(resetRoot, RuntimeLocalState.LeaseFileName);
+            var resetReceipt = Path.Combine(resetRoot, reset.ReceiptRelativePath);
+            foreach (var file in new[] { resetLease, resetReceipt, Path.Combine(resetRoot, RuntimeLocalState.SchemaFileName) })
+            {
+                Assert.Equal(user, new FileInfo(file).GetAccessControl().GetOwner(typeof(SecurityIdentifier)));
+                RuntimeOwnedFileSystem.ValidateMutableRegularFile(resetRoot, file);
+            }
+            AssertCompletedReceipt(resetRoot, reset.ReceiptRelativePath);
+            var receiptSecurity = new DirectoryInfo(receiptDirectory).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
+            var receiptBytes = File.ReadAllBytes(resetReceipt);
+            Assert.True((await RuntimeV1StateReset.ResetStartupCacheAsync(TimeSpan.Zero, resetRoot)).Success);
+            Assert.Equal(receiptBytes, File.ReadAllBytes(resetReceipt));
+            Assert.Equal(receiptSecurity, new DirectoryInfo(receiptDirectory).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All));
+
             var existing = Path.Combine(root, "existing");
             Directory.CreateDirectory(existing);
             var before = new DirectoryInfo(existing).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All);
@@ -64,6 +95,10 @@ public sealed class LocalStateV1Tests
             if (!user.Equals(new DirectoryInfo(existing).GetAccessControl().GetOwner(typeof(SecurityIdentifier))))
             {
                 Assert.Throws<InvalidDataException>(() => RuntimeOwnedFileSystem.ValidateMutableDirectory(existing, existing));
+                var rejected = await Assert.ThrowsAsync<InvalidDataException>(() => RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, existing));
+                Assert.Contains("not owned by the current Windows user", rejected.Message, StringComparison.Ordinal);
+                Assert.Equal(before, new DirectoryInfo(existing).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All));
+                Assert.Empty(Directory.EnumerateFileSystemEntries(existing));
             }
             var existingFile = Path.Combine(existing, "lock");
             File.WriteAllText(existingFile, "preserved");
@@ -71,6 +106,44 @@ public sealed class LocalStateV1Tests
             using (RuntimeOwnedFileSystem.CreateFile(existingFile, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.None)) { }
             Assert.Equal(fileBefore, new FileInfo(existingFile).GetAccessControl().GetSecurityDescriptorSddlForm(AccessControlSections.All));
             Assert.Equal("preserved", File.ReadAllText(existingFile));
+
+            foreach (var entry in new[] { RuntimeLocalState.LeaseFileName, RuntimeV1StateDescriptor.ResetReceiptDirectory })
+            {
+                var foreignRoot = Path.Combine(root, $"foreign-{entry}");
+                RuntimeLocalState.EnsureInitialized(foreignRoot);
+                var foreignPath = Path.Combine(foreignRoot, entry);
+                FileSystemSecurity security;
+                if (entry == RuntimeV1StateDescriptor.ResetReceiptDirectory)
+                {
+                    Directory.CreateDirectory(foreignPath);
+                    security = new DirectoryInfo(foreignPath).GetAccessControl();
+                }
+                else
+                {
+                    File.WriteAllText(foreignPath, "preserved-lease");
+                    security = new FileInfo(foreignPath).GetAccessControl();
+                }
+                if (!user.Equals(security.GetOwner(typeof(SecurityIdentifier))))
+                {
+                    var sddl = security.GetSecurityDescriptorSddlForm(AccessControlSections.All);
+                    var rejected = await Assert.ThrowsAsync<InvalidDataException>(() => RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, foreignRoot));
+                    Assert.Contains("not owned by the current Windows user", rejected.Message, StringComparison.Ordinal);
+                    var after = entry == RuntimeV1StateDescriptor.ResetReceiptDirectory
+                        ? (FileSystemSecurity)new DirectoryInfo(foreignPath).GetAccessControl()
+                        : new FileInfo(foreignPath).GetAccessControl();
+                    Assert.Equal(sddl, after.GetSecurityDescriptorSddlForm(AccessControlSections.All));
+                    if (entry == RuntimeLocalState.LeaseFileName)
+                    {
+                        Assert.Equal("preserved-lease", File.ReadAllText(foreignPath));
+                        Assert.False(Directory.Exists(Path.Combine(foreignRoot, RuntimeV1StateDescriptor.ResetReceiptDirectory)));
+                    }
+                    else
+                    {
+                        Assert.Empty(Directory.EnumerateFileSystemEntries(foreignPath));
+                        Assert.False(File.Exists(Path.Combine(foreignRoot, RuntimeLocalState.LeaseFileName)));
+                    }
+                }
+            }
         }
         finally { Directory.Delete(root, recursive: true); }
     }

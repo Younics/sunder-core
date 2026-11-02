@@ -45,12 +45,15 @@ jobs:
           node scripts/test-oracles/run-dotnet-tests-with-results.mjs --primary-lane host-platform
           --results-directory artifacts/test-results/platform --build --configuration Release --disable-build-servers
       - name: Verify bundled App, Supervisor, Runtime and CLI outputs
+        id: app_packaging
+        if: success()
         run: >-
           node scripts/test-oracles/run-dotnet-tests-with-results.mjs --primary-lane app-packaging
           --results-directory artifacts/test-results/app-packaging --build --configuration Release
       - if: always()
         run: node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/platform --allow-partial --require-primary-lane host-platform
-      - if: always()
+      - name: Summarize App packaging test evidence
+        if: always() && (steps.app_packaging.outcome == 'success' || steps.app_packaging.outcome == 'failure')
         run: node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/app-packaging --allow-partial --require-primary-lane app-packaging
       - name: Parse Windows packaging and installer scripts
         if: runner.os == 'Windows'

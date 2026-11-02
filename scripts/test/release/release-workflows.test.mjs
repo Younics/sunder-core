@@ -151,6 +151,21 @@ test("native validation requires both actual vendor-runtime tests on all six arc
   assert.match(source, /Parser\]::ParseFile/u);
 });
 
+test("packaging evidence is required after success or failure but not when packaging was never attempted", async () => {
+  const source = await workflow("host-validation");
+  const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
+  assert.match(platform, /name: Verify bundled App, Supervisor, Runtime and CLI outputs\n\s+id: app_packaging\n\s+if: success\(\)/u);
+  const summary = /name: Summarize App packaging test evidence\n\s+if: ([^\n]+)\n\s+run: ([^\n]+)/u.exec(platform);
+  assert.ok(summary, "Missing outcome-bound packaging evidence step");
+  assert.match(summary[2], /summarize-core-test-results\.mjs artifacts\/test-results\/app-packaging --allow-partial --require-primary-lane app-packaging/u);
+  const shouldSummarize = new Function("always", "steps", `return (${summary[1]});`);
+  for (const outcome of ["success", "failure", "skipped", "cancelled", ""]) {
+    assert.equal(shouldSummarize(() => true, { app_packaging: { outcome } }), ["success", "failure"].includes(outcome), outcome);
+  }
+  assert.doesNotMatch(platform, /continue-on-error|--allow-missing|--allow-empty/u);
+  assert.match(platform, /if: always\(\)[\s\S]+--require-primary-lane host-platform/u);
+});
+
 test("strict App packaging retains signing, notarization and Full-only feeds", async () => {
   const source = await workflow("app-release");
   assert.match(source, /environment: sunder-app-signing/u);

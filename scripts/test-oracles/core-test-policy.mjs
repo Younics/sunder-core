@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { csharpTestDeclarations } from "./csharp-test-declarations.mjs";
@@ -18,7 +19,9 @@ export function loadCoreTestModel(root = repositoryRoot, policyOverride) {
 
 export function discoverTestDeclarations(root, policy) {
   const declarations = [];
+  const inertSources = validatedInertDotnetSources(root, policy);
   for (const source of testSourceFiles(root)) {
+    if (inertSources.has(source)) continue;
     const content = readFileSync(resolve(root, source), "utf8");
     if (source.endsWith(".cs")) declarations.push(...discoverDotnetTests(source, content, policy));
     else if (source.endsWith(".ts") || source.endsWith(".mjs")) declarations.push(...discoverNodeTests(source, content));
@@ -149,6 +152,68 @@ function validatePolicyShape(policy) {
   if (!Array.isArray(policy.reports?.node) || typeof policy.reports?.releaseFixtures !== "string") {
     throw new Error("Core test policy must declare Node and release-fixture reports.");
   }
+  if (!Array.isArray(policy.inertDotnetSources ?? [])) throw new Error("Inert .NET sources must be an explicit array.");
+  const inertSources = new Set();
+  for (const item of policy.inertDotnetSources ?? []) {
+    if (item === null || typeof item !== "object" || Object.keys(item).sort().join(",") !== "reason,sha256Lf,source"
+        || typeof item.source !== "string"
+        || !/^languages\/csharp\/dotnet\/tests\/[A-Za-z0-9_.-]+\.Tests\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.cs$/u.test(item.source)
+        || item.source.split("/").some((part) => part === "." || part === "..")
+        || typeof item.sha256Lf !== "string" || !/^[a-f0-9]{64}$/u.test(item.sha256Lf)
+        || typeof item.reason !== "string" || item.reason.trim() === "") {
+      throw new Error("Every inert .NET source must declare an exact source path, LF-normalized hash and reason.");
+    }
+    if (inertSources.has(item.source)) throw new Error("Inert .NET source paths must be unique.");
+    inertSources.add(item.source);
+  }
+}
+
+function validatedInertDotnetSources(root, policy) {
+  const sources = new Set();
+  for (const item of policy.inertDotnetSources ?? []) {
+    const content = readFileSync(resolve(root, item.source), "utf8");
+    if (createHash("sha256").update(content.replaceAll(/\r\n?/gu, "\n")).digest("hex") !== item.sha256Lf) {
+      throw new Error(`Inert .NET source hash drift: ${item.source}`);
+    }
+    const segments = item.source.split("/");
+    const project = resolve(root, ...segments.slice(0, 5), `${segments[4]}.csproj`);
+    if (!hasUnconditionalLiteralCompileRemoval(readFileSync(project, "utf8"), segments.slice(5).join("/"))) {
+      throw new Error(`Inert .NET source requires an unconditional literal Compile Remove in its owning project: ${item.source}`);
+    }
+    sources.add(item.source);
+  }
+  return sources;
+}
+
+function hasUnconditionalLiteralCompileRemoval(xml, source) {
+  // This is a proof for an explicitly reviewed history entry, not an MSBuild
+  // evaluator. Refuse conditional/indirect or re-including project shapes rather
+  // than guessing which tests a build might compile. --list remains tool-free.
+  const content = xml.replaceAll(/<!--[\s\S]*?-->/gu, "");
+  if (content.includes("<!")) return false;
+  const stack = [];
+  let removed = false;
+  let sdkProject = false;
+  for (const [tag] of content.matchAll(/<(?:"[^"]*"|'[^']*'|[^'">])*>/gu)) {
+    if (tag.startsWith("<?")) continue;
+    const name = /^<\/?([A-Za-z_][\w:.-]*)/u.exec(tag)?.[1]?.toLowerCase();
+    if (name === undefined) return false;
+    if (tag.startsWith("</")) {
+      if (stack.pop()?.name !== name) return false;
+      continue;
+    }
+    const attributes = new Map([...tag.matchAll(/([A-Za-z_][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu)]
+      .map((match) => [match[1].toLowerCase(), match[2] ?? match[3]]));
+    if (name === "project" && stack.length === 0) sdkProject = attributes.get("sdk") === "Microsoft.NET.Sdk";
+    if (["import", "target", "choose"].includes(name) || name === "compile" && attributes.has("include")) return false;
+    if (name === "compile" && attributes.size === 1 && attributes.get("remove")?.replaceAll("\\", "/") === source
+        && stack.length === 2 && stack[0].name === "project" && stack[1].name === "itemgroup"
+        && stack.every((item) => !item.attributes.has("condition")) && tag.endsWith("/>")) {
+      removed = true;
+    }
+    if (!tag.endsWith("/>")) stack.push({ name, attributes });
+  }
+  return sdkProject && stack.length === 0 && removed;
 }
 
 function validateDeclarationIdentity(declarations) {
