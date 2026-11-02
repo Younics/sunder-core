@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -10,6 +11,23 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class ExecutionRuntimeProcessContainmentTests
 {
+    [Fact]
+    [Trait("Capability", "Process")]
+    public async Task GuardianStartFailure_PreservesNativeErrorBeforeProcessAssociation()
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-guardian-start-failure");
+        var startInfo = TestWorkerFixture.CreateProcessStartInfo(scope.GetPath("missing-working-directory"));
+        var report = scope.GetPath("payload.report");
+        var controller = new SystemExecutionRuntimeProcessContainmentController(
+            new SystemExecutionRuntimeProcessController());
+
+        var failure = await Assert.ThrowsAsync<Win32Exception>(() => controller.StartAsync(
+            Guid.NewGuid().ToString("N"), Guid.NewGuid(), startInfo, report, CancellationToken.None));
+
+        Assert.NotEqual(0, failure.NativeErrorCode);
+        Assert.False(File.Exists(report));
+    }
+
     [Fact]
     [Trait("Capability", "Process")]
     public async Task PayloadIdentity_AllowsRecoveryWhenGuardianDiesFirst()
@@ -425,9 +443,11 @@ public sealed class ExecutionRuntimeProcessContainmentTests
     [Trait("Capability", "Process")]
     public async Task DurableLease_AttachesContainmentBeforePayloadAndReleasesAfterDrain()
     {
+        // CreateProcess cannot use the >MAX_PATH working directory produced by
+        // nesting a content-addressed runtime below the Windows CI build output.
         var stateRoot = Path.Combine(
-            AppContext.BaseDirectory,
-            ".sunder-runtime-contained-lease-tests",
+            OperatingSystem.IsWindows() ? Path.GetTempPath() : AppContext.BaseDirectory,
+            "sunder-contained",
             Guid.NewGuid().ToString("N"));
         var layout = new ExecutionRuntimeStoreLayout(stateRoot);
         foreach (var path in layout.DurableRootPaths)
@@ -465,6 +485,8 @@ public sealed class ExecutionRuntimeProcessContainmentTests
             Assert.NotNull(document);
             Assert.True(document.HasContainment);
             Assert.True(document.IsAttached);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => lease.DisposeAsync().AsTask());
+            Assert.True(File.Exists(layout.GetLeasePath(lease.LeaseId)));
             Assert.False(File.Exists(layout.GetLeasePayloadReportPath(lease.LeaseId)));
 
             var expected = new byte[] { 0x10, 0x20, 0x30 };
@@ -501,8 +523,8 @@ public sealed class ExecutionRuntimeProcessContainmentTests
     public async Task RuntimeProjectionLease_SurvivesOrphanWorkerUntilDurableContainmentRecovery()
     {
         var testRoot = Path.Combine(
-            AppContext.BaseDirectory,
-            ".sunder-runtime-projection-lease-tests",
+            OperatingSystem.IsWindows() ? Path.GetTempPath() : AppContext.BaseDirectory,
+            "sunder-projection",
             Guid.NewGuid().ToString("N"));
         var stateRoot = Path.Combine(testRoot, "state");
         var sourceRoot = Path.Combine(testRoot, "projection-source");

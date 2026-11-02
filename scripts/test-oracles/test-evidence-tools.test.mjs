@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -393,4 +393,51 @@ test("candidate-safe workflows retain lane gates, runtime reports, and compact e
   );
   assert.match(nodeRunner, /--test-reporter=junit/u);
   assert.match(nodeRunner, /--test-reporter-destination=\$\{outputPath\}/u);
+});
+
+test("Node matrix builds every packed input before selecting all packed scenarios", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-node-matrix-"));
+  try {
+    const scripts = resolve(root, "scripts/test-oracles");
+    await mkdir(scripts, { recursive: true });
+    const runner = resolve(scripts, "run-node-test-matrix-with-results.mjs");
+    await writeFile(runner, await readFile(resolve(repositoryRoot, "scripts/test-oracles/run-node-test-matrix-with-results.mjs")));
+    await writeFile(resolve(scripts, "fixture.test.mjs"), "");
+    const log = resolve(root, "commands.jsonl");
+    const hook = resolve(root, "record-commands.mjs");
+    await writeFile(hook, `
+      import childProcess from "node:child_process";
+      import { syncBuiltinESMExports } from "node:module";
+      import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+      import { dirname, resolve } from "node:path";
+      childProcess.spawnSync = (command, args, options) => {
+        appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, env: {
+          packedClosure: options.env.SUNDER_TEST_PACKED_CLOSURE,
+          packedServices: options.env.SUNDER_TEST_PACKED_SERVICES,
+        } }) + "\\n");
+        if (args[0] === "exec") {
+          const tests = resolve(options.cwd, dirname(args.at(-1)), "dist-test/test");
+          mkdirSync(tests, { recursive: true });
+          writeFileSync(resolve(tests, "fixture.test.js"), "");
+        }
+        return { status: 0 };
+      };
+      syncBuiltinESMExports();
+    `);
+    const result = spawnSync(process.execPath, ["--import", hook, runner], { encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const commands = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+    const toolReport = commands.findIndex(({ args }) => args[1] === "node-package-tool");
+    assert.ok(toolReport >= 0);
+    for (const workspace of ["@sunder/sdk", "@sunder/package-tool", "create-sunder-package"]) {
+      const build = commands.findIndex(({ args }) => args.join(" ") === `run build --workspace ${workspace}`);
+      assert.ok(build >= 0 && build < toolReport, `${workspace} must be built before packed package-tool tests`);
+    }
+    assert.deepEqual(commands[toolReport].env, { packedClosure: "1", packedServices: "1" });
+    assert.ok(commands.some(({ args }) => args[1] === "node-sdk"));
+    assert.ok(commands.some(({ args }) => args[1] === "node-create-sunder-package"));
+    assert.ok(commands.some(({ args }) => args.join(" ") === "run templates:typecheck"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

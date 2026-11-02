@@ -88,6 +88,12 @@ generated output, rebuilds every workspace, and routes all four Node groups
 through the dual spec/JUnit reporter. Python and shell release fixtures write a
 fifth JUnit report.
 
+The Node matrix builds the SDK, package tool, and scaffolder before enabling the
+packed closure and service scenarios. The optional-reference Worker child case
+belongs to the package-tool `service-resources` tests: both TS and JS parents
+generate their provider and require exactly one passing child case with no skips.
+The standalone SDK run does not register that fixture-only child case.
+
 ```text
 node scripts/test-oracles/run-dotnet-tests-with-results.mjs --configuration Release
 node scripts/test-oracles/run-node-test-matrix-with-results.mjs

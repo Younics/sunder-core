@@ -8,6 +8,7 @@ using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Package.Projections;
 using Sunder.Registry.Contracts;
@@ -21,6 +22,28 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed partial class ExecutionRuntimeManagementServiceTests
 {
     private static readonly DateTimeOffset Now = DateTimeOffset.Parse("2026-08-29T12:00:00Z");
+
+    [Fact]
+    [Trait("Capability", "Process")]
+    public async Task ManagementState_FirstReadCreatesOwnedDirectoryAndFiles()
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-management-ownership");
+        var paths = new RuntimePackagePaths(scope.GetPath("runtime"));
+        RuntimeLocalState.EnsureInitialized(paths.RootPath);
+        var state = new ExecutionRuntimeManagementState(paths);
+
+        await state.ReadAsync(CancellationToken.None);
+
+        var directory = Path.GetDirectoryName(state.FilePath)!;
+        RuntimeOwnedFileSystem.ValidateMutableDirectory(paths.RootPath, directory);
+        RuntimeOwnedFileSystem.ValidateMutableRegularFile(paths.RootPath, state.FilePath);
+        RuntimeOwnedFileSystem.ValidateMutableRegularFile(paths.RootPath, state.FilePath + ".lock");
+        var identity = RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(paths.RootPath, directory);
+        await state.ReadAsync(CancellationToken.None);
+        Assert.Equal(identity, RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(paths.RootPath, directory));
+
+        Assert.True(File.Exists(state.FilePath));
+    }
 
     [Theory]
     [InlineData(true)]

@@ -40,7 +40,7 @@ internal sealed class ExecutionRuntimeManagementState(RuntimePackagePaths paths,
         {
             if (_writeFailed) throw new InvalidDataException("Runtime management state requires recovery after a failed durable write.");
             PackageStorePathGuard.EnsureSafe(FilePath, paths.RootPath);
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+            RuntimeOwnedFileSystem.CreateDirectory(Path.GetDirectoryName(FilePath)!);
             using var fileLock = await RuntimeFileLock.AcquireExclusiveAsync(FilePath + ".lock", token);
             ExecutionRuntimeManagementDocument current;
             var exists = File.Exists(FilePath);

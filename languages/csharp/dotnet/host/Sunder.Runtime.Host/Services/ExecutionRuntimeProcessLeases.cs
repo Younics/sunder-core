@@ -475,20 +475,29 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
             DeletePayloadReportsUnderFence(reservation.LeaseId);
             return contained;
         }
-        catch
+        catch (Exception launchFailure)
         {
-            if (pending is not null)
+            try
             {
-                try
+                if (pending is not null)
                 {
-                    await pending.TerminateAndDrainAsync(CancellationToken.None).ConfigureAwait(false);
+                    try
+                    {
+                        await pending.TerminateAndDrainAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        await pending.DisposeAsync().ConfigureAwait(false);
+                    }
                 }
-                finally
-                {
-                    await pending.DisposeAsync().ConfigureAwait(false);
-                }
+                await ReleaseFailedContainedLaunchAsync(reservation).ConfigureAwait(false);
             }
-            await ReleaseFailedContainedLaunchAsync(reservation).ConfigureAwait(false);
+            catch (Exception cleanupFailure)
+            {
+                // Keep the durable lease when termination cannot be proven, but
+                // preserve the primary launch error for the caller and recovery.
+                launchFailure.Data["ExecutionRuntimeLaunchCleanupFailure"] = cleanupFailure;
+            }
             throw;
         }
     }
@@ -632,7 +641,8 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
 
     private async Task ReleaseReservationAsync(
         ExecutionRuntimeProcessLeaseV1 reservation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool retainStarted = false)
     {
         using var fence = await EnterFenceAsync(cancellationToken).ConfigureAwait(false);
         var path = _layout.GetLeasePath(reservation.LeaseId);
@@ -646,8 +656,9 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
         {
             throw new InvalidDataException("The execution-runtime lease reservation is no longer owned by this launch.");
         }
-        if (current.IsAttached || current.HasContainment)
+        if (current.ProcessStartRequestedAtUtc is not null || current.IsAttached || current.HasContainment)
         {
+            if (retainStarted) return;
             throw new InvalidOperationException(
                 "A contained execution-runtime lease cannot be released without process-tree termination proof.");
         }
@@ -1093,6 +1104,7 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
         private bool _startRequested;
         private bool _attached;
         private bool _released;
+        private Exception? _launchFailure;
 
         public string LeaseId => reservation.LeaseId;
 
@@ -1126,9 +1138,10 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
                     _attached = true;
                     return contained;
                 }
-                catch
+                catch (Exception launchFailure)
                 {
                     _startRequested = true;
+                    _launchFailure = launchFailure;
                     throw;
                 }
             }
@@ -1165,6 +1178,23 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
             {
                 if (_released)
                 {
+                    return;
+                }
+                if (_launchFailure is not null)
+                {
+                    try
+                    {
+                        // A successful failed-launch cleanup already removed its
+                        // record. Release only a never-started reservation here;
+                        // uncertain started trees stay durable for recovery.
+                        await registry.ReleaseReservationAsync(
+                            reservation, CancellationToken.None, retainStarted: true).ConfigureAwait(false);
+                    }
+                    catch (Exception cleanupFailure)
+                    {
+                        _launchFailure.Data["ExecutionRuntimeLeaseDisposalFailure"] = cleanupFailure;
+                    }
+                    _released = true;
                     return;
                 }
                 if (_attached || _startRequested)

@@ -225,6 +225,7 @@ async outputMixed()/*:Promise<MixedInput>*/{const provider=await worker.api(Self
     const harness=join(require.resolve("@sunder/sdk"),"../../dist-test/test/worker.test.js");
     const result=spawnSync(process.execPath,["--test","--test-reporter=tap","--test-name-pattern=^source optional references",harness],{env,encoding:"utf8",timeout:90_000});
     assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/pass 1/);
+    assert.match(result.stdout,/\btests 1\r?\n/);assert.match(result.stdout,/\bskipped 0(?:\r?\n|$)/);
   }finally{await c.dispose();}
 });
 for(const extension of ["ts","js"] as const)test(`${extension} natural resources derive exact reference projections and browser-safe Models without author RPC plumbing`,async()=>{

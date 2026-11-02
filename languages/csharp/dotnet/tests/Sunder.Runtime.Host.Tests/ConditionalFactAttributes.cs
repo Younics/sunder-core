@@ -4,6 +4,14 @@ using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
+internal sealed class WindowsFactAttribute : FactAttribute
+{
+    public WindowsFactAttribute()
+    {
+        if (!OperatingSystem.IsWindows()) Skip = "Requires Windows.";
+    }
+}
+
 internal sealed class UnixFactAttribute : FactAttribute
 {
     public UnixFactAttribute()

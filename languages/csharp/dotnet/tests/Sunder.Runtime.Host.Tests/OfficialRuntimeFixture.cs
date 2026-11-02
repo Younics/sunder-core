@@ -31,7 +31,10 @@ public sealed class OfficialRuntimeFixture : IAsyncLifetime
     internal OfficialRuntimeFixture(ExecutionRuntimePhaseTelemetry? telemetry)
     {
         _telemetry = telemetry ?? ExecutionRuntimePhaseTelemetry.Disabled;
-        RootPath = Path.Combine(AppContext.BaseDirectory, ".sunder-official-runtime-tests", Guid.NewGuid().ToString("N"));
+        // Content-addressed roots below the Windows CI output exceed the native
+        // process launcher path limit, even though .NET file I/O accepts them.
+        RootPath = Path.Combine(OperatingSystem.IsWindows() ? Path.GetTempPath() : AppContext.BaseDirectory,
+            ".sunder-official-runtime-tests", Guid.NewGuid().ToString("N"));
         Layout = new ExecutionRuntimeStoreLayout(Path.Combine(RootPath, "runtime-store"));
         Paths = new RuntimePackagePaths(Path.Combine(RootPath, "runtime-data"));
         Store = new ExecutionRuntimeStore(

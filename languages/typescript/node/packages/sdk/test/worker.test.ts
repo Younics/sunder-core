@@ -1781,7 +1781,10 @@ test("natural content transport rejects malformed Host registration metadata wit
   }
 });
 
-test("source optional references obey occurrence policy over framed Worker lookup, dispatch, retirement and cleanup",{skip:!process.env.SUNDER_TEST_OPTIONAL_PROVIDER},async()=>{
+// Fixture-only child case, owned by both generated-provider cases in the
+// package-tool service-resources suite. Do not declare a standalone SDK skip.
+if(process.env.SUNDER_TEST_OPTIONAL_PROVIDER){
+test("source optional references obey occurrence policy over framed Worker lookup, dispatch, retirement and cleanup",async()=>{
   const bundle=require(process.env.SUNDER_TEST_OPTIONAL_PROVIDER!) as {providers:Array<Record<string,JsonValue>>};
   const registration=bundle.providers.find(value=>String(value.contractId).endsWith(".runner"))!;
   const target={packageId:packageIdentity.packageId,packageVersion:packageIdentity.packageVersion,providerId:registration.providerId!,contractId:registration.contractId!,contractVersion:registration.contractVersion!,descriptorSha256:registration.descriptorSha256!,abiSha256:registration.abiSha256!,activationId:"c".repeat(32),activationEpoch:1,sessionGeneration:1,endpointReference:"optional-target",catalogRevision:1,state:"active",faultCode:null};
@@ -1842,6 +1845,8 @@ test("source optional references obey occurrence policy over framed Worker looku
     }finally{worker.child.kill("SIGKILL");}
   }
 });
+
+}
 
 test("negotiated Node operational outcomes preserve overload and genuine Host failures but reject forged authority",async t=>{
   for(const scenario of ["local","host-resource-exhausted","host-unavailable","host-deadline-exceeded","forged","legacy"] as const)await t.test(scenario,async()=>{

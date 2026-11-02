@@ -121,18 +121,24 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             {
                 TryTerminateWindowsJob(jobHandle);
             }
-            else if (guardian is { HasExited: false }
-                     && containmentEstablished
+            else if (containmentEstablished
+                     && guardian is { HasExited: false }
                      && (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()))
             {
                 TryTerminateUnixGroup(guardian.Id);
             }
-            if (guardian is { HasExited: false })
+            if (guardian is not null)
             {
                 try
                 {
-                    guardian.Kill(entireProcessTree: true);
-                    await guardian.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    // Start can fail before the Process has an associated handle.
+                    // Probe only inside cleanup's guarded block, never mask the
+                    // native launch error with HasExited's InvalidOperationException.
+                    if (!guardian.HasExited)
+                    {
+                        guardian.Kill(entireProcessTree: true);
+                        await guardian.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+                    }
                 }
                 catch (Exception exception) when (exception is InvalidOperationException or Win32Exception)
                 {

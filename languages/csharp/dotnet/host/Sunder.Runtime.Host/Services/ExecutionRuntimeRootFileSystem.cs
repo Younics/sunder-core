@@ -408,7 +408,12 @@ internal static class ExecutionRuntimeRootFileSystem
         security.AddAccessRule(new FileSystemAccessRule(
             identity,
             rights,
-            InheritanceFlags.None,
+            // Windows propagates directory DACL changes to unprotected children.
+            // Keep them accessible until each child receives its protected sealed
+            // ACL; sealed ACLs themselves remain non-inheritable and read-only.
+            directory && rights == FileSystemRights.FullControl
+                ? InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit
+                : InheritanceFlags.None,
             PropagationFlags.None,
             AccessControlType.Allow));
         if (directory)

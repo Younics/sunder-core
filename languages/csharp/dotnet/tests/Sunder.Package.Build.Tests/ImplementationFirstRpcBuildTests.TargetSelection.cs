@@ -87,7 +87,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
 
         AssertSuccess(await RunDotnetAsync(root, ["msbuild", project, "-p:TargetFramework=net10.0", "-t:CapturePreview", "-nodeReuse:false", "-nologo", "-v:quiet"]));
         var preview = (await File.ReadAllTextAsync(Path.Combine(root, "preview.txt"))).Trim().Split('|');
-        Assert.Equal(Path.Combine(root, "bin/Debug/net10.0/sunder-roles/app", hostRid, "TargetSelection.App.dll"), preview[0]);
+        Assert.Equal(Path.Combine(root, "bin", "Debug", "net10.0", "sunder-roles", "app", hostRid, "TargetSelection.App.dll"), preview[0]);
         Assert.All(preview.Take(3), path => Assert.True(File.Exists(path), path));
         Assert.Equal("net10.0", preview[3]); Assert.Equal(hostRid, preview[4]);
         using (var runtime = JsonDocument.Parse(await File.ReadAllBytesAsync(preview[2])))
@@ -111,7 +111,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.True(File.Exists(cliProbe));
         AssertSuccess(await RunDotnetAsync(root, ["run", "--project", project, "--framework", "net10.0", "--no-build",
             $"-p:SunderCliPath={cliProbe}", "--", "--watch"]));
-        Assert.Equal(new[] { "dev", "package", "run", Path.Combine(root, "bin/Debug/net10.0/sunder-dev"), "--watch" },
+        Assert.Equal(new[] { "dev", "package", "run", Path.Combine(root, "bin", "Debug", "net10.0", "sunder-dev"), "--watch" },
             JsonSerializer.Deserialize<string[]>(await File.ReadAllTextAsync(invocation))!);
         File.Delete(previewSource);
         var foreign = await RunDotnetAsync(root, ["msbuild", project, "-p:TargetFramework=net10.0", $"-p:RuntimeIdentifier={otherRid}", "-t:GetSunderPackageAppPreviewInputs", "-nologo", "-v:quiet"]);

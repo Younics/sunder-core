@@ -11,13 +11,14 @@ using System.Text.Json.Nodes;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed class ExecutionRuntimeStoreTests
 {
-    [Fact]
+    [WindowsFact]
     public void WindowsSealedTreeBecomesWritableWithoutChangingOwner()
     {
         if (!OperatingSystem.IsWindows())
@@ -33,17 +34,38 @@ public sealed class ExecutionRuntimeStoreTests
     {
         var root = Path.Combine(Path.GetTempPath(), "sunder-execution-runtime-acl-tests", Guid.NewGuid().ToString("N"));
         var launcher = Path.Combine(root, "worker.exe");
-        Directory.CreateDirectory(root);
-        File.WriteAllText(launcher, "worker");
+        RuntimeOwnedFileSystem.CreateDirectory(root);
+        // Inherited-only files reproduce the ACL propagation boundary when the
+        // publication root is made writable before its children are sealed.
+        var inherited = new FileSecurity();
+        inherited.SetOwner(GetWindowsOwner(root));
+        using (var output = new FileInfo(launcher).Create(FileMode.CreateNew,
+                   FileSystemRights.Write | FileSystemRights.Synchronize, FileShare.None, 1,
+                   FileOptions.None, inherited))
+        {
+            output.Write("worker"u8);
+        }
+        var owner = GetWindowsOwner(root);
         try
         {
-            ExecutionRuntimeRootFileSystem.Seal(root, launcher);
-            var before = GetWindowsOwner(root);
+            var inheritedRules = new FileInfo(launcher).GetAccessControl(AccessControlSections.Access)
+                .GetAccessRules(includeExplicit: true, includeInherited: true, typeof(SecurityIdentifier))
+                .Cast<FileSystemAccessRule>().ToArray();
+            Assert.NotEmpty(inheritedRules);
+            Assert.All(inheritedRules, rule => Assert.True(rule.IsInherited));
+            ExecutionRuntimeRootFileSystem.PrepareForPublication(root, launcher);
+            ExecutionRuntimeRootFileSystem.VerifyPreparedForPublication(root, launcher);
+            ExecutionRuntimeRootFileSystem.SealRootDirectory(root);
+            ExecutionRuntimeRootFileSystem.VerifySealed(root, launcher);
 
             ExecutionRuntimeRootFileSystem.MakeOwnedTreeWritable(root);
 
-            Assert.Equal(before, GetWindowsOwner(root));
-            Assert.Equal(before, GetWindowsOwner(launcher));
+            Assert.Equal(owner, GetWindowsOwner(root));
+            Assert.Equal(owner, GetWindowsOwner(launcher));
+            File.AppendAllText(launcher, " writable");
+            Assert.Equal("worker writable", File.ReadAllText(launcher));
+            ExecutionRuntimeRootFileSystem.Seal(root, launcher);
+            ExecutionRuntimeRootFileSystem.VerifySealed(root, launcher);
         }
         finally
         {
@@ -572,6 +594,70 @@ public sealed class ExecutionRuntimeStoreTests
         Assert.Empty(Directory.EnumerateFiles(fixture.Layout.LeaseRootPath, "*.json"));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProcessLease_FailedLaunchDisposalPreservesOriginalFailureAndReleasesSafeReservation(bool validLaunch)
+    {
+        using var controller = new FakeContainmentController();
+        using var fixture = await StoreFixture.CreateAsync(containmentController: controller);
+        var receipt = (await fixture.Store.EnsureAsync(fixture.Plan, fixture.ArchivePath)).Receipt;
+
+        var failure = await Record.ExceptionAsync(async () =>
+        {
+            await using var lease = await ReserveAsync(fixture, receipt, "package.a");
+            await lease.LaunchAsync(new ProcessStartInfo
+            {
+                FileName = GetLauncherPath(lease.RuntimeRootPath, receipt.LauncherPath),
+                WorkingDirectory = lease.RuntimeRootPath,
+                UseShellExecute = !validLaunch,
+            });
+        });
+
+        if (validLaunch) Assert.IsType<NotSupportedException>(failure);
+        else Assert.IsType<InvalidDataException>(failure);
+        Assert.Empty(Directory.EnumerateFiles(fixture.Layout.LeaseRootPath, "*.json"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ProcessLease_FailedAuthorizationRetainsDurableEvidenceUntilContainmentIsProvenEmpty(bool drainFails)
+    {
+        using var controller = new FakeContainmentController
+        {
+            FailAuthorization = true,
+            DrainFails = drainFails,
+            ProbeResult = ExecutionRuntimeContainmentProbe.Active,
+        };
+        using var fixture = await StoreFixture.CreateAsync(containmentController: controller);
+        var receipt = (await fixture.Store.EnsureAsync(fixture.Plan, fixture.ArchivePath)).Receipt;
+        var lease = await ReserveAsync(fixture, receipt, "package.a");
+        var leasePath = fixture.Layout.GetLeasePath(lease.LeaseId);
+
+        var failure = await Assert.ThrowsAsync<InvalidDataException>(() => lease.LaunchAsync(new ProcessStartInfo
+        {
+            FileName = GetLauncherPath(lease.RuntimeRootPath, receipt.LauncherPath),
+            WorkingDirectory = lease.RuntimeRootPath,
+            UseShellExecute = false,
+        }));
+        Assert.Equal("Payload authorization failed.", failure.Message);
+        Assert.IsType<IOException>(failure.Data["ExecutionRuntimeLaunchCleanupFailure"]);
+        Assert.True(controller.PendingDisposed);
+
+        await lease.DisposeAsync();
+        Assert.True((await ReadLeaseAsync(leasePath)).HasContainment);
+        await fixture.Store.CollectGarbageAsync(TimeSpan.Zero);
+        await fixture.Store.CollectGarbageAsync(TimeSpan.Zero);
+        Assert.True(Directory.Exists(lease.RuntimeRootPath));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => lease.LaunchAsync(new ProcessStartInfo()));
+
+        // Recovery still owns the durable record, even after local disposal.
+        controller.ProbeResult = ExecutionRuntimeContainmentProbe.Empty;
+        await fixture.CreateStore(containmentController: controller).RecoverProcessLeasesAsync(CancellationToken.None);
+        Assert.False(File.Exists(leasePath));
+    }
+
     [Fact]
     public async Task GarbageCollection_ActiveLeasePreventsZeroGraceSweep()
     {
@@ -1042,6 +1128,9 @@ public sealed class ExecutionRuntimeStoreTests
     {
         public ExecutionRuntimeContainmentProbe ProbeResult { get; set; } = ExecutionRuntimeContainmentProbe.Empty;
         public int TerminateCalls { get; private set; }
+        public bool FailAuthorization { get; init; }
+        public bool DrainFails { get; init; }
+        public bool PendingDisposed { get; private set; }
 
         public Task<IExecutionRuntimePendingContainedProcess> StartAsync(
             string leaseId,
@@ -1049,7 +1138,9 @@ public sealed class ExecutionRuntimeStoreTests
             ProcessStartInfo payloadStartInfo,
             string payloadReportPath,
             CancellationToken cancellationToken)
-            => throw new NotSupportedException("This fake only exercises durable containment recovery.");
+            => FailAuthorization
+                ? Task.FromResult<IExecutionRuntimePendingContainedProcess>(new FailingPendingProcess(leaseId, this))
+                : throw new NotSupportedException("This fake only exercises durable containment recovery.");
 
         public ExecutionRuntimeContainmentProbe Probe(ExecutionRuntimeProcessLeaseV1 lease) => ProbeResult;
 
@@ -1062,6 +1153,36 @@ public sealed class ExecutionRuntimeStoreTests
 
         public void Dispose()
         {
+        }
+
+        private sealed class FailingPendingProcess(string leaseId, FakeContainmentController controller)
+            : IExecutionRuntimePendingContainedProcess
+        {
+            public string Kind => OperatingSystem.IsWindows()
+                ? SystemExecutionRuntimeProcessContainmentController.WindowsJobKind
+                : SystemExecutionRuntimeProcessContainmentController.UnixProcessGroupKind;
+            public string Identity => OperatingSystem.IsWindows()
+                ? $@"Local\Sunder.ExecutionRuntime.{leaseId}"
+                : Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            public ExecutionRuntimeProcessObservation ContainmentProcess { get; } = new(
+                Environment.ProcessId,
+                ExecutionRuntimeProcessBirthIdentity.CreateSyntheticForCurrentPlatform(77),
+                DateTimeOffset.UtcNow,
+                Path.GetFullPath(typeof(object).Assembly.Location));
+
+            public Task<IExecutionRuntimeContainedProcess> AuthorizePayloadAsync(CancellationToken cancellationToken = default)
+                => throw new InvalidDataException("Payload authorization failed.");
+
+            public Task TerminateAndDrainAsync(CancellationToken cancellationToken = default)
+                => controller.DrainFails
+                    ? throw new IOException("Containment drain failed.")
+                    : Task.CompletedTask;
+
+            public ValueTask DisposeAsync()
+            {
+                controller.PendingDisposed = true;
+                return ValueTask.CompletedTask;
+            }
         }
     }
 }

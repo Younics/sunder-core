@@ -20,26 +20,38 @@ runNodeReport("node-core-oracles", [
   ...testFiles(resolve(repositoryRoot, "scripts/test-oracles"), ".test.mjs"),
 ]);
 
-runWorkspace("@sunder/sdk", "packages/sdk", "node-sdk");
-runWorkspace("@sunder/package-tool", "packages/package-tool", "node-package-tool");
-runWorkspace("create-sunder-package", "packages/create-sunder-package", "node-create-sunder-package");
+const workspaces = [
+  ["@sunder/sdk", "packages/sdk", "node-sdk"],
+  ["@sunder/package-tool", "packages/package-tool", "node-package-tool"],
+  ["create-sunder-package", "packages/create-sunder-package", "node-create-sunder-package"],
+];
+// Packed package-tool cases consume the scaffolder as well as the SDK/tool.
+// Build the complete production closure before any workspace artifact tests.
+for (const [workspace] of workspaces) {
+  runRequired(npm, ["run", "typecheck", "--workspace", workspace], nodeRoot, `${workspace} typecheck`);
+  runRequired(npm, ["run", "build", "--workspace", workspace], nodeRoot, `${workspace} build`);
+}
+for (const [workspace, project, report] of workspaces) {
+  runWorkspace(workspace, project, report);
+}
 runRequired(npm, ["run", "templates:typecheck"], nodeRoot, "Node template generation and typecheck");
 
 function runWorkspace(workspace, project, report) {
-  runRequired(npm, ["run", "typecheck", "--workspace", workspace], nodeRoot, `${workspace} typecheck`);
-  runRequired(npm, ["run", "build", "--workspace", workspace], nodeRoot, `${workspace} build`);
   runRequired(
     npm,
     ["exec", "--", "tsc", "-p", `${project}/tsconfig.test.json`],
     nodeRoot,
     `${workspace} test compilation`,
   );
-  runNodeReport(report, testFiles(resolve(nodeRoot, project, "dist-test/test"), ".test.js"));
+  runNodeReport(report, testFiles(resolve(nodeRoot, project, "dist-test/test"), ".test.js"),
+    workspace === "@sunder/package-tool"
+      ? { SUNDER_TEST_PACKED_CLOSURE: "1", SUNDER_TEST_PACKED_SERVICES: "1" }
+      : {});
 }
 
-function runNodeReport(report, files) {
+function runNodeReport(report, files, environment = {}) {
   if (files.length === 0) throw new Error(`${report} selected no Node test files.`);
-  runRequired(process.execPath, [wrapper, report, ...files], repositoryRoot, `${report} test report`);
+  runRequired(process.execPath, [wrapper, report, ...files], repositoryRoot, `${report} test report`, environment);
 }
 
 function testFiles(directory, suffix) {
@@ -50,11 +62,11 @@ function testFiles(directory, suffix) {
     .sort(ordinal);
 }
 
-function runRequired(command, arguments_, cwd, label) {
+function runRequired(command, arguments_, cwd, label, environment = {}) {
   process.stdout.write(`\n=== ${label} ===\n`);
   const result = spawnSync(command, arguments_, {
     cwd,
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, ...environment, NO_COLOR: "1" },
     stdio: "inherit",
   });
   if (result.error !== undefined) throw new Error(`${label} could not start.`, { cause: result.error });
