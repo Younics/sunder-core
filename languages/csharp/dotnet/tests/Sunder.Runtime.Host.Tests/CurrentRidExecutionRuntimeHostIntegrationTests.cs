@@ -309,10 +309,14 @@ public sealed class CurrentRidNodeRuntimeHostIntegrationTests(
             processIds.AddRange(CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host));
 
             var retainNodeProvider = await host.LoadStartupDevPackagesAsync([nodeProvider]);
-            Assert.True(retainNodeProvider.Success, string.Join(Environment.NewLine, retainNodeProvider.Errors));
+            Assert.True(
+                retainNodeProvider.Success,
+                string.Join(Environment.NewLine, retainNodeProvider.Errors) + Environment.NewLine + CurrentRidRuntimeHostTestSupport.FormatLogs(logs));
             processIds.AddRange(CurrentRidRuntimeHostTestSupport.GetActiveProcessIds(host));
             var unloadNodeProvider = await host.LoadStartupDevPackagesAsync([]);
-            Assert.True(unloadNodeProvider.Success, string.Join(Environment.NewLine, unloadNodeProvider.Errors));
+            Assert.True(
+                unloadNodeProvider.Success,
+                string.Join(Environment.NewLine, unloadNodeProvider.Errors) + Environment.NewLine + CurrentRidRuntimeHostTestSupport.FormatLogs(logs));
             await CurrentRidRuntimeHostTestSupport.AssertProcessesStoppedAsync(processIds);
 
             await host.GrantRuntimeRpcPermissionsAsync(nodeCaller);

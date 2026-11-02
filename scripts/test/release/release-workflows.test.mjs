@@ -156,9 +156,10 @@ test("SDK corpus collection owns native context and transports evidence separate
 test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
   const source = await workflow("host-validation");
   const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
-  for (const rid of ["linux-x64", "win-x64", "win-arm64", "osx-x64", "osx-arm64"]) {
+  for (const rid of ["linux-x64", "linux-arm64", "win-x64", "win-arm64", "osx-x64", "osx-arm64"]) {
     assert.match(platform, new RegExp(`rid: ${rid}`, "u"));
   }
+  assert.match(platform, /rid: linux-arm64, os: ubuntu-24.04-arm/u);
   assert.match(platform, /rid: win-arm64, os: windows-11-arm/u);
   assert.match(platform, /--primary-lane host-platform/u);
   assert.match(platform, /rid: osx-x64, os: macos-26-intel/u);
