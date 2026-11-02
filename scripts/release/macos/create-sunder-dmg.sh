@@ -58,7 +58,7 @@ if [[ -z "$volume_name" || "$volume_name" == *:* || "$volume_name" == */* ]]; th
   exit 2
 fi
 
-for command_name in ditto hdiutil osascript swift tiffutil; do
+for command_name in ditto hdiutil osascript python3 swift tiffutil; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "$command_name is required to create the Sunder DMG." >&2
     exit 127
@@ -67,7 +67,9 @@ done
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 renderer="$script_dir/render-sunder-dmg-background.swift"
+image_tool="$script_dir/dmg_image.py"
 [[ -f "$renderer" ]] || { echo "Missing DMG background renderer: $renderer" >&2; exit 1; }
+[[ -f "$image_tool" ]] || { echo "Missing DMG attachment helper: $image_tool" >&2; exit 1; }
 
 output_parent="$(dirname "$output_path")"
 mkdir -p "$output_parent"
@@ -77,27 +79,22 @@ background_root="$work_root/background"
 mount_root="$work_root/mount"
 read_write_dmg="$work_root/Sunder-layout.dmg"
 compressed_dmg="$work_root/Sunder.dmg"
-mounted="false"
-
-detach_image() {
-  local attempt
-  for attempt in 1 2 3 4 5; do
-    if hdiutil detach "$mount_root" -quiet >/dev/null 2>&1; then
-      mounted="false"
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
 cleanup() {
-  if [[ "$mounted" == "true" ]]; then
-    detach_image || hdiutil detach "$mount_root" -force -quiet >/dev/null 2>&1 || true
+  local status=$?
+  trap - EXIT HUP INT TERM
+  # Query actual attachment state even when attach failed partway through.
+  if python3 "$image_tool" detach --image "$read_write_dmg" --mount "$mount_root" --discard; then
+    rm -rf "$work_root" || { [[ "$status" != 0 ]] || status=1; }
+  else
+    echo "Could not confirm DMG detachment; retaining staging files at $work_root" >&2
+    [[ "$status" != 0 ]] || status=1
   fi
-  rm -rf "$work_root"
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mkdir -p "$stage_root/.background" "$background_root" "$mount_root"
 ditto --rsrc --extattr --acl "$app_path" "$stage_root/Sunder.app"
@@ -118,13 +115,7 @@ hdiutil create \
   -format UDRW \
   "$read_write_dmg"
 
-hdiutil attach \
-  -readwrite \
-  -noverify \
-  -noautoopen \
-  -mountpoint "$mount_root" \
-  "$read_write_dmg" >/dev/null
-mounted="true"
+python3 "$image_tool" attach --image "$read_write_dmg" --mount "$mount_root" --read-write
 
 osascript - "$mount_root" <<'APPLESCRIPT'
 on run arguments
@@ -143,7 +134,7 @@ on run arguments
     set icon size of viewOptions to 112
     set text size of viewOptions to 13
     set label position of viewOptions to bottom
-    set shows icon preview of viewOptions to true
+    set shows icon preview of viewOptions to false
     set background picture of viewOptions to file ".background:Sunder.tiff" of mountedFolder
     set position of item "Sunder.app" of mountedFolder to {220, 260}
     set position of item "Applications" of mountedFolder to {600, 260}
@@ -162,7 +153,7 @@ done
 
 rm -rf "$mount_root/.fseventsd" "$mount_root/.Spotlight-V100" "$mount_root/.Trashes"
 sync
-detach_image || { echo "Could not detach the Sunder DMG staging image." >&2; exit 1; }
+python3 "$image_tool" detach --image "$read_write_dmg" --mount "$mount_root"
 
 hdiutil convert \
   -quiet \

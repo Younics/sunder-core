@@ -112,12 +112,22 @@ checksums_file="$tmp_dir/SHA256SUMS"
 mount_dir="$tmp_dir/mount"
 mounted="false"
 cleanup() {
+  local status=$?
+  trap - EXIT HUP INT TERM
   if [[ "$mounted" == "true" ]]; then
-    hdiutil detach "$mount_dir" -quiet >/dev/null 2>&1 || true
+    if ! hdiutil detach "$mount_dir"; then
+      echo "Could not detach the Sunder image; retaining downloaded files at $tmp_dir" >&2
+      [[ "$status" != 0 ]] || status=1
+      exit "$status"
+    fi
   fi
-  rm -rf "$tmp_dir"
+  rm -rf "$tmp_dir" || { [[ "$status" != 0 ]] || status=1; }
+  exit "$status"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 encoded_release_tag="${release_tag//\//%2F}"
 release_download_url="https://github.com/$repository/releases/download/$encoded_release_tag"
@@ -171,8 +181,9 @@ xcrun stapler validate "$tmp_file"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$tmp_file"
 
 mkdir -p "$mount_dir"
-hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$tmp_file" >/dev/null
+# Cleanup must also retain a possibly attached image when attach fails partway.
 mounted="true"
+hdiutil attach -readonly -nobrowse -mountpoint "$mount_dir" "$tmp_file" >/dev/null
 app_path="$mount_dir/Sunder.app"
 applications_link="$mount_dir/Applications"
 background_path="$mount_dir/.background/Sunder.tiff"
@@ -194,7 +205,7 @@ codesign --verify --deep --strict --verbose=2 "$app_path"
 xcrun stapler validate "$app_path"
 spctl --assess --type execute --verbose=4 "$app_path"
 echo "Verified Apple Developer Team ID: $app_team_id"
-hdiutil detach "$mount_dir" -quiet
+hdiutil detach "$mount_dir"
 mounted="false"
 
 download_dir="$HOME/Downloads"

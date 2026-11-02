@@ -46,6 +46,9 @@ test("workflows have valid Bash, pinned actions and no release-asset overwrites"
     for (const [, action] of source.matchAll(/uses:\s+([^\s#]+)/gu)) {
       assert.match(action, /^(?:\.\/\.github\/workflows\/[\w.-]+\.ya?ml|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
     }
+    for (const [runner] of source.matchAll(/\bmacos-[\w-]+\b/gu)) {
+      assert.ok(["macos-26", "macos-26-intel"].includes(runner), `${name}: unexpected macOS runner ${runner}`);
+    }
     assert.doesNotMatch(source, /--clobber|overwrite:\s*true/u);
   }
 });
@@ -66,6 +69,8 @@ test("component tags finalize the same verified assets after their build and tes
     // App signing intentionally runs its x64 client for both Windows packages.
     const armRunner = component === "app" ? "windows-2025" : "windows-11-arm";
     assert.match(source, new RegExp(`${coordinate}: win-arm64, os: ${armRunner}`, "u"));
+    assert.match(source, new RegExp(`${coordinate}: osx-x64, os: macos-26-intel`, "u"));
+    assert.match(source, new RegExp(`${coordinate}: osx-arm64, os: macos-26`, "u"));
   }
 });
 
@@ -136,7 +141,7 @@ test("SDK corpus collection owns native context and transports evidence separate
     assert.match(collector, new RegExp(`lane: ${lane}, os:`, "u"));
   }
   assert.match(collector, /lane: win-arm64, os: windows-11-arm/u);
-  assert.match(collector, /lane: osx-x64, os: macos-15-intel/u);
+  assert.match(collector, /lane: osx-x64, os: macos-26-intel/u);
   assert.match(collector, /sdk_compatibility_execution.py collect[\s\S]+--lane "\$CORPUS_LANE"/u);
   assert.match(collector, /name: sunder-sdk-compatibility-lane-\$\{\{ matrix.lane \}\}/u);
   assert.doesNotMatch(collector, /if:|continue-on-error:|contents: write|secrets\.|id-token: write|ACCEPTANCE_DRIVER/u);
@@ -151,11 +156,13 @@ test("SDK corpus collection owns native context and transports evidence separate
 test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
   const source = await workflow("host-validation");
   const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
-  for (const rid of ["linux-x64", "win-x64", "win-arm64", "osx-arm64"]) {
+  for (const rid of ["linux-x64", "win-x64", "win-arm64", "osx-x64", "osx-arm64"]) {
     assert.match(platform, new RegExp(`rid: ${rid}`, "u"));
   }
   assert.match(platform, /rid: win-arm64, os: windows-11-arm/u);
   assert.match(platform, /--primary-lane host-platform/u);
+  assert.match(platform, /rid: osx-x64, os: macos-26-intel/u);
+  assert.match(platform, /rid: osx-arm64, os: macos-26/u);
   assert.match(platform, /--primary-lane app-packaging/u);
   assert.match(platform, /SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP: "1"/u);
   assert.match(platform, /--require-test Sunder\.Package\.Build\.Tests\.PackageOutputLockTests\.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable/u);
@@ -165,13 +172,16 @@ test("native validation requires both actual vendor-runtime tests on all six arc
   }
   assert.match(official, /rid: win-x64, os: windows-2025/u);
   assert.match(official, /rid: win-arm64, os: windows-11-arm/u);
-  assert.match(source, /rid: osx-arm64, os: macos-15/u);
+  assert.match(source, /rid: osx-arm64, os: macos-26/u);
   assert.match(source, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidDotNetRuntimeHostIntegrationTests\.OfficialCurrentRidDotNetRuntime_LaunchesThinWorkerAndRebindIsAtomic/u);
   assert.match(source, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidNodeRuntimeHostIntegrationTests\.OfficialCurrentRidNode24Runtime_LaunchesThinWorkerAndRoutesCrossLanguageRpc/u);
   assert.match(official, /--require-test Sunder\.Runtime\.Host\.Tests\.CurrentRidDotNetRuntimeHostIntegrationTests\.OfficialCurrentRidDotNetRuntime_LifecycleFaultDrainsRealSdkHandlerBeforeDisposal/u);
   assert.match(official, /--require-test Sunder\.Runtime\.Host\.Tests\.ProcessRuntimeWorkerTests\.WorkerSdkPackagedExecutable_ExactArchiveInstallsThroughRuntimeHostAndRecordsReleaseEvidence/u);
   assert.match(source, /--strict-release/u);
   assert.match(source, /create-sunder-dmg\.sh/u);
+  assert.match(source, /dmg_image\.py attach/u);
+  assert.match(source, /dmg_image\.py detach/u);
+  assert.doesNotMatch(source, /hdiutil detach.*\|\| true/u);
   assert.match(source, /Parser\]::ParseFile/u);
 });
 

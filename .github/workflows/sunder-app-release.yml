@@ -51,8 +51,8 @@ jobs:
           - {runtime: win-arm64, os: windows-2025}
           - {runtime: linux-x64, os: ubuntu-24.04}
           - {runtime: linux-arm64, os: ubuntu-24.04-arm}
-          - {runtime: osx-x64, os: macos-15-intel}
-          - {runtime: osx-arm64, os: macos-15}
+          - {runtime: osx-x64, os: macos-26-intel}
+          - {runtime: osx-arm64, os: macos-26}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -194,8 +194,18 @@ jobs:
           xcrun stapler validate "$dmg"
           spctl --assess --type open --context context:primary-signature "$dmg"
           mount="$(mktemp -d "$RUNNER_TEMP/sunder-dmg.XXXXXX")"
-          trap 'hdiutil detach "$mount" -quiet >/dev/null 2>&1 || true; rmdir "$mount"' EXIT
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg" >/dev/null
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if python3 scripts/release/macos/dmg_image.py detach --image "$dmg" --mount "$mount" --discard; then
+              rmdir "$mount" || { [[ "$status" != 0 ]] || status=1; }
+            else
+              [[ "$status" != 0 ]] || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          python3 scripts/release/macos/dmg_image.py attach --image "$dmg" --mount "$mount"
           test -d "$mount/Sunder.app"
           test -L "$mount/Applications" && test "$(readlink "$mount/Applications")" = /Applications
           test -s "$mount/.background/Sunder.tiff" && test -s "$mount/.DS_Store"
@@ -213,6 +223,7 @@ jobs:
           lipo -archs "$app/Contents/MacOS/$executable" | grep -w "$architecture"
           xcrun stapler validate "$app"
           spctl --assess --type execute "$app"
+          python3 scripts/release/macos/dmg_image.py detach --image "$dmg" --mount "$mount"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sunder-app-release-${{ matrix.runtime }}

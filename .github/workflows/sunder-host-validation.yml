@@ -27,7 +27,8 @@ jobs:
           - {rid: linux-x64, os: ubuntu-24.04}
           - {rid: win-x64, os: windows-2025}
           - {rid: win-arm64, os: windows-11-arm}
-          - {rid: osx-arm64, os: macos-15}
+          - {rid: osx-x64, os: macos-26-intel}
+          - {rid: osx-arm64, os: macos-26}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -106,8 +107,8 @@ jobs:
           - {rid: win-arm64, os: windows-11-arm}
           - {rid: linux-x64, os: ubuntu-24.04}
           - {rid: linux-arm64, os: ubuntu-24.04-arm}
-          - {rid: osx-x64, os: macos-15-intel}
-          - {rid: osx-arm64, os: macos-15}
+          - {rid: osx-x64, os: macos-26-intel}
+          - {rid: osx-arm64, os: macos-26}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -167,7 +168,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-26]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -211,8 +212,18 @@ jobs:
           bash scripts/release/macos/create-sunder-dmg.sh --app "$app" --output "$dmg"
           hdiutil verify "$dmg" >/dev/null
           mkdir "$mount"
-          trap 'hdiutil detach "$mount" -quiet >/dev/null 2>&1 || true' EXIT
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$dmg" >/dev/null
+          cleanup() {
+            status=$?
+            trap - EXIT
+            if python3 scripts/release/macos/dmg_image.py detach --image "$dmg" --mount "$mount" --discard; then
+              rmdir "$mount" || { [[ "$status" != 0 ]] || status=1; }
+            else
+              [[ "$status" != 0 ]] || status=1
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          python3 scripts/release/macos/dmg_image.py attach --image "$dmg" --mount "$mount"
           test -d "$mount/Sunder.app"
           test -L "$mount/Applications" && test "$(readlink "$mount/Applications")" = /Applications
           test -s "$mount/.background/Sunder.tiff" && test -s "$mount/.DS_Store"
@@ -221,3 +232,4 @@ jobs:
           info="$(tiffutil -info "$mount/.background/Sunder.tiff")"
           grep -q 'Image Width: 820 Image Length: 460' <<< "$info"
           grep -q 'Image Width: 1640 Image Length: 920' <<< "$info"
+          python3 scripts/release/macos/dmg_image.py detach --image "$dmg" --mount "$mount"
