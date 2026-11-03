@@ -1,18 +1,20 @@
-import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
+import { dotnetTestArguments, dotnetTestBudget } from "./dotnet-test-command.mjs";
+import { maximumProcessTimeoutMilliseconds, runOwnedTestProcess } from "./run-owned-test-process.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const { policy, declarations } = loadCoreTestModel();
 const requestedArguments = process.argv.slice(2);
 const primaryLane = takeOption("--primary-lane");
 const project = takeOption("--project");
-const timeoutMilliseconds = Number(takeOption("--timeout-ms") ?? 60 * 60 * 1000);
-if (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0) {
-  throw new Error("--timeout-ms must be a positive safe integer.");
+const timeoutOverride = takeOption("--timeout-ms");
+const timeoutMilliseconds = timeoutOverride === undefined ? undefined : Number(timeoutOverride);
+if (timeoutMilliseconds !== undefined && (!Number.isSafeInteger(timeoutMilliseconds) || timeoutMilliseconds <= 0 || timeoutMilliseconds > maximumProcessTimeoutMilliseconds)) {
+  throw new Error(`--timeout-ms must be a positive integer no greater than ${maximumProcessTimeoutMilliseconds}.`);
 }
 const list = takeFlag("--list");
 const requestedOutputDirectory = takeOption("--results-directory")
@@ -38,7 +40,9 @@ if (selectedTests.length === 0) {
 }
 if (list) {
   const output = `${JSON.stringify({ project: project ?? "all", primaryLane: primaryLane ?? "all", operatingSystem,
-    declarations: selectedTests.map((test) => test.id) }, null, 2)}\n`;
+    declarations: selectedTests.map((test) => test.id),
+    projects: [...new Set(selectedTests.map((test) => test.project))].sort().map((name) => ({ project: name,
+      ...dotnetTestBudget(name, selectedTests), ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }) })) }, null, 2)}\n`;
   await new Promise((resolve, reject) => process.stdout.write(output, (error) => error ? reject(error) : resolve()));
   process.exit(0);
 }
@@ -55,35 +59,20 @@ const failed = [];
 for (const projectPath of projectPaths) {
   const projectName = projectPath.split("/").at(-1).replace(/\.csproj$/u, "");
   const filter = primaryLane === undefined ? undefined : projectFilter(projectName, selectedTests, allDotnetTests);
-  // Build integration cases run several builds/probes/rollback checks in one
-  // xUnit case, with independently bounded 15-minute child commands. Do not let
-  // VSTest's per-case watchdog kill those commands before their own deadline.
-  // Keep the fast Build selection (and ordinary unit projects) on five minutes.
-  const buildIntegration = projectName === "Sunder.Package.Build.Tests"
-    && selectedTests.some((test) => test.project === projectName && test.primaryLane === "host-platform");
-  const hangTimeout = buildIntegration ? "20m" : projectName === "Sunder.Package.Templates.Tests" ? "10m" : "5m";
+  const budget = dotnetTestBudget(projectName, selectedTests);
+  const logStem = resolve(outputDirectory, "diagnostics", projectName);
+  process.env.SUNDER_TEST_COMMAND_LOG_DIRECTORY = `${logStem}.commands`;
   process.stdout.write(`\n=== ${projectName} ===\n`);
-  const result = spawnSync("dotnet", [
-    "test",
-    projectPath,
-    "--nologo",
-    "--no-restore",
-    ...(!build ? ["--no-build"] : []),
-    "--blame-hang",
-    "--blame-hang-timeout",
-    hangTimeout,
-    "--blame-hang-dump-type",
-    "none",
-    "--logger",
-    `trx;LogFileName=${projectName}.trx`,
-    "--results-directory",
-    outputDirectory,
-    ...(filter === undefined ? [] : ["--filter", filter]),
-    ...requestedArguments,
-  ], { cwd: repositoryRoot, encoding: "utf8", timeout: timeoutMilliseconds, maxBuffer: 128 * 1024 * 1024 });
-  process.stdout.write(result.stdout ?? "");
-  process.stderr.write(result.stderr ?? "");
-  if (result.error !== undefined || result.status !== 0) failed.push(projectName);
+  const args = dotnetTestArguments({ projectPath, projectName, outputDirectory, logStem, build, filter, budget,
+    extraArguments: requestedArguments });
+  const result = await runOwnedTestProcess("dotnet", args, { cwd: repositoryRoot, logStem,
+    timeoutMilliseconds: timeoutMilliseconds ?? budget.timeoutMilliseconds });
+  process.stdout.write(`${projectName}: elapsed=${result.elapsedMilliseconds}ms; status=${result.status}; signal=${result.signal}; `
+    + `error=${JSON.stringify(result.error)}; cleanupComplete=${result.cleanupComplete}\n`);
+  if (result.error !== null || result.status !== 0 || !result.cleanupComplete) failed.push(projectName);
+  if (!result.cleanupComplete || result.error?.code === "ECANCELED") {
+    throw new Error(`Stopping before the next project: ${projectName} was cancelled or process cleanup could not be confirmed. See ${logStem}.process.json.`);
+  }
 }
 if (failed.length > 0) {
   throw new Error(`Core .NET test projects failed: ${failed.join(", ")}`);

@@ -2,11 +2,13 @@ name: Sunder SDK Release
 
 on:
   push:
+    branches: [main]
     tags: ["sdk/v*"]
+  workflow_dispatch:
 
 permissions: {}
 concurrency:
-  group: sunder-release-${{ github.ref_name }}
+  group: sunder-release-${{ startsWith(github.ref, 'refs/tags/sdk/') && 'sdk' || github.ref_name }}
   cancel-in-progress: false
 env:
   DOTNET_VERSION: "10.0.403"
@@ -15,7 +17,30 @@ env:
   NPM_REGISTRY: https://registry.npmjs.org
 
 jobs:
+  select:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - id: version
+        run: node scripts/release/check-sdk-version.mjs
+      - name: Select only newer versions or resume the original retained release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SDK_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 -B scripts/release/sdk_release.py select "$SDK_VERSION"
+
   prepare:
+    if: startsWith(github.ref, 'refs/tags/sdk/')
     runs-on: ubuntu-24.04
     environment: sunder-core-release
     permissions:
@@ -23,6 +48,7 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
       is_prerelease: ${{ steps.release.outputs.is_prerelease }}
+      publish: ${{ steps.selection.outputs.publish }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -32,12 +58,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - id: release
         run: python3 -B scripts/release/github_release.py metadata "$GITHUB_REF_NAME"
-      - name: Verify tag source and coordinated metadata
+      - name: Compare published version history before release builds
+        id: selection
         env:
           GH_TOKEN: ${{ github.token }}
-          SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
-          SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
-          SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
+          SDK_VERSION: ${{ steps.release.outputs.version }}
+        run: python3 -B scripts/release/sdk_release.py prepare "$SDK_VERSION"
+      - name: Verify tag source and coordinated metadata
+        if: steps.selection.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
           SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
           VERSION: ${{ steps.release.outputs.version }}
         run: |
@@ -46,6 +76,7 @@ jobs:
           bash scripts/release/verify-nuget-source.sh
 
   validation:
+    if: needs.prepare.outputs.publish == 'true'
     needs: prepare
     uses: ./.github/workflows/sunder-ci.yml
     permissions:
@@ -53,6 +84,7 @@ jobs:
 
   compatibility-corpus:
     name: SDK retained corpus (${{ matrix.lane }})
+    if: needs.validation.outputs.sdk-packaged == 'true'
     needs: [prepare, validation]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -115,9 +147,6 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
-      SUNDER_CORE_RELEASE_APPROVED: ${{ vars.SUNDER_CORE_RELEASE_APPROVED }}
-      SUNDER_CORE_RELEASE_APPROVAL_REFERENCE: ${{ vars.SUNDER_CORE_RELEASE_APPROVAL_REFERENCE }}
-      SUNDER_CORE_ARTIFACT_SOURCE_COMMIT: ${{ vars.SUNDER_CORE_ARTIFACT_SOURCE_COMMIT }}
       SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
       SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ vars.SUNDER_SDK_COMPATIBILITY_BASE_COMMIT }}
     steps:
@@ -178,6 +207,7 @@ jobs:
     needs: [prepare, stage]
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    environment: sunder-core-release
     env:
       SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
       SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
@@ -193,18 +223,26 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: ${{ env.NPM_REGISTRY }}
-      - name: Publish with trusted publishing and verify each package before advancing
+      - name: Download retained npm packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
           mkdir release-assets
           python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-          bash scripts/release/preflight-npm-trusted-publishing.sh "$VERSION" "accept-v$VERSION" \
+      - name: Publish with npm access token and verify each package before advancing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          bash scripts/release/preflight-npm-publishing.sh "$VERSION" "accept-v$VERSION" \
             "release-assets/sunder-sdk-$VERSION.tgz" "release-assets/sunder-package-tool-$VERSION.tgz" "release-assets/create-sunder-package-$VERSION.tgz"
           bash scripts/release/publish-sdk.sh npm "$VERSION" release-assets
 
@@ -219,6 +257,7 @@ jobs:
     environment: sunder-core-release
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -229,18 +268,30 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Check NuGet account configuration and download retained packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUGET_USER: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+        run: |
+          set -euo pipefail
+          : "${NUGET_USER:?Set NUGET_USER in the sunder-core-release environment to your NuGet.org username}"
+          mkdir release-assets
+          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
+      - name: Authenticate to NuGet.org with trusted publishing
+        id: nuget-login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
+        with:
+          user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
       - name: Publish and verify six immutable NuGet versions
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
           RELEASE_ID: ${{ needs.stage.outputs.release_id }}
           VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          mkdir release-assets
-          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-          bash scripts/release/publish-sdk.sh nuget "$VERSION" release-assets
+        run: bash scripts/release/publish-sdk.sh nuget "$VERSION" release-assets
 
   promote-npm:
     needs: [prepare, stage, publish-nuget]
@@ -250,7 +301,7 @@ jobs:
       SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
       SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
       SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
-    environment: sunder-sdk-npm-promotion
+    environment: sunder-core-release
     permissions:
       contents: read
     steps:
@@ -261,19 +312,24 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           registry-url: ${{ env.NPM_REGISTRY }}
-      - name: Advance verified npm consumer channels
+      - name: Download retained npm packages
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
           RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
           npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
           mkdir release-assets
           python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-          bash scripts/release/publish-sdk.sh promote "$VERSION" release-assets
+      - name: Advance verified npm consumer channels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash scripts/release/publish-sdk.sh promote "$VERSION" release-assets
 
   finalize:
     needs: [prepare, stage, promote-npm]
@@ -283,7 +339,7 @@ jobs:
       SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
       SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
       SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
-    environment: sunder-github-release-promotion
+    environment: sunder-core-release
     permissions:
       contents: write
     steps:

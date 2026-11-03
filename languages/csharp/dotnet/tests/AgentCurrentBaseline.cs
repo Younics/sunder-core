@@ -25,7 +25,7 @@ internal sealed class AgentCurrentBaseline
 
     private AgentCurrentInputs.Inventory Inventory => _inputs.Expected;
     internal AgentCurrentInputs.ExpectedPackage[] Packages => Inventory.Packages;
-    internal string PackageVersion => Inventory.PackageVersion;
+    internal string PackageVersion => _inputs.PackageVersionFor(AgentId);
     internal string InventorySha256 => _inputs.InventorySha256;
     internal string ContractsSha256 => _inputs.ContractsSha256;
     internal IEnumerable<string> AppPackageIds => Packages.Where(package => package.HasApp).Select(package => package.PackageId).Order(StringComparer.Ordinal);
@@ -58,7 +58,7 @@ internal sealed class AgentCurrentBaseline
         var bundles = manifest.ContractBundles ?? throw new InvalidDataException("Current archive has no contract bundles.");
         var providers = manifest.Provides ?? throw new InvalidDataException("Current archive has no provider inventory.");
         var package = Assert.Single(Packages, package => package.PackageId == manifest.Id);
-        Assert.Equal(PackageVersion, manifest.Version);
+        Assert.Equal(_inputs.PackageVersionFor(package.PackageId), manifest.Version);
         string[] roles = package.HasApp ? ["app", "runtime"] : ["runtime"];
         Assert.Equal(roles.SelectMany(role => expectedRids.Select(rid => $"{role}/{rid}")).Order(StringComparer.Ordinal),
             targets.Select(target => $"{target!.Role}/{target!.Rid}").Order(StringComparer.Ordinal));
@@ -131,7 +131,7 @@ internal sealed class AgentCurrentBaseline
         {
             var package = Assert.Single(Packages, package => package.PackageId == provider.PackageId);
             Assert.Equal(package.Providers[provider.ProviderId], provider.ContractId);
-            Assert.Equal(PackageVersion, provider.PackageVersion);
+            Assert.Equal(_inputs.PackageVersionFor(provider.PackageId), provider.PackageVersion);
             Assert.Equal(SunderRpcProviderState.Active, provider.State);
             if (provider.ContractId == StackId) Assert.Equal(Inventory.Platform.Version, provider.ContractVersion);
             else

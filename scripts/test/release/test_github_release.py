@@ -52,6 +52,15 @@ class MemoryRelease(release.GitHubRelease):
 
 
 class GitHubReleaseTests(unittest.TestCase):
+    def test_agent_package_stream_hyphens_and_build_metadata_are_not_prerelease_markers(self):
+        for version, prerelease in (("2.1.0", False), ("2.1.0+build-7", False), ("2.1.0-rc.1", True)):
+            store = release.GitHubRelease("Younics/sunder-agent-package", "agent-provider-openai/v" + version)
+            self.assertIs(store.prerelease, prerelease)
+        with self.assertRaises(ValueError):
+            release.GitHubRelease("Younics/sunder-agent-package", "sdk/v2.0.0")
+        with self.assertRaises(ValueError):
+            release.GitHubRelease("Younics/sunder-agent-package", "agent-provider-openai/v2.0.0-01")
+
     def candidate(self, root, store):
         artifacts = []
         for name in sorted(release.core_names("cli", "1.0.0")):

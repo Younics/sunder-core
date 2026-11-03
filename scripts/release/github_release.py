@@ -72,9 +72,14 @@ class GitHubRelease:
     def __init__(self, repository, tag):
         c.require(repository in ("Younics/sunder-core", "Younics/sunder-agent-package"), "Unexpected release repository")
         stream = tag.split("/", 1)[0]
-        c.require(stream in (("app", "cli", "host", "sdk") if repository.endswith("sunder-core") else ("agent",)), "Unexpected release stream")
+        c.require(stream in ("app", "cli", "host", "sdk") if repository.endswith("sunder-core")
+                  else re.fullmatch(r"agent(?:-[a-z0-9]+)*", stream), "Unexpected release stream")
         c.tag(tag, stream)
         self.repository, self.tag = repository, tag
+
+    @property
+    def prerelease(self):
+        return "-" in self.tag.split("/v", 1)[1].split("+", 1)[0]
 
     def api(self, suffix, method="GET", value=None):
         arguments = ["gh", "api", "--hostname", "github.com", "--method", method,
@@ -125,7 +130,7 @@ class GitHubRelease:
             # A lost creation response is reconciled by tag; never create twice blindly.
             try:
                 self.api("releases", "POST", dict(tag_name=self.tag, target_commitish=source, name=title,
-                         body=f"Source: {source}", draft=True, prerelease="-" in self.tag, make_latest="false"))
+                         body=f"Source: {source}", draft=True, prerelease=self.prerelease, make_latest="false"))
             except (ValueError, subprocess.TimeoutExpired):
                 pass
             for _ in range(4):
@@ -134,7 +139,7 @@ class GitHubRelease:
                     break
                 time.sleep(1)
         c.require(value is not None and value["target_commitish"] == source
-                  and value["prerelease"] is ("-" in self.tag), "Release does not bind the exact source/version")
+                   and value["prerelease"] is self.prerelease, "Release does not bind the exact source/version")
         return self.get(value["id"])
 
     def download(self, item, destination):
@@ -267,7 +272,8 @@ def verify_evidence(files, release_id, repository, tag, source, run_id=None):
 def core_stage(store, directory, component, channel, finalize=False):
     c.require(store.repository == c.REPOSITORY, "Core publication requires the Core repository")
     source = c.sha(os.environ["GITHUB_SHA"], 40)
-    c.require(os.environ["GITHUB_EVENT_NAME"] == "push" and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
+    events = ("push", "workflow_dispatch") if component == "sdk" else ("push",)
+    c.require(os.environ["GITHUB_EVENT_NAME"] in events and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
               "Component publication requires its tag workflow")
     c.require(os.environ["GITHUB_WORKFLOW_REF"] == f"{store.repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{store.tag}", "Unexpected component workflow")
     c.require(os.environ["GITHUB_WORKFLOW_SHA"] == source, "Workflow/source mismatch")
@@ -368,7 +374,7 @@ def main():
     args = parser.parse_args()
     store = GitHubRelease(args.repository, args.tag)
     if args.action == "metadata":
-        values = {"version": args.tag.split("/v", 1)[1], "is_prerelease": str("-" in args.tag).lower()}
+        values = {"version": args.tag.split("/v", 1)[1], "is_prerelease": str(store.prerelease).lower()}
         c.require(not (args.tag.startswith("sdk/") and "-" in values["version"]
                        and values["version"].split("-", 1)[0].split(".")[2] == "0"),
                   "A coordinated SDK minor line starts at stable X.Y.0")

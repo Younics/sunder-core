@@ -5,6 +5,11 @@ import { loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-poli
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
 
 export function parseTrxReport(xml, source) {
+  const summary = /<ResultSummary\b([^>]*?)>/u.exec(xml);
+  const runOutcome = summary === null ? undefined : parseAttributes(summary[1]).outcome;
+  if (!["Completed", "Passed", "Failed"].includes(runOutcome)) {
+    throw new Error(`TRX report '${source}' has no completed run summary (outcome=${runOutcome ?? "missing"}).`);
+  }
   const project = basename(source, ".trx");
   const definitions = new Map();
   for (const match of xml.matchAll(/<UnitTest\b([^>]*)>([\s\S]*?)<\/UnitTest>/gu)) {
@@ -55,6 +60,15 @@ export function parseTrxReport(xml, source) {
     const counters = parseAttributes(countersMatch[1]);
     assertCounter(source, "total", counters.total, results.length);
     assertCounter(source, "executed", counters.executed, results.filter((item) => item.outcome !== "Skipped").length);
+    for (const name of ["error", "timeout", "aborted", "passedButRunAborted", "inProgress", "pending", "disconnected"]) {
+      assertCounter(source, name, counters[name], 0);
+    }
+  }
+  // VSTest can write only passing completed cases after a testhost crash. Case
+  // counters are not evidence that the enclosing run completed successfully.
+  const runErrors = [...xml.matchAll(/<RunInfo\b([^>]*?)>/gu)].some((match) => parseAttributes(match[1]).outcome === "Error");
+  if ((runOutcome === "Failed" || runErrors) && !results.some((result) => result.outcome === "Failed")) {
+    throw new Error(`TRX report '${source}' failed or aborted despite its completed cases having no failures.`);
   }
   return { source, framework: "dotnet", discovered: results.length, results };
 }
@@ -287,6 +301,13 @@ function main() {
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
   if (!existsSync(directory)) throw new Error(`Test result directory '${directory}' does not exist.`);
   const files = listFiles(directory).filter((path) => extname(path) === ".trx" || path.endsWith(".junit.xml"));
+  for (const path of listFiles(directory).filter((path) => path.endsWith(".process.json"))) {
+    const execution = JSON.parse(readFileSync(path, "utf8"));
+    if (execution.status !== 0 || execution.signal !== null || execution.error !== null || execution.cleanupComplete !== true) {
+      const { status, signal, error, cleanupComplete } = execution;
+      throw new Error(`Test command failed: '${relative(directory, path)}': ${JSON.stringify({ status, signal, error, cleanupComplete })}`);
+    }
+  }
   if (files.length === 0) throw new Error(`No TRX or JUnit files were found under '${directory}'.`);
   const reports = files.map((path) => {
     const xml = readFileSync(path, "utf8");

@@ -169,20 +169,26 @@ def pack_inputs(source):
     source.clean()
 
 
-def pack(root, commit, command):
+@contextmanager
+def pack_context(root, commit):
     # Ordinary CI/local candidate packaging keeps its existing mutable source docs.
     # Only the SDK tag's already-approved release path binds a source identity.
     ref = os.environ.get("GITHUB_REF", "")
     if not ref.startswith("refs/tags/sdk/"):
-        subprocess.run(command, cwd=root, check=True)
+        yield
         return
     c.tag(ref[len("refs/tags/"):], "sdk")
-    c.require(os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_SHA") == commit
-              and os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY, "Source-bound documentation requires the exact SDK tag push")
+    c.require(os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch") and os.environ.get("GITHUB_SHA") == commit
+              and os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY, "Source-bound documentation requires the exact SDK tag workflow")
     source = Source(root, commit)
     version, _ = packages(source)
     c.require(ref == "refs/tags/sdk/v" + version, "Documentation source/version differs from the SDK tag")
     with pack_inputs(source):
+        yield
+
+
+def pack(root, commit, command):
+    with pack_context(root, commit):
         subprocess.run(command, cwd=root, check=True)
 
 
@@ -215,9 +221,14 @@ def archive_texts(path, package):
     return texts
 
 
-def verify(root, directories, commit):
+def verify(root, directories, commit, package_names=None):
     source = Source(root, commit)
     _, inventory = packages(source)
+    if package_names is not None:
+        known = {package["item"]["packageId"] if package["kind"] == "nuget" else package["item"]["name"] for package in inventory}
+        c.require(package_names and len(set(package_names)) == len(package_names) and set(package_names) <= known,
+                  "Documentation verification needs an exact nonempty public package selection")
+        inventory = [package for package in inventory if (package["item"]["packageId"] if package["kind"] == "nuget" else package["item"]["name"]) in package_names]
     for directory in directories:
         c.require(Path(directory).is_dir() and not Path(directory).is_symlink(), "Documentation artifact directory must be real")
     for package in inventory:

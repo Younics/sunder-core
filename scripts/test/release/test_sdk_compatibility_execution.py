@@ -52,7 +52,7 @@ class SdkCompatibilityExecutionTests(unittest.TestCase):
     def test_measured_platform_and_workflow_context_reject_relabelled_or_emulated_runners(self):
         environment = dict(GITHUB_REPOSITORY=c.REPOSITORY, GITHUB_REF_PROTECTED="true", GITHUB_SHA="a" * 40,
                            GITHUB_WORKFLOW_SHA="a" * 40, GITHUB_REF="refs/tags/sdk/v1.1.0", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
-                           GITHUB_WORKFLOW_REF=c.REPOSITORY + "/" + c.SDK_WORKFLOW + "@refs/tags/sdk/v1.1.0", GITHUB_EVENT_NAME="push", GITHUB_JOB=e.JOB)
+                            GITHUB_WORKFLOW_REF=c.REPOSITORY + "/" + c.SDK_WORKFLOW + "@refs/tags/sdk/v1.1.0", GITHUB_REF_NAME="sdk/v1.1.0", GITHUB_EVENT_NAME="push", GITHUB_JOB=e.JOB)
         for rid in e.RIDS:
             prefix, architecture = rid.split("-")
             system = {"win": "Windows", "linux": "Linux", "osx": "Darwin"}[prefix]

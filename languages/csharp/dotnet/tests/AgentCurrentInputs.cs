@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Xml.Linq;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.Core.TestSupport;
@@ -14,9 +17,11 @@ internal sealed class AgentCurrentInputs
     internal const string AgentId = "younics.ai.agent";
     internal const string StackId = "sunder.stack.contributor";
     private readonly Dictionary<string, SunderRpcContractDescriptor> _descriptors;
+    private readonly string _root;
 
-    private AgentCurrentInputs(byte[] inventoryBytes, byte[] recordBytes)
+    private AgentCurrentInputs(string root, byte[] inventoryBytes, byte[] recordBytes)
     {
+        _root = root;
         InventorySha256 = Convert.ToHexStringLower(SHA256.HashData(inventoryBytes));
         ContractsSha256 = Convert.ToHexStringLower(SHA256.HashData(recordBytes));
         Expected = JsonSerializer.Deserialize<Inventory>(inventoryBytes, new JsonSerializerOptions(JsonSerializerDefaults.Web))
@@ -72,7 +77,7 @@ internal sealed class AgentCurrentInputs
             var bytes = Encoding.UTF8.GetBytes(entry.GetProperty("canonicalDescriptor").GetString()!);
             var descriptor = SunderRpcContractDescriptor.Parse(bytes);
             Require(entry.GetProperty("packageId").GetString() == expected.PackageId && entry.GetProperty("exposure").GetString() == expected.Exposure
-                    && descriptor.ContractId == expected.ContractId && descriptor.Version == Version(expected)
+                    && descriptor.ContractId == expected.ContractId && descriptor.Version == ReviewedVersion(expected)
                     && descriptor.SchemaProfile == SunderRpcProtocol.ValueSchemaProfile
                     && bytes.AsSpan().SequenceEqual(descriptor.GetCanonicalUtf8())
                     && entry.GetProperty("descriptorSha256").GetString() == descriptor.Sha256
@@ -92,14 +97,35 @@ internal sealed class AgentCurrentInputs
     internal HashSet<string> AppPackageIds => Packages.Where(p => p.HasApp).Select(p => p.PackageId).ToHashSet(StringComparer.Ordinal);
     internal ExpectedPackage Package(string id) => Packages.Single(p => p.PackageId == id);
     internal ExpectedContract Contract(string id) => Expected.Contracts.Single(c => c.ContractId == id);
-    internal string Version(ExpectedContract contract) => contract.ContractVersion ?? (contract.Exposure == "public" ? Expected.PublicVersion : Expected.PackageVersion);
-    internal SunderRpcContractDescriptor Descriptor(string id) => _descriptors[id];
+    private string ReviewedVersion(ExpectedContract contract) => contract.ContractVersion ?? (contract.Exposure == "public" ? Expected.PublicVersion : Expected.PackageVersion);
+    internal string Version(ExpectedContract contract) => contract.Exposure == "package" ? PackageVersionFor(contract.PackageId) : ReviewedVersion(contract);
+    internal SunderRpcContractDescriptor Descriptor(string id)
+    {
+        var reviewed = _descriptors[id];
+        var version = Version(Contract(id));
+        if (reviewed.Version == version) return reviewed;
+        // Private descriptors follow the authored package version. Project only
+        // that label from authenticated reviewed bytes, never from an archive.
+        Require(Contract(id).Exposure == "package", "Public contract versions require independent review.");
+        var document = JsonNode.Parse(reviewed.GetCanonicalUtf8())!;
+        document["version"] = version;
+        var projected = SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(document));
+        Require(projected.AbiSha256 == reviewed.AbiSha256, "Private version projection changed the reviewed ABI.");
+        return projected;
+    }
+    internal string PackageVersionFor(string id)
+    {
+        var project = XDocument.Load(RequiredPath(_root, Package(id).ProjectPath));
+        var version = project.Root!.Elements("PropertyGroup").Elements("Version").Single().Value;
+        Require(SemanticVersion.TryParse(version, out _), "Expected one authored strict package Version.");
+        return version;
+    }
 
     internal static async Task<AgentCurrentInputs> LoadAsync(string agentRoot, CancellationToken token)
-        => new(await ReadRequiredAsync(agentRoot, InventoryPath, token), await ReadRequiredAsync(agentRoot, ContractsPath, token));
+        => new(agentRoot, await ReadRequiredAsync(agentRoot, InventoryPath, token), await ReadRequiredAsync(agentRoot, ContractsPath, token));
 
     internal static AgentCurrentInputs Load(string agentRoot)
-        => new(File.ReadAllBytes(RequiredPath(agentRoot, InventoryPath)), File.ReadAllBytes(RequiredPath(agentRoot, ContractsPath)));
+        => new(agentRoot, File.ReadAllBytes(RequiredPath(agentRoot, InventoryPath)), File.ReadAllBytes(RequiredPath(agentRoot, ContractsPath)));
 
     internal void ValidatePackageInventory(JsonElement actual)
     {

@@ -84,7 +84,7 @@ public sealed partial class AgentPackageReleaseSmokeTests
                 provider => provider.PackageId == AgentPackageId
                             && provider.ProviderId == "agent.runtime.catalog");
             Assert.Equal("younics.ai.agent.runtime.catalog", agentCatalogProvider.ContractId);
-            Assert.Equal("1.0.0", agentCatalogProvider.ContractVersion);
+            // VerifyProviders above checks its independently reviewed public version and hashes.
             Assert.Equal(SunderRpcProviderState.Active, agentCatalogProvider.State);
 
             var shell = Assert.Single(host.GetActivePackages(), package => package.PackageId == ShellPackageId);

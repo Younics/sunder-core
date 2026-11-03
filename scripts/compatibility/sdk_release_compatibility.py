@@ -31,9 +31,9 @@ MISSING = ("SDK release qualification missing: integrated sunder-tested-sdk must
 
 
 def context():
-    invocation = c.current_invocation(c.SDK_WORKFLOW)
+    invocation = c.sdk_context()
     name = c.tag(os.environ["GITHUB_REF_NAME"], "sdk")
-    c.require(os.environ.get("GITHUB_EVENT_NAME") == "push" and invocation["workflowRef"] == "refs/tags/" + name,
+    c.require(invocation["workflowRef"] == "refs/tags/" + name,
               "Compatibility qualification requires the integrated SDK tag run")
     c.require(c.command("git", "rev-parse", "HEAD", cwd=ROOT).decode().strip() == invocation["workflowSha"],
               "Compatibility checkout differs from artifactSourceCommit")
@@ -143,7 +143,7 @@ def prepare(candidate, directory, executions=None):
               and not executions.resolve().is_relative_to(candidate.resolve()) and not candidate.resolve().is_relative_to(executions.resolve()),
               "Missing independent same-run owning-lane artifacts; candidate-bundled execution claims are not trusted")
     invocation, version, base = context()
-    c.approved_source(invocation["workflowSha"])
+    c.sdk_source()
     c.require(c.command("git", "cat-file", "-t", base, cwd=ROOT).strip() == b"commit", "Trusted history must be a Git commit")
     subprocess.run(["git", "merge-base", "--is-ancestor", base, invocation["workflowSha"]], cwd=ROOT, check=True)
     trusted = c.command("git", "show", f"{base}:{MANIFEST}", cwd=ROOT)

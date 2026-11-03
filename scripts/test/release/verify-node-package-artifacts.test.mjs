@@ -113,6 +113,29 @@ test("verifies exact npm paths, identities, versions, contents, and npm pack dig
   }
 });
 
+test("selected npm verification rejects skipped archives without weakening the default full set", async () => {
+  const fixture = await createFixture();
+  try {
+    const options = { version: VERSION, npmVersionRange: RANGE, viteVersion: VITE,
+      artifactDirectory: fixture.artifacts, packReportPath: fixture.reportPath, packageInventoryPath: fixture.inventoryPath };
+    const packageNames = ["@sunder/package-tool"];
+    await assert.rejects(verifyNodePackageArtifacts({ ...options, packageNames }), /artifact paths/u);
+    for (const item of packageDefinitions.filter((item) => !packageNames.includes(item.name))) {
+      await rm(join(fixture.artifacts, item.archive));
+    }
+    const report = JSON.parse(await readFile(fixture.reportPath, "utf8")).filter((item) => packageNames.includes(item.name));
+    await writeFile(fixture.reportPath, JSON.stringify(report));
+    const result = await verifyNodePackageArtifacts({ ...options, packageNames });
+    assert.deepEqual(result.map((item) => item.name), packageNames);
+    await assert.rejects(verifyNodePackageArtifacts(options), /artifact paths/u);
+    for (const invalid of [[], ["@other/package"], [...packageNames, ...packageNames]]) {
+      await assert.rejects(verifyNodePackageArtifacts({ ...options, packageNames: invalid }), /public package selection/u);
+    }
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test("rejects an expected filename containing another package identity", async () => {
   const fixture = await createFixture();
   try {

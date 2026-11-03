@@ -12,8 +12,9 @@
 | `host/vX.Y.Z` | Current-user Supervisor with its nested Runtime worker |
 | `sdk/vX.Y.Z` | Six NuGets, three npm packages, notices, and the stable Core catalog |
 
-Each tag starts one integrated build, verification, publication and finalization
-workflow. Prereleases are supported. Only a stable App release becomes GitHub
+SDK version selection runs automatically on `main`; it creates the SDK tag and
+dispatches the existing integrated tag workflow. Other component tags still start
+their workflows directly. Prereleases are supported. Only a stable App release becomes GitHub
 `latest`; SDK, CLI, Host and App prereleases explicitly use `make_latest=false`.
 SDK npm consumer channels are `latest` for stable versions and `next` for prereleases.
 
@@ -34,6 +35,14 @@ SDK npm consumer channels are `latest` for stable versions and `next` for prerel
 
 SDK tags additionally require a release-specific qualification bundle before
 publication. The empty-ledger PR/dev success cannot satisfy that gate.
+
+CI compares each authored package version before release artifact work and rechecks
+immediately before packing. Only packages newer than their own registry history get
+`.nupkg`/`.tgz` output; an unchanged/older version creates no release archives or
+candidate-feed upload. Source compilation/tests (including their temporary test
+fixtures), native validation and cross-language tests still run. Archive-dependent
+template/Host smoke checks run for a complete newly packed candidate; a partial
+package selection does not satisfy or bypass the existing full release qualification.
 
 CI also runs on the weekly schedule, manual dispatch and SDK tags. On those runs,
 the final report audit consumes the successful owning jobs' TRX/JUnit reports without
@@ -59,28 +68,38 @@ Windows ARM64 App signing uses the x64 Azure signing client on Windows x64.
 
 Verification and promotion are stages in the component tag workflow. There is no
 separate acceptance/promotion dispatch or externally supplied acceptance executable.
-Protect the four tag streams with rulesets restricting creation and blocking
-updates/deletion. Configure the referenced protected environments before release.
+Protect all four tag streams against updates/deletion. App/CLI/Host creation remains
+restricted; SDK tag creation must permit the selector's `GITHUB_TOKEN`. SDK helpers
+independently require the protected tag's exact workflow/source to belong to `main`.
+Configure the referenced protected environments before release.
 
 `scripts/release/github_release.py` owns draft discovery, numeric-ID transport,
 exact component inventories, checksum/provenance/SPDX verification and finalization.
 It downloads actual remote bytes, requires uploaded SHA-256 metadata, and rejects
 duplicate names/IDs, changed source, unexpected assets and mismatched retries.
-The same `sunder-release-<tag>` concurrency group covers the whole workflow.
+SDK tag runs share `sunder-release-sdk` to serialize publication and channel updates;
+other components use `sunder-release-<tag>`. SDK branch selectors have their own slot.
 No release asset is clobbered and failed drafts remain available for recovery.
 Partial evidence uploads preserve retained bytes and the original invocation.
 Finalization checks the remote tag and asset identities again before its numeric PATCH.
 
 Build/test jobs receive no publication credentials. SDK credentials remain separated:
 
-- `sunder-core-release`: approved catalog/source coordinates and the NuGet publish key;
-  the NuGet job has no GitHub contents-write or npm OIDC permission.
-- npm publication: `id-token: write`, no NuGet key or GitHub contents-write permission;
-  `.github/workflows/sunder-sdk-release.yml` remains its trusted-publisher identity.
-- `sunder-sdk-npm-promotion`: only the package-scoped `NPM_DIST_TAG_TOKEN` for consumer channels.
-- `sunder-github-release-promotion`: final GitHub contents-write permission, with no
+- `sunder-core-release`: the one-time Registry origin, `NUGET_USER` (a variable or
+  existing environment secret), and `NPM_TOKEN`. SDK upload/promotion/finalization
+  jobs use this environment, with `sdk/v*` allowed and no per-release review. The
+  NuGet job uses `id-token: write` to obtain a short-lived NuGet
+  credential, with no stored NuGet publish key, GitHub contents-write or npm credential.
+- npm publication: the granular `NPM_TOKEN`, supplied as
+  `NODE_AUTH_TOKEN` only to the preflight/publish step; `id-token: write` supplies
+  provenance, not npm authentication. No NuGet key or GitHub contents-write permission.
+- npm promotion: the same `NPM_TOKEN`, supplied only to the
+  consumer-channel step. The token can publish and move channels; the protected job
+  controls workflow ordering, not the token's registry capabilities.
+- SDK finalization: GitHub contents-write permission, with no
   npm, NuGet, signing or deployment credential.
-- `sunder-app-signing`: Windows and Apple signing configuration.
+- Other components retain `sunder-github-release-promotion`; `sunder-app-signing`
+  retains its separate Windows/Apple signing configuration and approvals.
 
 ### Official installer/launcher qualification
 
@@ -117,13 +136,53 @@ current-user gateway distribution, distinct from the development Runtime fallbac
 
 ## Publish SDK
 
-The `sunder-core-release` gate requires `SUNDER_CORE_RELEASE_APPROVED=approved`,
-an HTTPS `SUNDER_CORE_RELEASE_APPROVAL_REFERENCE`, exact
-`SUNDER_CORE_ARTIFACT_SOURCE_COMMIT`, and canonical `SUNDER_CORE_REGISTRY_ORIGIN`.
-The clean source, protected tag, workflow SHA and remote tag must agree.
+Push the coordinated authored version to `main`. `sdk_release.py` compares each
+package's authored version at that commit with its **highest published SemVer**:
+
+| Package state | Release artifact action |
+| --- | --- |
+| Never published | Build/pack, then qualify and publish |
+| Authored version greater than every published version | Build/pack, then qualify and publish |
+| Authored version equal to or older than the highest published version | Skip build/pack/release/publish work for that package |
+
+The comparison uses the full NuGet version index (including unlisted versions) and
+npm's version history, not `latest`/`next` aliases or exact-version absence. Prereleases
+participate in SemVer ordering; build metadata does not make a version newer.
+For example, an unpublished `1.9.0` is skipped if `1.10.0` is already published.
+Source changes without a version increase do not trigger package publication.
+When no packages are newer, no new SDK tag, release build or publishing login is
+started; this does not depend on an old GitHub release retaining all its assets.
+Ordinary source CI continues to run.
+
+For a new version the selector creates `sdk/v<version>` at that commit and explicitly
+dispatches `sunder-sdk-release.yml` at the tag. No manual SDK tag is needed. This
+explicit dispatch is necessary because tag pushes using `GITHUB_TOKEN` do not start
+another workflow. The dispatched pipeline records the real tag/event context; it
+does not impersonate a tag-push event.
+
+An active version is left running. A failed version resumes **only failed jobs in
+its original run**, preserving successful build/stage outputs and the original
+source/run identity. An existing tag is never advanced to a later `main` commit.
+Recovery of a partially published version requires its complete retained candidate;
+it never starts another build. The same applies if all versions have uploaded but
+the original draft still needs finalization. That is recovery of the original
+release, not a new equal-version release. Superseded versions are not resumed.
+Only HTTP 404 means absent; authentication, rate-limit and other registry failures
+stop before publication. Npm channels never move to an older version.
+
+The SDK source gate no longer reads `SUNDER_CORE_RELEASE_APPROVED`, its approval
+reference, or a manually maintained artifact-source SHA. The clean checkout,
+protected tag, remote tag and workflow SHA must agree, and the source must belong
+to `main`. `SUNDER_CORE_REGISTRY_ORIGIN` remains one-time canonical configuration.
 Release qualification also requires the protected environment's
 `SUNDER_SDK_COMPATIBILITY_BASE_COMMIT`: an independent approved history ancestor,
 with an actual ledger even for the first release.
+
+**Readiness:** automatic selection is implemented, but compatibility-input
+production and automatic supported-history confirmation/loading are not complete.
+The selector rejects a new version before creating a tag when reviewed compatibility
+recipes are absent. The qualification gate below is not bypassed; pushing the
+current source is not yet an end-to-end publication guarantee.
 
 The release consumes the tested `sunder-tested-sdk` artifact from the same run;
 publication jobs never rebuild or repack it. Stable releases use the source-built
@@ -155,7 +214,8 @@ Update `languages/csharp/dotnet/Directory.Build.props`, the bounded minor range 
 the coordinated npm workspace/template/lockfile metadata. Review assembly identity
 separately: compatible SDK patches preserve the stable contract assembly version;
 do not mechanically change it with the package version.
-Run `node scripts/release/check-sdk-version.mjs`; the SDK tag must equal its version.
+Run `node scripts/release/check-sdk-version.mjs`, then commit and push `main`; the
+automatically created SDK tag must equal that authored version.
 Dependencies use NuGet `[X.Y.0,X.(Y+1).0)` and npm `>=X.Y.0 <X.(Y+1).0`.
 Use a later-patch prerelease within an established minor line, not `X.Y.0-*`.
 The current tools are npm `11.19.1` and Vite `8.2.0`. Exact SDK and Node/npm pins
@@ -217,23 +277,108 @@ releases must retain the supported V1 baseline and pass all retained comparisons
 updating the current snapshot cannot erase that obligation. Registering corpus
 recipes is input retention, not a passing behavioral result or release promotion.
 
-### Trusted Publishing
+### Registry authentication
 
-All three real npm coordinates must already exist under the expected owner.
-`preflight-npm-trusted-publishing.sh` reports missing coordinates with exit3 before
-OIDC exchange; it never publishes placeholders. Configure each package with:
+#### NuGet trusted publishing
 
-| npm field | Value |
+Create a [NuGet.org trusted publishing policy](https://learn.microsoft.com/nuget/nuget-org/trusted-publishing)
+with these fields:
+
+| NuGet field | Value |
 | --- | --- |
-| Organization/user | `Younics` |
+| Policy Name | `sunder-core-sdk` (descriptive only) |
+| Package Owner | `younics` |
+| CI/CD Provider | `GitHub Actions` |
+| Repository Owner | `Younics` |
 | Repository | `sunder-core` |
-| Workflow filename | `sunder-sdk-release.yml` |
-| Environment | Empty (the npm publication job has no environment) |
-| Allowed action | `npm publish` |
+| Workflow File | `sunder-sdk-release.yml` (filename only) |
+| Environment | `sunder-core-release` |
 
-Require 2FA and trusted publishing for publication. The distinct granular
-`NPM_DIST_TAG_TOKEN` is used only for dist-tag mutation in its protected job.
-OIDC preflight and local publish dry-runs do not prove successful real publication.
+Enable **Push**, select **Push new packages and package versions**, and leave
+**Unlist or relist package versions** disabled. New-package permission is needed
+for the first publication of SDK packages that do not yet exist. Use these exact
+package names, one per line, rather than a broad wildcard:
+
+```text
+Sunder.Sdk
+Sunder.Sdk.Avalonia
+Sunder.Sdk.Stacks
+Sunder.Sdk.Worker
+Sunder.Package.Build
+Sunder.Package.Templates
+```
+
+In **Younics/sunder-core → Settings → Environments**, create/protect
+`sunder-core-release`, allow the `sdk/v*` release tags, and set its environment
+variable `NUGET_USER` to the individual NuGet.org username that creates the policy
+(not an email address or GitHub username). Use `younics` if that is the individual
+login; if it is an organization, use the policy creator's individual member account.
+An existing `NUGET_USER` environment secret is also supported, so it need not be
+copied merely to change its storage type. The workflow prefers the variable when
+both exist. Keep the Registry origin and compatibility configuration described
+above; trusted publishing does not replace qualification.
+
+The NuGet publication job downloads the retained release assets first, then uses
+the commit-pinned official `NuGet/login` action immediately before publishing.
+GitHub OIDC is exchanged for a masked temporary `NUGET_API_KEY`, valid for one hour,
+passed only to the publish step. No stored `NUGET_API_KEY` secret or fallback is
+used. Authentication failure stops publication; existing-version byte/signature
+verification and immutable recovery are unchanged.
+
+After a successful trusted-publishing release, revoke the old long-lived key on
+NuGet.org and remove the obsolete GitHub `NUGET_API_KEY` secret. Creating the policy
+or passing local workflow checks does not prove a successful OIDC exchange or
+production publication.
+
+#### npm access-token publishing
+
+The three npm packages use a granular access token for both their first publication
+and later versions; no npm trusted-publisher configuration or prior placeholder
+publication is required. The npm account must have publishing rights to the
+`@sunder` scope and be able to create the unscoped `create-sunder-package` name.
+GitHub organization ownership does not confer npm scope ownership.
+
+On **npmjs.com → Access Tokens → Generate New Token**, configure:
+
+| Token setting | Value |
+| --- | --- |
+| Name | `sunder-core-publish` |
+| Packages and scopes permission | **Read and write (publish and stage)** |
+| Bypass two-factor authentication | Enabled for unattended CI publication |
+| Packages | **All Packages** for initial creation, including the new unscoped name |
+| Organization-management permissions | **No access** (not needed to publish) |
+| Expiration | A short operational lifetime; rotate before expiry |
+
+Enable account 2FA. Package publishing access must permit granular tokens with
+2FA bypass; **Require two-factor authentication and disallow tokens** is incompatible
+with this publication mode. Do not grant organization/team governance permissions.
+After the first release, replace the bootstrap token with one restricted to exactly
+`@sunder/sdk`, `@sunder/package-tool`, and `create-sunder-package`, then revoke the
+broader token. Never paste a token into source, workflow YAML, or release evidence.
+
+Store `NPM_TOKEN` in **Younics/sunder-core → Settings → Environments →
+sunder-core-release**, or as a repository Actions secret. Both npm jobs use that
+environment, so the existing environment secret works without duplication. If both
+locations define it, the environment value wins. `NPM_DIST_TAG_TOKEN` and the
+separate `sunder-sdk-npm-promotion` environment are no longer needed by SDK jobs.
+Keep the SDK tag/source/compatibility gates.
+The token is absent from build/test, toolchain-installation, artifact-download,
+NuGet, and GitHub-finalization steps. `actions/setup-node` configures npm to read
+`NODE_AUTH_TOKEN`; no literal token is written into the repository.
+
+`preflight-npm-publishing.sh` validates all local archive identities, the SDK
+tag/workflow/provenance context, existing public package identities, and token
+authentication using `npm whoami`. HTTP 404 allows a first publication; other HTTP
+failures stop before dry-runs. Missing versions get `npm publish --dry-run` with
+public access, lifecycle scripts disabled, provenance, and the version-specific
+`accept-v<version>` tag. Existing versions skip the conflicting dry-run but still
+require exact byte/signature/provenance readback in `publish-sdk.sh`.
+
+`id-token: write` remains enabled only on the npm upload job for GitHub/Sigstore
+provenance. A valid token and local dry-run do not prove package write permission,
+2FA bypass, or successful provenance generation; actual publication/readback is the
+acceptance evidence. Retained candidate bytes and all release qualification gates
+remain mandatory for first publications as well as later releases.
 
 ### Transaction and verification
 
@@ -259,6 +404,10 @@ builds and their artifacts. Existing registry versions are verified before being
 skipped; missing versions resume in dependency order. Lost acknowledgements are
 reconciled by immutable readback, not overwrite. npm and NuGet cannot form a
 cross-registry transaction: failures can leave a published prefix with a private draft.
+
+The next `main` push, or **Run workflow** on `main`, performs the same failed-job
+resume automatically. Do not dispatch a fresh run at the existing SDK tag to recover
+a partial publication; the prepare check rejects another run's retained candidate.
 
 A channel/finalization failure resumes its failed jobs in the same workflow. If
 original bytes cannot be recovered or an existing version differs, retain the draft

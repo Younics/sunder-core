@@ -27,7 +27,7 @@ verify_npm() {
     "$GITHUB_REPOSITORY" .github/workflows/sunder-sdk-release.yml "$GITHUB_SHA" "$policy" "$@"
 }
 if [[ "$action" == nuget ]]; then
-  : "${NUGET_API_KEY:?NuGet API key is required}"
+  : "${NUGET_API_KEY:?NuGet trusted-publishing credential is required}"
   bash "$helpers/verify-nuget-source.sh"
   python3 "$helpers/verify-nuget-package-set.py" "$version" "$directory" "$GITHUB_SHA"
   remote="$(mktemp -d)"
@@ -39,7 +39,11 @@ if [[ "$action" == nuget ]]; then
   }
   for package_id in Sunder.Sdk Sunder.Sdk.Avalonia Sunder.Sdk.Stacks Sunder.Sdk.Worker Sunder.Package.Build Sunder.Package.Templates; do
     package="$directory/$package_id.$version.nupkg"
-    if ! download_nuget; then
+    if python3 -B "$helpers/sdk_release.py" package "$version" "$package_id"; then
+      retry download_nuget
+    else
+      lookup_status=$?
+      [[ "$lookup_status" == 4 ]] || exit "$lookup_status"
       # Reconcile duplicate/lost push acknowledgements by signed canonical readback.
       dotnet nuget push "$package" --source https://api.nuget.org/v3/index.json --api-key "$NUGET_API_KEY" --skip-duplicate || true
       retry download_nuget
@@ -47,11 +51,16 @@ if [[ "$action" == nuget ]]; then
     bash "$helpers/verify-nuget-package.sh" "$package" "$remote/package.nupkg"
   done
 elif [[ "$action" == npm ]]; then
+  : "${NODE_AUTH_TOKEN:?Set the NPM_TOKEN secret in sunder-core-release or repository Actions secrets for npm publication}"
   package_ids=("@sunder/sdk" "@sunder/package-tool" "create-sunder-package")
   archives=("sunder-sdk" "sunder-package-tool" "create-sunder-package")
   for index in "${!package_ids[@]}"; do
     package_id="${package_ids[$index]}"
-    if ! npm view "$package_id@$version" version --json --registry="$registry" >/dev/null 2>&1; then
+    if python3 -B "$helpers/sdk_release.py" package "$version" "$package_id"; then
+      : # Verify the existing immutable version below, without publishing it again.
+    else
+      lookup_status=$?
+      [[ "$lookup_status" == 4 ]] || exit "$lookup_status"
       npm publish "$directory/${archives[$index]}-$version.tgz" --ignore-scripts --access public \
         --tag "accept-v$version" --registry="$registry" --provenance || true
     fi
@@ -59,8 +68,9 @@ elif [[ "$action" == npm ]]; then
   done
   verify_npm "accept-v$version" publication
 elif [[ "$action" == promote ]]; then
-  : "${NODE_AUTH_TOKEN:?Protected npm dist-tag token is required}"
+  : "${NODE_AUTH_TOKEN:?Set the NPM_TOKEN secret in sunder-core-release or repository Actions secrets for npm channel promotion}"
   verify_npm "accept-v$version" publication
+  python3 -B "$helpers/sdk_release.py" channels "$version"
   for package_id in "@sunder/sdk" "@sunder/package-tool" "create-sunder-package"; do
     npm dist-tag add "$package_id@$version" "$channel" --registry="$registry"
     retry verify_npm "$channel" promotion "$package_id"

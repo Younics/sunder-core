@@ -38,11 +38,12 @@ def number(value):
 
 
 def tag(value, stream):
-    require(isinstance(value, str) and re.fullmatch(rf"{stream}/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?", value),
+    require(isinstance(value, str) and re.fullmatch(rf"{re.escape(stream)}/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?", value),
             f"Expected an exact SemVer {stream}/v<version> release tag")
-    if "-" in value:
+    version = value[len(stream) + 2:].split("+", 1)[0]
+    if "-" in version:
         require(all(not (item.isascii() and item.isdigit() and len(item) > 1 and item.startswith("0"))
-                    for item in value.split("-", 1)[1].split(".")), "Numeric prerelease identifiers cannot have leading zeroes")
+                    for item in version.split("-", 1)[1].split(".")), "Numeric prerelease identifiers cannot have leading zeroes")
     return value
 
 
@@ -152,6 +153,24 @@ def approved_source(source):
     require(sha(source, 40) == os.environ.get("SUNDER_CORE_ARTIFACT_SOURCE_COMMIT"), "Artifact source is not the approved Core SDK source")
 
 
+def sdk_context():
+    context = current_invocation(SDK_WORKFLOW)
+    name = tag(os.environ["GITHUB_REF_NAME"], "sdk")
+    require(os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
+            and context["workflowRef"] == "refs/tags/" + name, "SDK publication requires its exact tag workflow")
+    return context
+
+
+def sdk_source():
+    """A protected SDK tag must identify the workflow source on main, not a mutable setting."""
+    context = sdk_context()
+    source = context["workflowSha"]
+    remote_tag(os.environ["GITHUB_REF_NAME"], source)
+    comparison = gh(f"compare/{source}...main")
+    require(comparison["status"] in ("ahead", "identical"), "SDK source is not part of main")
+    return context
+
+
 def release(release_id, name, source, draft=True):
     value = gh("releases/" + number(release_id))
     require(type(value["id"]) is int and value["id"] == int(release_id) and value["tag_name"] == name and value["target_commitish"] == source
@@ -228,14 +247,11 @@ def main():
     parser.add_argument("stream", choices=["sdk"])
     args = parser.parse_args()
     name = tag(os.environ["GITHUB_REF_NAME"], args.stream)
-    context = current_invocation(SDK_WORKFLOW)
-    require(os.environ["GITHUB_EVENT_NAME"] == "push" and context["workflowRef"] == "refs/tags/" + name, "Only tag pushes produce artifacts")
+    context = sdk_source()
     source = context["workflowSha"]
-    approved_source(source)
     local_checkout(source)
-    remote_tag(name, source)
     origin(os.environ["SUNDER_CORE_REGISTRY_ORIGIN"])
-    print("Verified approved artifactSourceCommit:", source)
+    print("Verified tagged main artifactSourceCommit:", source)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,8 @@ public static class RegistryApiRoutes
     public const string CurrentUserStacks = CurrentUser + "/stacks";
     public const string CurrentUserUsers = CurrentUser + "/users";
     public const string CurrentUserCliTokens = CurrentUser + "/tokens";
+    public const string CurrentUserApiKeys = CurrentUser + "/api-keys";
+    public const string ApiKeyPermissions = CurrentUserApiKeys + "/permissions";
     public const string CurrentUserPublishTokens = CurrentUser + "/publish-tokens";
     public const string CurrentUserPackageReservations = CurrentUser + "/package-reservations";
     public const string CurrentUserStackReservations = CurrentUser + "/stack-reservations";
@@ -51,6 +53,9 @@ public static class RegistryApiRoutes
 
     public static string CurrentUserPublishToken(Guid tokenId)
         => $"{CurrentUserPublishTokens}/{tokenId:D}";
+
+    public static string CurrentUserApiKey(Guid keyId)
+        => $"{CurrentUserApiKeys}/{keyId:D}";
 
     public static string CurrentUserPackageReservation(string packageId)
         => $"{CurrentUserPackageReservations}/{Segment(packageId, nameof(packageId))}";

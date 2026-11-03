@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sunder.Core.Tests;
 using Sunder.Core.TestSupport;
+using Sunder.Sdk.Rpc;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
@@ -62,6 +63,37 @@ public sealed class AgentCurrentInputsTests
             var error = Assert.Throws<InvalidDataException>(() => AgentCurrentInputs.Load(root));
             Assert.Contains("Missing reviewed CURRENT input", error.Message);
             Assert.Contains(AgentCurrentInputs.ContractsPath, error.Message.Replace('\\', '/'));
+        });
+    }
+
+    [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_CURRENT_INPUTS", "SUNDER_AGENT_CURRENT_BASELINE_ROOT")]
+    public void PackageVersionsComeFromIndependentAuthoredProjectsNotObservedArchives()
+    {
+        WithInputs(root =>
+        {
+            var inputs = AgentCurrentInputs.Load(root);
+            foreach (var (id, version) in new[] { (AgentCurrentInputs.AgentId, "2.0.0"), ("younics.ai.agent.provider.openai", "2.3.1-rc.2") })
+            {
+                var path = Path.Combine(root, inputs.Package(id).ProjectPath);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.WriteAllText(path, $"<Project><PropertyGroup><Version>{version}</Version></PropertyGroup></Project>");
+                Assert.Equal(version, inputs.PackageVersionFor(id));
+            }
+            var provider = Path.Combine(root, inputs.Package("younics.ai.agent.provider.openai").ProjectPath);
+            var contractId = "younics.ai.agent.provider.openai.management";
+            var projected = inputs.Descriptor(contractId);
+            Assert.Equal("2.3.1-rc.2", projected.Version);
+            using var records = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(root, AgentCurrentInputs.ContractsPath)));
+            var reviewed = SunderRpcContractDescriptor.Parse(System.Text.Encoding.UTF8.GetBytes(records.RootElement.GetProperty("contracts").EnumerateArray()
+                .Single(record => record.GetProperty("contractId").GetString() == contractId).GetProperty("canonicalDescriptor").GetString()!));
+            Assert.Equal(reviewed.AbiSha256, projected.AbiSha256);
+            Assert.NotEqual(reviewed.Sha256, projected.Sha256);
+            var restored = JsonNode.Parse(projected.GetCanonicalUtf8())!;
+            restored["version"] = reviewed.Version;
+            Assert.Equal(reviewed.GetCanonicalUtf8(), SunderRpcContractDescriptor.Parse(JsonSerializer.SerializeToUtf8Bytes(restored)).GetCanonicalUtf8());
+            File.WriteAllText(provider, "<Project><PropertyGroup><Version>2.3</Version></PropertyGroup></Project>");
+            Assert.Throws<InvalidDataException>(() => inputs.PackageVersionFor("younics.ai.agent.provider.openai"));
+            Assert.Equal("2.0.0", inputs.PackageVersionFor(AgentCurrentInputs.AgentId));
         });
     }
 

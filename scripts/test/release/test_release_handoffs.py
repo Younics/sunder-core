@@ -82,6 +82,19 @@ class ReleaseHandoffTests(unittest.TestCase):
             with self.subTest(head=head, status=status), patch.object(c, "command", side_effect=[head.encode(), status]):
                 with self.assertRaises(ValueError): c.local_checkout(SOURCE)
 
+    def test_automatic_sdk_source_requires_a_protected_tag_on_main_not_approval_variables(self):
+        for event in ("push", "workflow_dispatch"):
+            with self.subTest(event=event), patch.dict(os.environ, dict(GITHUB_EVENT_NAME=event,
+                 SUNDER_CORE_RELEASE_APPROVED="", SUNDER_CORE_ARTIFACT_SOURCE_COMMIT="")), \
+                 patch.object(c, "remote_tag") as tag, patch.object(c, "gh", return_value=dict(status="ahead")):
+                self.assertEqual(SOURCE, c.sdk_source()["workflowSha"])
+                tag.assert_called_once_with("sdk/v1.1.0", SOURCE)
+        for change in (dict(GITHUB_EVENT_NAME="pull_request"), dict(GITHUB_REF="refs/heads/main"),
+                       dict(GITHUB_REF_PROTECTED="false"), dict(GITHUB_WORKFLOW_SHA=MAIN)):
+            with self.subTest(change=change), patch.dict(os.environ, change), self.assertRaises(ValueError): c.sdk_context()
+        with patch.object(c, "remote_tag"), patch.object(c, "gh", return_value=dict(status="diverged")), self.assertRaisesRegex(ValueError, "not part of main"):
+            c.sdk_source()
+
     def test_annotated_tag_requires_exact_artifact_source(self):
         with patch.object(c, "gh", side_effect=[dict(object=dict(type="tag", sha=EVIDENCE)), dict(object=dict(type="commit", sha=SOURCE))]):
             c.remote_tag("sdk/v1.1.0", SOURCE)
@@ -151,7 +164,8 @@ class ReleaseHandoffTests(unittest.TestCase):
         def exporter(arguments, **kwargs):
             calls.append(arguments)
             if arguments[3] == "export": Path(arguments[-1]).write_bytes(data)
-        with patch.object(c, "local_checkout") as clean, patch.object(c, "remote_tag"), patch.object(catalog.subprocess, "run", exporter):
+        with patch.object(c, "local_checkout") as clean, patch.object(c, "sdk_source", return_value=c.sdk_context()), \
+             patch.object(c, "remote_tag"), patch.object(catalog.subprocess, "run", exporter):
             catalog.export_catalog(self.root, self.root / "export", self.root / "source-built-verifier.dll")
         self.assertEqual(["check", "export"], [arguments[3] for arguments in calls])
         self.assertEqual(2, clean.call_count)

@@ -160,14 +160,20 @@ public sealed class TestSupportFaultProbeTests
     [Trait("Size", "Small")]
     public async Task CapturedProcess_NonzeroExitSurfacesStdoutAndStderrDiagnostics()
     {
+        await using var scope = TemporaryDirectoryScope.Create("sunder-command-diagnostics-probe");
         var startInfo = DotnetStartInfo("definitely-not-a-real-dotnet-command");
-        await using var process = CapturedProcess.Start(startInfo);
+        await using var process = CapturedProcess.Start(startInfo, maximumOutputCharacters: null, diagnosticsDirectory: scope.RootPath);
 
         var failure = await Assert.ThrowsAsync<ProcessFixtureException>(
             () => process.EnsureSuccessAsync(TimeSpan.FromSeconds(15)));
 
         Assert.Contains("exited with code", failure.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("stderr:", failure.Diagnostics, StringComparison.Ordinal);
+        var log = await File.ReadAllTextAsync(Assert.Single(Directory.GetFiles(scope.RootPath, "*.command.jsonl")));
+        Assert.Contains("\"phase\":\"start\"", log, StringComparison.Ordinal);
+        Assert.Contains("\"phase\":\"exit\"", log, StringComparison.Ordinal);
+        Assert.Contains("definitely-not-a-real-dotnet-command", log, StringComparison.Ordinal);
+        Assert.Contains("\"timeoutMilliseconds\":15000", log, StringComparison.Ordinal);
     }
 
     [Fact]

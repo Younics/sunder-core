@@ -62,13 +62,37 @@ node scripts/test-oracles/run-dotnet-tests-with-results.mjs --project Sunder.Pac
 `--build` compiles current source without restoring. Restore explicitly after dependency
 changes. When source has not changed since compilation, omit `--build` to reuse those
 test binaries. Project-scoped reports go under `artifacts/test-results/local/` by
-default and do not remove other lanes' reports. Full runs have a bounded 60-minute
-project watchdog; `--timeout-ms 5400000` selects a bounded 90-minute project run when
-needed for a shared-generator checkpoint. VSTest's per-case hang watchdog is five
-minutes for ordinary/fast selections, ten for Templates, and twenty for Build
-selections containing `host-platform` integration cases (including full-project
-runs). Those multi-command cases retain their own fifteen-minute child-process
-deadlines; the outer project and CI job watchdogs remain separate and bounded.
+default and do not remove other lanes' reports. Projects have a bounded 60-minute
+watchdog, except Package.Build selections containing `host-platform`, which get
+90 minutes (a measured Windows invocation completed 87/87 cases in 66.5 minutes).
+`--timeout-ms` explicitly overrides the project budget. VSTest's per-case hang
+watchdog is five minutes for ordinary/fast selections, fifteen for process-capable
+ExecutionRuntime.Build selections, and twenty for Templates and Package.Build
+process selections (including full-project runs). Release-only Templates selections
+retain their previous ten-minute case bound. Build's fifteen-minute child
+commands and ExecutionRuntime.Build's five-minute commands retain their own
+bounds. Templates keeps ordinary child commands at four minutes; only universal
+six-RID packing gets ten. The outer project and CI job watchdogs remain separate.
+
+The reporter streams stdout/stderr into console and retained diagnostic files.
+Its process sidecar records the command, elapsed time, exit status/signal, timeout
+or spawn error, and confirmed cleanup. A dedicated Unix process group or Windows
+Job Object owns descendants; Windows assigns the launcher while suspended, before
+it can create children. The reporter kills and drains remaining owned processes
+before advancing, even after a normal launcher exit. Unconfirmed cleanup or
+cancellation stops the selection. The native platform jobs exercise these cleanup
+regressions on each OS before the .NET lane, including Windows Job Object behavior.
+The sidecar starts incomplete before launch, so a killed reporter cannot leave
+apparently passing evidence. Log-write failures also go through process cleanup.
+
+Build/transport/template selections retain VSTest diagnostics. Package.Build also
+collects mini crash dumps on unexpected testhost failure; it does not dump successful
+test runs. On Linux, process sidecars include before/after memory and cgroup OOM
+counters when readable, plus available filesystem space. These are diagnostic
+observations, not automatic attribution of a crash to OOM. `CapturedProcess`
+fixtures record child-command start/wait/exit
+timings under the reporter's diagnostic directory, so an outer abort need not erase
+the last started command. No production Runtime timeouts or lifecycle behavior change.
 
 | Change | Validation to select |
 | --- | --- |
@@ -118,8 +142,9 @@ each report, project/lane pair, and lane. The only individual test identities in
 the compact evidence are tests that actually skipped; each must match an
 explicit policy rule and is recorded with its reason and owning lane. An unknown
 skip, unknown result, missing report, missing project/lane owner, omitted selected
-.NET declaration, inconsistent TRX counter, failed test, or report containing
-zero tests fails evidence generation. Raw TRX/JUnit artifacts retain individual
+.NET declaration, inconsistent TRX counter, failed/aborted run, failed command
+sidecar (even beside a passing TRX), failed test, or report containing zero tests
+fails evidence generation. Raw TRX/JUnit artifacts retain individual
 outcomes and durations for diagnosis.
 
 `.github/workflows/sunder-ci.yml` owns PR/main, scheduled, manual and SDK-release
@@ -165,8 +190,9 @@ reset deletion grants inheritable user-only directory access while traversing
 validated owned trees, avoiding loss of inherited child access without changing
 foreign ownership or relaxing path/identity checks.
 
-App packaging evidence is summarized after an attempted packaging step, including
-a failed attempt, but not after a skipped step when an earlier platform test failed.
+App packaging and Windows output-lock evidence are summarized after their execution
+step was attempted, including a failed attempt, but not after a skipped step when
+an earlier platform test failed.
 This avoids a misleading missing-directory error without accepting missing reports:
 successful native validation still requires both platform and packaging checks.
 Host-only releases disable the reusable workflow's `include-app-packaging` input,

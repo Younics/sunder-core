@@ -14,6 +14,19 @@ public sealed partial class PackageTemplateTests
     private const string TestVersionRange = "[9.8.7-preview.4]";
 
     [Fact]
+    public void CommandWatchdog_OnlyUniversalPackGetsTheFanoutBudget()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(10), CommandTimeout(["msbuild", "package.csproj", "-t:PackSunderPackage"]));
+        foreach (var arguments in new[]
+        {
+            new[] { "build", "package.csproj" },
+            new[] { "restore", "package.csproj" },
+            new[] { "pack", "sdk.csproj" },
+            new[] { "msbuild", "package.csproj", "-t:PackSunderPackage", "-p:SunderPackageUsePrebuiltLeaves=true" },
+        }) Assert.Equal(TimeSpan.FromMinutes(4), CommandTimeout(arguments));
+    }
+
+    [Fact]
     public async Task PackedTemplate_UsesPackageVersionAndEscapesGeneratedInputs()
     {
         var repositoryRoot = FindRepositoryRoot();
@@ -772,7 +785,7 @@ public sealed partial class PackageTemplateTests
         await using var process = CapturedProcess.Start(startInfo);
         try
         {
-            var result = await process.WaitForExitAsync(TimeSpan.FromMinutes(4));
+            var result = await process.WaitForExitAsync(CommandTimeout(arguments));
             return new ProcessResult(result.ExitCode, result.StandardOutput, result.StandardError);
         }
         catch (ProcessFixtureException exception)
@@ -784,6 +797,15 @@ public sealed partial class PackageTemplateTests
                 + Environment.NewLine
                 + exception.Message);
         }
+    }
+
+    private static TimeSpan CommandTimeout(string[] arguments)
+    {
+        // Universal pack builds six exact-RID leaves (twelve with App).
+        // Ordinary and no-build/prebuilt commands retain their four-minute bound.
+        var universalPack = arguments.Contains("-t:PackSunderPackage", StringComparer.Ordinal)
+            && !arguments.Contains("-p:SunderPackageUsePrebuiltLeaves=true", StringComparer.Ordinal);
+        return TimeSpan.FromMinutes(universalPack ? 10 : 4);
     }
 
     private static void AssertSuccess(ProcessResult result)

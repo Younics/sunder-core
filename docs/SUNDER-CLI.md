@@ -382,7 +382,16 @@ revisions and ownership; there is no package/Stack hard-delete command.
 
 ## CI Publication Credentials
 
-Protected automation may publish a package or Stack directly with a scoped Registry publish token. Do not put the token in an option, process argument, repository file, or log.
+Create a scoped **API key** in the Registry's **Dashboard → API keys** page. Select
+the exact package/Stack IDs and permissions, then copy the one-time secret into
+your protected CI environment. Existing `sunder_pub_v1_...` credentials and the
+`SUNDER_REGISTRY_PUBLISH_TOKEN` variable remain supported; key management uses
+`/api/v1/me/api-keys`.
+
+Protected automation may publish a package or Stack directly with this API key.
+Do not put it in an option, process argument, repository file, or log. Direct
+stable publication that sets `latest` needs both `package:publish` and
+`package:promote-latest`; use `--no-latest` for publish-only access.
 
 Environment input:
 
@@ -398,7 +407,7 @@ printf '%s' "$PUBLISH_TOKEN" | \
   sunder registry stack publish --file ./MyStack.sunderstack --credential-source stdin
 ```
 
-`--credential-source` accepts only `runtime`, `environment`, or `stdin` and defaults to `runtime`. Environment mode reads `SUNDER_REGISTRY_PUBLISH_TOKEN` and clears it from the CLI process after capture. Stdin mode requires redirected input and accepts one bounded credential with an optional trailing newline. Automation credentials apply only to package/Stack publication; other management commands remain Runtime-owned human operations.
+`--credential-source` accepts only `runtime`, `environment`, or `stdin` and defaults to `runtime`. Environment mode reads `SUNDER_REGISTRY_PUBLISH_TOKEN` and clears it from the CLI process after capture. Stdin mode requires redirected input and accepts one bounded credential with an optional trailing newline. CLI automation credentials apply only to package/Stack publication; other CLI management commands remain Runtime-owned human operations. The Registry's atomic release API separately accepts keys with `package:release`.
 
 ## Development Package Imports And Loading
 

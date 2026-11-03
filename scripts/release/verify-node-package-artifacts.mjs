@@ -40,6 +40,7 @@ export async function verifyNodePackageArtifacts({
   artifactDirectory,
   packReportPath,
   packageInventoryPath = PUBLIC_PACKAGE_INVENTORY,
+  packageNames,
 }) {
   const versionMatch = SEMVER.exec(version);
   assert(versionMatch !== null, `Expected a strict SemVer release version, received '${version}'.`);
@@ -50,11 +51,20 @@ export async function verifyNodePackageArtifacts({
   const directory = resolve(artifactDirectory);
   const directoryStat = await lstat(directory);
   assert(directoryStat.isDirectory() && !directoryStat.isSymbolicLink(), `npm artifact directory must be a real directory: ${directory}`);
-  const packages = [
+  const allPackages = [
     { name: "@sunder/sdk", archive: `sunder-sdk-${version}.tgz` },
     { name: "@sunder/package-tool", archive: `sunder-package-tool-${version}.tgz` },
     { name: "create-sunder-package", archive: `create-sunder-package-${version}.tgz` },
   ];
+  if (packageNames !== undefined) {
+    assert(
+      Array.isArray(packageNames) && packageNames.length > 0
+        && new Set(packageNames).size === packageNames.length
+        && packageNames.every((name) => allPackages.some((item) => item.name === name)),
+      "npm verification requires a nonempty, unique public package selection.",
+    );
+  }
+  const packages = packageNames === undefined ? allPackages : allPackages.filter((item) => packageNames.includes(item.name));
   const expectedArchives = new Set(packages.map((item) => item.archive));
   const topLevelEntries = await readdir(directory, { withFileTypes: true });
   const actualArchives = topLevelEntries
@@ -73,7 +83,7 @@ export async function verifyNodePackageArtifacts({
   } catch (error) {
     throw new Error(`npm pack report is missing or invalid: ${packReportPath}`, { cause: error });
   }
-  assert(Array.isArray(packReport) && packReport.length === packages.length, "npm pack must report exactly three package artifacts.");
+  assert(Array.isArray(packReport) && packReport.length === packages.length, "npm pack must report exactly the selected package artifacts.");
   let packageInventory;
   try {
     packageInventory = JSON.parse(await readFile(resolve(packageInventoryPath), "utf8"));
@@ -84,9 +94,9 @@ export async function verifyNodePackageArtifacts({
   assert(packageInventory.coordinatedVersion === version, `Public package inventory version is '${packageInventory.coordinatedVersion}', expected '${version}'.`);
   const packageContracts = new Map(packageInventory.npm.map((contract) => [contract.name, contract]));
   assert(
-    packageInventory.npm.length === packages.length
-      && packageContracts.size === packages.length
-      && packages.every((item) => packageContracts.has(item.name)),
+    packageInventory.npm.length === allPackages.length
+      && packageContracts.size === allPackages.length
+      && allPackages.every((item) => packageContracts.has(item.name)),
     "Public npm package inventory does not match the coordinated release set.",
   );
 
@@ -184,11 +194,11 @@ export async function verifyNodePackageArtifacts({
     });
   }
 
-  assert(manifests.get("@sunder/package-tool")?.dependencies?.["@sunder/sdk"] === npmVersionRange,
-    `@sunder/package-tool must depend on @sunder/sdk '${npmVersionRange}'.`);
-  assert(manifests.get("create-sunder-package")?.dependencies?.["@sunder/sdk"] === npmVersionRange,
-    `create-sunder-package must depend on @sunder/sdk '${npmVersionRange}'.`);
-  assert(manifests.get("@sunder/package-tool")?.dependencies?.vite === viteVersion,
+  for (const name of ["@sunder/package-tool", "create-sunder-package"]) {
+    if (manifests.has(name)) assert(manifests.get(name).dependencies?.["@sunder/sdk"] === npmVersionRange,
+      `${name} must depend on @sunder/sdk '${npmVersionRange}'.`);
+  }
+  if (manifests.has("@sunder/package-tool")) assert(manifests.get("@sunder/package-tool").dependencies?.vite === viteVersion,
     `@sunder/package-tool must pin Vite '${viteVersion}'.`);
 
   return results;
@@ -211,12 +221,13 @@ function ordinal(left, right) {
 }
 
 async function main() {
-  const [version, npmVersionRange, viteVersion, artifactDirectory, packReportPath] = process.argv.slice(2);
+  const [version, npmVersionRange, viteVersion, artifactDirectory, packReportPath, ...selected] = process.argv.slice(2);
   if ([version, npmVersionRange, viteVersion, artifactDirectory, packReportPath].some((value) => value === undefined)
-      || process.argv.length !== 7) {
-    throw new Error("Usage: verify-node-package-artifacts.mjs <version> <npm-version-range> <vite-version> <artifact-directory> <npm-pack.json>");
+      || process.argv.length < 7) {
+    throw new Error("Usage: verify-node-package-artifacts.mjs <version> <npm-version-range> <vite-version> <artifact-directory> <npm-pack.json> [package-name ...]");
   }
-  const result = await verifyNodePackageArtifacts({ version, npmVersionRange, viteVersion, artifactDirectory, packReportPath });
+  const result = await verifyNodePackageArtifacts({ version, npmVersionRange, viteVersion, artifactDirectory, packReportPath,
+    packageNames: selected.length === 0 ? undefined : selected });
   console.log(JSON.stringify({ packages: result }));
 }
 

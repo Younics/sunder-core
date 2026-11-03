@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
 import {
   auditCoreTestReports,
@@ -61,7 +66,7 @@ test("TRX and JUnit parsers retain expanded discovery, execution, and skip reaso
       <TestDefinitions>
         <UnitTest id="case"><TestMethod className="Example.Tests" name="Cases" /></UnitTest>
       </TestDefinitions>
-      <ResultSummary><Counters total="2" executed="1" /></ResultSummary>
+      <ResultSummary outcome="Completed"><Counters total="2" executed="1" /></ResultSummary>
     </TestRun>`, "Example.Tests.trx");
   assert.equal(trx.discovered, 2);
   assert.deepEqual(trx.results.map((item) => item.declarationId), ["Example.Tests.Cases", "Example.Tests.Cases"]);
@@ -226,6 +231,48 @@ test("TRX counter mutation cannot hide omitted runtime cases", () => {
     <TestRun>
       <Results><UnitTestResult executionId="one" testId="case" testName="Example.Tests.Passes" outcome="Passed" /></Results>
       <TestDefinitions><UnitTest id="case"><TestMethod className="Example.Tests" name="Passes" /></UnitTest></TestDefinitions>
-      <ResultSummary><Counters total="0" executed="0" /></ResultSummary>
+      <ResultSummary outcome="Completed"><Counters total="0" executed="0" /></ResultSummary>
     </TestRun>`, "mutation.trx"), /expected 1/u);
+});
+
+test("TRX run failures and incomplete summaries cannot be hidden by passing case counters", () => {
+  const report = (summary) => `<TestRun>
+    <Results><UnitTestResult executionId="one" testId="case" testName="Example.Tests.Passes" outcome="Passed" /></Results>
+    <TestDefinitions><UnitTest id="case"><TestMethod className="Example.Tests" name="Passes" /></UnitTest></TestDefinitions>
+    ${summary}</TestRun>`;
+  for (const summary of [
+    '<ResultSummary outcome="Failed"><Counters total="1" executed="1" passed="1" /></ResultSummary>',
+    '<ResultSummary outcome="Aborted"><Counters total="1" executed="1" passed="1" /></ResultSummary>',
+    '<ResultSummary outcome="Completed"><Counters total="1" executed="1" aborted="1" /></ResultSummary>',
+    '<ResultSummary outcome="Completed"><Counters total="1" executed="1" passedButRunAborted="1" /></ResultSummary>',
+    '<ResultSummary outcome="Completed"><RunInfo outcome="Error"><Text>Test host process crashed</Text></RunInfo><Counters total="1" executed="1" /></ResultSummary>',
+    '<ResultSummary><Counters total="1" executed="1" /></ResultSummary>',
+    '',
+  ]) {
+    assert.throws(() => parseTrxReport(report(summary), "crashed.trx"), /failed or aborted|completed run summary|aborted=1|passedButRunAborted=1/u);
+  }
+  // Keep ordinary failed cases available to the evidence counter/reporting path.
+  const failure = report('<ResultSummary outcome="Failed"><Counters total="1" executed="1" /></ResultSummary>')
+    .replace('outcome="Passed"', 'outcome="Failed"');
+  assert.equal(parseTrxReport(failure, "failed.trx").results[0].outcome, "Failed");
+});
+
+test("evidence cannot accept a passing TRX left by a timed-out or unclean runner", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-failed-command-evidence-"));
+  const id = "Sunder.Core.TestSupport.Tests.TestSupportFaultProbeTests.ManualTime_DelayCannotCompleteBeforeItsClockBoundary";
+  try {
+    await writeFile(resolve(root, "Sunder.Core.TestSupport.Tests.trx"), `<TestRun>
+      <Results><UnitTestResult executionId="one" testId="case" testName="${id}" outcome="Passed" /></Results>
+      <TestDefinitions><UnitTest id="case"><TestMethod className="Sunder.Core.TestSupport.Tests.TestSupportFaultProbeTests"
+        name="ManualTime_DelayCannotCompleteBeforeItsClockBoundary" /></UnitTest></TestDefinitions>
+      <ResultSummary outcome="Completed"><Counters total="1" executed="1" /></ResultSummary></TestRun>`);
+    for (const failure of [{ error: { code: "ETIMEDOUT" } }, { status: null, error: { code: "EINCOMPLETE" } },
+      { status: 1 }, { signal: "SIGKILL" }, { cleanupComplete: false }]) {
+      await writeFile(resolve(root, "command.process.json"), JSON.stringify({ status: 0, signal: null, error: null, cleanupComplete: true, ...failure }));
+      const result = spawnSync(process.execPath, [fileURLToPath(new URL("./summarize-core-test-results.mjs", import.meta.url)),
+        root, "--allow-partial", "--require-test", id], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Test command failed/u);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

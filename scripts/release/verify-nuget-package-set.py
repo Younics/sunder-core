@@ -171,7 +171,11 @@ def verify_package_set(
     version: str,
     directory: Path,
     expected_commit: str,
+    package_ids=None,
 ) -> list[dict[str, object]]:
+    package_ids = PACKAGE_IDS if package_ids is None else tuple(package_ids)
+    if not package_ids or len(set(package_ids)) != len(package_ids) or not set(package_ids) <= set(PACKAGE_IDS):
+        fail("NuGet verification requires a nonempty, unique public package selection.")
     if SEMVER.fullmatch(version) is None:
         fail(f"Expected a strict SemVer package version, received '{version}'.")
     if GIT_COMMIT.fullmatch(expected_commit) is None:
@@ -179,7 +183,7 @@ def verify_package_set(
     if directory.is_symlink() or not directory.is_dir():
         fail(f"NuGet artifact directory must be a real directory: {directory}")
 
-    expected_paths = {f"{package_id}.{version}.nupkg" for package_id in PACKAGE_IDS}
+    expected_paths = {f"{package_id}.{version}.nupkg" for package_id in package_ids}
     actual_paths: set[str] = set()
     for root, directories, files in os.walk(directory, followlinks=False):
         root_path = Path(root)
@@ -204,19 +208,19 @@ def verify_package_set(
             version,
             expected_commit,
         )
-        for package_id in PACKAGE_IDS
+        for package_id in package_ids
     ]
 
 
 def main() -> int:
-    if len(sys.argv) != 4:
+    if len(sys.argv) < 4:
         print(
-            "Usage: verify-nuget-package-set.py <version> <artifact-directory> <repository-commit>",
+            "Usage: verify-nuget-package-set.py <version> <artifact-directory> <repository-commit> [package-id ...]",
             file=sys.stderr,
         )
         return 2
     try:
-        result = verify_package_set(sys.argv[1], Path(sys.argv[2]).absolute(), sys.argv[3])
+        result = verify_package_set(sys.argv[1], Path(sys.argv[2]).absolute(), sys.argv[3], sys.argv[4:] or None)
     except (OSError, ValueError) as exception:
         print(str(exception), file=sys.stderr)
         return 1

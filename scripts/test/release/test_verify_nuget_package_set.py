@@ -71,6 +71,22 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
             self.assertEqual(set(MODULE.PACKAGE_IDS), {item["packageId"] for item in result})
             self.assertTrue(all(len(item["sha256"]) == 64 for item in result))
 
+    def test_selected_package_verification_does_not_require_or_allow_skipped_archives(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            selected = ["Sunder.Sdk.Worker"]
+            self.create_package(root, selected[0], selected[0], self.version)
+            result = MODULE.verify_package_set(self.version, root, self.commit, selected)
+            self.assertEqual(selected, [item["packageId"] for item in result])
+            with self.assertRaisesRegex(ValueError, "artifact paths"):
+                MODULE.verify_package_set(self.version, root, self.commit)
+            self.create_package(root, "Sunder.Sdk", "Sunder.Sdk", self.version)
+            with self.assertRaisesRegex(ValueError, "artifact paths"):
+                MODULE.verify_package_set(self.version, root, self.commit, selected)
+            for invalid in ([], ["Other.Package"], selected * 2):
+                with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "public package selection"):
+                    MODULE.verify_package_set(self.version, root, self.commit, invalid)
+
     def test_rejects_filename_that_does_not_match_exact_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -13,6 +13,7 @@ import {
   validateWorkflowTestSelections,
 } from "./core-test-policy.mjs";
 import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
+import { dotnetTestArguments } from "./dotnet-test-command.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const fixtureSource = "languages/csharp/dotnet/tests/Inventory.Tests/Declarations.cs";
@@ -176,44 +177,72 @@ test("project-scoped test selection excludes process cases from the fast lane an
   }
 });
 
-test(".NET reporter bounds expensive Build cases without relaxing fast-project or project deadlines", async () => {
-  const root = await mkdtemp(resolve(tmpdir(), "sunder-dotnet-timeouts-"));
+test(".NET reporter scopes integration budgets and crash diagnostics without relaxing the fast lane", () => {
+  const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
+  for (const [project, lane, hang, minutes] of [
+    ["Sunder.Package.Build.Tests", "host-platform", "20m", 90],
+    ["Sunder.Package.Build.Tests", undefined, "20m", 90],
+    ["Sunder.Package.Build.Tests", "dotnet-linux", "5m", 60],
+    ["Sunder.Package.Templates.Tests", undefined, "20m", 60],
+    ["Sunder.Package.Templates.Tests", "release-artifact", "10m", 60],
+    ["Sunder.ExecutionRuntime.Build.Tests", "host-platform", "15m", 60],
+    ["Sunder.ExecutionRuntime.Build.Tests", "dotnet-linux", "5m", 60],
+    ["Sunder.Sdk.PublicApi.Tests", "dotnet-linux", "5m", 60],
+  ]) {
+    const result = spawnSync(process.execPath, [runner, "--list", "--project", project,
+      ...(lane === undefined ? [] : ["--primary-lane", lane])], { cwd: repositoryRoot, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    const budget = JSON.parse(result.stdout).projects[0];
+    assert.equal(budget.hangTimeout, hang);
+    assert.equal(budget.timeoutMilliseconds, minutes * 60_000);
+    const args = dotnetTestArguments({ projectPath: `${project}.csproj`, projectName: project,
+      outputDirectory: "results", logStem: "results/diagnostics/project", build: false, budget, extraArguments: [] });
+    assert.equal(args[args.indexOf("--blame-hang-timeout") + 1], hang);
+    assert.equal(args.includes("--blame-crash"), project === "Sunder.Package.Build.Tests");
+    assert.equal(args.includes("--diag"), budget.diagnostics);
+    assert.ok(args.includes("--no-build"));
+  }
+  const override = spawnSync(process.execPath, [runner, "--list", "--project", "Sunder.Package.Build.Tests",
+    "--timeout-ms", "1234"], { cwd: repositoryRoot, encoding: "utf8" });
+  assert.equal(override.status, 0, override.stderr);
+  assert.equal(JSON.parse(override.stdout).projects[0].timeoutMilliseconds, 1234);
+  for (const invalid of ["0", "2147483648"]) {
+    const rejected = spawnSync(process.execPath, [runner, "--list", "--project", "Sunder.Package.Build.Tests",
+      "--timeout-ms", invalid], { cwd: repositoryRoot, encoding: "utf8" });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /--timeout-ms must be a positive integer/u);
+  }
+});
+
+test(".NET reporter refuses to start the next project when process cleanup is unconfirmed", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-reporter-cleanup-failure-"));
   try {
-    const log = resolve(root, "commands.jsonl");
-    const hook = resolve(root, "record-dotnet.mjs");
+    const log = resolve(root, "started.jsonl");
+    const hook = resolve(root, "unclean-process.mjs");
     await writeFile(hook, `
-      import childProcess from "node:child_process";
-      import { syncBuiltinESMExports } from "node:module";
-      import { appendFileSync } from "node:fs";
-      childProcess.spawnSync = (command, args, options) => {
-        appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command, args, timeout: options.timeout }) + "\\n");
-        return { status: 0 };
+      import childProcess from 'node:child_process';
+      import { syncBuiltinESMExports } from 'node:module';
+      import { EventEmitter } from 'node:events';
+      import { PassThrough } from 'node:stream';
+      import { appendFileSync } from 'node:fs';
+      childProcess.spawn = (command, args) => {
+        appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command, args }) + '\\n');
+        const child = new EventEmitter();
+        child.pid = 2147483646;
+        child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        process.nextTick(() => { child.emit('exit', 0, null); child.stdout.end(); child.stderr.end(); child.emit('close', 0, null); });
+        return child;
       };
+      process.kill = () => { throw Object.assign(new Error('seeded cleanup failure'), { code: 'EPERM' }); };
       syncBuiltinESMExports();
     `);
     const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
-    for (const [project, lane, expected] of [
-      ["Sunder.Package.Build.Tests", "host-platform", "20m"],
-      ["Sunder.Package.Build.Tests", undefined, "20m"],
-      ["Sunder.Package.Build.Tests", "dotnet-linux", "5m"],
-      ["Sunder.Package.Templates.Tests", undefined, "10m"],
-      ["Sunder.Sdk.PublicApi.Tests", "dotnet-linux", "5m"],
-    ]) {
-      const result = spawnSync(process.execPath, ["--import", hook, runner,
-        "--project", project, ...(lane === undefined ? [] : ["--primary-lane", lane]),
-        "--results-directory", resolve(root, "results")], { cwd: repositoryRoot, encoding: "utf8" });
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      const command = JSON.parse((await readFile(log, "utf8")).trim().split("\n").at(-1));
-      assert.equal(command.command, "dotnet");
-      assert.ok(command.args.includes("--blame-hang"));
-      assert.equal(command.args[command.args.indexOf("--blame-hang-timeout") + 1], expected);
-      assert.equal(command.timeout, 60 * 60 * 1000);
-      assert.ok(command.args.includes("--logger"));
-      assert.ok(command.args.includes("--no-build"));
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
+    const result = spawnSync(process.execPath, ["--import", hook, runner, "--primary-lane", "host-platform",
+      "--results-directory", resolve(root, "results")], { cwd: repositoryRoot, encoding: "utf8" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Stopping before the next project/u);
+    assert.equal((await readFile(log, "utf8")).trim().split("\n").length, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("lane entry retains the renamed process suspension regression and fails closed on missing release inputs", () => {
@@ -351,7 +380,7 @@ test("runtime model retains theories, dynamic Node declarations, platform owners
   assert.ok(declarations.some((item) => item.id
     === "Sunder.Package.Format.Tests.SemanticVersionTests.TryParse_RejectsMalformedVersions"));
   assert.ok(declarations.some((item) => item.framework === "node" && item.dynamicTemplate));
-  for (const name of ["preflight-npm-trusted-publishing.fixture.sh", "verify-nuget-package.fixture.sh",
+  for (const name of ["preflight-npm-publishing.fixture.sh", "verify-nuget-package.fixture.sh",
     "verify-nuget-source.fixture.sh", "verify-release-tag.fixture.sh"]) {
     assert.ok(declarations.some((item) => item.framework === "shell" && item.name === name));
   }

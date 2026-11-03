@@ -195,7 +195,11 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 d.pack(self.root, COMMIT, ["existing-pack-command"])
         self.assert_restored()
-        for changed in (dict(GITHUB_SHA="b" * 40), dict(GITHUB_REF="refs/tags/sdk/v9.9.9"), dict(GITHUB_EVENT_NAME="workflow_dispatch")):
+        with patch.dict(os.environ, dict(env, GITHUB_EVENT_NAME="workflow_dispatch")), patch.object(d.subprocess, "run") as run:
+            d.pack(self.root, COMMIT, ["existing-pack-command"])
+            run.assert_called_once()
+        self.assert_restored()
+        for changed in (dict(GITHUB_SHA="b" * 40), dict(GITHUB_REF="refs/tags/sdk/v9.9.9"), dict(GITHUB_EVENT_NAME="pull_request")):
             with self.subTest(changed=changed), patch.dict(os.environ, dict(env, **changed)), patch.object(d.subprocess, "run") as run:
                 with self.assertRaises(ValueError):
                     d.pack(self.root, COMMIT, ["existing-pack-command"])
@@ -205,6 +209,10 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         self.create_archives()
         before = {path.name: path.read_bytes() for path in (self.root / "artifacts").iterdir()}
         d.verify(self.root, [self.root / "artifacts"], COMMIT)
+        d.verify(self.root, [self.root / "artifacts"], COMMIT, package_names=["Sunder.Sdk", "@sunder/sdk"])
+        for invalid in ([], ["Other.Package"], ["Sunder.Sdk", "Sunder.Sdk"]):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "public package selection"):
+                d.verify(self.root, [self.root / "artifacts"], COMMIT, package_names=invalid)
         self.assertEqual(before, {path.name: path.read_bytes() for path in (self.root / "artifacts").iterdir()})
         self.assert_restored()
 
@@ -272,18 +280,15 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
 
     def test_ci_binds_before_pack_and_artifact_consumption_using_the_existing_commands(self):
         ci = (d.ROOT / ".github/workflows/sunder-ci.yml").read_text()
-        wrapper = ci.index('sdk_release_documentation.py pack "$SOURCE_SHA" -- bash -euo pipefail')
-        validation = ci.index('sdk_release_documentation.py verify "$SOURCE_SHA" artifacts/sdk artifacts/npm')
-        self.assertLess(wrapper, ci.index('dotnet pack "$project"'))
-        self.assertLess(wrapper, ci.index("npm pack --prefix"))
-        self.assertLess(ci.index("verify-node-package-artifacts.mjs"), validation)
-        self.assertLess(validation, ci.index("name: Source catalog and generated .NET template variants"))
-        self.assertLess(validation, ci.index("name: Retain the tested candidate feed"))
-        self.assertIn('if [[ "$GITHUB_REF" == refs/tags/sdk/* ]]; then', ci)
-        block = ci[ci.rfind("        run: |", 0, wrapper):ci.index("      - name:", validation)]
-        script = "\n".join(line[10:] for line in block.splitlines()[1:])
-        script = re.sub(r"\$\{\{.*?\}\}", "GITHUB_EXPRESSION", script)
-        subprocess.run(["bash", "-n"], input=script, text=True, check=True, capture_output=True)
+        wrapper = ci.index('sdk_release.py pack "$SDK_VERSION"')
+        self.assertLess(wrapper, ci.index("name: Source catalog and generated .NET template variants"))
+        self.assertLess(wrapper, ci.index("name: Retain the tested candidate feed"))
+        packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(version):", 1)[1].split("def channels(", 1)[0]
+        self.assertIn("documentation.pack_context(ROOT, commit)", packer)
+        self.assertLess(packer.index("with context:"), packer.index('["dotnet", "pack"'))
+        self.assertLess(packer.index("with context:"), packer.index('["npm", "pack"'))
+        self.assertLess(packer.index("verify-node-package-artifacts.mjs"), packer.index("documentation.verify("))
+        self.assertIn('if is_tag:', packer)
 
 
 if __name__ == "__main__":

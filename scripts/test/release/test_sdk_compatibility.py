@@ -133,7 +133,7 @@ class SdkCompatibilityTests(unittest.TestCase):
             directory = self.root / attempt
             directory.mkdir()
             with patch.object(compatibility, "context", return_value=(invocation, "1.1.0", BASE)), \
-                 patch.object(c, "approved_source"), patch.object(c, "command", side_effect=[b"commit", ledger, ledger]), \
+                 patch.object(c, "sdk_source"), patch.object(c, "command", side_effect=[b"commit", ledger, ledger]), \
                  patch.object(compatibility.subprocess, "run"), \
                  patch.object(compatibility, "gate", return_value=dict(files=sorted(values), executionFiles=["synthetic.json"])) as gate, \
                  patch.dict(os.environ, GITHUB_OUTPUT=str(self.root / "outputs")):

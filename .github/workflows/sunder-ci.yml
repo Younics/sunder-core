@@ -6,6 +6,10 @@ on:
     branches: [main]
   workflow_dispatch:
   workflow_call:
+    outputs:
+      sdk-packaged:
+        description: Whether newer SDK package archives were produced.
+        value: ${{ jobs.build-test-pack.outputs.sdk-packaged }}
   schedule:
     - cron: "17 3 * * 1"
 
@@ -24,6 +28,8 @@ jobs:
   build-test-pack:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    outputs:
+      sdk-packaged: ${{ steps.package.outputs.publish }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -37,6 +43,14 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: languages/typescript/node/package-lock.json
+      - name: Read authored package versions
+        id: version
+        run: node scripts/release/check-sdk-version.mjs
+      - name: Compare each authored version with its highest published version
+        id: packages
+        env:
+          SDK_VERSION: ${{ steps.version.outputs.version }}
+        run: python3 -B scripts/release/sdk_release.py check "$SDK_VERSION"
       - name: Compare supported release history and public surfaces
         env:
           COMPATIBILITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -53,7 +67,6 @@ jobs:
           node scripts/toolchains.mjs
           node scripts/test-oracles/check-core-test-policy.mjs
           npm install --global "npm@$NPM_VERSION" --registry=https://registry.npmjs.org
-          node scripts/release/check-sdk-version.mjs
           npm ci --prefix languages/typescript/node
           npm ls --all --prefix languages/typescript/node
           python3 -B scripts/test/check-markdown-links.py .
@@ -75,26 +88,15 @@ jobs:
           node scripts/test-oracles/run-dotnet-tests-with-results.mjs --configuration Release --primary-lane dotnet-linux --results-directory artifacts/test-results/dotnet
           node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/dotnet --allow-partial --require-primary-lane dotnet-linux
           node scripts/test-oracles/run-release-fixtures-with-results.mjs
-      - name: Pack developer artifacts once with source-bound release documentation
+      - name: Pack only newer developer packages with source-bound release documentation
+        id: package
+        if: steps.packages.outputs.publish == 'true'
         env:
-          SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          python3 -B scripts/release/sdk_release_documentation.py pack "$SOURCE_SHA" -- bash -euo pipefail <<'PACK'
-          version="$(node -p "JSON.parse(require('fs').readFileSync('eng/test-oracles/core-public-packages.json')).coordinatedVersion")"
-          mkdir -p artifacts/sdk
-          while IFS= read -r project; do
-            dotnet pack "$project" -c Release --no-restore --no-build -p:ContinuousIntegrationBuild=true -p:GeneratePackageOnBuild=false -o artifacts/sdk
-          done < <(jq -r '.nuget[].project' eng/test-oracles/core-public-packages.json)
-          python3 scripts/release/verify-nuget-package-set.py "$version" artifacts/sdk "$SOURCE_SHA"
-          mkdir -p "$PWD/artifacts/npm"
-          npm pack --prefix languages/typescript/node --json --pack-destination "$PWD/artifacts/npm" --workspace @sunder/sdk --workspace @sunder/package-tool --workspace create-sunder-package > artifacts/npm-pack.json
-          node scripts/release/verify-node-package-artifacts.mjs "$(node -p "require('./languages/typescript/node/package.json').version")" "$(node -p "require('./languages/typescript/node/packages/package-tool/package.json').dependencies['@sunder/sdk']")" "$(node -p "require('./languages/typescript/node/package.json').devDependencies.vite")" artifacts/npm artifacts/npm-pack.json
-          PACK
-          if [[ "$GITHUB_REF" == refs/tags/sdk/* ]]; then
-            python3 -B scripts/release/sdk_release_documentation.py verify "$SOURCE_SHA" artifacts/sdk artifacts/npm
-          fi
+          SDK_VERSION: ${{ steps.version.outputs.version }}
+        # Recheck immediately before packing: another run may have published while tests ran.
+        run: python3 -B scripts/release/sdk_release.py pack "$SDK_VERSION"
       - name: Source catalog and generated .NET template variants
+        if: steps.package.outputs.all_new == 'true'
         env:
           DOTNET_CLI_HOME: ${{ runner.temp }}/template-cli-home
           NUGET_PACKAGES: ${{ runner.temp }}/template-packages
@@ -132,7 +134,8 @@ jobs:
             dotnet msbuild "$project" -t:PackSunderPackage -p:Configuration=Release
             dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll dev package validate "$sample/bin/Release/net10.0/Smoke.$variant.1.0.0.sunderpkg"
           done
-      - name: Generated Node templates and universal module
+      - name: Generated Node templates
+        if: steps.package.outputs.all_new == 'true'
         run: |
           set -euo pipefail
           version="$(jq -r .coordinatedVersion eng/test-oracles/core-public-packages.json)"
@@ -150,14 +153,26 @@ jobs:
             npm --prefix "$sample" run build
             npm --prefix "$sample" run package
           done
-          npm --prefix languages/typescript/node run module:package
-          dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll dev package validate languages/typescript/node/fixtures/runtime-backed-worker/dist/sunder.node.runtimebacked.1.0.0.sunderpkg
-      - name: Required generated-package and cross-language Host integration
+      - name: Require generated-package Host smoke tests for a complete new candidate
+        if: steps.package.outputs.all_new == 'true'
         env:
           SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE: "1"
           SUNDER_DOTNET_TEMPLATE_DEV_PATH: ${{ runner.temp }}/dotnet-template-headless/bin/Release/net10.0/sunder-dev
           SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE: "1"
           SUNDER_NODE_TEMPLATE_DEV_PATH: ${{ runner.temp }}/node-template-node/dist/sunder-dev
+        run: |
+          set -euo pipefail
+          dotnet test languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj -c Release --no-build --no-restore --filter FullyQualifiedName~GeneratedTemplateRuntimeHostSmokeTests --logger trx --results-directory artifacts/test-results/generated-templates
+          node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/generated-templates --allow-partial \
+            --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost \
+            --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost
+      - name: Build the universal test module
+        run: |
+          set -euo pipefail
+          npm --prefix languages/typescript/node run module:package
+          dotnet languages/csharp/dotnet/host/Sunder.Cli/bin/Release/net10.0/sunder.dll dev package validate languages/typescript/node/fixtures/runtime-backed-worker/dist/sunder.node.runtimebacked.1.0.0.sunderpkg
+      - name: Required cross-language Host integration
+        env:
           SUNDER_REQUIRE_NODE_MODULE_PACKAGE: "1"
           SUNDER_NODE_MODULE_PACKAGE_PATH: ${{ github.workspace }}/languages/typescript/node/fixtures/runtime-backed-worker/dist/sunder.node.runtimebacked.1.0.0.sunderpkg
           SUNDER_NODE_MODULE_EXPECTED_RIDS: win-x64,win-arm64,linux-x64,linux-arm64,osx-x64,osx-arm64
@@ -168,13 +183,11 @@ jobs:
         run: |
           set -euo pipefail
           tests=languages/csharp/dotnet/tests
-          dotnet test "$tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" -c Release --no-build --no-restore --filter 'FullyQualifiedName~GeneratedTemplateRuntimeHostSmokeTests|FullyQualifiedName~CrossLanguageWorkerRuntimeHostTests' --logger trx --results-directory artifacts/test-results/interop/host
+          dotnet test "$tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" -c Release --no-build --no-restore --filter FullyQualifiedName~CrossLanguageWorkerRuntimeHostTests --logger trx --results-directory artifacts/test-results/interop/host
           dotnet test "$tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" -c Release --no-build --no-restore --filter FullyQualifiedName~NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector --logger trx --results-directory artifacts/test-results/interop/format
           dotnet test "$tests/Sunder.Package.Build.Tests/Sunder.Package.Build.Tests.csproj" -c Release --no-build --no-restore --filter FullyQualifiedName~SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable --logger trx --results-directory artifacts/test-results/interop/build
           dotnet test "$tests/Sunder.App.Tests/Sunder.App.Tests.csproj" -c Release --no-build --no-restore --filter FullyQualifiedName~AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm --logger trx --results-directory artifacts/test-results/interop/app
           node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/interop --allow-partial \
-            --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedDotNetTemplate_ActivatesThroughOfficialRuntimeHost \
-            --require-test Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests.GeneratedNodeTemplate_ActivatesThroughOfficialRuntimeHost \
             --require-test Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.DotNetToNode_RealRuntimeHostRunsRuntimeBackedModuleUnaryStreamDataFaultAndShutdown \
             --require-test Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker \
             --require-test Sunder.Package.Format.Tests.NodePackageArchiveCompatibilityTests.NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector \
@@ -182,6 +195,7 @@ jobs:
             --require-test Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_ExecutesExactNativeContractAcrossNavigation \
             --require-test Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_RejectsSeededNonceOwnershipMutation
       - name: Retain the tested candidate feed
+        if: steps.package.outputs.publish == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sunder-tested-sdk

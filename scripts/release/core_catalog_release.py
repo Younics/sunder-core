@@ -43,12 +43,10 @@ def catalog(data, baseline, version):
 
 
 def export_catalog(root, output, tool):
-    context = c.current_invocation(c.SDK_WORKFLOW)
+    context = c.sdk_source()
     source = context["workflowSha"]
-    c.approved_source(source)
     c.local_checkout(source)
     name = c.tag(os.environ["GITHUB_REF_NAME"], "sdk")
-    c.require(os.environ["GITHUB_EVENT_NAME"] == "push" and context["workflowRef"] == "refs/tags/" + name, "Catalog export requires the SDK tag source")
     c.remote_tag(name, source)
     registry = c.origin(os.environ["SUNDER_CORE_REGISTRY_ORIGIN"])
     baseline = c.read(root / c.BASELINE)
@@ -92,7 +90,6 @@ def retain(directory, release_id):
     c.closed(exported, "schemaVersion kind artifactSourceCommit sdkTag registryOrigin baselineSha256 inventorySha256 catalogSha256 catalogBytes invocation")
     context = c.current_invocation(c.SDK_WORKFLOW)
     source, name = context["workflowSha"], c.tag(os.environ["GITHUB_REF_NAME"], "sdk")
-    c.approved_source(source)
     c.remote_tag(name, source)
     c.require(exported["schemaVersion"] == 1 and exported["kind"] == "https://sunderapp.io/acceptance/platform-catalog-export/v1"
               and exported["artifactSourceCommit"] == source and exported["sdkTag"] == name

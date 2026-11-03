@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 
 namespace Sunder.Core.TestSupport;
 
@@ -16,16 +17,20 @@ public sealed class CapturedProcess : IAsyncDisposable
     private int _outputCharacters;
     private int _outputLimitExceeded;
     private int _disposeStarted;
+    private readonly string? _commandLog;
+    private readonly Stopwatch _clock = Stopwatch.StartNew();
 
-    private CapturedProcess(Process process, int? maximumOutputCharacters)
+    private CapturedProcess(Process process, int? maximumOutputCharacters, string? commandLog)
     {
         Process = process;
+        _commandLog = commandLog;
         _maximumOutputCharacters = maximumOutputCharacters;
         Process.EnableRaisingEvents = true;
         Process.Exited += (_, _) => _exited.TrySetResult(Process.ExitCode);
         if (Process.HasExited) _exited.TrySetResult(Process.ExitCode);
         _outputPump = PumpAsync(Process.StandardOutput, _standardOutput);
         _errorPump = PumpAsync(Process.StandardError, _standardError);
+        RecordCommand("start");
     }
 
     public Process Process { get; }
@@ -46,6 +51,9 @@ public sealed class CapturedProcess : IAsyncDisposable
     public static CapturedProcess Start(ProcessStartInfo startInfo) => Start(startInfo, maximumOutputCharacters: null);
 
     public static CapturedProcess Start(ProcessStartInfo startInfo, int? maximumOutputCharacters)
+        => Start(startInfo, maximumOutputCharacters, diagnosticsDirectory: null);
+
+    public static CapturedProcess Start(ProcessStartInfo startInfo, int? maximumOutputCharacters, string? diagnosticsDirectory)
     {
         ArgumentNullException.ThrowIfNull(startInfo);
         if (maximumOutputCharacters is <= 0) throw new ArgumentOutOfRangeException(nameof(maximumOutputCharacters));
@@ -56,9 +64,16 @@ public sealed class CapturedProcess : IAsyncDisposable
         startInfo.RedirectStandardOutput = true;
         startInfo.RedirectStandardError = true;
         startInfo.CreateNoWindow = true;
+        diagnosticsDirectory ??= Environment.GetEnvironmentVariable("SUNDER_TEST_COMMAND_LOG_DIRECTORY");
+        string? commandLog = null;
+        if (!string.IsNullOrWhiteSpace(diagnosticsDirectory))
+        {
+            Directory.CreateDirectory(diagnosticsDirectory);
+            commandLog = Path.Combine(diagnosticsDirectory, Guid.NewGuid().ToString("N") + ".command.jsonl");
+        }
         var process = Process.Start(startInfo)
                       ?? throw new InvalidOperationException($"Could not start process '{startInfo.FileName}'.");
-        return new CapturedProcess(process, maximumOutputCharacters);
+        return new CapturedProcess(process, maximumOutputCharacters, commandLog);
     }
 
     public async Task WaitForOutputAsync(
@@ -95,6 +110,7 @@ public sealed class CapturedProcess : IAsyncDisposable
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
+        RecordCommand("wait", timeout);
         int exitCode;
         try
         {
@@ -102,6 +118,7 @@ public sealed class CapturedProcess : IAsyncDisposable
         }
         catch (TimeoutException exception)
         {
+            RecordCommand("timeout", timeout);
             throw new ProcessFixtureException(
                 $"Process did not exit within {timeout.TotalMilliseconds:F0} ms.",
                 Diagnostics,
@@ -130,6 +147,7 @@ public sealed class CapturedProcess : IAsyncDisposable
         }
         if (Volatile.Read(ref _outputLimitExceeded) != 0)
             throw new ProcessFixtureException("Process output exceeded its capture bound.", Diagnostics);
+        RecordCommand("exit", timeout);
         return new CapturedProcessResult(exitCode, StandardOutput, StandardError);
     }
 
@@ -163,6 +181,7 @@ public sealed class CapturedProcess : IAsyncDisposable
                 Process.StandardError.Dispose();
             }
             await Task.WhenAll(_outputPump, _errorPump).WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+            RecordCommand("cleanup");
         }
         catch (InvalidOperationException) when (Process.HasExited)
         {
@@ -220,6 +239,26 @@ public sealed class CapturedProcess : IAsyncDisposable
     {
         try { return Process.HasExited; }
         catch (InvalidOperationException) { return true; }
+    }
+
+    private void RecordCommand(string phase, TimeSpan? timeout = null)
+    {
+        if (_commandLog is null) return;
+        try
+        {
+            File.AppendAllText(_commandLog, JsonSerializer.Serialize(new
+            {
+                phase, at = DateTimeOffset.UtcNow, elapsedMilliseconds = _clock.ElapsedMilliseconds,
+                pid = Id, command = Process.StartInfo.FileName, arguments = Process.StartInfo.ArgumentList,
+                workingDirectory = Process.StartInfo.WorkingDirectory,
+                timeoutMilliseconds = timeout?.TotalMilliseconds, exitCode = SafeExitCode(),
+            }) + Environment.NewLine);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            // Optional CI diagnostics must not replace a test's original failure.
+            Console.Error.WriteLine($"Could not write process command diagnostics: {error.Message}");
+        }
     }
 
     private string SafeExitCode()

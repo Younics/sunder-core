@@ -8,9 +8,9 @@ public static class RegistryPublishRequestHeaders
 
 public static class RegistryPublishTokenScopes
 {
-    public const string PackagePublish = "package:publish";
-    public const string PackagePromoteLatest = "package:promote-latest";
-    public const string StackPublish = "stack:publish";
+    public const string PackagePublish = RegistryApiKeyPermissions.PackagePublish;
+    public const string PackagePromoteLatest = RegistryApiKeyPermissions.PackagePromoteLatest;
+    public const string StackPublish = RegistryApiKeyPermissions.StackPublish;
 }
 
 public sealed record RegistryPublishTokenGrant(

@@ -11,12 +11,15 @@ const verifierPath = resolve(repositoryRoot, "scripts/release/verify-npm-release
 test("npm publication verifies each exact package before advancing and retains aggregate verification", async () => {
   const script = await readFile(resolve(repositoryRoot, "scripts/release/publish-sdk.sh"), "utf8");
   const publicationLoop = script.slice(script.indexOf('elif [[ "$action" == npm ]]'), script.indexOf('elif [[ "$action" == promote ]]'));
-  const existenceCheck = publicationLoop.indexOf('npm view "$package_id@$version" version');
+  assert.match(publicationLoop, /\$\{NODE_AUTH_TOKEN:\?Set the NPM_TOKEN secret/u);
+  assert.match(publicationLoop, /npm publish[^\n]+--ignore-scripts --access public[\s\S]+--provenance/u);
+  const existenceCheck = publicationLoop.indexOf('sdk_release.py" package "$version" "$package_id"');
   const publish = publicationLoop.indexOf('npm publish "$directory/');
   const conditionalEnd = publicationLoop.indexOf("\n    fi", publish);
   const exactVerification = publicationLoop.indexOf('retry verify_npm "accept-v$version" publication "$package_id"');
   const loopEnd = publicationLoop.indexOf("\n  done", exactVerification);
   assert.ok(existenceCheck >= 0 && publish > existenceCheck, "npm publication must remain conditional on an exact version lookup.");
+  assert.match(publicationLoop.slice(existenceCheck, publish), /\[\[ "\$lookup_status" == 4 \]\] \|\| exit "\$lookup_status"/u);
   assert.ok(conditionalEnd > publish && exactVerification > conditionalEnd, "both existing and newly published packages must reach exact verification.");
   assert.ok(loopEnd > exactVerification, "exact package verification must complete before the publication loop advances.");
   assert.match(publicationLoop.slice(loopEnd), /verify_npm "accept-v\$version" publication\s*$/u);

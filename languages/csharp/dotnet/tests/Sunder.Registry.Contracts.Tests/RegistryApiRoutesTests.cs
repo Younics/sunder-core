@@ -24,6 +24,8 @@ public sealed class RegistryApiRoutesTests
         Assert.Equal("/api/v1/me/users", RegistryApiRoutes.CurrentUserUsers);
         Assert.Equal("/api/v1/me/tokens", RegistryApiRoutes.CurrentUserCliTokens);
         Assert.Equal("/api/v1/me/publish-tokens", RegistryApiRoutes.CurrentUserPublishTokens);
+        Assert.Equal("/api/v1/me/api-keys", RegistryApiRoutes.CurrentUserApiKeys);
+        Assert.Equal("/api/v1/me/api-keys/permissions", RegistryApiRoutes.ApiKeyPermissions);
         Assert.Equal("/api/v1/packages", RegistryApiRoutes.Packages);
         Assert.Equal("/api/v1/packages/resolve-updates", RegistryApiRoutes.PackageResolveUpdates);
         Assert.Equal("/api/v1/packages/resolve-install-plan", RegistryApiRoutes.PackageResolveInstallPlan);
@@ -46,6 +48,7 @@ public sealed class RegistryApiRoutesTests
         Assert.Equal("/api/v1/contracts/sample.contract/resolve", RegistryApiRoutes.ContractResolve("sample.contract"));
         Assert.Equal("/api/v1/me/tokens/ffeeddcc-bbaa-9988-7766-554433221100", RegistryApiRoutes.CurrentUserCliToken(TokenId));
         Assert.Equal("/api/v1/me/publish-tokens/ffeeddcc-bbaa-9988-7766-554433221100", RegistryApiRoutes.CurrentUserPublishToken(TokenId));
+        Assert.Equal("/api/v1/me/api-keys/ffeeddcc-bbaa-9988-7766-554433221100", RegistryApiRoutes.CurrentUserApiKey(TokenId));
         Assert.Equal("/api/v1/me/packages/sample.package", RegistryApiRoutes.CurrentUserPackage("sample.package"));
         Assert.Equal("/api/v1/me/packages/sample.package/profile", RegistryApiRoutes.CurrentUserPackageProfile("sample.package"));
         Assert.Equal("/api/v1/me/packages/sample.package/media", RegistryApiRoutes.CurrentUserPackageMedia("sample.package"));
@@ -100,7 +103,7 @@ public sealed class RegistryApiRoutesTests
             .Where(method => method.Name != nameof(RegistryApiRoutes.ToHttpClientRelativePath))
             .ToArray();
 
-        Assert.Equal(61, routes.Length);
+        Assert.Equal(62, routes.Length);
         foreach (var route in routes)
         {
             var parameters = route.GetParameters();

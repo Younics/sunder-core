@@ -196,8 +196,8 @@ def platform_identity():
 
 
 def lane_context(lane, version):
-    invocation = c.current_invocation(c.SDK_WORKFLOW)
-    c.require(os.environ.get("GITHUB_EVENT_NAME") == "push" and invocation["workflowRef"] == "refs/tags/sdk/v" + version
+    invocation = c.sdk_context()
+    c.require(invocation["workflowRef"] == "refs/tags/sdk/v" + version
               and os.environ.get("GITHUB_JOB") == JOB, "Collector must run in the owning integrated SDK job")
     actual = platform_identity()
     c.require(lane in LANES and actual["actualRid"] == ("linux-x64" if lane == "portable" else lane), "Selected lane differs from actual OS/RID")
