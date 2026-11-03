@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
 """Shared, read-only GitHub/source checks for Core release handoffs."""
-import argparse
-import base64
-from datetime import datetime
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
-import sys
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 REPOSITORY = "Younics/sunder-core"
 SDK_WORKFLOW = ".github/workflows/sunder-sdk-release.yml"
-BASELINE = "eng/platform-contracts/sunder-contracts.owned.json"
 
 
 def require(condition, message):
@@ -44,15 +39,6 @@ def tag(value, stream):
     if "-" in version:
         require(all(not (item.isascii() and item.isdigit() and len(item) > 1 and item.startswith("0"))
                     for item in version.split("-", 1)[1].split(".")), "Numeric prerelease identifiers cannot have leading zeroes")
-    return value
-
-
-def origin(value):
-    parsed = urlsplit(value)
-    require(parsed.scheme == "https" and parsed.hostname and not parsed.username and not parsed.password
-            and parsed.path in ("", "/") and not parsed.query and not parsed.fragment
-            and parsed.netloc == parsed.netloc.lower() and parsed.port != 443
-            and value == f"https://{parsed.netloc}/", "Registry origin must be canonical credential-free HTTPS with a terminal slash")
     return value
 
 
@@ -114,21 +100,6 @@ def remote_tag(name, expected):
     raise ValueError("Excessive annotated-tag depth")
 
 
-def source_file(commit, path):
-    value = gh("contents/" + path + "?ref=" + sha(commit, 40))
-    require(value["type"] == "file" and value["encoding"] == "base64", "Expected exact source blob")
-    return base64.b64decode(value["content"], validate=False)
-
-
-def approval(prefix):
-    require(os.environ.get(prefix + "_APPROVED") == "approved", "Missing explicit " + prefix + " approval")
-    reference = os.environ.get(prefix + "_APPROVAL_REFERENCE", "")
-    parsed = urlsplit(reference)
-    require(parsed.scheme == "https" and parsed.hostname and parsed.path not in ("", "/")
-            and not parsed.username and not parsed.password and not parsed.fragment
-            and not any(character.isspace() for character in reference), "Missing HTTPS approval evidence reference")
-
-
 def local_checkout(expected):
     require(command("git", "rev-parse", "HEAD").decode().strip() == sha(expected, 40), "Checkout differs from workflow source")
     require(not command("git", "status", "--porcelain", "--untracked-files=all").strip(), "Release source must be clean")
@@ -148,111 +119,10 @@ def current_invocation(workflow):
     return invocation(workflow, ref, commit, os.environ["GITHUB_RUN_ID"], os.environ["GITHUB_RUN_ATTEMPT"])
 
 
-def approved_source(source):
-    approval("SUNDER_CORE_RELEASE")
-    require(sha(source, 40) == os.environ.get("SUNDER_CORE_ARTIFACT_SOURCE_COMMIT"), "Artifact source is not the approved Core SDK source")
-
-
 def sdk_context():
+    """Historical retained-corpus context, not current project-version publication."""
     context = current_invocation(SDK_WORKFLOW)
     name = tag(os.environ["GITHUB_REF_NAME"], "sdk")
     require(os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
-            and context["workflowRef"] == "refs/tags/" + name, "SDK publication requires its exact tag workflow")
+            and context["workflowRef"] == "refs/tags/" + name, "Historical SDK corpus collection requires its exact tag workflow")
     return context
-
-
-def sdk_source():
-    """A protected SDK tag must identify the workflow source on main, not a mutable setting."""
-    context = sdk_context()
-    source = context["workflowSha"]
-    remote_tag(os.environ["GITHUB_REF_NAME"], source)
-    comparison = gh(f"compare/{source}...main")
-    require(comparison["status"] in ("ahead", "identical"), "SDK source is not part of main")
-    return context
-
-
-def release(release_id, name, source, draft=True):
-    value = gh("releases/" + number(release_id))
-    require(type(value["id"]) is int and value["id"] == int(release_id) and value["tag_name"] == name and value["target_commitish"] == source
-            and value["draft"] is draft, "Expected exact numeric source-bound release state")
-    assets = value["assets"]
-    require(len({asset["name"] for asset in assets}) == len(assets)
-            and len({asset["id"] for asset in assets}) == len(assets), "Ambiguous release assets")
-    for asset in assets:
-        require(type(asset["id"]) is int, "GitHub asset ID must be numeric")
-        number(asset["id"])
-        require(asset["state"] == "uploaded" and type(asset["size"]) is int and asset["size"] > 0
-                and re.fullmatch(r"sha256:[0-9a-f]{64}", asset["digest"] or ""), "Incomplete release asset metadata")
-    return value
-
-
-def evidence_descendant(source, evidence):
-    require(sha(evidence, 40) == os.environ.get("SUNDER_CORE_PUBLICATION_EVIDENCE_COMMIT"), "Unapproved publication evidence commit")
-    commit = gh("git/commits/" + evidence)
-    require([parent["sha"] for parent in commit["parents"]] == [source], "Publication evidence must be a direct untagged descendant")
-    comparison = gh(f"compare/{source}...{evidence}")
-    require(comparison["ahead_by"] == 1 and comparison["behind_by"] == 0 and comparison["total_commits"] == 1,
-            "Publication evidence ancestry differs")
-    files = comparison["files"]
-    compatibility_manifest = "eng/compatibility/supported-releases.json"
-    require(files and len(files) < 300 and all(item["filename"] in (BASELINE, compatibility_manifest) or re.fullmatch(
-        r"eng/release/publication-evidence/[a-z0-9][a-z0-9.-]*\.json", item["filename"]) for item in files),
-        "Publication evidence commit changes artifact inputs outside the evidence allowlist")
-    require(all(item["status"] in ("added", "modified") for item in files), "Evidence files cannot be deleted or renamed")
-    has_catalog = any(item["filename"] == BASELINE for item in files)
-    has_compatibility = any(item["filename"] == compatibility_manifest for item in files)
-    require(has_catalog or has_compatibility, "Evidence commit must confirm catalog or SDK compatibility publication")
-    if has_compatibility:
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "compatibility"))
-        import sdk_release_compatibility as compatibility
-        require(any(item["filename"] == compatibility.PUBLICATION for item in files), "Compatibility confirmation requires its publication evidence")
-        compatibility.verify_publication_evidence(decode(source_file(evidence, compatibility.PUBLICATION)),
-            decode(source_file(source, compatibility_manifest)), decode(source_file(evidence, compatibility_manifest)), source)
-    if not has_catalog:
-        return dict(parentCommit=source, publicationEvidenceCommit=evidence,
-                    changedPaths=sorted(item["filename"] for item in files), baselineChange="verified-compatibility-publication-only")
-    before, after = (decode(source_file(commit, BASELINE)) for commit in (source, evidence))
-    require(set(before["contracts"]) == set(after["contracts"]), "Publication changed the owned inventory")
-    for key, contract in before["contracts"].items():
-        published = after["contracts"][key]["current"]
-        require(contract["current"]["state"] == "release-frozen" and published["state"] == "published", "Expected verified publication transition")
-        publication = published.get("publication")
-        closed(publication, "registryOrigin authorityId catalogRelease catalogContentIdentity publishedAtUtc etag")
-        require(publication["registryOrigin"] == origin(os.environ["SUNDER_CORE_REGISTRY_ORIGIN"])
-                and publication["authorityId"] == "sunder.core"
-                and publication["catalogRelease"] == contract["current"]["catalogRelease"]["releaseVersion"]
-                and publication["etag"] == '"' + contract["current"]["descriptorSha256"] + '"', "Publication evidence identity differs")
-        sha(publication["catalogContentIdentity"])
-        require(datetime.fromisoformat(publication["publishedAtUtc"].replace("Z", "+00:00")).tzinfo is not None,
-                "Publication timestamp must include its UTC offset")
-        contracts = []
-        for owned in before["contracts"].values():
-            snapshot = owned["current"]
-            contracts.append(dict(contractId=owned["contractId"], **{name: snapshot[name] for name in
-                ("contractVersion", "descriptorBytes", "descriptorSha256", "abiSha256", "canonicalDescriptor")}))
-        catalog = dict(schemaVersion=1, authorityKind="platform", authorityId="sunder.core",
-                       releaseVersion=publication["catalogRelease"], contractCount=len(contracts),
-                       contracts=sorted(contracts, key=lambda item: item["contractId"]))
-        require(publication["catalogContentIdentity"] == digest(json.dumps(catalog, ensure_ascii=False, separators=(",", ":")).encode()),
-                "Publication evidence does not confirm the exact source-derived catalog")
-        published.pop("publication")
-        published["state"] = "release-frozen"
-    require(before == after, "Publication evidence rewrites frozen source/baseline bytes")
-    return dict(parentCommit=source, publicationEvidenceCommit=evidence,
-                changedPaths=sorted(item["filename"] for item in files), baselineChange="verified-publication-only")
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("stream", choices=["sdk"])
-    args = parser.parse_args()
-    name = tag(os.environ["GITHUB_REF_NAME"], args.stream)
-    context = sdk_source()
-    source = context["workflowSha"]
-    local_checkout(source)
-    origin(os.environ["SUNDER_CORE_REGISTRY_ORIGIN"])
-    print("Verified tagged main artifactSourceCommit:", source)
-
-
-if __name__ == "__main__":
-    main()

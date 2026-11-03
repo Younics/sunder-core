@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { csharpTestDeclarations } from "./csharp-test-declarations.mjs";
+import { selectScenario } from "./ci-scenarios.mjs";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const policyRelativePath = "eng/test-oracles/core-test-policy.json";
@@ -23,6 +24,9 @@ export function validateWorkflowTestSelections(workflows, declarations) {
     for (const match of content.matchAll(/--require-test(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\]+))/gu)) {
       const id = match[1] ?? match[2] ?? match[3];
       if (!ids.has(id)) throw new Error(`${source}: required workflow test '${id}' is not declared.`);
+    }
+    for (const match of content.matchAll(/--(?:require-)?scenario(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\]+))/gu)) {
+      selectScenario(match[1] ?? match[2] ?? match[3], declarations);
     }
   }
 }

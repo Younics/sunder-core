@@ -1,191 +1,41 @@
 #!/usr/bin/env node
-
-import { appendFile, readFile } from "node:fs/promises";
+// Check source metadata without forcing unrelated packages to share a version.
+import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { policy, synchronize } from "../toolchains.mjs";
 
-const expectedVersion = process.argv[2];
-if (process.argv.length > 3) {
-  throw new Error("Usage: check-sdk-version.mjs [expected-version]");
-}
-
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const json = async path => JSON.parse(await readFile(resolve(root, path), "utf8"));
+const inventory = await json("eng/test-oracles/core-public-packages.json");
+const versionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
+const packages = [];
 await synchronize(true);
-const readText = (path) => readFile(resolve(root, path), "utf8");
-const readJson = async (path) => JSON.parse(await readText(path));
-
-const props = await readText("languages/csharp/dotnet/Directory.Build.props");
-const property = (name) => {
-  const matches = [...props.matchAll(new RegExp(`<${name}>([^<]+)</${name}>`, "g"))];
-  if (matches.length !== 1) {
-    throw new Error(`languages/csharp/dotnet/Directory.Build.props must define exactly one ${name}.`);
-  }
-  return matches[0][1].trim();
-};
-
-const version = property("SunderDeveloperPackageVersion");
-const versionRange = property("SunderDeveloperPackageVersionRange");
-const assemblyVersion = property("SunderSdkAssemblyVersion");
-const semver = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
-const match = semver.exec(version);
-if (match === null) {
-  throw new Error(`SunderDeveloperPackageVersion '${version}' is not a strict SemVer release version.`);
-}
-if (match[4] !== undefined) {
-  for (const identifier of match[4].split(".")) {
-    if (/^[0-9]+$/.test(identifier) && identifier.length > 1 && identifier.startsWith("0")) {
-      throw new Error(`Numeric SemVer prerelease identifier '${identifier}' contains a leading zero.`);
+for (const kind of ["nuget", "npm"]) {
+  for (const item of inventory[kind]) {
+    const source = kind === "npm" ? await json(`${item.project}/package.json`) : null;
+    const name = item.packageId ?? item.name;
+    const version = source?.version ?? /<Version>([^<]+)<\/Version>/u.exec(await readFile(resolve(root, item.project), "utf8"))?.[1];
+    const match = typeof version === "string" && versionPattern.exec(version);
+    if (!match || match[4]?.split(".").some(value => /^0\d+$/u.test(value))) throw new Error(`Invalid authored version: ${item.project}`);
+    if (source && (source.name !== name || source.private === true || source.license !== "MIT"
+      || source.repository?.url !== "git+https://github.com/Younics/sunder-core.git"
+      || source.publishConfig?.access !== "public" || source.publishConfig?.provenance !== true)) {
+      throw new Error(`Unexpected npm publication metadata: ${item.project}`);
     }
+    packages.push({ kind, name, version, project: item.project });
   }
 }
-if (expectedVersion !== undefined && expectedVersion !== version) {
-  throw new Error(`Release version '${expectedVersion}' does not match production package metadata '${version}'.`);
-}
-
-const major = match[1];
-const minor = match[2];
-const nextMinor = (BigInt(minor) + 1n).toString();
-const computedRange = `[${major}.${minor}.0,${major}.${nextMinor}.0)`;
-const npmVersionRange = `>=${major}.${minor}.0 <${major}.${nextMinor}.0`;
-if (versionRange !== computedRange) {
-  throw new Error(`SunderDeveloperPackageVersionRange must be '${computedRange}', not '${versionRange}'.`);
-}
-const computedAssemblyVersion = `${major}.${minor}.0.0`;
-if (assemblyVersion !== computedAssemblyVersion) {
-  throw new Error(`SunderSdkAssemblyVersion must be '${computedAssemblyVersion}', not '${assemblyVersion}'.`);
-}
-
-const packagePaths = [
-  "languages/typescript/node/package.json",
-  "languages/typescript/node/packages/sdk/package.json",
-  "languages/typescript/node/packages/package-tool/package.json",
-  "languages/typescript/node/packages/create-sunder-package/package.json",
-];
-const expectedPackageIdentity = new Map([
-  ["languages/typescript/node/package.json", { name: "sunder-js", private: true }],
-  ["languages/typescript/node/packages/sdk/package.json", { name: "@sunder/sdk", directory: "languages/typescript/node/packages/sdk" }],
-  ["languages/typescript/node/packages/package-tool/package.json", { name: "@sunder/package-tool", directory: "languages/typescript/node/packages/package-tool" }],
-  ["languages/typescript/node/packages/create-sunder-package/package.json", { name: "create-sunder-package", directory: "languages/typescript/node/packages/create-sunder-package" }],
-]);
-const packages = new Map();
-for (const path of packagePaths) {
-  const manifest = await readJson(path);
-  const identity = expectedPackageIdentity.get(path);
-  if (manifest.name !== identity.name) {
-    throw new Error(`${path} package name '${manifest.name}' does not match '${identity.name}'.`);
-  }
-  if (manifest.version !== version) {
-    throw new Error(`${path} version '${manifest.version}' does not match '${version}'.`);
-  }
-  if (identity.private === true) {
-    if (manifest.private !== true) throw new Error(`${path} must remain private.`);
-  } else if (manifest.license !== "MIT"
-      || manifest.repository?.type !== "git"
-      || manifest.repository?.url !== "git+https://github.com/Younics/sunder-core.git"
-      || manifest.repository?.directory !== identity.directory
-      || manifest.publishConfig?.access !== "public"
-      || manifest.publishConfig?.provenance !== true) {
-    throw new Error(`${path} has unexpected release identity, repository, license, or publish configuration.`);
-  }
-  packages.set(path, manifest);
-}
-
-const packageTool = packages.get("languages/typescript/node/packages/package-tool/package.json");
-const createPackage = packages.get("languages/typescript/node/packages/create-sunder-package/package.json");
-const rootPackage = packages.get("languages/typescript/node/package.json");
-const packageManager = rootPackage.packageManager;
-const packageManagerMatch = /^npm@([0-9]+\.[0-9]+\.[0-9]+)$/.exec(packageManager ?? "");
-if (packageManagerMatch === null) {
-  throw new Error("languages/typescript/node/package.json must pin packageManager to an exact npm version.");
-}
-const npmVersion = packageManagerMatch[1];
-if (npmVersion !== policy.npm) {
-  throw new Error(`languages/typescript/node/package.json packageManager must be 'npm@${policy.npm}', not '${packageManager}'.`);
-}
-const viteVersion = rootPackage.devDependencies?.vite;
-if (viteVersion !== "8.2.0") {
-  throw new Error(`languages/typescript/node/package.json must pin Vite to '8.2.0', not '${viteVersion}'.`);
-}
-if (packageTool.dependencies?.["@sunder/sdk"] !== npmVersionRange) {
-  throw new Error(`@sunder/package-tool must depend on @sunder/sdk '${npmVersionRange}'.`);
-}
-if (createPackage.dependencies?.["@sunder/sdk"] !== npmVersionRange) {
-  throw new Error(`create-sunder-package must depend on @sunder/sdk '${npmVersionRange}'.`);
-}
-if (packageTool.dependencies?.vite !== viteVersion) {
-  throw new Error(`@sunder/package-tool must pin Vite to '${viteVersion}'.`);
-}
-
-const templates = new Map();
-for (const templatePath of [
-  "languages/typescript/node/packages/create-sunder-package/template/package.json",
-  "languages/typescript/node/packages/create-sunder-package/template-react-node/package.json",
-]) {
-  const template = await readJson(templatePath);
-  if (template.dependencies?.["@sunder/sdk"] !== npmVersionRange) {
-    throw new Error(`${templatePath} must use @sunder/sdk '${npmVersionRange}'.`);
-  }
-  if (template.devDependencies?.["@sunder/package-tool"] !== npmVersionRange) {
-    throw new Error(`${templatePath} must use @sunder/package-tool '${npmVersionRange}'.`);
-  }
-  templates.set(templatePath, template);
-}
-if (templates.get("languages/typescript/node/packages/create-sunder-package/template-react-node/package.json")
-  ?.devDependencies?.vite !== `^${viteVersion}`) {
-  throw new Error(`The React/Node template must use Vite '^${viteVersion}'.`);
-}
-
-const lock = await readJson("languages/typescript/node/package-lock.json");
-const lockVersions = [
-  ["languages/typescript/node/package-lock.json", lock.version],
-  ["languages/typescript/node/package-lock.json packages['']", lock.packages?.[""]?.version],
-  ["languages/typescript/node/package-lock.json packages/sdk", lock.packages?.["packages/sdk"]?.version],
-  ["languages/typescript/node/package-lock.json packages/package-tool", lock.packages?.["packages/package-tool"]?.version],
-  ["languages/typescript/node/package-lock.json packages/create-sunder-package", lock.packages?.["packages/create-sunder-package"]?.version],
-];
-for (const [location, value] of lockVersions) {
-  if (value !== version) {
-    throw new Error(`${location} version '${value}' does not match '${version}'.`);
+const lock = await json("languages/typescript/node/package-lock.json");
+for (const item of packages.filter(item => item.kind === "npm")) {
+  const relative = item.project.replace("languages/typescript/node/", "");
+  const source = await json(`${item.project}/package.json`);
+  if (lock.packages?.[relative]?.version !== item.version
+    || !isDeepStrictEqual(lock.packages[relative].dependencies, source.dependencies)) {
+    throw new Error(`npm lockfile differs from ${item.project}/package.json`);
   }
 }
-if (lock.lockfileVersion !== 3) {
-  throw new Error(`languages/typescript/node/package-lock.json must use lockfileVersion 3, not '${lock.lockfileVersion}'.`);
-}
-if (lock.packages?.[""]?.devDependencies?.vite !== viteVersion
-    || lock.packages?.["packages/package-tool"]?.dependencies?.vite !== viteVersion
-    || lock.packages?.["node_modules/vite"]?.version !== viteVersion) {
-  throw new Error(`languages/typescript/node/package-lock.json does not consistently pin Vite '${viteVersion}'.`);
-}
-if (lock.packages?.["packages/package-tool"]?.dependencies?.["@sunder/sdk"] !== npmVersionRange
-    || lock.packages?.["packages/create-sunder-package"]?.dependencies?.["@sunder/sdk"] !== npmVersionRange) {
-  throw new Error(`languages/typescript/node/package-lock.json does not contain internal npm range '${npmVersionRange}'.`);
-}
-
-const nugetProjects = [
-  "languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj",
-  "languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj",
-  "languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/Sunder.Sdk.Stacks.csproj",
-  "languages/csharp/dotnet/packages/Sunder.Sdk.Worker/Sunder.Sdk.Worker.csproj",
-  "languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj",
-  "languages/csharp/dotnet/packages/Sunder.Package.Templates/Sunder.Package.Templates.csproj",
-];
-for (const path of nugetProjects) {
-  const project = await readText(path);
-  if (!project.includes("<Version>$(SunderDeveloperPackageVersion)</Version>")) {
-    throw new Error(`${path} must use SunderDeveloperPackageVersion as its package version source.`);
-  }
-  if (!project.includes("<AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>")) {
-    throw new Error(`${path} must use SunderSdkAssemblyVersion as its assembly version source.`);
-  }
-}
-
-const output = { version, versionRange, npmVersionRange, assemblyVersion, npmVersion, viteVersion };
-if (process.env.GITHUB_OUTPUT !== undefined) {
-  await appendFile(
-    process.env.GITHUB_OUTPUT,
-    `version=${version}\nversion_range=${versionRange}\nnpm_version_range=${npmVersionRange}\nassembly_version=${assemblyVersion}\nnpm_version=${npmVersion}\nvite_version=${viteVersion}\n`,
-    "utf8",
-  );
-}
-console.log(JSON.stringify(output));
+const workspace = await json("languages/typescript/node/package.json");
+if (workspace.packageManager !== `npm@${policy.npm}`) throw new Error("Node workspace must use the pinned npm toolchain");
+console.log(JSON.stringify({ packages }));

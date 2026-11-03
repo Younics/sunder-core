@@ -193,8 +193,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
         {
             var project = Path.Combine(repository, "languages/csharp/dotnet/packages", name, name + ".csproj");
             AssertSuccess(await run(repository, ["pack", project, "--no-restore", "--disable-build-servers", "--nologo", "-v:quiet", "-o", feed,
-                $"-p:Configuration={configuration}", $"-p:SunderDeveloperPackageVersion={version}",
-                $"-p:SunderDeveloperPackageVersionRange=[{version}]", "-p:GeneratePackageOnBuild=false"]));
+                $"-p:Configuration={configuration}", $"-p:Version={version}",
+                "-p:GeneratePackageOnBuild=false"]));
             Assert.True(File.Exists(Path.Combine(feed, name + "." + version + ".nupkg")));
         }
     }

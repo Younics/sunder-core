@@ -145,44 +145,22 @@ class GitHubReleaseTests(unittest.TestCase):
             (root / "two/a.zip").unlink(); (root / "two/link.zip").symlink_to(root / "one/a.zip")
             with self.assertRaises(ValueError): release.local_files(root)
 
-    def test_component_inventory_has_all_six_rids_and_sdk_package_set(self):
+    def test_native_component_inventory_has_all_six_rids_without_a_coordinated_sdk_set(self):
         self.assertEqual(6, len(release.core_names("cli", "1.0.0")))
         self.assertEqual(6, len(release.core_names("host", "1.0.0")))
         self.assertEqual(18, len(release.core_names("app", "1.0.0")))
-        self.assertEqual(15, len(release.core_names("sdk", "1.1.0")))
-        self.assertEqual(13, len(release.core_names("sdk", "1.1.0-beta.1")))
+        with self.assertRaisesRegex(ValueError, "developer packages"): release.core_names("sdk", "1.1.0")
 
-    def test_sdk_missing_qualification_blocks_staging_and_finalization_before_remote_mutation(self):
+    def test_old_coordinated_sdk_publication_entry_point_is_rejected(self):
         for finalize in (False, True):
             with self.subTest(finalize=finalize), tempfile.TemporaryDirectory() as directory:
                 store = MemoryRelease(); store.tag = "sdk/v1.1.0"
                 with patch.dict(os.environ, dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
                      GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/sdk/v1.1.0",
                      GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/tags/sdk/v1.1.0")), \
-                     patch.object(release.subprocess, "run"), \
-                     patch.object(release, "verify_sdk_compatibility", side_effect=ValueError("missing qualification")):
-                    with self.assertRaisesRegex(ValueError, "missing qualification"):
+                     patch.object(release.subprocess, "run"):
+                    with self.assertRaisesRegex(ValueError, "individually"):
                         release.core_stage(store, Path(directory), "sdk", "stable", finalize=finalize)
-                self.assertEqual([], store.requests)
-
-    def test_sdk_unbound_documentation_blocks_stage_finalize_and_publication_verification(self):
-        for action in ("stage", "finalize", "verify"):
-            with self.subTest(action=action), tempfile.TemporaryDirectory() as directory:
-                store = MemoryRelease(); store.tag = "sdk/v1.1.0"
-                with patch.dict(os.environ, dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
-                     GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/sdk/v1.1.0",
-                     GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/tags/sdk/v1.1.0")), \
-                     patch.object(release.subprocess, "run"), patch.object(release, "verify_sdk_compatibility"), \
-                     patch.object(release, "verify_sdk_documentation", side_effect=ValueError("mutable /main/ documentation")) as docs:
-                    with self.assertRaisesRegex(ValueError, "mutable /main/"):
-                        if action == "verify":
-                            with patch.object(sys, "argv", ["github_release.py", "verify", store.tag, "--directory", directory, "--release-id", "12"]), \
-                                 patch.object(release, "local_files", return_value={name: Path(directory) / name for name in
-                                     release.core_names("sdk", "1.1.0") | release.EVIDENCE}):
-                                release.main()
-                        else:
-                            release.core_stage(store, Path(directory), "sdk", "stable", finalize=action == "finalize")
-                    docs.assert_called_once_with(Path(directory), "a" * 40)
                 self.assertEqual([], store.requests)
 
     def test_stream_download_is_bounded_and_does_not_replace_local_bytes(self):

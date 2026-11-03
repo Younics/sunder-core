@@ -93,13 +93,13 @@ public sealed class GeneratedTemplateRuntimeHostSmokeTests(
             else
             {
                 Assert.Equal(package.Source.PackageId + ".messages", provider.ContractId);
-                Assert.Equal("1.0.0", provider.ContractVersion);
+                Assert.Equal(package.Source.Manifest!.Version, provider.ContractVersion);
                 var request = JsonSerializer.SerializeToElement(new { message = "managed runtime" });
                 var response = await registration.Handler.InvokeUnaryAsync(context, "messages", "send", request, deadline.Token);
-                Assert.Equal($"Hello from {package.Source.Manifest!.Name}: managed runtime", response.GetProperty("message").GetString());
+                Assert.Equal($"Hello from {package.Source.Manifest!.Name}: managed runtime", response.GetString());
                 var events = new List<string?>();
                 await foreach (var item in registration.Handler.InvokeServerStreamAsync(context, "messages", "watch", request, deadline.Token))
-                    events.Add(item.GetProperty("message").GetString());
+                    events.Add(item.GetString());
                 Assert.Equal(["Watching managed runtime"], events);
                 await Assert.ThrowsAsync<ProcessRpcProviderFaultException>(async () => await registration.Handler.InvokeUnaryAsync(
                     context, "messages", "send", JsonSerializer.SerializeToElement(new { message = 42 }), deadline.Token));

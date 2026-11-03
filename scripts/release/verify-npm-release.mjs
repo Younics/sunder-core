@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 
 import { createHash, X509Certificate } from "node:crypto";
-import { lstat, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { policy } from "../toolchains.mjs";
 
-const [version, npmVersionRange, npmTag, artifactArgument, repository, workflowPath, commit, tagPolicy, packageName] = process.argv.slice(2);
-if ((process.argv.length !== 10 && process.argv.length !== 11)
-    || [version, npmVersionRange, npmTag, artifactArgument, repository, workflowPath, commit, tagPolicy].some((value) => value === undefined)) {
-  throw new Error("Usage: verify-npm-release.mjs <version> <npm-version-range> <npm-tag> <artifact-directory> <owner/repo> <workflow-path> <commit> <publication|promotion> [package-name]");
+const [packageName, version, archiveArgument, commit, tagPolicy] = process.argv.slice(2);
+if (process.argv.length !== 7) {
+  throw new Error("Usage: verify-npm-release.mjs <name> <version> <archive> <commit> <publication|promotion>");
 }
+const repository = "Younics/sunder-core";
+const workflowPath = ".github/workflows/sunder-sdk-release.yml";
 if (!/^[0-9a-f]{40}$/.test(commit)) {
   throw new Error(`Expected a lowercase 40-character Git commit, received '${commit}'.`);
 }
@@ -20,38 +22,25 @@ const versionMatch = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0
 if (versionMatch === null) {
   throw new Error(`Expected a strict SemVer release version, received '${version}'.`);
 }
-const expectedNpmVersionRange = `>=${versionMatch[1]}.${versionMatch[2]}.0 <${versionMatch[1]}.${BigInt(versionMatch[2]) + 1n}.0`;
-if (npmVersionRange !== expectedNpmVersionRange) {
-  throw new Error(`Expected npm compatibility range '${expectedNpmVersionRange}', received '${npmVersionRange}'.`);
-}
-if (repository !== "Younics/sunder-core") {
-  throw new Error(`Expected provenance repository 'Younics/sunder-core', received '${repository}'.`);
-}
-if (workflowPath !== ".github/workflows/sunder-sdk-release.yml") {
-  throw new Error(`Expected provenance workflow '.github/workflows/sunder-sdk-release.yml', received '${workflowPath}'.`);
-}
 if (tagPolicy !== "publication" && tagPolicy !== "promotion") {
   throw new Error(`Expected npm tag policy 'publication' or 'promotion', received '${tagPolicy}'.`);
 }
 const expectedNpmTag = tagPolicy === "publication"
   ? `accept-v${version}`
   : version.includes("-") ? "next" : "latest";
-if (npmTag !== expectedNpmTag) {
-  throw new Error(`Expected npm dist-tag '${expectedNpmTag}' for version '${version}', received '${npmTag}'.`);
-}
+const npmTag = expectedNpmTag;
 
-const artifactDirectory = resolve(artifactArgument);
+const archivePath = resolve(archiveArgument);
+const artifactDirectory = resolve(archivePath, "..");
 const registry = "https://registry.npmjs.org";
-const coordinatedPackages = [
+const publicPackages = [
   { name: "@sunder/sdk", archive: `sunder-sdk-${version}.tgz` },
   { name: "@sunder/package-tool", archive: `sunder-package-tool-${version}.tgz` },
   { name: "create-sunder-package", archive: `create-sunder-package-${version}.tgz` },
 ];
-const packages = packageName === undefined
-  ? coordinatedPackages
-  : coordinatedPackages.filter((item) => item.name === packageName);
-if (packages.length !== (packageName === undefined ? coordinatedPackages.length : 1)) {
-  throw new Error(`Expected one coordinated npm package name, received '${packageName}'.`);
+const packages = publicPackages.filter(item => item.name === packageName);
+if (packages.length !== 1 || basename(archivePath) !== packages[0].archive) {
+  throw new Error(`Expected one public npm package archive, received '${packageName}'.`);
 }
 
 const npmVersion = execFileSync("npm", ["--version"], { encoding: "utf8" }).trim();
@@ -78,17 +67,7 @@ const fetchBytes = async (url) => {
 
 const artifactDirectoryStat = await lstat(artifactDirectory);
 assert(artifactDirectoryStat.isDirectory() && !artifactDirectoryStat.isSymbolicLink(), `npm artifact directory must be a real directory: ${artifactDirectory}.`);
-const actualArchives = (await readdir(artifactDirectory, { withFileTypes: true }))
-  .filter((entry) => entry.name.endsWith(".tgz"))
-  .map((entry) => entry.name)
-  .sort();
-assert(
-  actualArchives.length === coordinatedPackages.length
-    && actualArchives.every((name, index) => name === [...coordinatedPackages.map((item) => item.archive)].sort()[index]),
-  `npm artifact directory does not contain the exact coordinated tarball set: ${JSON.stringify(actualArchives)}.`,
-);
 
-const packuments = new Map();
 const localDigests = new Map();
 for (const item of packages) {
   const localPath = resolve(artifactDirectory, item.archive);
@@ -110,6 +89,9 @@ for (const item of packages) {
   assert(metadata.name === item.name && metadata.version === version, `npm metadata identity mismatch for ${item.name}@${version}.`);
   assert(metadata.license === "MIT", `${item.name}@${version} does not report the MIT license.`);
   assert(metadata.repository?.url === "git+https://github.com/Younics/sunder-core.git", `${item.name}@${version} has unexpected repository metadata.`);
+  for (const field of ["dependencies", "optionalDependencies", "peerDependencies", "engines"]) {
+    assert(isDeepStrictEqual(metadata[field] ?? {}, localManifest[field] ?? {}), `${item.name}@${version} registry ${field} differs from its archive.`);
+  }
   assert(packument["dist-tags"]?.[npmTag] === version, `${item.name}:${npmTag} does not resolve to ${version}.`);
 
   const integrity = `sha512-${hash("sha512", localBytes, "base64")}`;
@@ -124,17 +106,9 @@ for (const item of packages) {
   const remoteBytes = await fetchBytes(metadata.dist.tarball);
   assert(localBytes.equals(remoteBytes), `Registry bytes differ from ${basename(localPath)}.`);
 
-  packuments.set(item.name, metadata);
   localDigests.set(item.name, hash("sha512", localBytes, "hex"));
 }
 
-if (packuments.has("@sunder/package-tool")) {
-  assert(packuments.get("@sunder/package-tool")?.dependencies?.["@sunder/sdk"] === npmVersionRange, `Published @sunder/package-tool must use @sunder/sdk '${npmVersionRange}'.`);
-  assert(packuments.get("@sunder/package-tool")?.dependencies?.vite === "8.2.0", "Published @sunder/package-tool must pin Vite 8.2.0.");
-}
-if (packuments.has("create-sunder-package")) {
-  assert(packuments.get("create-sunder-package")?.dependencies?.["@sunder/sdk"] === npmVersionRange, `Published create-sunder-package must use @sunder/sdk '${npmVersionRange}'.`);
-}
 
 const verificationDirectory = await mkdtemp(join(tmpdir(), "sunder-npm-release-verify-"));
 try {
@@ -167,7 +141,7 @@ try {
   assert(Array.isArray(audit.missing) && audit.missing.length === 0, "npm found a missing registry signature.");
   assert(Array.isArray(audit.verified), "npm did not return verified attestation details.");
 
-  const expectedRef = `refs/tags/sdk/v${version}`;
+  const expectedRef = "refs/heads/main";
   const expectedRepositoryUrl = `https://github.com/${repository}`;
   const expectedWorkflowSan = `URI:${expectedRepositoryUrl}/${workflowPath}@${expectedRef}`;
   const expectedSourceUri = `git+${expectedRepositoryUrl}@${expectedRef}`;

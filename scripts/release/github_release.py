@@ -15,9 +15,11 @@ from urllib.parse import quote
 
 sys.dont_write_bytecode = True
 import release_coordinates as c
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
+from metadata import platforms
 
 ROOT = Path(__file__).resolve().parents[2]
-RIDS = ("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64")
+RIDS = tuple(row["rid"] for row in platforms()["include"])
 EVIDENCE = {"SHA256SUMS", "release-provenance.json", "release-sbom.spdx.json", "toolchain.txt"}
 MAX_ASSET = 2 * 1024 ** 3
 
@@ -72,7 +74,7 @@ class GitHubRelease:
     def __init__(self, repository, tag):
         c.require(repository in ("Younics/sunder-core", "Younics/sunder-agent-package"), "Unexpected release repository")
         stream = tag.split("/", 1)[0]
-        c.require(stream in ("app", "cli", "host", "sdk") if repository.endswith("sunder-core")
+        c.require(stream in ("app", "cli", "host", "sdk") or re.fullmatch(r"(?:nuget|npm)-[a-z0-9-]+", stream) if repository.endswith("sunder-core")
                   else re.fullmatch(r"agent(?:-[a-z0-9]+)*", stream), "Unexpected release stream")
         c.tag(tag, stream)
         self.repository, self.tag = repository, tag
@@ -227,29 +229,26 @@ def core_names(component, version, channel="stable"):
             suffix = "-Setup.exe" if rid.startswith("win-") else ".AppImage" if rid.startswith("linux-") else ".dmg"
             names.add(f"Sunder-app-{rid}-{channel}{suffix}")
         return names
-    c.require(component == "sdk", "Unknown Core component")
-    inventory = c.decode(c.read(ROOT / "eng/test-oracles/core-public-packages.json"))
-    names = {f"{package['packageId']}.{version}.nupkg" for package in inventory["nuget"]}
-    names.update(f"{package}-{version}.tgz" for package in ("sunder-sdk", "sunder-package-tool", "create-sunder-package"))
-    names.update(("npm-MIT-LICENSE.txt", "npm-NOTICES.txt", "node-dependency-notices.json"))
-    names.add("sunder-sdk-compatibility.tar")
-    if "-" not in version:
-        names.update(("sunder-platform-contracts.v1.json", "sunder-platform-contracts.receipt.v1.json"))
-    return names
+    raise ValueError("Unknown native Core component; developer packages use sdk_release.py")
 
 
 def verify_evidence(files, release_id, repository, tag, source, run_id=None):
     c.require(EVIDENCE <= files.keys(), "Incomplete release evidence")
     value = c.decode(c.read(files["release-provenance.json"]))
     invocation = value["invocation"]
+    package_release = repository == c.REPOSITORY and tag.startswith(("nuget-", "npm-"))
+    expected_ref = "refs/heads/main" if package_release else "refs/tags/" + tag
     c.require(value["schemaVersion"] == 1 and value["buildType"] == "https://sunderapp.io/provenance/github-actions/v1"
               and invocation["repository"] == repository and invocation["releaseId"] == int(release_id)
-              and invocation["sha"] == source and invocation["ref"] == "refs/tags/" + tag
-              and invocation["refName"] == tag and (run_id is None or invocation["runId"] == run_id), "Provenance source/run/release mismatch")
+              and invocation["sha"] == source and invocation["ref"] == expected_ref
+              and invocation["refName"] == ("main" if package_release else tag)
+              and (run_id is None or invocation["runId"] == run_id), "Provenance source/run/release mismatch")
     if repository == c.REPOSITORY:
         component = tag.split("/", 1)[0]
+        package_release = component.startswith(("nuget-", "npm-"))
         c.require(value["sources"] == [{"name": "sunder-core", "sha": source}]
-                  and invocation["workflowRef"] == f"{repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{tag}",
+                  and invocation["workflowRef"] == (f"{repository}/{c.SDK_WORKFLOW}@refs/heads/main" if package_release else
+                      f"{repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{tag}"),
                   "Provenance workflow/material mismatch")
     c.number(invocation["runId"]); c.number(invocation["runAttempt"])
     artifacts = value["artifacts"]
@@ -271,18 +270,15 @@ def verify_evidence(files, release_id, repository, tag, source, run_id=None):
 
 def core_stage(store, directory, component, channel, finalize=False):
     c.require(store.repository == c.REPOSITORY, "Core publication requires the Core repository")
+    c.require(component in ("app", "cli", "host"), "SDK packages release individually from the main workflow")
     source = c.sha(os.environ["GITHUB_SHA"], 40)
-    events = ("push", "workflow_dispatch") if component == "sdk" else ("push",)
-    c.require(os.environ["GITHUB_EVENT_NAME"] in events and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
+    c.require(os.environ["GITHUB_EVENT_NAME"] == "push" and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
               "Component publication requires its tag workflow")
     c.require(os.environ["GITHUB_WORKFLOW_REF"] == f"{store.repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{store.tag}", "Unexpected component workflow")
     c.require(os.environ["GITHUB_WORKFLOW_SHA"] == source, "Workflow/source mismatch")
     subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag], check=True, cwd=ROOT)
     version = store.tag.split("/v", 1)[1]
     expected = core_names(component, version, channel)
-    if component == "sdk":
-        verify_sdk_compatibility(directory)
-        verify_sdk_documentation(directory, source)
     release = store.resolve() if finalize else store.create(source, f"Sunder {component.title()} {version}")
     c.require(release is not None and release["target_commitish"] == source
               and release["prerelease"] is ("-" in version), "Missing source-bound release")
@@ -314,8 +310,6 @@ def core_stage(store, directory, component, channel, finalize=False):
     c.require(set(files) == expected | EVIDENCE, "Incomplete component/evidence inventory")
     evidence = verify_evidence(files, release_id, store.repository, store.tag, source, os.environ["GITHUB_RUN_ID"])
     c.require(int(evidence["invocation"]["runAttempt"]) <= int(os.environ["GITHUB_RUN_ATTEMPT"]), "Future publication attempt")
-    if component == "sdk" and "-" not in version:
-        verify_catalog(directory, release_id, store.tag, source, release["draft"])
     if component == "app":
         for rid in RIDS:
             manifest = c.decode(c.read(files[f"releases.app-{rid}-{channel}.json"]))
@@ -344,24 +338,6 @@ def core_stage(store, directory, component, channel, finalize=False):
     print(json.dumps(result))
 
 
-def verify_sdk_compatibility(directory):
-    subprocess.run([sys.executable, "-B", str(ROOT / "scripts/compatibility/sdk_release_compatibility.py"),
-                    "verify", "--directory", str(directory)], check=True, cwd=ROOT)
-
-
-def verify_sdk_documentation(directory, source):
-    import sdk_release_documentation as documentation
-    documentation.verify(ROOT, [directory], source)
-
-
-def verify_catalog(directory, release_id, tag, source, draft):
-    # Import lazily: catalog retention uses this module's transport. The closed
-    # catalog receipt also binds numeric asset identity, not just equal file bytes.
-    import core_catalog_release as catalog
-    receipt = c.decode(c.read(Path(directory) / catalog.RECEIPT))
-    catalog.verify(Path(directory), release_id, tag, source, receipt["registryOrigin"], c.source_file(source, c.BASELINE), draft=draft)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("metadata", "resolve", "create", "upload", "download", "verify", "stage", "finalize"))
@@ -375,9 +351,6 @@ def main():
     store = GitHubRelease(args.repository, args.tag)
     if args.action == "metadata":
         values = {"version": args.tag.split("/v", 1)[1], "is_prerelease": str(store.prerelease).lower()}
-        c.require(not (args.tag.startswith("sdk/") and "-" in values["version"]
-                       and values["version"].split("-", 1)[0].split(".")[2] == "0"),
-                  "A coordinated SDK minor line starts at stable X.Y.0")
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
                 output.writelines(f"{key}={value}\n" for key, value in values.items())
@@ -406,14 +379,9 @@ def main():
             source = c.sha(os.environ["GITHUB_SHA"], 40)
             component, version = store.tag.split("/v", 1)
             c.require(set(files) == core_names(component, version, args.channel) | EVIDENCE, "Incomplete component inventory")
-            if component == "sdk":
-                verify_sdk_compatibility(args.directory)
-                verify_sdk_documentation(args.directory, source)
             verify_evidence(files, args.release_id, store.repository, store.tag, source, os.environ["GITHUB_RUN_ID"])
             value = store.get(args.release_id)
             c.require(value["target_commitish"] == source and value["prerelease"] is ("-" in version), "Release source/version changed")
-            if component == "sdk" and "-" not in version:
-                verify_catalog(args.directory, args.release_id, store.tag, source, value["draft"])
         store.verify(args.release_id, files)
     else:
         c.require(args.directory is not None, "Publication directory is required")

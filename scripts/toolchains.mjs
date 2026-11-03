@@ -77,18 +77,6 @@ export async function synchronize(check = false) {
     nodeRoot.packageManager = `npm@${policy.npm}`;
     await writeFile(nodeManifest, JSON.stringify(nodeRoot, null, 2) + "\n");
   }
-  for (const filename of ["sunder-ci.yml", "sunder-host-validation.yml", "sunder-sdk-release.yml", "sunder-app-release.yml", "sunder-host-release.yml", "sunder-cli-release.yml"]) {
-    const workflow = path.join(root, ".github/workflows", filename);
-    let text = await readFile(workflow, "utf8");
-    for (const [key, version] of [["DOTNET_VERSION", policy.dotnetSdk], ["NODE_VERSION", policy.node], ["NPM_VERSION", policy.npm]]) {
-      const match = text.match(new RegExp(`^  ${key}: ["']?([^"'\\s]+)`, "m"));
-      if (match && match[1] !== version) {
-        if (check) throw new Error(`${filename}: ${key} differs from eng/toolchains.json.`);
-        text = text.replace(new RegExp(`^(  ${key}: )["']?[^"'\\s]+["']?`, "m"), `$1"${version}"`);
-      }
-    }
-    if (!check) await writeFile(workflow, text);
-  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))

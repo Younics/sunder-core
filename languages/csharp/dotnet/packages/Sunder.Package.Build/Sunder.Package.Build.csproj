@@ -11,7 +11,7 @@
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificContentInPackage>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
-    <Version>$(SunderDeveloperPackageVersion)</Version>
+    <Version>1.1.0</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Title>Sunder.Package.Build</Title>
     <Description>MSBuild targets and tasks that generate Sunder package manifests, development output, and distributable .sunderpkg archives.</Description>

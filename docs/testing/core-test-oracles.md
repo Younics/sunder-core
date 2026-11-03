@@ -16,8 +16,10 @@ inspection supplies declaration-level filtering, platform support, and external
 prerequisites at runtime; parameterized and generated cases come only from the
 test adapters. `check-core-test-policy.mjs` rejects an empty test project, an
 empty lane, ownership drift, or stale expected-skip identities. It also checks every
-literal workflow `--require-test` selection against current declarations, before
-expensive CI work starts; renaming a test class must update its required evidence selection.
+literal workflow `--require-test` and named `--scenario`/`--require-scenario`
+selection against current declarations before expensive CI work starts. Required
+scenario owners live in `eng/test-oracles/ci-scenarios.json`; a removed owner fails
+discovery and new cases beneath that owner are included automatically.
 
 ```text
 node scripts/test-oracles/check-core-test-policy.mjs
@@ -36,6 +38,22 @@ A lane with no runnable declaration fails. A READY-selected result that is
 missing or skipped also fails.
 
 ## Runtime evidence
+
+### Named CI scenarios
+
+Scenarios combine existing declarations for generated templates, interop, output
+locks, official runtimes and Agent-family acceptance. They share the existing
+runner and evidence checker; their required environment flags are applied by the
+runner. Supply the actual selected archives/directories before execution.
+
+```sh
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scenario interop --list
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scenario interop --configuration Release
+node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/scenarios/interop --allow-partial --require-scenario interop
+```
+
+Scenario reports default to their own directory. `--list` changes no reports or
+environment, and required-scenario evidence rejects missing or skipped execution.
 
 ### Local iteration
 
@@ -82,6 +100,9 @@ it can create children. The reporter kills and drains remaining owned processes
 before advancing, even after a normal launcher exit. Unconfirmed cleanup or
 cancellation stops the selection. The native platform jobs exercise these cleanup
 regressions on each OS before the .NET lane, including Windows Job Object behavior.
+Preflight runs before restore/build and uses the existing Node spec/JUnit reporter.
+Its reports and failed process fixtures are retained under `artifacts/process-preflight/`,
+separate from the .NET lane evidence; successful fixtures are removed.
 The sidecar starts incomplete before launch, so a killed reporter cannot leave
 apparently passing evidence. Log-write failures also go through process cleanup.
 
@@ -147,8 +168,8 @@ sidecar (even beside a passing TRX), failed test, or report containing zero test
 fails evidence generation. Raw TRX/JUnit artifacts retain individual
 outcomes and durations for diagnosis.
 
-`.github/workflows/sunder-ci.yml` owns PR/main, scheduled, manual and SDK-release
-checks. On scheduled, manual and SDK-tag runs, its `test-results` job waits for
+`.github/workflows/sunder-ci.yml` owns PR/merge-queue, scheduled, manual and SDK-release
+checks. On scheduled, manual and selected SDK-release runs, its `test-results` job waits for
 successful portable and native jobs, downloads their raw reports, and runs
 `summarize-core-test-results.mjs <directory> --aggregate`.
 This checks combined ordinary .NET declaration coverage, all release fixtures and
@@ -190,9 +211,9 @@ reset deletion grants inheritable user-only directory access while traversing
 validated owned trees, avoiding loss of inherited child access without changing
 foreign ownership or relaxing path/identity checks.
 
-App packaging and Windows output-lock evidence are summarized after their execution
-step was attempted, including a failed attempt, but not after a skipped step when
-an earlier platform test failed.
+Platform, official-runtime, App packaging and Windows output-lock evidence are
+summarized after their execution step was attempted, including a failed attempt,
+but not after a skipped step when an earlier prerequisite or test failed.
 This avoids a misleading missing-directory error without accepting missing reports:
 successful native validation still requires both platform and packaging checks.
 Host-only releases disable the reusable workflow's `include-app-packaging` input,

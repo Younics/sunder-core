@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "velopackSdk": "9.0.100",
+  "signingSdk": "8.0.100",
+  "windowsSigningClient": {
+    "packageId": "microsoft.artifactsigning.client",
+    "version": "1.0.128",
+    "sha256": "74bd7d27e6ce1051409c38d9b46bc8df0400ecd643d51ffbf2ac00869061e40b"
+  }
+}

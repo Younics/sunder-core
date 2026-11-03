@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { runOwnedTestProcess } from "./run-owned-test-process.mjs";
 
 const leaf = `
@@ -28,10 +29,19 @@ const tree = `
 `;
 
 async function fixture(action) {
-  const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-process-"));
+  const diagnostics = process.env.SUNDER_TEST_PROCESS_DIAGNOSTICS_DIRECTORY;
+  if (diagnostics !== undefined) await mkdir(diagnostics, { recursive: true });
+  const root = await mkdtemp(resolve(diagnostics ?? tmpdir(), "sunder-owned-process-"));
+  let failed = false;
   try { await action(root, (extra = {}) => ({ cwd: root, logStem: resolve(root, "command with spaces"),
     timeoutMilliseconds: 15_000, streamOutput: false, ...extra })); }
-  finally { await rm(root, { recursive: true, force: true }); }
+  catch (error) {
+    failed = true;
+    if (diagnostics !== undefined) console.error(`Failed process fixture retained at ${root}`);
+    throw error;
+  } finally {
+    if (!failed || diagnostics === undefined) await rm(root, { recursive: true, force: true });
+  }
 }
 
 async function unchanged(path) {
@@ -131,7 +141,7 @@ test("output overflow and spawn failure retain explicit failures instead of look
 });
 
 test("a results log write failure still terminates and drains the owned tree", async () => fixture(async (root, options) => {
-  const hook = resolve(root, "failed-log-writer.mjs");
+  const hook = resolve(root, "failed log writer #100%.mjs");
   await writeFile(hook, `
     import fs from 'node:fs';
     import { syncBuiltinESMExports } from 'node:module';
@@ -156,7 +166,7 @@ test("a results log write failure still terminates and drains the owned tree", a
       ${JSON.stringify(options())});
     if (result.error?.code !== 'ENOSPC' || !result.cleanupComplete) throw new Error(JSON.stringify(result));
   `;
-  const result = spawnSync(process.execPath, ["--import", hook, "--input-type=module", "-e", driver], { encoding: "utf8", timeout: 45_000 });
+  const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, "--input-type=module", "-e", driver], { encoding: "utf8", timeout: 45_000 });
   assert.equal(result.status, 0, result.stdout + result.stderr);
   const receipt = JSON.parse(await readFile(`${options().logStem}.process.json`, "utf8"));
   assert.equal(receipt.error.code, "ENOSPC");

@@ -1,50 +1,30 @@
 #!/usr/bin/env python3
-"""Select an authored SDK version and start/resume its existing tag workflow."""
+"""Release each public project only when its authored version is newer."""
 import argparse
 from contextlib import nullcontext
+import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
-import re
+import shutil
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
+import zipfile
 from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 sys.dont_write_bytecode = True
 import github_release as assets
+import package_metadata as metadata
 import release_coordinates as c
 
 ROOT = Path(__file__).resolve().parents[2]
-WORKFLOW = c.SDK_WORKFLOW.rsplit("/", 1)[-1]
-ACTIVE = {"queued", "in_progress", "waiting", "pending", "requested"}
-
-
-def version_key(value):
-    c.tag("sdk/v" + value, "sdk")
-    c.require("+" not in value, "SDK versions cannot contain build metadata")
-    return published_version_key(value)
-
-
-def published_version_key(value, nuget=False):
-    c.require(isinstance(value, str), "Published package version must be a string")
-    core, _, suffix = value.split("+", 1)[0].partition("-")
-    c.require("-" not in value.split("+", 1)[0] or suffix, "Invalid published prerelease version: " + value)
-    numbers = core.split(".")
-    c.require(len(numbers) == 3 or nuget and len(numbers) == 4, "Invalid published package version: " + value)
-    # NuGet also supports normalized four-part legacy versions. Do not silently
-    # ignore one when deciding whether an authored version is actually newer.
-    revision = numbers[3] if len(numbers) == 4 else "0"
-    c.require(re.fullmatch(r"0|[1-9][0-9]*", revision), "Invalid NuGet revision")
-    normalized = ".".join(numbers[:3]) + ("-" + suffix if suffix else "")
-    if "+" in value:
-        normalized += "+" + value.split("+", 1)[1]
-    c.tag("sdk/v" + normalized, "sdk")
-    if nuget:
-        suffix = suffix.lower()
-    identifiers = tuple((0, int(item)) if item.isdigit() else (1, item) for item in suffix.split(".")) if suffix else ()
-    return (*map(int, numbers[:3]), int(revision), 0 if suffix else 1, identifiers)
+PLAN = "release-plan.json"
+version_key = metadata.version_key
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -53,16 +33,14 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def registry_json(url):
-    """Only a real 404 means absent; auth, rate limits and network errors fail."""
-    c.require(url.startswith(("https://api.nuget.org/", "https://registry.npmjs.org/")), "Unexpected package registry")
+    """A 404 means absent; service/authentication failures are not absence."""
+    c.require(url.startswith(("https://api.nuget.org/", "https://registry.npmjs.org/")), "Unexpected registry")
     try:
         with build_opener(NoRedirect).open(Request(url, headers={"Accept": "application/json"}), timeout=30) as response:
             c.require(response.status == 200, "Registry lookup did not return HTTP 200")
             raw = response.read(8 * 1024 * 1024 + 1)
-            c.require(len(raw) <= 8 * 1024 * 1024, "Registry response exceeds its bound")
-            value = c.decode(raw)
-            c.require(isinstance(value, dict), "Registry metadata must be an object")
-            return value
+            c.require(len(raw) <= 8 * 1024 * 1024, "Oversized registry response")
+            return c.decode(raw)
     except HTTPError as error:
         code = error.code
         error.close()
@@ -71,282 +49,356 @@ def registry_json(url):
         raise ValueError(f"Registry lookup failed (HTTP {code}): {url}") from None
 
 
-def package_presence(version, inventory=None, get=registry_json):
-    return {name: item["present"] for name, item in package_statuses(version, inventory, get).items()}
-
-
 def package_history(kind, name, version, get=registry_json):
     nuget = kind == "nuget"
-    current = published_version_key(version, nuget=nuget)
-    if nuget:
-        metadata = get(f"https://api.nuget.org/v3-flatcontainer/{name.lower()}/index.json")
-        c.require(metadata is None or isinstance(metadata.get("versions"), list), "Invalid NuGet version history: " + name)
+    document = get(f"https://api.nuget.org/v3-flatcontainer/{name.lower()}/index.json" if nuget
+                   else "https://registry.npmjs.org/" + quote(name, safe=""))
+    if document is None:
+        versions = []
     else:
-        metadata = get(f"https://registry.npmjs.org/{quote(name, safe='')}")
-        c.require(metadata is None or metadata.get("name") == name and isinstance(metadata.get("versions"), dict),
-                  "Invalid npm version history: " + name)
-    versions = list(metadata["versions"]) if metadata is not None else []
-    c.require(metadata is None or versions, "Empty published version history is not a not-found response: " + name)
-    c.require(all(isinstance(item, str) for item in versions), "Invalid published version history: " + name)
-    keys = {item: published_version_key(item, nuget=nuget) for item in versions}
+        c.require(isinstance(document, dict) and isinstance(document.get("versions"), list if nuget else dict)
+                  and document["versions"] and (nuget or document.get("name") == name), "Invalid published version history: " + name)
+        versions = list(document["versions"])
+    keys = {value: version_key(value, nuget) for value in versions}
+    current = version_key(version, nuget)
     highest = max(keys, key=keys.get) if keys else None
     return dict(latest=highest, present=current in keys.values(), newer=highest is None or current > keys[highest])
 
 
-def package_statuses(version, inventory=None, get=registry_json):
-    version_key(version)
-    inventory = inventory or c.decode(c.read(ROOT / "eng/test-oracles/core-public-packages.json"))
-    c.require(inventory["coordinatedVersion"] == version, "SDK selection must use the authored source version")
-    result = {}
-    for kind in ("nuget", "npm"):
-        for package in inventory[kind]:
-            name = package["packageId"] if kind == "nuget" else package["name"]
-            c.require(name not in result, "Duplicate public package identity")
-            result[name] = dict(kind=kind, name=name, version=version, project=package["project"],
-                                **package_history(kind, name, version, get))
-    c.require(len(result) == 9, "Expected six public NuGets and three npm packages")
-    return result
+def github_releases(store):
+    result = []
+    for page in range(1, 101):
+        values = store.api(f"releases?per_page=100&page={page}")
+        c.require(isinstance(values, list), "Invalid GitHub release page")
+        result.extend(values)
+        if len(values) < 100:
+            c.require(len({item["tag_name"] for item in result}) == len(result), "Ambiguous release tags")
+            return result
+    raise ValueError("Release pagination limit exceeded")
 
 
-def selection(version, statuses=None):
-    statuses = package_statuses(version) if statuses is None else statuses
-    packages = list(statuses.values())
-    return dict(version=version, publish=any(item["newer"] for item in packages),
-                all_new=all(item["newer"] for item in packages), packages=packages,
-                **{kind: [item["name"] for item in packages if item["kind"] == kind and item["newer"]] for kind in ("nuget", "npm")})
+def select(packages, source, releases, get=registry_json):
+    rows = []
+    for package in packages:
+        history = package_history(package["kind"], package["name"], package["version"], get)
+        # Published GitHub archives also cover historical combined sdk/v releases.
+        published = []
+        prefix, suffix = (package["name"] + ".", ".nupkg") if package["kind"] == "nuget" else (
+            package["name"].lstrip("@").replace("/", "-") + "-", ".tgz")
+        for release in releases:
+            if release["draft"]:
+                continue
+            for asset in release["assets"]:
+                name = asset["name"]
+                if name.startswith(prefix) and name.endswith(suffix):
+                    text = name[len(prefix):-len(suffix)]
+                    try:
+                        published.append((version_key(text, package["kind"] == "nuget"), text))
+                    except ValueError:
+                        continue  # An unrelated asset is not a package version.
+        if published:
+            previous = max(published)
+            history["newer"] = history["newer"] and version_key(package["version"], package["kind"] == "nuget") > previous[0]
+            if history["latest"] is None or previous[0] > version_key(history["latest"], package["kind"] == "nuget"):
+                history["latest"] = previous[1]
+        rows.append(dict(package, selected=history["newer"], latest=history["latest"]))
+    return dict(schemaVersion=1, artifactSourceCommit=source, packages=rows)
 
 
-def package_present(version, name):
-    inventory = c.decode(c.read(ROOT / "eng/test-oracles/core-public-packages.json"))
-    selected = {"nuget": [item for item in inventory["nuget"] if item["packageId"] == name],
-                "npm": [item for item in inventory["npm"] if item["name"] == name]}
-    c.require(sum(map(len, selected.values())) == 1, "Not a public SDK package: " + name)
-    history = package_history("nuget" if selected["nuget"] else "npm", name, version)
-    c.require(history["present"] or history["newer"],
-              f"Refusing to publish {name}@{version}: highest published version is {history['latest']}")
-    return history["present"]
-
-
-class Workflow:
-    def api(self, suffix, method="GET", value=None, optional=False):
-        arguments = ["gh", "api", "--hostname", "github.com", "--include", "--method", method,
-                     "-H", "Accept: application/vnd.github+json", "-H", "X-GitHub-Api-Version: 2022-11-28",
-                     f"repos/{c.REPOSITORY}/{suffix}"]
-        if value is not None:
-            arguments += ["--input", "-"]
-        result = subprocess.run(arguments, input=c.canonical(value) if value is not None else None,
-                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        raw = result.stdout.replace(b"\r\n", b"\n")
-        header, separator, body = raw.partition(b"\n\n")
-        status = re.match(rb"HTTP/\S+ (\d{3})\b", header)
-        c.require(separator and status, "GitHub response has no HTTP status: " + suffix)
-        code = int(status[1])
-        if optional and code == 404:
-            return None
-        c.require(result.returncode == 0 and 200 <= code < 300, f"GitHub {method} failed (HTTP {code}): {suffix}")
-        return c.decode(body) if body.strip() else None
-
-    def source(self, tag):
-        value = self.api("git/ref/tags/" + quote(tag, safe=""), optional=True)
-        if value is None:
-            return None
-        item = value["object"]
-        for _ in range(9):
-            c.sha(item["sha"], 40)
-            if item["type"] == "commit":
-                return item["sha"]
-            c.require(item["type"] == "tag", "Release tag does not resolve to a commit")
-            item = self.api("git/tags/" + item["sha"])["object"]
-        raise ValueError("Excessive annotated-tag depth")
-
-    def runs(self, tag, source):
-        found = []
-        for page in range(1, 101):
-            values = self.api(f"actions/workflows/{WORKFLOW}/runs?head_sha={source}&per_page=100&page={page}")["workflow_runs"]
-            for run in values:
-                if run["head_branch"] == tag and run["head_sha"] == source and run["event"] in ("push", "workflow_dispatch"):
-                    c.require(run["path"] == c.SDK_WORKFLOW, "Unexpected SDK workflow path")
-                    c.number(run["id"])
-                    found.append(run)
-            if len(values) < 100:
-                return sorted(found, key=lambda run: int(run["id"]))
-        raise ValueError("SDK workflow pagination limit exceeded")
-
-
-def require_retained_candidate(store, release):
-    c.require(release is not None, "Published package versions have no retained SDK release; refusing to rebuild them")
-    value = store.get(release["id"])
-    c.require({item["name"] for item in value["assets"]} == assets.core_names("sdk", store.tag[5:]) | assets.EVIDENCE,
-              "Published package versions have no complete retained candidate; resume the original SDK run")
-
-
-def require_recipes():
-    c.require(any((ROOT / "eng/compatibility/recipes").glob("*/*.json")),
-              "SDK release inputs are not ready: no reviewed compatibility recipes exist under eng/compatibility/recipes. "
-              "Complete the compatibility-input producer before creating a release tag; no tag or package was created.")
-
-
-def select(version, workflow=None, store=None, statuses=None):
-    version_key(version)
-    c.require(os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY and os.environ.get("GITHUB_REF") == "refs/heads/main"
-              and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch"), "SDK selection runs only on main")
-    commit = c.sha(os.environ["GITHUB_SHA"], 40)
-    c.require(os.environ.get("GITHUB_WORKFLOW_SHA") == commit
-              and os.environ.get("GITHUB_WORKFLOW_REF") == f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main",
-              "SDK selector workflow/source differs")
-    workflow = workflow or Workflow()
-    tag = "sdk/v" + version
-    store = store or assets.GitHubRelease(c.REPOSITORY, tag)
-    statuses = package_statuses(version) if statuses is None else statuses
-    presence = {name: item["present"] for name, item in statuses.items()}
-    newer = any(item["newer"] for item in statuses.values())
-    obsolete = any(item["latest"] is not None and
-        published_version_key(item["latest"], nuget=item["kind"] == "nuget") >
-        published_version_key(version, nuget=item["kind"] == "nuget") for item in statuses.values())
-    if not newer and (obsolete or not all(presence.values())):
-        return dict(action="skip", tag=tag, reason="Authored version is not newer than the highest published versions")
-    release = store.resolve()
-    if not newer and (release is None or not release["draft"]):
-        return dict(action="skip", tag=tag, reason="Authored version is not newer than the highest published versions")
-    source = workflow.source(tag)
-    if release:
-        c.require(source and release["target_commitish"] == source, "SDK release/tag source conflict")
-    if any(presence.values()):
-        require_retained_candidate(store, release)
-    if source is None:
-        c.require(release is None and not any(presence.values()), "Existing publication has no source tag")
-        require_recipes()
-        try:
-            workflow.api("git/refs", "POST", dict(ref="refs/tags/" + tag, sha=commit))
-        except (ValueError, subprocess.TimeoutExpired):
-            # Read after even a failed/lost acknowledgement. Never move a tag.
-            if workflow.source(tag) != commit:
-                raise
-        source = workflow.source(tag)
-        c.require(source == commit, "Created SDK tag names another source")
-    comparison = workflow.api(f"compare/{source}...main")
-    c.require(comparison["status"] in ("ahead", "identical"), "SDK source is not part of main")
-    runs = workflow.runs(tag, source)
-    active = [run for run in runs if run["status"] in ACTIVE]
-    if active:
-        return dict(action="active", tag=tag, run_id=active[0]["id"])
-    if runs:
-        # All attempts retain one run ID. Re-running only failed jobs preserves
-        # successful build/stage outputs and cannot rebuild a published candidate.
-        original = runs[0]
-        c.require(original["status"] == "completed" and original["conclusion"] in ("failure", "cancelled", "timed_out", "action_required", "startup_failure"),
-                  "SDK run succeeded but publication is incomplete; inspect the original run instead of rebuilding")
-        workflow.api(f"actions/runs/{c.number(original['id'])}/rerun-failed-jobs", "POST")
-        return dict(action="resume", tag=tag, run_id=original["id"])
-    c.require(release is None and not any(presence.values()), "Original SDK workflow is unavailable; retained publication cannot be rebuilt")
-    workflow.api(f"actions/workflows/{WORKFLOW}/dispatches", "POST", dict(ref=tag))
-    return dict(action="dispatch", tag=tag, source=source)
-
-
-def prepare(version, store=None, statuses=None):
-    store = store or assets.GitHubRelease(c.REPOSITORY, "sdk/v" + version)
-    statuses = package_statuses(version) if statuses is None else statuses
-    if not any(item["newer"] for item in statuses.values()):
-        return False
-    presence = {name: item["present"] for name, item in statuses.items()}
-    release = store.resolve()
-    if release:
-        c.require(release["target_commitish"] == os.environ["GITHUB_SHA"], "SDK release/tag source conflict")
-    if any(presence.values()):
-        require_retained_candidate(store, release)
-    if release:
-        provenance = next((item for item in release["assets"] if item["name"] == "release-provenance.json"), None)
-        if provenance:
-            value = c.gh("releases/assets/" + c.number(provenance["id"]), binary=True)
-            c.require(c.digest(value) == provenance["digest"][7:], "Retained SDK provenance digest differs")
-            invocation = c.decode(value)["invocation"]
-            c.require(invocation["runId"] == os.environ["GITHUB_RUN_ID"], "Resume the original SDK run; a new run must not rebuild its candidate")
-    require_recipes()
-    return True
-
-
-def output_selection(value):
-    if os.environ.get("GITHUB_OUTPUT"):
-        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-            for key in ("publish", "all_new", "nuget", "npm"):
-                output.write(key + "=" + json.dumps(value[key], separators=(",", ":")) + "\n")
-    print(json.dumps(value))
-
-
-def pack(version):
-    """Only newly authored versions get release archives; normal source tests are separate."""
-    import sdk_release_documentation as documentation
-    value = selection(version)
-    if not value["publish"]:
-        return value
-    commit = c.sha(os.environ["GITHUB_SHA"], 40)
-    root = ROOT / "artifacts"
-    selected = [item for item in value["packages"] if item["newer"]]
-    is_tag = os.environ.get("GITHUB_REF", "").startswith("refs/tags/sdk/")
-    context = documentation.pack_context(ROOT, commit) if is_tag else nullcontext()
-    with context:
-        for item in selected:
-            if item["kind"] == "nuget":
-                (root / "sdk").mkdir(parents=True, exist_ok=True)
-                subprocess.run(["dotnet", "pack", item["project"], "-c", "Release", "--no-restore", "--no-build",
-                    "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false", "-o", str(root / "sdk")], cwd=ROOT, check=True)
-        if value["nuget"]:
-            subprocess.run([sys.executable, "-B", str(ROOT / "scripts/release/verify-nuget-package-set.py"),
-                version, str(root / "sdk"), commit, *value["nuget"]], cwd=ROOT, check=True)
-        if value["npm"]:
-            (root / "npm").mkdir(parents=True, exist_ok=True)
-            command = ["npm", "pack", "--prefix", "languages/typescript/node", "--json", "--pack-destination", str(root / "npm")]
-            for name in value["npm"]:
-                command += ["--workspace", name]
-            report = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, check=True)
-            (root / "npm-pack.json").write_bytes(report.stdout)
-            source = c.decode(c.read(ROOT / "languages/typescript/node/packages/package-tool/package.json"))
-            subprocess.run(["node", str(ROOT / "scripts/release/verify-node-package-artifacts.mjs"), version,
-                source["dependencies"]["@sunder/sdk"], source["dependencies"]["vite"], str(root / "npm"),
-                str(root / "npm-pack.json"), *value["npm"]], cwd=ROOT, check=True)
-    if is_tag:
-        documentation.verify(ROOT, [root / kind for kind in ("sdk", "npm") if value[kind]], commit,
-                             package_names=value["nuget"] + value["npm"])
+def load(path):
+    value = c.decode(c.read(path))
+    c.closed(value, "schemaVersion artifactSourceCommit packages")
+    c.require(value["schemaVersion"] == 1, "Unknown release plan")
+    c.sha(value["artifactSourceCommit"], 40)
+    expected = metadata.packages(ROOT)
+    c.require(len(value["packages"]) == len(expected), "Release package inventory differs")
+    for row, package in zip(value["packages"], expected):
+        c.closed(row, "kind name version project tag archive selected latest")
+        c.require(all(row[key] == item for key, item in package.items()) and type(row["selected"]) is bool,
+                  "Release plan differs from project metadata")
     return value
 
 
-def channels(version, get=registry_json):
-    """Check the entire channel before the first dist-tag mutation."""
-    channel = "next" if "-" in version else "latest"
-    for name in ("@sunder/sdk", "@sunder/package-tool", "create-sunder-package"):
-        metadata = get("https://registry.npmjs.org/" + quote(name, safe=""))
-        c.require(metadata and metadata.get("name") == name, "Missing npm package during channel promotion")
-        current = metadata.get("dist-tags", {}).get(channel)
-        c.require(current is None or version_key(current) <= version_key(version), f"Refusing to move {name}:{channel} backwards from {current} to {version}")
+def selected(plan, kind=None):
+    return [row for row in plan["packages"] if row["selected"] and (kind is None or row["kind"] == kind)]
+
+
+def source_guard(plan):
+    c.require(os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY and os.environ.get("GITHUB_REF") == "refs/heads/main"
+              and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
+              and os.environ.get("GITHUB_REF_PROTECTED") == "true"
+              and os.environ.get("GITHUB_WORKFLOW_SHA") == plan["artifactSourceCommit"] == os.environ.get("GITHUB_SHA")
+              and os.environ.get("GITHUB_WORKFLOW_REF") == f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main",
+              "Publication requires the exact protected-main workflow source")
+    c.require(c.command("git", "rev-parse", "HEAD", cwd=ROOT).decode().strip() == plan["artifactSourceCommit"], "Release checkout differs")
+    c.require(not c.command("git", "status", "--porcelain", "--untracked-files=all", cwd=ROOT).strip(), "Release source must be clean")
+
+
+def store_for(row):
+    return assets.GitHubRelease(c.REPOSITORY, row["tag"])
+
+
+def prepare(path):
+    packages = metadata.packages(ROOT, evaluate=True)
+    source = c.sha(os.environ["GITHUB_SHA"], 40)
+    releases = github_releases(store_for(packages[0]))
+    drafts = [release for release in releases if release["draft"] and release["tag_name"] in {row["tag"] for row in packages}]
+    recover = bool(drafts)
+    if recover:
+        first = drafts[0]
+        c.require(first["target_commitish"] == source, "An unfinished release belongs to another source; rerun its original failed jobs")
+        store = assets.GitHubRelease(c.REPOSITORY, first["tag_name"])
+        item = assets.asset(first, PLAN)
+        store.download(item, path)
+        plan = load(path)
+        source_guard(plan)
+        by_tag = {release["tag_name"]: release for release in releases}
+        for row in selected(plan):
+            release = by_tag.get(row["tag"])
+            c.require(release and release["target_commitish"] == source
+                      and {row["archive"], PLAN, *assets.EVIDENCE} <= {asset["name"] for asset in release["assets"]},
+                      "Staging was interrupted; rerun the original failed job with its retained tested artifacts")
+    else:
+        plan = select(packages, source, releases)
+        source_guard(plan)
+        c.write_new(path, plan)
+    outputs = dict(selected_count=len(selected(plan)), nuget_count=len(selected(plan, "nuget")), npm_count=len(selected(plan, "npm")), recover=str(recover).lower())
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.writelines(f"{key}={value}\n" for key, value in outputs.items())
+    print(json.dumps(outputs))
+
+
+def pack(plan, directory):
+    import sdk_release_documentation as documentation
+    directory.mkdir(parents=True, exist_ok=True)
+    release = os.environ.get("GITHUB_WORKFLOW_REF") == f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main"
+    context = documentation.pack_context(ROOT, plan["artifactSourceCommit"]) if release else nullcontext()
+    with context:
+        for row in selected(plan):
+            if row["kind"] == "nuget":
+                subprocess.run(["dotnet", "pack", row["project"], "-c", "Release", "--no-restore", "--no-build",
+                    "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false", "-o", str(directory)], cwd=ROOT, check=True)
+                spec = importlib.util.spec_from_file_location("verify_nuget", ROOT / "scripts/release/verify-nuget-package-set.py")
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                module.verify_archive(directory / row["archive"], row["name"], row["version"], plan["artifactSourceCommit"])
+            else:
+                with tempfile.TemporaryDirectory() as temporary:
+                    work = Path(temporary)
+                    command = ["npm", "pack", "--prefix", "languages/typescript/node", "--workspace", row["name"], "--json", "--pack-destination", str(work)]
+                    report = subprocess.check_output(command, cwd=ROOT)
+                    report_path = Path(temporary) / "pack.json"
+                    report_path.write_bytes(report)
+                    manifest = c.decode(c.read(ROOT / row["project"] / "package.json"))
+                    tool_manifest = c.decode(c.read(ROOT / "languages/typescript/node/packages/package-tool/package.json"))
+                    subprocess.run(["node", str(ROOT / "scripts/release/verify-node-package-artifacts.mjs"), row["version"],
+                        manifest.get("dependencies", {}).get("@sunder/sdk", "-"), tool_manifest["dependencies"]["vite"], str(work), str(report_path), row["name"]], check=True)
+                    shutil.copyfile(work / row["archive"], directory / row["archive"])
+    if release and selected(plan):
+        documentation.verify(ROOT, [directory], plan["artifactSourceCommit"], package_names=[row["name"] for row in selected(plan)])
+
+
+def feed(plan, candidate, directory):
+    """Template tests use selected archives plus exact already-published dependencies."""
+    directory.mkdir(parents=True, exist_ok=True)
+    packages = []
+    for row in plan["packages"]:
+        test_row = dict(row)
+        if not row["selected"]:
+            history = package_history(row["kind"], row["name"], row["version"], get=registry_json)
+            test_row["version"] = row["version"] if history["present"] else history["latest"]
+            c.require(test_row["version"], "Missing published dependency: " + row["name"])
+            test_row["archive"] = metadata.archive_name(row["kind"], row["name"], test_row["version"])
+        packages.append({key: test_row[key] for key in ("kind", "name", "version", "archive")})
+        if row["selected"]:
+            shutil.copyfile(candidate / row["archive"], directory / row["archive"])
+            continue
+        download_dependency(test_row, directory)
+    # Independently versioned Worker/Avalonia/Stacks archives may refer to an
+    # older exact SDK. Preserve that real closure, not a forced same-version set.
+    queue = [item for item in packages if item["kind"] == "nuget"]
+    known = {item["name"].casefold(): item["name"] for item in queue}
+    seen = set()
+    while queue:
+        row = queue.pop(0)
+        if row["archive"] in seen: continue
+        seen.add(row["archive"])
+        c.require(len(seen) <= 128, "Oversized public NuGet dependency closure")
+        with zipfile.ZipFile(directory / row["archive"]) as archive:
+            names = [name for name in archive.namelist() if name.endswith(".nuspec")]
+            c.require(len(names) == 1 and archive.getinfo(names[0]).file_size <= 1024 * 1024, "Missing/bounded NuGet metadata required")
+            raw = archive.read(names[0])
+            c.require(not any(marker in raw.upper().replace(b"\0", b"") for marker in (b"<!DOCTYPE", b"<!ENTITY")), "Unsupported NuGet XML markup")
+            nuspec = ET.fromstring(raw)
+            for dependency in nuspec.iter():
+                name, constraint = dependency.get("id", ""), dependency.get("version", "")
+                if dependency.tag.rsplit("}", 1)[-1] != "dependency" or name.casefold() not in known: continue
+                if not (constraint.startswith("[") and constraint.endswith("]") and "," not in constraint): continue
+                version = constraint[1:-1]
+                metadata.version_key(version, True)
+                name = known[name.casefold()]
+                item = dict(kind="nuget", name=name, version=version, archive=metadata.archive_name("nuget", name, version))
+                if not (directory / item["archive"]).exists(): download_dependency(item, directory)
+                queue.append(item)
+    c.write_new(directory / "test-feed.json", dict(packages=packages))
+
+
+def download_dependency(row, directory):
+    integrity = None
+    if row["kind"] == "nuget":
+        name, version = row["name"].lower(), row["version"].lower()
+        url = f"https://api.nuget.org/v3-flatcontainer/{name}/{version}/{name}.{version}.nupkg"
+    else:
+        document = registry_json("https://registry.npmjs.org/" + quote(row["name"], safe="") + "/" + quote(row["version"], safe=""))
+        c.require(document and document["name"] == row["name"] and document["version"] == row["version"], "Missing published dependency: " + row["name"])
+        url, integrity = document["dist"]["tarball"], document["dist"]["integrity"]
+        c.require(url.startswith("https://registry.npmjs.org/"), "Unexpected npm download origin")
+    digest = hashlib.sha512()
+    with build_opener(NoRedirect).open(url, timeout=120) as response, (directory / row["archive"]).open("xb") as output:
+        c.require(response.status == 200, "Dependency download did not return HTTP 200")
+        size = 0
+        while data := response.read(1024 * 1024):
+            size += len(data)
+            c.require(size <= assets.MAX_ASSET, "Oversized published dependency")
+            digest.update(data)
+            output.write(data)
+        c.require(size > 0, "Empty published dependency")
+    if integrity:
+        import base64
+        c.require(integrity == "sha512-" + base64.b64encode(digest.digest()).decode(), "Published npm dependency integrity differs")
+
+
+def release_directory(directory, row):
+    return directory / row["tag"].split("/")[0]
+
+
+def verify_retained(store, info, directory, plan, row):
+    c.require(info and info["tag_name"] == row["tag"] and info["target_commitish"] == plan["artifactSourceCommit"]
+              and info["prerelease"] is store.prerelease, "Retained package release source/version differs")
+    files = assets.local_files(directory)
+    c.require(c.decode(c.read(directory / PLAN)) == plan and row["archive"] in files, "Retained release plan/archive differs")
+    expected = {PLAN, row["archive"], *assets.EVIDENCE}
+    if row["name"] == "Sunder.Sdk.Stacks":
+        expected.add("sunder-platform-contracts.v1.json")
+    c.require(set(files) == expected, "Retained package release inventory differs")
+    proof = assets.verify_evidence(files, info["id"], c.REPOSITORY, row["tag"], plan["artifactSourceCommit"])
+    c.require(proof["invocation"]["workflowRef"] == f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main", "Unexpected package publication workflow")
+    c.remote_tag(row["tag"], plan["artifactSourceCommit"])
+    return store.verify(info["id"], files)
+
+
+def stage(plan, candidate, directory):
+    source_guard(plan)
+    for row in selected(plan):
+        store = store_for(row)
+        folder = release_directory(directory, row)
+        folder.mkdir(parents=True, exist_ok=True)
+        # Query ref creation through the transport's exact readback, never move it.
+        try:
+            store.api("git/refs", "POST", dict(ref="refs/tags/" + row["tag"], sha=plan["artifactSourceCommit"]))
+        except (ValueError, subprocess.TimeoutExpired):
+            pass
+        c.remote_tag(row["tag"], plan["artifactSourceCommit"])
+        info = store.create(plan["artifactSourceCommit"], row["name"] + " " + row["version"])
+        shutil.copyfile(candidate / row["archive"], folder / row["archive"])
+        c.write_new(folder / PLAN, plan)
+        catalog = candidate / "sunder-platform-contracts.v1.json"
+        if row["name"] == "Sunder.Sdk.Stacks" and catalog.exists():
+            shutil.copyfile(catalog, folder / catalog.name)
+        # Keep original evidence on an interrupted upload; only generate missing files.
+        old = {item["name"]: item for item in info["assets"]}
+        for name in assets.EVIDENCE & old.keys():
+            store.download(old[name], folder / name)
+        if not assets.EVIDENCE <= {path.name for path in folder.iterdir()}:
+            with tempfile.TemporaryDirectory() as temporary:
+                work = Path(temporary)
+                for path in folder.iterdir():
+                    if path.name not in assets.EVIDENCE:
+                        shutil.copyfile(path, work / path.name)
+                env = dict(os.environ, GITHUB_RELEASE_ID=str(info["id"]))
+                subprocess.run(["bash", str(ROOT / "scripts/release/generate-release-evidence.sh"), str(work),
+                    "sunder-core=" + plan["artifactSourceCommit"]], env=env, check=True)
+                for name in assets.EVIDENCE - {path.name for path in folder.iterdir()}:
+                    shutil.copyfile(work / name, folder / name)
+        if info["draft"]:
+            store.upload(info["id"], [folder / PLAN, *[path for path in folder.iterdir() if path.name != PLAN]])
+        verify_retained(store, info, folder, plan, row)
+
+
+def download(plan, directory):
+    source_guard(plan)
+    for row in selected(plan):
+        store = store_for(row)
+        info = store.resolve()
+        c.require(info and info["target_commitish"] == plan["artifactSourceCommit"], "Missing original package release")
+        info = store.get(info["id"])
+        folder = release_directory(directory, row)
+        folder.mkdir(parents=True, exist_ok=True)
+        for item in info["assets"]:
+            store.download(item, folder / item["name"])
+        verify_retained(store, info, folder, plan, row)
+
+
+def publish(plan, directory, kind):
+    source_guard(plan)
+    for row in selected(plan, kind):
+        folder = release_directory(directory, row)
+        info = store_for(row).resolve()
+        verify_retained(store_for(row), info, folder, plan, row)
+        subprocess.run(["bash", str(ROOT / "scripts/release/publish-sdk.sh"), kind, row["name"], row["version"],
+                        str(folder / row["archive"])], check=True)
+
+
+def finalize(plan, directory):
+    source_guard(plan)
+    for row in selected(plan):
+        store = store_for(row)
+        info = store.resolve()
+        folder = release_directory(directory, row)
+        verify_retained(store, info, folder, plan, row)
+        subprocess.run(["bash", str(ROOT / "scripts/release/publish-sdk.sh"), "verify-" + row["kind"], row["name"],
+                        row["version"], str(folder / row["archive"])], check=True)
+        if info["draft"]:
+            try:
+                store.api("releases/" + str(info["id"]), "PATCH", dict(draft=False, make_latest="false"))
+            except (ValueError, subprocess.TimeoutExpired):
+                pass
+        store.verify(info["id"], assets.local_files(folder), draft=False)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("check", "pack", "select", "prepare", "channels", "package"))
-    parser.add_argument("version")
-    parser.add_argument("name", nargs="?")
+    parser.add_argument("action", choices=("metadata", "history", "select", "pack", "feed", "stage", "download", "npm", "nuget", "finalize"))
+    parser.add_argument("--name")
+    parser.add_argument("--version")
+    parser.add_argument("--kind", choices=("nuget", "npm"))
+    parser.add_argument("--plan", type=Path, default=ROOT / "artifacts" / PLAN)
+    parser.add_argument("--directory", type=Path, default=ROOT / "artifacts/packages")
+    parser.add_argument("--candidate", type=Path, default=ROOT / "artifacts/packages")
     args = parser.parse_args()
-    version_key(args.version)
-    if args.action in ("check", "pack"):
-        output_selection(selection(args.version) if args.action == "check" else pack(args.version))
-    elif args.action == "select":
-        print(json.dumps(select(args.version)))
-    elif args.action == "prepare":
-        result = str(prepare(args.version)).lower()
-        if os.environ.get("GITHUB_OUTPUT"):
-            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
-                output.write("publish=" + result + "\n")
-        print("SDK publication needed: " + result)
-    elif args.action == "channels":
-        channels(args.version)
-    else:
-        c.require(args.name, "Package lookup needs an exact public package name")
-        return 0 if package_present(args.version, args.name) else 4
-    return 0
+    if args.action == "history":
+        c.require(args.name and args.version and args.kind, "Package history needs kind/name/version")
+        print(json.dumps(package_history(args.kind, args.name, args.version)))
+        return
+    if args.action == "metadata":
+        print(json.dumps(metadata.packages(ROOT, evaluate=True)))
+        return
+    if args.action == "select":
+        args.plan.parent.mkdir(parents=True, exist_ok=True)
+        prepare(args.plan)
+        return
+    plan = load(args.plan)
+    if args.action == "pack": pack(plan, args.directory.resolve())
+    elif args.action == "feed": feed(plan, args.candidate.resolve(), args.directory.resolve())
+    elif args.action == "stage": stage(plan, args.candidate.resolve(), args.directory.resolve())
+    elif args.action == "download": download(plan, args.directory.resolve())
+    elif args.action == "finalize": finalize(plan, args.directory.resolve())
+    else: publish(plan, args.directory.resolve(), args.action)
 
 
 if __name__ == "__main__":
     try:
-        raise SystemExit(main())
+        main()
     except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
         raise SystemExit(str(error))

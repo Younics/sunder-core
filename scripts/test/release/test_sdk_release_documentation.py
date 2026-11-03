@@ -29,7 +29,7 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.head, self.status = COMMIT, b""
-        inventory = dict(schemaVersion=1, coordinatedVersion="1.2.3", nuget=[
+        inventory = dict(schemaVersion=1, nuget=[
             dict(packageId="Sunder.Sdk", project=CSHARP + "Sunder.Sdk/Sunder.Sdk.csproj", maximumBytes=1024 * 1024, requiredEntries=[]),
             dict(packageId="Sunder.Package.Templates", project=CSHARP + "Sunder.Package.Templates/Sunder.Package.Templates.csproj",
                  maximumBytes=1024 * 1024, requiredEntries=["content/sample/README.md"]),
@@ -41,6 +41,7 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         self.files = {d.INVENTORY: json.dumps(inventory).encode(), "docs/policy.md": b"# Policy\n"}
         readme = b"> UNFROZEN / UNRELEASED\n" + f"[Policy]({URL}/blob/main/docs/policy.md#policy)\n".encode()
         for item in inventory["nuget"]:
+            self.files[item["project"]] = b'<Project><PropertyGroup><Version>1.2.3</Version></PropertyGroup></Project>'
             directory = item["project"].rsplit("/", 1)[0]
             self.files[directory + "/README.md"] = readme
             for entry in item["requiredEntries"]:
@@ -63,7 +64,7 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         self.git_mock.start()
         self.addCleanup(self.git_mock.stop)
         self.source = d.Source(self.root, COMMIT)
-        self.packages = d.packages(self.source)[1]
+        self.packages = d.packages(self.source)
 
     def git(self, *arguments, **kwargs):
         self.assertEqual(self.root, kwargs["cwd"])
@@ -186,8 +187,8 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         self.assert_restored()
 
     def test_tag_pack_uses_exact_source_then_restores_inputs_when_command_fails(self):
-        env = dict(GITHUB_REF="refs/tags/sdk/v1.2.3", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
-                   GITHUB_REPOSITORY="Younics/sunder-core")
+        env = dict(GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
+                   GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/heads/main")
         def failed_command(*args, **kwargs):
             self.assertNotIn(b"/main/", (self.root / NODE / "sdk/README.md").read_bytes())
             raise subprocess.CalledProcessError(2, args[0])
@@ -280,15 +281,15 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
 
     def test_ci_binds_before_pack_and_artifact_consumption_using_the_existing_commands(self):
         ci = (d.ROOT / ".github/workflows/sunder-ci.yml").read_text()
-        wrapper = ci.index('sdk_release.py pack "$SDK_VERSION"')
-        self.assertLess(wrapper, ci.index("name: Source catalog and generated .NET template variants"))
+        wrapper = ci.index('sdk_release.py pack')
+        self.assertLess(wrapper, ci.index("core_ci.py templates"))
         self.assertLess(wrapper, ci.index("name: Retain the tested candidate feed"))
-        packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(version):", 1)[1].split("def channels(", 1)[0]
-        self.assertIn("documentation.pack_context(ROOT, commit)", packer)
+        packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(plan, directory):", 1)[1].split("def feed(", 1)[0]
+        self.assertIn('documentation.pack_context(ROOT, plan["artifactSourceCommit"])', packer)
         self.assertLess(packer.index("with context:"), packer.index('["dotnet", "pack"'))
         self.assertLess(packer.index("with context:"), packer.index('["npm", "pack"'))
         self.assertLess(packer.index("verify-node-package-artifacts.mjs"), packer.index("documentation.verify("))
-        self.assertIn('if is_tag:', packer)
+        self.assertIn('if release and selected(plan):', packer)
 
 
 if __name__ == "__main__":

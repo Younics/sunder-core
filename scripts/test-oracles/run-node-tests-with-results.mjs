@@ -2,13 +2,17 @@ import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const [reportName, ...testFiles] = process.argv.slice(2);
+const { values, positionals: [reportName, ...testFiles] } = parseArgs({
+  allowPositionals: true,
+  options: { "results-directory": { type: "string", default: "artifacts/test-results" } },
+});
 if (reportName === undefined || !/^[a-z0-9][a-z0-9-]*$/u.test(reportName) || testFiles.length === 0) {
-  throw new Error("Usage: run-node-tests-with-results.mjs <report-name> <test-file> [...].");
+  throw new Error("Usage: run-node-tests-with-results.mjs [--results-directory <directory>] <report-name> <test-file> [...].");
 }
-const outputDirectory = resolve(repositoryRoot, "artifacts/test-results");
+const outputDirectory = resolve(repositoryRoot, values["results-directory"]);
 mkdirSync(outputDirectory, { recursive: true });
 const outputPath = resolve(outputDirectory, `${reportName}.junit.xml`);
 rmSync(outputPath, { force: true });

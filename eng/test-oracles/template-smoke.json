@@ -1,0 +1,10 @@
+{
+  "dotnet": [
+    { "name": "headless", "options": [] },
+    { "name": "avalonia", "options": ["--withAvalonia"] },
+    { "name": "no-view", "options": ["--withAvalonia", "--noDefaultView"] },
+    { "name": "stacks", "options": ["--withStacks"], "platformContract": "sunder.stack.contributor" },
+    { "name": "all", "options": ["--withAvalonia", "--withStacks"], "platformContract": "sunder.stack.contributor" }
+  ],
+  "node": ["node", "react-node"]
+}

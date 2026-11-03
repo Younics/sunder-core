@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Owned, bounded SDK corpus collector and verifier. Recipes come from reviewed source.
 
-Only this collector emits lane evidence. The tag workflow transports its outputs
-separately from the candidate; candidate manifests cannot supply results/selectors.
+This standalone tool retains the historical SDK-tag corpus envelope. Normal
+project-version publication does not invoke it. Candidate manifests cannot supply
+their own results/selectors; owning execution evidence remains separate.
 """
 import argparse
 import os
@@ -19,8 +20,8 @@ import time
 import uuid
 
 sys.dont_write_bytecode = True
-import sdk_release_compatibility as compatibility
-from sdk_release_compatibility import c, ROOT
+import sdk_corpus as compatibility
+from sdk_corpus import c, ROOT
 
 SCHEMAS = ROOT / "eng/compatibility"
 RIDS = ("win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64")

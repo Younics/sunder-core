@@ -15,12 +15,14 @@ public static class RegistryPublishTokenScopes
 
 public sealed record RegistryPublishTokenGrant(
     string Scope,
-    string ResourceId);
+    string ResourceId = "",
+    bool AllPackages = false);
 
 public sealed record RegistryCreatePublishTokenRequest(
     string DisplayName,
     IReadOnlyList<RegistryPublishTokenGrant> Grants,
-    int? LifetimeDays = null);
+    int? LifetimeDays = null,
+    bool NeverExpires = false);
 
 public sealed record RegistryCreatePublishTokenResponse(
     Guid Id,
@@ -28,7 +30,7 @@ public sealed record RegistryCreatePublishTokenResponse(
     string DisplayName,
     IReadOnlyList<RegistryPublishTokenGrant> Grants,
     DateTimeOffset CreatedAtUtc,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset? ExpiresAtUtc);
 
 public sealed record RegistryPublishTokenSummary(
     Guid Id,
@@ -36,4 +38,4 @@ public sealed record RegistryPublishTokenSummary(
     IReadOnlyList<RegistryPublishTokenGrant> Grants,
     DateTimeOffset CreatedAtUtc,
     DateTimeOffset? LastUsedAtUtc,
-    DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset? ExpiresAtUtc);

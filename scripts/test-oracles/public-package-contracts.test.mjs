@@ -37,7 +37,7 @@ test("public npm source manifests retain inventoried roles and entry points", as
   for (const contract of inventory.npm) {
     const manifest = JSON.parse(await readFile(resolve(repositoryRoot, contract.project, "package.json"), "utf8"));
     assert.equal(manifest.name, contract.name);
-    assert.equal(manifest.version, inventory.coordinatedVersion);
+    assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u);
     assert.equal(manifest.engines?.node, ">=24.18.1 <25.0.0");
     verifyRole(contract.role, manifest);
     verifyExportTargets(manifest, [...commonEntries, ...contract.requiredEntries]);
@@ -84,7 +84,7 @@ test("every public npm package has its inventoried role and deterministic artifa
       const project = resolve(repositoryRoot, contract.project);
       const manifest = JSON.parse(await readFile(resolve(project, "package.json"), "utf8"));
       assert.equal(manifest.name, contract.name);
-      assert.equal(manifest.version, inventory.coordinatedVersion);
+      assert.match(manifest.version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u);
       assert.equal(manifest.engines?.node, ">=24.18.1 <25.0.0");
       verifyRole(contract.role, manifest);
 
@@ -96,7 +96,7 @@ test("every public npm package has its inventoried role and deterministic artifa
       const first = pack(project, firstDirectory);
       const second = pack(project, secondDirectory);
       assert.equal(first.name, contract.name);
-      assert.equal(first.version, inventory.coordinatedVersion);
+      assert.equal(first.version, manifest.version);
       assert.ok(first.size > 0 && first.size <= contract.maximumBytes, `${contract.name} exceeded ${contract.maximumBytes} bytes`);
       const entries = first.files.map((file) => file.path);
       verifyEntries(contract, entries);

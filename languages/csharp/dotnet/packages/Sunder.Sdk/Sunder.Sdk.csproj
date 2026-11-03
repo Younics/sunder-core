@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <Version>$(SunderDeveloperPackageVersion)</Version>
+    <Version>1.1.0</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
@@ -33,12 +33,12 @@
     <None Include="LICENSE" Pack="true" PackagePath="" />
   </ItemGroup>
 
-  <!-- NuGet otherwise turns project references into unbounded lower-minimum dependencies. -->
+  <!-- Package dependencies bind the referenced SDK, not the consumer's version. -->
   <Target Name="_SetSunderProjectReferencePackageVersion"
           BeforeTargets="_GetProjectVersion"
           Condition="'$(BuildProjectReferences)' == 'false'">
     <PropertyGroup>
-      <PackageVersion>$(SunderDeveloperPackageVersionRange)</PackageVersion>
+      <PackageVersion>[$(Version)]</PackageVersion>
     </PropertyGroup>
   </Target>
 

@@ -7,7 +7,7 @@
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
-    <Version>$(SunderDeveloperPackageVersion)</Version>
+    <Version>1.1.0</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
@@ -33,15 +33,5 @@
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="..\Sunder.Sdk\LICENSE" Link="LICENSE" Pack="true" PackagePath="" />
   </ItemGroup>
-
-  <!-- Worker uses a same-release internal transport bridge; do not permit patch-level skew. -->
-  <Target Name="_PinSunderSdkWorkerDependency"
-          AfterTargets="_GetProjectReferenceVersions">
-    <ItemGroup>
-      <_ProjectReferencesWithVersions Condition="'%(_ProjectReferencesWithVersions.Filename)' == 'Sunder.Sdk'">
-        <ProjectVersion>[$(SunderDeveloperPackageVersion)]</ProjectVersion>
-      </_ProjectReferencesWithVersions>
-    </ItemGroup>
-  </Target>
 
 </Project>

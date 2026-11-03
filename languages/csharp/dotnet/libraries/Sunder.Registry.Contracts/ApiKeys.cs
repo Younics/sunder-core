@@ -1,6 +1,6 @@
 namespace Sunder.Registry.Contracts;
 
-/// <summary>Explicit operations an API key may perform on one exact resource.</summary>
+/// <summary>Operations an API key may perform within its resource scope.</summary>
 public static class RegistryApiKeyPermissions
 {
     public const string PackagePublish = "package:publish";
@@ -18,9 +18,11 @@ public static class RegistryApiKeyPermissions
 }
 
 public sealed record RegistryApiKeyPermission(string Id, string Name, string Description, string ResourceKind, IReadOnlyList<string> Requires);
-public sealed record RegistryApiKeyGrant(string Permission, string ResourceId);
-public sealed record RegistryCreateApiKeyRequest(string DisplayName, IReadOnlyList<RegistryApiKeyGrant> Grants, int? LifetimeDays = null);
+/// <summary>ResourceId is empty only when AllPackages is explicitly selected. Stack grants are always exact.</summary>
+public sealed record RegistryApiKeyGrant(string Permission, string ResourceId = "", bool AllPackages = false);
+public sealed record RegistryCreateApiKeyRequest(string DisplayName, IReadOnlyList<RegistryApiKeyGrant> Grants,
+    int? LifetimeDays = null, bool NeverExpires = false);
 public sealed record RegistryCreateApiKeyResponse(Guid Id, string Key, string DisplayName, IReadOnlyList<RegistryApiKeyGrant> Grants,
-    DateTimeOffset CreatedAtUtc, DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset CreatedAtUtc, DateTimeOffset? ExpiresAtUtc);
 public sealed record RegistryApiKeySummary(Guid Id, string DisplayName, IReadOnlyList<RegistryApiKeyGrant> Grants,
-    DateTimeOffset CreatedAtUtc, DateTimeOffset ExpiresAtUtc);
+    DateTimeOffset CreatedAtUtc, DateTimeOffset? ExpiresAtUtc);

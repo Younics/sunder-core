@@ -29,10 +29,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-metadata="$(node "$repository_root/scripts/release/check-sdk-version.mjs")"
-version="$(jq -er '.version' <<< "$metadata")"
-version_range="$(jq -er '.versionRange' <<< "$metadata")"
-version_range_msbuild="${version_range/,/%2C}"
+node "$repository_root/scripts/release/check-sdk-version.mjs"
 commit="$(git -C "$repository_root" rev-parse HEAD)"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || { printf 'Core HEAD is not a full commit SHA.\n' >&2; exit 1; }
 
@@ -47,8 +44,6 @@ common_args=(
   --no-restore
   --artifacts-path "$work_directory/artifacts"
   -o "$output"
-  -p:SunderDeveloperPackageVersion="$version"
-  -p:SunderDeveloperPackageVersionRange="$version_range_msbuild"
   -p:RestorePackagesPath="$packages_directory"
   -p:ContinuousIntegrationBuild=true
   -p:GeneratePackageOnBuild=false
@@ -69,4 +64,13 @@ done
 
 packages=("$output"/*.nupkg)
 [[ ${#packages[@]} -eq 6 ]] || { printf 'Expected exactly six candidate NuGet packages, found %s.\n' "${#packages[@]}" >&2; exit 1; }
-python3 "$repository_root/scripts/release/verify-nuget-package-set.py" "$version" "$output" "$commit"
+python3 -B - "$repository_root" "$output" "$commit" <<'PY'
+import importlib.util, pathlib, sys
+root, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(root / 'scripts/release'))
+from package_metadata import packages
+spec = importlib.util.spec_from_file_location('verify_nuget', root / 'scripts/release/verify-nuget-package-set.py')
+verifier = importlib.util.module_from_spec(spec); spec.loader.exec_module(verifier)
+for package in packages(root):
+    if package['kind'] == 'nuget': verifier.verify_archive(output / package['archive'], package['name'], package['version'], sys.argv[3])
+PY

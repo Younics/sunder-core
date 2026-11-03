@@ -2,6 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
+import { selectScenario } from "./ci-scenarios.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
 import { dotnetTestArguments, dotnetTestBudget } from "./dotnet-test-command.mjs";
 import { maximumProcessTimeoutMilliseconds, runOwnedTestProcess } from "./run-owned-test-process.mjs";
@@ -10,6 +11,7 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 const { policy, declarations } = loadCoreTestModel();
 const requestedArguments = process.argv.slice(2);
 const primaryLane = takeOption("--primary-lane");
+const scenarioName = takeOption("--scenario");
 const project = takeOption("--project");
 const timeoutOverride = takeOption("--timeout-ms");
 const timeoutMilliseconds = timeoutOverride === undefined ? undefined : Number(timeoutOverride);
@@ -18,13 +20,18 @@ if (timeoutMilliseconds !== undefined && (!Number.isSafeInteger(timeoutMilliseco
 }
 const list = takeFlag("--list");
 const requestedOutputDirectory = takeOption("--results-directory")
-  ?? (project === undefined ? "artifacts/test-results/dotnet" : `artifacts/test-results/local/${project}/${primaryLane ?? "full"}`);
+  ?? (scenarioName !== undefined ? `artifacts/test-results/scenarios/${scenarioName}`
+    : project === undefined ? "artifacts/test-results/dotnet" : `artifacts/test-results/local/${project}/${primaryLane ?? "full"}`);
 const build = takeFlag("--build");
 if (requestedArguments.some((argument) => ["--filter", "--logger", "-l", "--results-directory", "-m", "--maxcpucount"].includes(argument))) {
   throw new Error("The Core .NET reporter owns filtering, logging, and result paths.");
 }
 const allDotnetTests = declarations.filter((test) => test.framework === "dotnet");
 const operatingSystem = currentOperatingSystem();
+if (scenarioName !== undefined && (primaryLane !== undefined || project !== undefined)) {
+  throw new Error("Select a scenario or a project/lane, not both.");
+}
+const scenario = scenarioName === undefined ? undefined : selectScenario(scenarioName, declarations, operatingSystem);
 if (project !== undefined && !allDotnetTests.some((test) => test.project === project)) {
   throw new Error(`Unknown .NET test project '${project}'. Use its project name, such as Sunder.Package.Build.Tests.`);
 }
@@ -34,12 +41,12 @@ if (primaryLane !== undefined && !policy.primaryLanes.includes(primaryLane)) {
 const laneTests = primaryLane === undefined
   ? allDotnetTests
   : allDotnetTests.filter((test) => test.primaryLane === primaryLane && test.operatingSystems.includes(operatingSystem));
-const selectedTests = project === undefined ? laneTests : laneTests.filter((test) => test.project === project);
+const selectedTests = scenario?.tests ?? (project === undefined ? laneTests : laneTests.filter((test) => test.project === project));
 if (selectedTests.length === 0) {
   throw new Error(`Selection project='${project ?? "all"}', lane='${primaryLane ?? "all"}' has no runnable .NET tests on ${operatingSystem}.`);
 }
 if (list) {
-  const output = `${JSON.stringify({ project: project ?? "all", primaryLane: primaryLane ?? "all", operatingSystem,
+  const output = `${JSON.stringify({ project: project ?? "all", primaryLane: primaryLane ?? "all", scenario: scenarioName, operatingSystem,
     declarations: selectedTests.map((test) => test.id),
     projects: [...new Set(selectedTests.map((test) => test.project))].sort().map((name) => ({ project: name,
       ...dotnetTestBudget(name, selectedTests), ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }) })) }, null, 2)}\n`;
@@ -47,7 +54,7 @@ if (list) {
   process.exit(0);
 }
 const outputDirectory = resolve(repositoryRoot, requestedOutputDirectory);
-const cleanDirectory = project === undefined && primaryLane === undefined && requestedOutputDirectory === "artifacts/test-results/dotnet"
+const cleanDirectory = project === undefined && primaryLane === undefined && scenarioName === undefined && requestedOutputDirectory === "artifacts/test-results/dotnet"
   ? dirname(outputDirectory)
   : outputDirectory;
 rmSync(cleanDirectory, { recursive: true, force: true });
@@ -56,9 +63,10 @@ const projectPaths = [...new Set(selectedTests
   .map((test) => `languages/csharp/dotnet/tests/${test.project}/${test.project}.csproj`))].sort();
 
 const failed = [];
+Object.assign(process.env, scenario?.environment);
 for (const projectPath of projectPaths) {
   const projectName = projectPath.split("/").at(-1).replace(/\.csproj$/u, "");
-  const filter = primaryLane === undefined ? undefined : projectFilter(projectName, selectedTests, allDotnetTests);
+  const filter = primaryLane === undefined && scenarioName === undefined ? undefined : projectFilter(projectName, selectedTests, allDotnetTests);
   const budget = dotnetTestBudget(projectName, selectedTests);
   const logStem = resolve(outputDirectory, "diagnostics", projectName);
   process.env.SUNDER_TEST_COMMAND_LOG_DIRECTORY = `${logStem}.commands`;

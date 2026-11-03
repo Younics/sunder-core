@@ -102,11 +102,13 @@ def packages(source):
     """Use the existing public inventory; do not create another package/pack list."""
     inventory = c.decode(source.read(INVENTORY))
     c.require(inventory["schemaVersion"] == 1, "Unexpected public package inventory")
-    version = inventory["coordinatedVersion"]
     result = []
     for kind in ("nuget", "npm"):
         for item in inventory[kind]:
             project = PurePosixPath(item["project"])
+            version = (ET.fromstring(source.read(str(project))).findtext("./PropertyGroup/Version") if kind == "nuget"
+                       else c.decode(source.read(str(project / "package.json")))["version"])
+            c.require(isinstance(version, str), "Package source must author its version")
             directory = project.parent if kind == "nuget" else project
             documents = {"README.md": str(directory / "README.md")}
             for entry in item["requiredEntries"]:
@@ -117,7 +119,7 @@ def packages(source):
             name = item["packageId"] if kind == "nuget" else item["name"].lstrip("@").replace("/", "-")
             result.append(dict(kind=kind, item=item, documents=documents, directory=str(directory),
                                archive=f"{name}.{version}.nupkg" if kind == "nuget" else f"{name}-{version}.tgz"))
-    return version, result
+    return result
 
 
 def manifest(source, package):
@@ -138,7 +140,7 @@ def pack_inputs(source):
     manufacturing replacement npm pack digests after tests have consumed them.
     """
     source.clean()
-    _, inventory = packages(source)
+    inventory = packages(source)
     replacements = {}
     for package in inventory:
         for path in package["documents"].values():
@@ -171,18 +173,15 @@ def pack_inputs(source):
 
 @contextmanager
 def pack_context(root, commit):
-    # Ordinary CI/local candidate packaging keeps its existing mutable source docs.
-    # Only the SDK tag's already-approved release path binds a source identity.
+    # Local/PR packaging stays unchanged. Release docs use the workflow's source.
     ref = os.environ.get("GITHUB_REF", "")
-    if not ref.startswith("refs/tags/sdk/"):
+    if os.environ.get("GITHUB_WORKFLOW_REF") != f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main":
         yield
         return
-    c.tag(ref[len("refs/tags/"):], "sdk")
-    c.require(os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch") and os.environ.get("GITHUB_SHA") == commit
-              and os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY, "Source-bound documentation requires the exact SDK tag workflow")
+    c.require(ref == "refs/heads/main" and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
+              and os.environ.get("GITHUB_SHA") == commit and os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY,
+              "Source-bound documentation requires the exact release workflow")
     source = Source(root, commit)
-    version, _ = packages(source)
-    c.require(ref == "refs/tags/sdk/v" + version, "Documentation source/version differs from the SDK tag")
     with pack_inputs(source):
         yield
 
@@ -223,7 +222,7 @@ def archive_texts(path, package):
 
 def verify(root, directories, commit, package_names=None):
     source = Source(root, commit)
-    _, inventory = packages(source)
+    inventory = packages(source)
     if package_names is not None:
         known = {package["item"]["packageId"] if package["kind"] == "nuget" else package["item"]["name"] for package in inventory}
         c.require(package_names and len(set(package_names)) == len(package_names) and set(package_names) <= known,

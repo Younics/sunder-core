@@ -4,6 +4,7 @@ Run commands from the Core repository root unless a script accepts an explicit r
 
 | Directory | Owner and responsibility |
 | --- | --- |
+| `ci/` | Metadata-driven toolchain/platform setup and source, template, interop and official-runtime preparation. |
 | `release/` | App packaging, SDK/NuGet/npm verification, immutable GitHub transport, exact source/catalog/acceptance handoffs and promotion. Read-only verifiers are release tools too. |
 | `install/` | Self-contained public OS installers; public URLs and signature checks remain stable. |
 | `dev/` | Local candidate-feed production. |
@@ -23,8 +24,8 @@ It needs .NET, Git, Node, Python and jq. It does not publish or sign packages.
 ```sh
 feed="$(mktemp -d)"
 bash scripts/dev/build-core-candidate-packages.sh "$feed"
-# In a coordinated sibling Agent checkout, deliberately refresh local candidate locks:
-bash ../sunder-agent-package/scripts/dev/refresh-release-locks.sh 1.1.0 "$feed" ../sunder-agent-package
+# In a sibling Agent checkout, deliberately refresh independently authored dependency locks:
+bash ../sunder-agent-package/scripts/dev/refresh-release-locks.sh "$feed" ../sunder-agent-package
 ```
 
 The producer defaults to its own checkout, or accepts a repository root as argument
@@ -32,6 +33,19 @@ two. Local candidate bytes/locks are preparation evidence only; production still
 requires the exact approved Core release and repository-signature checks.
 
 ## Targeted script checks
+
+`ci/core_ci.py` is also the local entry point for the extracted GitHub preparation
+steps. `templates` consumes the exact `artifacts/test-feed/test-feed.json` inventory
+created by `release/sdk_release.py feed`; `module` prepares the universal Node fixture
+and selects its leaf for the evaluated .NET host RID.
+Use the repository-pinned toolchains reported by `metadata.py toolchains` for these
+checks. Required test selections live in `eng/test-oracles/ci-scenarios.json`:
+
+```sh
+python3 -B scripts/ci/metadata.py toolchains
+python3 -B scripts/ci/core_ci.py --help
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scenario interop --list
+```
 
 ```sh
 node --test scripts/test/release/*.test.mjs

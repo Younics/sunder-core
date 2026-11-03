@@ -3,6 +3,7 @@ import { basename, dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
+import { selectScenario } from "./ci-scenarios.mjs";
 
 export function parseTrxReport(xml, source) {
   const summary = /<ResultSummary\b([^>]*?)>/u.exec(xml);
@@ -287,12 +288,14 @@ function main() {
   const requiredTests = [];
   const requiredPrimaryLanes = [];
   for (let index = 0; index < arguments_.length;) {
-    if (arguments_[index] !== "--require-test" && arguments_[index] !== "--require-primary-lane") {
+    if (!["--require-test", "--require-primary-lane", "--require-scenario"].includes(arguments_[index])) {
       index++;
       continue;
     }
     if (arguments_[index + 1] === undefined) throw new Error(`${arguments_[index]} requires a value.`);
-    (arguments_[index] === "--require-test" ? requiredTests : requiredPrimaryLanes).push(arguments_[index + 1]);
+    if (arguments_[index] === "--require-scenario") {
+      requiredTests.push(...selectScenario(arguments_[index + 1], loadCoreTestModel().declarations, currentOperatingSystem()).tests.map(test => test.id));
+    } else (arguments_[index] === "--require-test" ? requiredTests : requiredPrimaryLanes).push(arguments_[index + 1]);
     arguments_.splice(index, 2);
   }
   if (arguments_.length > 1 || aggregate && (allowPartial || requiredTests.length > 0 || requiredPrimaryLanes.length > 0)) {

@@ -55,28 +55,10 @@ function main() {
 }
 
 function generateCandidate(sourceCommit) {
-  const coordinated = readText("languages/csharp/dotnet/Directory.Build.props");
-  const developerVersion = matchRequired(
-    coordinated,
-    /<SunderDeveloperPackageVersion>([^<]+)<\/SunderDeveloperPackageVersion>/u,
-    "coordinated developer package version",
-  );
-  const developerVersionRange = matchRequired(
-    coordinated,
-    /<SunderDeveloperPackageVersionRange>([^<]+)<\/SunderDeveloperPackageVersionRange>/u,
-    "coordinated developer package version range",
-  );
   const publicApiBaselines = collectPublicApiBaselines();
-  const nugetProjects = [
-    "Sunder.Sdk",
-    "Sunder.Sdk.Avalonia",
-    "Sunder.Sdk.Stacks",
-    "Sunder.Sdk.Worker",
-    "Sunder.Package.Build",
-    "Sunder.Package.Templates",
-  ];
+  const inventory = JSON.parse(readText("eng/test-oracles/core-public-packages.json"));
   const tags = gitLines(["tag", "--list"])
-    .filter((tag) => /^(?:app|cli|host|sdk)\/v\d+\.\d+\.\d+$/u.test(tag))
+    .filter((tag) => /^(?:app|cli|host|sdk|nuget-[a-z0-9-]+|npm-[a-z0-9-]+)\/v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(tag))
     .sort(compareOrdinal);
   const runtimeProblems = JSON.parse(readText(
     "languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Fixtures/ProblemDetails.golden.json",
@@ -132,9 +114,7 @@ function generateCandidate(sourceCommit) {
       rationale: "Current implementation-first source, explicit package/platform authorities and generated roles define this observation. Protected migration ledgers are inert and do not supply current expectations.",
     },
     publicArtifacts: {
-      coordinatedVersion: developerVersion,
-      coordinatedNuGetRange: developerVersionRange,
-      nuget: nugetProjects.map((name) => nugetArtifact(name, developerVersion, publicApiBaselines)),
+      nuget: inventory.nuget.map(({ packageId }) => nugetArtifact(packageId, publicApiBaselines)),
       dotnetApiBaselines: publicApiBaselines,
       hostContracts: baselineReference(publicApiBaselines, "Sunder.Host.Contracts"),
       runtimeContracts: baselineReference(publicApiBaselines, "Sunder.Runtime.Contracts"),
@@ -271,11 +251,11 @@ function generateCandidate(sourceCommit) {
     releases: {
       repository: "https://github.com/Younics/sunder-core",
       publicTags: tags,
-      latestSdkTag: latestTag(tags, "sdk/v"),
+      legacySdkTag: latestTag(tags, "sdk/v"),
       latestAppTag: latestTag(tags, "app/v"),
       latestCliTag: latestTag(tags, "cli/v"),
       latestHostTag: latestTag(tags, "host/v"),
-      tagFamilies: ["app/v<semver>", "cli/v<semver>", "host/v<semver>", "sdk/v<semver>"],
+      tagFamilies: ["app/v<semver>", "cli/v<semver>", "host/v<semver>", "nuget-<package>/v<semver>", "npm-<package>/v<semver>"],
       workerV1Thresholds: sourceFingerprint("eng/release/worker-v1-thresholds.json"),
       workflows: listFiles(".github/workflows")
         .filter((path) => /(?:ci|release|validation|promotion)\.yml$/u.test(path))
@@ -340,9 +320,10 @@ function baselineReference(baselines, assembly) {
     ?? fail(`Public API baseline is missing for ${assembly}.`);
 }
 
-function nugetArtifact(name, version, baselines) {
+function nugetArtifact(name, baselines) {
   const project = `languages/csharp/dotnet/packages/${name}/${name}.csproj`;
   if (!existsSync(resolve(repositoryRoot, project))) fail(`NuGet project is missing: ${project}`);
+  const version = matchRequired(readText(project), /<Version>([^<]+)<\/Version>/u, `${name} authored version`);
   const baseline = baselines.find((item) => item.assembly === name);
   return {
     packageId: name,

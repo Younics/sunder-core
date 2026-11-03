@@ -11,7 +11,6 @@ namespace Sunder.Package.Templates.Tests;
 public sealed partial class PackageTemplateTests
 {
     private const string TestVersion = "9.8.7-preview.4";
-    private const string TestVersionRange = "[9.8.7-preview.4]";
 
     [Fact]
     public void CommandWatchdog_OnlyUniversalPackGetsTheFanoutBudget()
@@ -27,7 +26,7 @@ public sealed partial class PackageTemplateTests
     }
 
     [Fact]
-    public async Task PackedTemplate_UsesPackageVersionAndEscapesGeneratedInputs()
+    public async Task PackedTemplate_PreservesIndependentDependenciesAndEscapesGeneratedInputs()
     {
         var repositoryRoot = FindRepositoryRoot();
         var root = CreateTempDirectory();
@@ -72,23 +71,9 @@ public sealed partial class PackageTemplateTests
                     archive.Entries,
                     entry => entry.FullName == "content/sunder-package/.template.config/template.json");
                 using var document = JsonDocument.Parse(configuration.Open());
-                Assert.Equal(
-                    TestVersion,
-                    document.RootElement
-                        .GetProperty("symbols")
-                        .GetProperty("coordinatedPackageVersion")
-                        .GetProperty("parameters")
-                        .GetProperty("value")
-                        .GetString());
-                Assert.Equal(
-                    TestVersionRange,
-                    document.RootElement
-                        .GetProperty("symbols")
-                        .GetProperty("coordinatedPackageVersionRange")
-                        .GetProperty("parameters")
-                        .GetProperty("value")
-                        .GetString());
                 var symbols = document.RootElement.GetProperty("symbols");
+                Assert.False(symbols.TryGetProperty("coordinatedPackageVersion", out _));
+                Assert.False(symbols.TryGetProperty("coordinatedPackageVersionRange", out _));
                 Assert.True(symbols.TryGetProperty("withPackageDependency", out _));
                 var dependencyRange = symbols.GetProperty("dependencyVersionRange");
                 Assert.Equal("withPackageDependency == true", dependencyRange.GetProperty("isRequired").GetString());
@@ -168,7 +153,31 @@ public sealed partial class PackageTemplateTests
                 .Where(reference => reference.Attribute("Include")?.Value.StartsWith("Sunder.", StringComparison.Ordinal) == true)
                 .ToArray();
             Assert.Equal(4, sunderReferences.Length);
-            Assert.All(sunderReferences, reference => Assert.Equal(TestVersionRange, reference.Attribute("Version")?.Value));
+            var authoredDependencies = Directory.EnumerateFiles(payload, "*.in", SearchOption.AllDirectories)
+                .Where(path => path.EndsWith(".csproj.in", StringComparison.Ordinal) || path.EndsWith(".props.in", StringComparison.Ordinal))
+                .Select(XDocument.Load).SelectMany(document => document.Descendants("PackageReference"))
+                .ToDictionary(reference => reference.Attribute("Include")!.Value, reference => reference.Attribute("Version")!.Value);
+            Assert.All(sunderReferences, reference => Assert.Equal(authoredDependencies[reference.Attribute("Include")!.Value], reference.Attribute("Version")?.Value));
+
+            // NuGet's reference-version getter must retain the referenced SDK's
+            // exact version, never the independently versioned consumer's value.
+            var sdkProject = Path.Combine(repositoryRoot, "languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj");
+            var sdkVersion = XDocument.Load(sdkProject).Root!.Elements("PropertyGroup").Elements("Version").Single().Value;
+            Assert.NotEqual(TestVersion, sdkVersion);
+            var consumer = Path.Combine(root, "independent-consumer", "Independent.Consumer.csproj");
+            Directory.CreateDirectory(Path.GetDirectoryName(consumer)!);
+            new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"),
+                new XElement("PropertyGroup", new XElement("TargetFramework", "net10.0"), new XElement("Version", TestVersion)),
+                new XElement("ItemGroup", new XElement("ProjectReference", new XAttribute("Include", sdkProject))))).Save(consumer);
+            AssertSuccess(await RunDotnetAsync(root, "restore", consumer, "--no-dependencies",
+                "--source", "https://api.nuget.org/v3/index.json", "-p:NuGetAudit=false"));
+            var dependency = await RunDotnetAsync(root, "msbuild", consumer, "-t:_GetProjectReferenceVersions", "-getItem:_ProjectReferencesWithVersions");
+            AssertSuccess(dependency);
+            using (var metadata = JsonDocument.Parse(dependency.StandardOutput))
+            {
+                var reference = Assert.Single(metadata.RootElement.GetProperty("Items").GetProperty("_ProjectReferencesWithVersions").EnumerateArray());
+                Assert.Equal("[" + sdkVersion + "]", reference.GetProperty("ProjectVersion").GetString());
+            }
 
             Assert.True(File.Exists(Path.Combine(output, "Escaped.Sample.csproj")));
             Assert.False(Directory.Exists(Path.Combine(output, "Escaped.Sample.Protocol")));
@@ -261,7 +270,9 @@ public sealed partial class PackageTemplateTests
     {
         var repositoryRoot = FindRepositoryRoot();
         var root = CreateTempDirectory();
-        var currentVersion = "1.1.1-dev.template.g" + Guid.NewGuid().ToString("N");
+        // The local-only stable patch satisfies the independently authored template
+        // ranges; the isolated feed/cache cannot substitute a public SDK package.
+        var currentVersion = "1.1." + Random.Shared.Next(10000, 60000);
         try
         {
             var packageProject = Path.Combine(
@@ -644,8 +655,7 @@ public sealed partial class PackageTemplateTests
                 "--disable-build-servers",
                 "-o",
                 localFeed,
-                $"-p:SunderDeveloperPackageVersion={version}",
-                $"-p:SunderDeveloperPackageVersionRange=[{version}]",
+                $"-p:Version={version}",
                 $"-p:PackageVersion={version}",
                 "-p:GeneratePackageOnBuild=false"));
             // Reuse restored third-party nupkgs, never a cached/published Sunder

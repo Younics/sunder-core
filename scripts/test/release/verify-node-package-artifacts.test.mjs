@@ -90,7 +90,6 @@ async function createFixture() {
   const inventoryPath = join(root, "core-public-packages.json");
   await writeFile(inventoryPath, `${JSON.stringify({
     schemaVersion: 1,
-    coordinatedVersion: VERSION,
     npm: packageDefinitions.map(({ name, maximumBytes, requiredEntries }) => ({ name, maximumBytes, requiredEntries })),
   })}\n`);
   return { root, artifacts, reportPath, inventoryPath, stagingByName };

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   discoverDotnetTests,
   loadCoreTestModel,
@@ -14,10 +14,25 @@ import {
 } from "./core-test-policy.mjs";
 import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 import { dotnetTestArguments } from "./dotnet-test-command.mjs";
+import { selectScenario } from "./ci-scenarios.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const fixtureSource = "languages/csharp/dotnet/tests/Inventory.Tests/Declarations.cs";
 const policy = JSON.parse(await readFile(resolve(repositoryRoot, "eng/test-oracles/core-test-policy.json"), "utf8"));
+
+test("CI scenarios discover added cases and reject missing owners without workflow test lists", () => {
+  const { declarations } = loadCoreTestModel();
+  const official = selectScenario("official", declarations, "Linux");
+  assert.ok(official.tests.some(test => test.id.endsWith("WorkerSdkPackagedExecutable_ExactArchiveInstallsThroughRuntimeHostAndRecordsReleaseEvidence")));
+  const added = { ...official.tests[0], id: "Sunder.Runtime.Host.Tests.CurrentRidDotNetRuntimeHostIntegrationTests.FutureLifecycleRegression" };
+  assert.ok(selectScenario("official", [...declarations, added], "Linux").tests.includes(added));
+  assert.throws(() => selectScenario("official", declarations.filter(test => !test.id.includes("CurrentRidNodeRuntimeHostIntegrationTests")), "Linux"), /no declared tests/u);
+  assert.throws(() => selectScenario("missing", declarations), /Unknown/u);
+  const interop = selectScenario("interop", declarations, "Linux");
+  for (const name of ["ExecutesExactNativeContractAcrossNavigation", "RejectsSeededNonceOwnershipMutation"]) {
+    assert.ok(interop.tests.some(test => test.id.endsWith(name)));
+  }
+});
 
 test("C# declaration inventory ignores comment and literal fixtures without losing real tests after them", () => {
   const content = String.raw`
@@ -218,30 +233,76 @@ test(".NET reporter refuses to start the next project when process cleanup is un
   const root = await mkdtemp(resolve(tmpdir(), "sunder-reporter-cleanup-failure-"));
   try {
     const log = resolve(root, "started.jsonl");
-    const hook = resolve(root, "unclean-process.mjs");
-    await writeFile(hook, `
+    const hook = resolve(root, "unclean process #100%.mjs");
+    const preload = `
       import childProcess from 'node:child_process';
       import { syncBuiltinESMExports } from 'node:module';
       import { EventEmitter } from 'node:events';
       import { PassThrough } from 'node:stream';
-      import { appendFileSync } from 'node:fs';
+      import { appendFileSync, writeFileSync } from 'node:fs';
       childProcess.spawn = (command, args) => {
         appendFileSync(${JSON.stringify(log)}, JSON.stringify({ command, args }) + '\\n');
         const child = new EventEmitter();
         child.pid = 2147483646;
+        child.exitCode = 0; child.signalCode = null;
         child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        if (process.platform === 'win32') {
+          writeFileSync(args[args.indexOf('-ResultPath') + 1], JSON.stringify({
+            ProcessId: child.pid, Status: 0, Error: 'ECLEANUP',
+            Message: 'seeded cleanup failure', CleanupComplete: false,
+          }));
+        }
         process.nextTick(() => { child.emit('exit', 0, null); child.stdout.end(); child.stderr.end(); child.emit('close', 0, null); });
         return child;
       };
       process.kill = () => { throw Object.assign(new Error('seeded cleanup failure'), { code: 'EPERM' }); };
       syncBuiltinESMExports();
-    `);
+    `;
     const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
-    const result = spawnSync(process.execPath, ["--import", hook, runner, "--primary-lane", "host-platform",
-      "--results-directory", resolve(root, "results")], { cwd: repositoryRoot, encoding: "utf8" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Stopping before the next project/u);
-    assert.equal((await readFile(log, "utf8")).trim().split("\n").length, 1);
+    for (const platform of new Set([process.platform, "win32"])) {
+      await writeFile(log, "");
+      await writeFile(hook, `${preload}\nObject.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} });`);
+      const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner, "--primary-lane", "host-platform",
+        "--results-directory", resolve(root, "results")], { cwd: repositoryRoot, encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /Stopping before the next project/u);
+      assert.match(result.stdout, /seeded cleanup failure/u);
+      assert.equal((await readFile(log, "utf8")).trim().split("\n").length, 1);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Node reporter keeps failed preflight evidence and removes successful process fixtures", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-preflight-reports-"));
+  try {
+    const hook = resolve(root, "fail assertions #100%.mjs");
+    await writeFile(hook, `import assert from 'node:assert/strict';
+      assert.deepEqual = () => { throw new Error('seeded preflight assertion failure'); };`);
+    for (const fail of [false, true]) {
+      const output = resolve(root, fail ? "failed" : "passed");
+      const diagnostics = resolve(output, "fixtures");
+      const env = { ...process.env, NODE_OPTIONS: fail ? `--import=${pathToFileURL(hook).href}` : "",
+        SUNDER_NODE_TEST_NAME_PATTERN: "^owned command preserves",
+        SUNDER_TEST_PROCESS_DIAGNOSTICS_DIRECTORY: diagnostics };
+      // This is a separate CLI invocation, not a child in this test runner's IPC protocol.
+      delete env.NODE_TEST_CONTEXT;
+      const result = spawnSync(process.execPath, [resolve(repositoryRoot, "scripts/test-oracles/run-node-tests-with-results.mjs"),
+        "--results-directory", output, "preflight", resolve(repositoryRoot, "scripts/test-oracles/owned-test-process.test.mjs")], {
+        cwd: repositoryRoot, encoding: "utf8", timeout: 45_000, env,
+      });
+      assert.equal(result.status, fail ? 1 : 0, result.stdout + result.stderr);
+      const report = await readFile(resolve(output, "preflight.junit.xml"), "utf8");
+      assert.match(report, /owned command preserves/u);
+      assert.equal(report.includes("seeded preflight assertion failure"), fail);
+      const fixtures = await readdir(diagnostics);
+      assert.equal(fixtures.length, fail ? 1 : 0);
+      if (fail) {
+        assert.match(result.stdout + result.stderr, /Failed process fixture retained at/u);
+        const receipt = JSON.parse(await readFile(resolve(diagnostics, fixtures[0], "command with spaces.process.json"), "utf8"));
+        assert.equal(receipt.status, 7);
+        assert.equal(receipt.cleanupComplete, true);
+      }
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -464,9 +525,10 @@ test("workflow required-test selections resolve current declarations and reject 
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
   const declarations = loadCoreTestModel().declarations;
   validateWorkflowTestSelections([{ source: "ci", content: workflow }, { source: "host", content: host }], declarations);
-  const oldOwner = workflow.replaceAll("PackageOutputLockTests.SharedOutputLock_Interoperates", "PackageBuildManifestTests.SharedOutputLock_Interoperates");
+  const oldOwner = workflow.replaceAll("--require-scenario interop", "--require-scenario removed-interop");
   assert.notEqual(oldOwner, workflow);
-  assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: oldOwner }], declarations), /required workflow test.*not declared/u);
+  assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: oldOwner }], declarations), /Unknown or empty CI scenario/u);
+  assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: "--require-test Removed.Tests.Case" }], declarations), /required workflow test.*not declared/u);
 });
 
 test("Node matrix builds every packed input before selecting all packed scenarios", async () => {
@@ -478,7 +540,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
     await writeFile(runner, await readFile(resolve(repositoryRoot, "scripts/test-oracles/run-node-test-matrix-with-results.mjs")));
     await writeFile(resolve(scripts, "fixture.test.mjs"), "");
     const log = resolve(root, "commands.jsonl");
-    const hook = resolve(root, "record-commands.mjs");
+    const hook = resolve(root, "record commands #100%.mjs");
     await writeFile(hook, `
       import childProcess from "node:child_process";
       import { syncBuiltinESMExports } from "node:module";
@@ -498,7 +560,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
       };
       syncBuiltinESMExports();
     `);
-    const result = spawnSync(process.execPath, ["--import", hook, runner], { encoding: "utf8" });
+    const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const commands = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     const toolReport = commands.findIndex(({ args }) => args[1] === "node-package-tool");

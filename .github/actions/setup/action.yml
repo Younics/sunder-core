@@ -1,0 +1,44 @@
+name: Repository toolchains
+description: Install the exact toolchains owned by Core metadata.
+inputs:
+  root:
+    description: Core checkout relative to the workspace.
+    default: .
+  dotnet:
+    description: Install the development .NET SDK.
+    default: 'true'
+  node:
+    description: Install Node and the pinned npm CLI.
+    default: 'true'
+  packaging:
+    description: Also install the SDKs needed by release tools.
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - id: versions
+      shell: bash
+      env:
+        CORE_ROOT: ${{ inputs.root }}
+      run: python3 -B "$CORE_ROOT/scripts/ci/metadata.py" toolchains
+    - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      if: inputs.dotnet == 'true'
+      with:
+        global-json-file: ${{ inputs.root }}/global.json
+    - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+      if: inputs.packaging == 'true'
+      with:
+        dotnet-version: |
+          ${{ steps.versions.outputs.velopack_sdk }}
+          ${{ steps.versions.outputs.signing_sdk }}
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      if: inputs.node == 'true'
+      with:
+        node-version: ${{ steps.versions.outputs.node }}
+        registry-url: https://registry.npmjs.org
+    - name: Install repository npm version
+      if: inputs.node == 'true'
+      shell: bash
+      env:
+        NPM_VERSION: ${{ steps.versions.outputs.npm }}
+      run: npm install --global "npm@$NPM_VERSION" --registry=https://registry.npmjs.org

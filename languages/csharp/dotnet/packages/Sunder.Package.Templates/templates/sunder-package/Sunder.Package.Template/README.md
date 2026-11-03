@@ -14,7 +14,7 @@ isolated Worker/App compilation and package composition.
 
 Folders are organizational. The App has generated role-local RPC clients and does
 not reference the Worker implementation assembly. All coordinated SDK references
-use `SUNDER_TEMPLATE_PACKAGE_VERSION_RANGE`.
+use the dependency ranges authored in the template, independently of the template package version.
 
 Author each business record once. Owned roles reuse that source; imported records
 come from the authority package's generated `_Models` namespace. Sunder generates

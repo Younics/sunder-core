@@ -3,260 +3,120 @@ name: Sunder SDK Release
 on:
   push:
     branches: [main]
-    tags: ["sdk/v*"]
   workflow_dispatch:
 
 permissions: {}
 concurrency:
-  group: sunder-release-${{ startsWith(github.ref, 'refs/tags/sdk/') && 'sdk' || github.ref_name }}
+  group: sunder-core-package-release
   cancel-in-progress: false
-env:
-  DOTNET_VERSION: "10.0.403"
-  NODE_VERSION: "24.22.1"
-  NPM_VERSION: "11.19.1"
-  NPM_REGISTRY: https://registry.npmjs.org
-
 jobs:
   select:
-    if: github.ref == 'refs/heads/main'
+    if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
     permissions:
+      # Draft discovery requires push access; evaluation receives no token.
       contents: write
-      actions: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - id: version
-        run: node scripts/release/check-sdk-version.mjs
-      - name: Select only newer versions or resume the original retained release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SDK_VERSION: ${{ steps.version.outputs.version }}
-        run: python3 -B scripts/release/sdk_release.py select "$SDK_VERSION"
-
-  prepare:
-    if: startsWith(github.ref, 'refs/tags/sdk/')
-    runs-on: ubuntu-24.04
-    environment: sunder-core-release
-    permissions:
-      contents: read
     outputs:
-      version: ${{ steps.release.outputs.version }}
-      is_prerelease: ${{ steps.release.outputs.is_prerelease }}
-      publish: ${{ steps.selection.outputs.publish }}
+      selected_count: ${{ steps.selection.outputs.selected_count }}
+      nuget_count: ${{ steps.selection.outputs.nuget_count }}
+      npm_count: ${{ steps.selection.outputs.npm_count }}
+      recover: ${{ steps.selection.outputs.recover }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - id: release
-        run: python3 -B scripts/release/github_release.py metadata "$GITHUB_REF_NAME"
-      - name: Compare published version history before release builds
+          global-json-file: global.json
+      - name: Select only newer authored package versions
         id: selection
         env:
           GH_TOKEN: ${{ github.token }}
-          SDK_VERSION: ${{ steps.release.outputs.version }}
-        run: python3 -B scripts/release/sdk_release.py prepare "$SDK_VERSION"
-      - name: Verify tag source and coordinated metadata
-        if: steps.selection.outputs.publish == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
-          VERSION: ${{ steps.release.outputs.version }}
-        run: |
-          python3 -B scripts/release/release_coordinates.py sdk
-          node scripts/release/check-sdk-version.mjs "$VERSION"
-          bash scripts/release/verify-nuget-source.sh
+        run: python3 -B scripts/release/sdk_release.py select
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-release-selection
+          path: artifacts/release-plan.json
+          if-no-files-found: error
+          retention-days: 90
 
   validation:
-    if: needs.prepare.outputs.publish == 'true'
-    needs: prepare
+    needs: select
+    if: needs.select.outputs.recover != 'true'
     uses: ./.github/workflows/sunder-ci.yml
     permissions:
       contents: read
-
-  compatibility-corpus:
-    name: SDK retained corpus (${{ matrix.lane }})
-    if: needs.validation.outputs.sdk-packaged == 'true'
-    needs: [prepare, validation]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {lane: portable, os: ubuntu-24.04}
-          - {lane: win-x64, os: windows-2025}
-          - {lane: win-arm64, os: windows-11-arm}
-          - {lane: linux-x64, os: ubuntu-24.04}
-          - {lane: linux-arm64, os: ubuntu-24.04-arm}
-          - {lane: osx-x64, os: macos-26-intel}
-          - {lane: osx-arm64, os: macos-26}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: sunder-tested-sdk
-          path: candidate
-      - name: Execute reviewed corpus with measured native context and byte-bound inputs
-        env:
-          SDK_VERSION: ${{ needs.prepare.outputs.version }}
-          CORPUS_LANE: ${{ matrix.lane }}
-        shell: bash
-        run: >-
-          python3 -B scripts/compatibility/sdk_compatibility_execution.py collect
-          --candidate candidate --version "$SDK_VERSION" --lane "$CORPUS_LANE"
-          --output "$RUNNER_TEMP/sdk-compatibility-lane"
-      - name: Retain independently collected owning-lane evidence
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sunder-sdk-compatibility-lane-${{ matrix.lane }}
-          path: ${{ runner.temp }}/sdk-compatibility-lane
-          if-no-files-found: error
+    with:
+      release-packages: ${{ needs.select.outputs.selected_count != '0' }}
 
   stage:
-    needs: [prepare, validation, compatibility-corpus]
+    needs: [select, validation]
+    if: always() && needs.select.result == 'success' && needs.select.outputs.selected_count != '0' && (needs.validation.result == 'success' || needs.select.outputs.recover == 'true')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
     environment: sunder-core-release
     permissions:
       contents: write
-    outputs:
-      release_id: ${{ steps.publication.outputs.release_id }}
-      compatibility_sha256: ${{ steps.qualification.outputs.compatibility_sha256 }}
-      compatibility_base_commit: ${{ steps.qualification.outputs.compatibility_base_commit }}
-      compatibility_base_sha256: ${{ steps.qualification.outputs.compatibility_base_sha256 }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      SUNDER_CORE_REGISTRY_ORIGIN: ${{ vars.SUNDER_CORE_REGISTRY_ORIGIN }}
-      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ vars.SUNDER_SDK_COMPATIBILITY_BASE_COMMIT }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Export source-bound canonical catalog
-        if: needs.prepare.outputs.is_prerelease == 'false'
-        run: |
-          dotnet restore languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj --locked-mode
-          dotnet build languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/Sunder.ExecutionRuntime.Build.csproj -c Release --no-restore
-          python3 -B scripts/release/core_catalog_release.py export --tool languages/csharp/dotnet/tools/Sunder.ExecutionRuntime.Build/bin/Release/net10.0/Sunder.ExecutionRuntime.Build.dll --directory "$RUNNER_TEMP/catalog"
+      - uses: ./.github/actions/setup
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: sunder-tested-sdk
-          path: candidate
-      - name: Download same-run owning-lane outputs separately from candidate inputs
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+          name: core-release-selection
+          path: artifacts
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.select.outputs.recover != 'true'
         with:
-          pattern: sunder-sdk-compatibility-lane-*
-          path: compatibility-executions
-          merge-multiple: false
-      - name: Assemble the tested bytes
+          name: sunder-tested-sdk
+          path: artifacts/packages
+      - name: Automatically tag and retain the tested archives
+        if: needs.select.outputs.recover != 'true'
         env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
-          mkdir release-assets
-          cp candidate/sdk/*.nupkg candidate/npm/*.tgz release-assets/
-          python3 scripts/release/verify-nuget-package-set.py "$VERSION" release-assets "$GITHUB_SHA"
-          node scripts/release/generate-node-release-notices.mjs languages/typescript/node/package-lock.json release-assets
-      - name: Require release-specific compatibility and retain the new candidate reference
-        id: qualification
-        run: python3 -B scripts/compatibility/sdk_release_compatibility.py prepare --candidate candidate --directory release-assets --executions compatibility-executions
-      - name: Retain the numeric catalog receipt
-        if: needs.prepare.outputs.is_prerelease == 'false'
-        run: |
-          set -euo pipefail
-          release_id="$(python3 -B scripts/release/github_release.py create "$GITHUB_REF_NAME" | jq -er .id)"
-          python3 -B scripts/release/core_catalog_release.py retain --directory "$RUNNER_TEMP/catalog" --release-id "$release_id"
-          cp "$RUNNER_TEMP/catalog/sunder-platform-contracts.v1.json" "$RUNNER_TEMP/catalog/sunder-platform-contracts.receipt.v1.json" release-assets/
-      - name: Stage and read back immutable release assets
-        id: publication
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/sdk_release.py stage --directory artifacts/retained-packages
+      - name: Recover staged archives without rebuilding
+        if: needs.select.outputs.recover == 'true'
         env:
-          SUNDER_SDK_COMPATIBILITY_SHA256: ${{ steps.qualification.outputs.compatibility_sha256 }}
-          SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ steps.qualification.outputs.compatibility_base_sha256 }}
-        run: python3 -B scripts/release/github_release.py stage "$GITHUB_REF_NAME" --directory release-assets
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
 
   publish-npm:
-    needs: [prepare, stage]
+    needs: [select, stage]
+    if: always() && needs.stage.result == 'success' && needs.select.outputs.npm_count != '0'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
     environment: sunder-core-release
-    env:
-      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
-      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
-      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: ./.github/actions/setup
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: ${{ env.NPM_REGISTRY }}
-      - name: Download retained npm packages
+          dotnet: 'false'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Download and verify retained package bytes
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
-          mkdir release-assets
-          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-      - name: Publish with npm access token and verify each package before advancing
+        run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
+      - name: Publish selected npm packages and advance their channels
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          bash scripts/release/preflight-npm-publishing.sh "$VERSION" "accept-v$VERSION" \
-            "release-assets/sunder-sdk-$VERSION.tgz" "release-assets/sunder-package-tool-$VERSION.tgz" "release-assets/create-sunder-package-$VERSION.tgz"
-          bash scripts/release/publish-sdk.sh npm "$VERSION" release-assets
+        run: python3 -B scripts/release/sdk_release.py npm --directory artifacts/retained-packages
 
   publish-nuget:
-    needs: [prepare, stage, publish-npm]
+    needs: [select, stage, publish-npm]
+    if: always() && needs.stage.result == 'success' && needs.select.outputs.nuget_count != '0' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped')
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    env:
-      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
-      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
-      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
     environment: sunder-core-release
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -264,102 +124,45 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+          global-json-file: global.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Check NuGet account configuration and download retained packages
+          name: core-release-selection
+          path: artifacts
+      - name: Download and verify retained package bytes
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          NUGET_USER: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          : "${NUGET_USER:?Set NUGET_USER in the sunder-core-release environment to your NuGet.org username}"
-          mkdir release-assets
-          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-      - name: Authenticate to NuGet.org with trusted publishing
+        run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
+      - name: Authenticate using NuGet Trusted Publishing
         id: nuget-login
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
         with:
           user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
-      - name: Publish and verify six immutable NuGet versions
+      - name: Publish selected NuGet packages
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: bash scripts/release/publish-sdk.sh nuget "$VERSION" release-assets
-
-  promote-npm:
-    needs: [prepare, stage, publish-nuget]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    env:
-      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
-      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
-      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
-    environment: sunder-core-release
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          registry-url: ${{ env.NPM_REGISTRY }}
-      - name: Download retained npm packages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-        run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
-          mkdir release-assets
-          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-      - name: Advance verified npm consumer channels
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: bash scripts/release/publish-sdk.sh promote "$VERSION" release-assets
+        run: python3 -B scripts/release/sdk_release.py nuget --directory artifacts/retained-packages
 
   finalize:
-    needs: [prepare, stage, promote-npm]
+    needs: [select, stage, publish-npm, publish-nuget]
+    if: always() && needs.stage.result == 'success' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') && (needs.publish-nuget.result == 'success' || needs.publish-nuget.result == 'skipped')
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    env:
-      SUNDER_SDK_COMPATIBILITY_SHA256: ${{ needs.stage.outputs.compatibility_sha256 }}
-      SUNDER_SDK_COMPATIBILITY_BASE_COMMIT: ${{ needs.stage.outputs.compatibility_base_commit }}
-      SUNDER_SDK_COMPATIBILITY_BASE_SHA256: ${{ needs.stage.outputs.compatibility_base_sha256 }}
     environment: sunder-core-release
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      - uses: ./.github/actions/setup
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-      - name: Recheck channels and finalize the same numeric release
+          name: core-release-selection
+          path: artifacts
+      - name: Recheck public bytes and finalize the same project releases
         env:
           GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_ID: ${{ needs.stage.outputs.release_id }}
-          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          set -euo pipefail
-          npm install --global "npm@$NPM_VERSION" --registry="$NPM_REGISTRY"
-          mkdir release-assets
-          python3 -B scripts/release/github_release.py download "$GITHUB_REF_NAME" --release-id "$RELEASE_ID" --directory release-assets
-          bash scripts/release/publish-sdk.sh verify "$VERSION" release-assets
-          python3 -B scripts/release/github_release.py finalize "$GITHUB_REF_NAME" --directory release-assets
+          python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
+          python3 -B scripts/release/sdk_release.py finalize --directory artifacts/retained-packages

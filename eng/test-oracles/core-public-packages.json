@@ -1,6 +1,5 @@
 {
   "schemaVersion": 1,
-  "coordinatedVersion": "1.1.0",
   "nuget": [
     {
       "packageId": "Sunder.Sdk",
