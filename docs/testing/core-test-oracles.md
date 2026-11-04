@@ -5,7 +5,7 @@ TRX definitions/results and Node's JUnit testcases are the executable discovery
 authority. Raw reports stay in ignored local paths and CI artifacts.
 
 `eng/test-oracles/core-test-policy.json` is the small checked policy surface. It
-contains only allowed primary lanes, expected project/lane ownership, report
+contains component scopes, primary lanes, expected project/lane ownership, report
 groups, explicit expected-skip rules with reasons and owners, and audited inert
 .NET history entries. Each inert source is pinned by its LF-normalized SHA-256
 and reason and must still have an unconditional literal `Compile Remove` in its
@@ -37,11 +37,29 @@ executable, exact opt-in variable, file, and directory before reporting READY.
 A lane with no runnable declaration fails. A READY-selected result that is
 missing or skipped also fails.
 
+Component scopes are independent of those lanes. `sdk` owns the developer packages
+and Host/CLI consumers; `repository` owns App and repository-policy checks. Their
+union is `all`, with no overlap. `app`, `host` and `cli` support individual component
+releases. The same scope controls build roots, prerequisites, execution and report
+auditing. Package-side Avalonia and `Sunder.App.Bridge` contracts remain SDK-owned.
+Desktop-dependent process/approval tests live in `Sunder.App.Integration.Tests`;
+Runtime tests have no project reference to the desktop App. Mixed architecture
+tests that inspect App source explicitly declare `[Trait("Component", "App")]`.
+Public npm artifact/entry-point checks, wire schemas, byte-preserving checkout and
+development toolchain contracts remain SDK-owned. Test-report infrastructure and
+workflow wiring belong to repository validation.
+
+```sh
+python3 -B scripts/ci/core_ci.py portable --scope sdk --list
+python3 -B scripts/ci/core_ci.py portable --scope sdk
+python3 -B scripts/ci/core_ci.py portable --scope repository
+```
+
 ## Runtime evidence
 
 ### Named CI scenarios
 
-Scenarios combine existing declarations for generated templates, interop, output
+Scenarios combine existing declarations for generated templates, SDK/Host interop, App VM interop, output
 locks, official runtimes and Agent-family acceptance. They share the existing
 runner and evidence checker; their required environment flags are applied by the
 runner. Supply the actual selected archives/directories before execution.
@@ -106,9 +124,10 @@ separate from the .NET lane evidence; successful fixtures are removed.
 The sidecar starts incomplete before launch, so a killed reporter cannot leave
 apparently passing evidence. Log-write failures also go through process cleanup.
 
-Build/transport/template selections retain VSTest diagnostics. Package.Build also
-collects mini crash dumps on unexpected testhost failure; it does not dump successful
-test runs. On Linux, process sidecars include before/after memory and cgroup OOM
+Set `SUNDER_TEST_DIAGNOSTICS=1` to retain VSTest diagnostics for
+Build/transport/template selections and mini crash dumps for unexpected Package.Build
+testhost failures. Normal runs retain compact command/process reports and hang
+watchdogs. On Linux, process sidecars include before/after memory and cgroup OOM
 counters when readable, plus available filesystem space. These are diagnostic
 observations, not automatic attribution of a crash to OOM. `CapturedProcess`
 fixtures record child-command start/wait/exit
@@ -140,9 +159,11 @@ than repeating already-passed full suites.
 
 `run-dotnet-tests-with-results.mjs` executes selected .NET projects serially and
 writes one TRX per project. `run-node-test-matrix-with-results.mjs` removes
-generated output, rebuilds every workspace, and routes all four Node groups
-through the dual spec/JUnit reporter. Python and shell release fixtures write a
-fifth JUnit report.
+selected generated output, rebuilds the selected workspaces, and routes their Node
+groups through the dual spec/JUnit reporter. Selected Python and shell release fixtures
+write a separate JUnit report. Python runs are batched once per source module while preserving
+per-method timings, failures and skips. The [CI commands](../../scripts/ci/README.md)
+own preparation, execution order, temporary cleanup and artifact retention.
 
 The Node matrix builds the SDK, package tool, and scaffolder before enabling the
 packed closure and service scenarios. The optional-reference Worker child case
@@ -168,24 +189,33 @@ sidecar (even beside a passing TRX), failed test, or report containing zero test
 fails evidence generation. Raw TRX/JUnit artifacts retain individual
 outcomes and durations for diagnosis.
 
-`.github/workflows/sunder-ci.yml` owns PR/merge-queue, scheduled, manual and SDK-release
-checks. On scheduled, manual and selected SDK-release runs, its `test-results` job waits for
-successful portable and native jobs, downloads their raw reports, and runs
-`summarize-core-test-results.mjs <directory> --aggregate`.
-This checks combined ordinary .NET declaration coverage, all release fixtures and
-the owning Node reports without restoring, building or rerunning suites. Native
+`.github/workflows/sunder-ci.yml` runs `all` for PR/merge-queue, scheduled and default
+manual validation. Main pushes run `repository`; `sunder-sdk-release.yml` owns the
+complementary `sdk` validation on main. Component releases pass their explicit scopes.
+Every successful selection's `test-results` job downloads its portable/native reports
+and runs `summarize-core-test-results.mjs <directory> --scope <scope> --aggregate`.
+CLI has no native test lane. Report paths and artifact names include the scope so
+App and Host calls in the same release cannot overwrite each other.
+This checks selected ordinary .NET declarations, required CI scenarios, script fixtures,
+Node source coverage and owning reports without rebuilding or rerunning suites.
+Downloaded reports resolve absolute paths against complete declared source paths,
+so different checkout roots retain component ownership. Native
 jobs enforce their own per-architecture required execution and platform-specific
 skip rules; the aggregate does not reinterpret Windows/macOS skips as Linux results.
 Externally gated live Registry, Agent and retained-release tests retain their
 explicit inputs and owning acceptance lanes, rather than pretending an unselected
 skip is execution evidence. The two App web-bridge JavaScript VM tests are required
-in the main job alongside generated-package and cross-language acceptance.
+by the App-owned `app-interop` scenario; SDK/Host interop has its own scenario.
 
 Native/process and App packaging checks use the reusable
 `sunder-host-validation.yml`. All selected partitions produce the same compact
 evidence. Project tests run sequentially, with ordinary
 parallel MSBuild inside each build; race-sensitive test collections retain their
-own serialization. Node artifact cleanup completes before Node outputs are rebuilt
+own serialization. Package.Build caps compiler-heavy collection concurrency at two
+to fit alongside build processes on CI workers. Linux .NET test commands default
+`MALLOC_ARENA_MAX` to `2`, preserving an explicit caller value, to bound glibc arena
+retention across repeated compiler metadata loads. Node artifact cleanup completes
+before Node outputs are rebuilt
 for .NET interop.
 
 The Windows x64/ARM64 platform jobs additionally require the real .NET/Node
@@ -215,10 +245,10 @@ Platform, official-runtime, App packaging and Windows output-lock evidence are
 summarized after their execution step was attempted, including a failed attempt,
 but not after a skipped step when an earlier prerequisite or test failed.
 This avoids a misleading missing-directory error without accepting missing reports:
-successful native validation still requires both platform and packaging checks.
-Host-only releases disable the reusable workflow's `include-app-packaging` input,
-omitting bundled App output and installer checks. Core CI and App releases retain
-the default enabled input and all App packaging coverage. Superseded PR runs are
+successful native validation requires every lane owned by its scope. SDK/Host scopes
+require platform/process and official-runtime checks; App scopes require platform,
+bundled-output and installer checks. App releases require both App and Host validation.
+Superseded PR runs are
 cancelled; main, scheduled, manual and release runs have unique CI concurrency groups.
 
 The historical Core/Stack migration ledgers are inert preserved archives; the

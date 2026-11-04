@@ -1,9 +1,5 @@
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
-using Sunder.Sdk.Packaging;
-using System.Globalization;
-using System.Numerics;
-using System.Reflection;
 
 namespace Sunder.Package.Build.Rpc.Authoring;
 
@@ -16,55 +12,12 @@ internal static partial class SunderRpcPlatformCatalogCache
 {
     internal const string DirectoryName = "platform-catalogs";
     internal const int MaximumBytes = 67_108_864;
-    internal static string ToolRange
-    {
-        get
-        {
-            var (lower, upper) = ToolBounds();
-            return $">={lower} <{upper}";
-        }
-    }
-
-    private static (string Lower, string Upper) ToolBounds()
-    {
-        // CLR assembly identity may stay stable across SDK releases; use the
-        // semantic version of the actual SDK shipped with this tool instead.
-        var version = typeof(PackageVersionRange).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        if (!SemanticVersion.TryParse(version, out _))
-            throw new InvalidDataException("platform-api.catalog-version-unsupported: The installed SDK has no valid coordinated release identity.");
-        var parts = version!.Split('.');
-        var minor = BigInteger.Parse(parts[1], CultureInfo.InvariantCulture);
-        return ($"{parts[0]}.{parts[1]}.0", $"{parts[0]}.{(minor + 1).ToString(CultureInfo.InvariantCulture)}.0");
-    }
 
     internal static string DefaultKey(string contractId)
     {
         var parts = contractId.Split('.');
         if (parts[0] == "sunder" && parts.Length > 1) parts = parts[1..];
         return parts[0] + string.Concat(parts.Skip(1).Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
-    }
-
-    internal static void ValidateToolRange(SunderRpcContractLock contractLock)
-    {
-        var (lower, upper) = ToolBounds();
-        foreach (var requirement in Requirements(contractLock))
-            if (!PackageVersionRange.IsSatisfiedBy(requirement.ReleaseVersion, $">={lower} <{upper}"))
-                throw new InvalidDataException("platform-api.catalog-version-unsupported: The platform catalog is outside the coordinated tooling minor line. Upgrade Core tooling.");
-        foreach (var import in contractLock.PlatformImports.Values)
-        {
-            var boundedBelow = false; var boundedAbove = false;
-            foreach (var token in import.AuthorityReleaseRange.Split(' '))
-            {
-                var value = token.TrimStart('<', '>', '=');
-                _ = PackageVersionRange.TryCompare(value, lower, out var fromLower);
-                _ = PackageVersionRange.TryCompare(value, upper, out var fromUpper);
-                var exact = token[0] is not ('<' or '>');
-                boundedBelow |= (exact || token[0] == '>') && fromLower >= 0;
-                boundedAbove |= (exact || token[0] == '<') && (fromUpper < 0 || fromUpper == 0 && token.StartsWith('<') && !token.StartsWith("<=", StringComparison.Ordinal));
-            }
-            if (!boundedBelow || !boundedAbove)
-                throw new InvalidDataException("rpc-authoring.authority-mismatch: Platform ranges must be contained by the coordinated tooling minor line.");
-        }
     }
 
     internal static SunderRpcLockedArtifactContract AsArtifactContract(SunderRpcLockedPlatformImport value)

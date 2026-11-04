@@ -531,7 +531,6 @@ public sealed partial class SunderPackageArchiveInspectorTests
                 capability,
                 "execution-runtime.v1",
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
                 "worker-protocol.v1",
             ]);
         var archivePath = CreatePackageArchive(
@@ -550,11 +549,10 @@ public sealed partial class SunderPackageArchiveInspectorTests
     [InlineData("execution-runtime.v1")]
     [InlineData("rpc.v1")]
     [InlineData("worker-protocol.v1")]
-    [InlineData("sdk-baseline-1-1.v1")]
     public async Task ExtractAndValidateAsync_RejectsWorkerMissingMandatoryCapability(string capability)
     {
         var root = CreateTempDirectory();
-        var capabilities = new[] { "core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1" }
+        var capabilities = new[] { "core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1" }
             .Where(value => !string.Equals(value, capability, StringComparison.Ordinal))
             .ToArray();
         var target = CreateTarget(
@@ -579,10 +577,11 @@ public sealed partial class SunderPackageArchiveInspectorTests
     }
 
     [Fact]
-    public async Task ExtractAndValidateAsync_RejectsWorkerBaselineMismatchedToSdkVersion()
+    public async Task ExtractAndValidateAsync_RejectsRemovedSdkBaselineCapability()
     {
         var root = CreateTempDirectory();
-        var target = CreateTarget("runtime", "linux-x64", "worker", "bin/worker", sdkVersion: "1.2.0");
+        var target = CreateTarget("runtime", "linux-x64", "worker", "bin/worker", sdkVersion: "1.0.0",
+            requiredHostCapabilities: ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"]);
         var archivePath = CreatePackageArchive(
             root,
             CreateManifest([target]),
@@ -595,7 +594,7 @@ public sealed partial class SunderPackageArchiveInspectorTests
         Assert.False(result.Success);
         Assert.Contains(
             result.Errors,
-            error => error.Contains("SDK baseline capability 'sdk-baseline-1-1.v1' does not match sdkVersion '1.2.0'", StringComparison.Ordinal));
+            error => error.Contains("cannot declare removed SDK baseline capabilities", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -639,7 +638,6 @@ public sealed partial class SunderPackageArchiveInspectorTests
                 "core.v1",
                 "execution-runtime.v1",
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
                 "worker-protocol.v1",
                 capability,
             ]);
@@ -2373,11 +2371,12 @@ public sealed partial class SunderPackageArchiveInspectorTests
                 ? "node24"
                 : kind == "avalonia" ? "net10.0" : null),
             SdkVersion = includeSdkVersion
-                ? sdkVersion ?? (role == SunderPackageFormat.RuntimeHostRole || kind == "avalonia" ? "1.1.0" : null)
+                ? sdkVersion ?? "1.0.0"
                 : null,
+            AvaloniaVersion = kind == "avalonia" ? "12.1.4" : null,
             RequiredHostCapabilities = requiredHostCapabilities ?? (role == SunderPackageFormat.RuntimeHostRole
-                ? ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"]
-                : ["core.v1"]),
+                ? ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"]
+                : [kind == "web" ? "web-bridge.v1" : "app-bridge.v1", "core.v1"]),
             ExecutionRuntime = role == SunderPackageFormat.RuntimeHostRole && includeExecutionRuntime
                 ? executionRuntime ?? (targetFramework == "net10.0"
                     ? RuntimeRequirement(

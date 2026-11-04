@@ -28,14 +28,15 @@
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.1.4, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "Avalonia": {

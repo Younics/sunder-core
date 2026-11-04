@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Local/CI preparation for the Core test lanes. Product metadata owns output names."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 
@@ -45,6 +47,7 @@ def one(paths):
 
 
 def publish_environment(values):
+    os.environ.update({name: str(value) for name, value in values.items()})
     if os.environ.get("GITHUB_ENV"):
         with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
             for name, value in values.items():
@@ -59,15 +62,44 @@ def node_inputs(restore=True):
     run("npm", "exec", "--prefix", NODE, "--", "tsc", "-p", NODE / "packages/package-tool/tsconfig.test.json")
 
 
-def source():
-    node_inputs(restore=False)
-    run("dotnet", "restore", ROOT / "Sunder.Core.slnx", "--locked-mode")
-    run("dotnet", "build", ROOT / "Sunder.Core.slnx", "-c", "Release", "--no-restore",
-        "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false")
+def selection(scope):
+    value = json.loads(subprocess.check_output(["node", str(ROOT / "scripts/test-oracles/core-test-policy.mjs"),
+                                               "--scope", scope], cwd=ROOT))
+    roots = {str(project(name).relative_to(ROOT)) for name in value["projects"]}
+    if "sdk" in value["components"]:
+        packages = json.loads((ROOT / "eng/test-oracles/core-public-packages.json").read_text())
+        roots.update(row["project"] for row in packages["nuget"])
+        roots.update(str(project(name).relative_to(ROOT)) for name in ("Sunder.Cli", "Sunder.ExecutionRuntime.Build"))
+    value["buildProjects"] = sorted(roots)
+    return value
 
 
-def templates(work):
-    feed = ROOT / "artifacts/test-feed"
+def build_input(selected, work):
+    if selected["scope"] == "all": return ROOT / "Sunder.Core.slnx"
+    solution = ET.Element("Solution")
+    for path in selected["buildProjects"]: ET.SubElement(solution, "Project", Path=str(ROOT / path))
+    path = work / (selected["scope"] + ".slnx")
+    ET.ElementTree(solution).write(path, encoding="utf-8", xml_declaration=True)
+    return path
+
+
+def source(scope="all", work=None):
+    if work is None:
+        with tempfile.TemporaryDirectory(prefix="sunder-source-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
+            return source(scope, Path(temporary))
+    selected = selection(scope)
+    if "sdk" in selected["components"]: node_inputs(restore=False)
+    solution = build_input(selected, work)
+    run("dotnet", "restore", solution, "--locked-mode")
+    # A scoped solution lists roots; transitive project references must inherit
+    # Release even when they have no entry in the solution's configuration map.
+    run("dotnet", "build", solution, "-c", "Release", "--no-restore",
+         "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false",
+         "-p:ShouldUnsetParentConfigurationAndPlatform=false")
+
+
+def templates(work, feed=None, package_output=None):
+    feed = feed or ROOT / "artifacts/test-feed"
     records = json.loads((feed / "test-feed.json").read_text())["packages"]
     def archive(name):
         row = one_record(records, name)
@@ -84,7 +116,7 @@ def templates(work):
     tool = target("Sunder.ExecutionRuntime.Build")
     run("dotnet", tool, "platform-contracts", "check", "--core-root", ROOT)
     run("dotnet", tool, "platform-contracts", "export", "--core-root", ROOT, "--catalog-release", versions.pop(), "--output", catalog)
-    shutil.copyfile(catalog, ROOT / "artifacts/packages/sunder-platform-contracts.v1.json")
+    shutil.copyfile(catalog, (package_output or ROOT / "artifacts/packages") / "sunder-platform-contracts.v1.json")
     env = {**os.environ, "DOTNET_CLI_HOME": str(work / "template-cli-home"), "NUGET_PACKAGES": str(work / "template-packages")}
     run("dotnet", "new", "install", archive("Sunder.Package.Templates"), env=env)
     config = ET.Element("configuration")
@@ -148,31 +180,139 @@ def module_inputs():
         "SUNDER_NODE_MODULE_LEAF_PATH": leaf})
 
 
-def official_inputs(work, rid):
+def official_inputs(work, rid, scope="all"):
     fixture = DOTNET / "tests/Sunder.Package.Build.TestFixtures/WorkerV1Executable/WorkerV1Executable.csproj"
     archive = work / "native-worker.sunderpkg"
     run("dotnet", "msbuild", fixture, "-t:PackSunderPackage", "-p:Configuration=Release", "-p:RuntimeIdentifier=" + rid,
         "-p:SunderPackageOutputPath=" + str(archive))
     publish_environment({"SUNDER_DOTNET_WORKER_ARCHIVE_PATH": archive,
-        "SUNDER_WORKER_RELEASE_METRICS_PATH": ROOT / "artifacts/test-results/official" / f"dotnet-worker-{rid}.json"})
+        "SUNDER_WORKER_RELEASE_METRICS_PATH": ROOT / "artifacts/test-results" / scope / "official" / f"dotnet-worker-{rid}.json"})
+
+
+def oracle(script, *args):
+    run("node", ROOT / "scripts/test-oracles" / (script + ".mjs"), *args)
+
+
+def dotnet_tests(selection, name, *, scope="all", build=False, directory=None):
+    output = ROOT / "artifacts/test-results" / scope / (directory or name)
+    try:
+        oracle("run-dotnet-tests-with-results", "--scope", scope, "--" + selection, name, "--configuration", "Release",
+               "--results-directory", output, *(["--build", "--disable-build-servers"] if build else []))
+    finally:
+        oracle("summarize-core-test-results", output, "--scope", scope, "--allow-partial", "--require-" + selection, name)
+
+
+@contextmanager
+def local_environment():
+    previous = dict(os.environ)
+    # Prepared paths belong to this invocation, including local runs with no CI env file.
+    os.environ.pop("GITHUB_ENV", None)
+    try:
+        yield
+    finally:
+        os.environ.clear()
+        os.environ.update(previous)
+
+
+def validate(profile, *, rid=None, scope="all"):
+    selected = selection(scope)
+    components = selected["components"]
+    output = ROOT / "artifacts/test-results" / scope
+    with local_environment(), tempfile.TemporaryDirectory(prefix="sunder-ci-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
+        work = Path(temporary)
+        if profile == "portable":
+            if "sdk" in components:
+                run("node", ROOT / "scripts/toolchains.mjs")
+                run("node", ROOT / "scripts/release/check-sdk-version.mjs")
+            if "ci" in components:
+                oracle("check-core-test-policy")
+                run(sys.executable, "-B", ROOT / "scripts/test/check-markdown-links.py", ROOT)
+            if "node" in selected["lanes"]:
+                if "sdk" in components: run("npm", "ci", "--prefix", NODE)
+                oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "node")
+                oracle("run-node-test-matrix-with-results", "--scope", scope, "--results-directory", output / "node")
+                oracle("summarize-core-test-results", output / "node", "--scope", scope, "--allow-partial", "--require-primary-lane", "node")
+            # Artifact tests remove Node outputs; interop preparation must follow them.
+            source(scope, work)
+            oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "dotnet-linux")
+            dotnet_tests("primary-lane", "dotnet-linux", scope=scope, directory="dotnet")
+            if "release-fixtures.junit.xml" in selected["reports"]:
+                oracle("run-release-fixtures-with-results", "--scope", scope, "--results-directory", output / "scripts")
+            if "interop" in selected["scenarios"]["portable"]: module_inputs()
+            for scenario in selected["scenarios"]["portable"]: dotnet_tests("scenario", scenario, scope=scope)
+        elif profile == "candidate":
+            if "sdk" not in components: raise ValueError("Candidate packages require SDK validation")
+            run(sys.executable, "-B", ROOT / "scripts/release/sdk_release.py", "pack")
+            run(sys.executable, "-B", ROOT / "scripts/release/sdk_release.py", "feed", "--directory", "artifacts/test-feed")
+            templates(work)
+            dotnet_tests("scenario", "generated-templates", scope=scope)
+        else:
+            if "sdk" in components or "host" in components: node_inputs()
+            run("dotnet", "restore", build_input(selected, work), "--locked-mode")
+            if profile == "platform":
+                os.environ["SUNDER_REQUIRE_NODE24_HOST_INTEGRATION"] = "1"
+                os.environ["SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS"] = "1" if sys.platform == "darwin" else "0"
+                dotnet_tests("primary-lane", "host-platform", scope=scope, build=True, directory="platform")
+                if os.name == "nt" and "sdk" in components: dotnet_tests("scenario", "output-lock", scope=scope, directory="lock-interop")
+                if "app" in components:
+                    dotnet_tests("primary-lane", "app-packaging", scope=scope, build=True)
+                    if os.name == "nt": run("pwsh", "-File", ROOT / "scripts/ci/check-powershell.ps1")
+            elif profile == "official":
+                if "host" not in components: raise ValueError("Official runtimes require a Host consumer scope")
+                rid = rid or property_value(project("Sunder.Cli"), "NETCoreSdkRuntimeIdentifier")
+                if rid not in [row["rid"] for row in platforms()["include"]]: raise ValueError("Unsupported native RID: " + rid)
+                official_inputs(work, rid, scope)
+                dotnet_tests("scenario", "official", scope=scope, build=True)
+            else:
+                raise ValueError("Unknown validation profile: " + profile)
+
+
+def rehearse(output):
+    """Exercise the production pack/feed/template owners with a local all-package selection."""
+    sys.path.insert(0, str(ROOT / "scripts/release"))
+    import sdk_release
+    import package_metadata
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=False)
+    with local_environment(), tempfile.TemporaryDirectory(prefix="sunder-rehearsal-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
+        os.environ.pop("GITHUB_WORKFLOW_REF", None)
+        run("npm", "ci", "--prefix", NODE)
+        source("sdk", Path(temporary))
+        plan = dict(artifactSourceCommit=run("git", "rev-parse", "HEAD", capture=True),
+                    packages=[dict(row, selected=True) for row in package_metadata.packages(ROOT, evaluate=True)])
+        sdk_release.pack(plan, output / "packages")
+        sdk_release.feed(plan, output / "packages", output / "test-feed")
+        templates(Path(temporary), output / "test-feed", output / "packages")
+        dotnet_tests("scenario", "generated-templates", scope="sdk", directory="rehearsal-templates")
+        (output / "rehearsal.json").write_text(json.dumps(dict(scope="local-artifact-rehearsal", **plan), indent=2) + "\n")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("source", "node-inputs", "templates", "module", "official-inputs"))
+    parser.add_argument("action", choices=("source", "node-inputs", "templates", "module", "official-inputs", "portable", "platform", "official", "candidate", "rehearse"))
     parser.add_argument("--work", type=Path)
     parser.add_argument("--rid", choices=[row["rid"] for row in platforms()["include"]])
+    parser.add_argument("--scope", choices=tuple(json.loads((ROOT / "eng/test-oracles/core-test-policy.json").read_text())["scopes"]), default="all")
+    parser.add_argument("--list", action="store_true", help="Print scope ownership and build roots without changing outputs")
     args = parser.parse_args()
-    if args.action == "source": source()
+    if args.list:
+        print(json.dumps(selection(args.scope), indent=2))
+    elif args.action in ("portable", "platform", "official", "candidate"):
+        validate(args.action, rid=args.rid, scope=args.scope)
+    elif args.action == "rehearse":
+        if args.work is None: parser.error("rehearse requires a new --work output directory")
+        rehearse(args.work)
+    elif args.action == "source": source(args.scope)
     elif args.action == "node-inputs": node_inputs()
     elif args.action == "module": module_inputs()
     else:
-        work = args.work or Path(tempfile.mkdtemp(prefix="sunder-ci-", dir=os.environ.get("RUNNER_TEMP")))
+        if args.work is None: parser.error("Prepared inputs require --work; use a validation profile for automatic cleanup")
+        work = args.work
         work.mkdir(parents=True, exist_ok=True)
         if args.action == "templates": templates(work.resolve())
         else:
             if not args.rid: parser.error("official-inputs requires --rid")
-            official_inputs(work.resolve(), args.rid)
+            official_inputs(work.resolve(), args.rid, args.scope)
 
 
 if __name__ == "__main__":

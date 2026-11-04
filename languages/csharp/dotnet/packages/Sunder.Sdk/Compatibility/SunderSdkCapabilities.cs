@@ -5,8 +5,6 @@ public static class SunderSdkCapabilities
 {
     /// <summary>Host-selected exact .NET SDK and Node/npm development versions.</summary>
     public const string DevelopmentToolchainV1 = "development-toolchain.v1";
-    /// <summary>Clean-break Sunder SDK 1.1 contract baseline.</summary>
-    public const string Baseline11V1 = "sdk-baseline-1-1.v1";
     /// <summary>Core lifecycle contracts.</summary>
     public const string CoreV1 = "core.v1";
     /// <summary>Packaging metadata contracts.</summary>

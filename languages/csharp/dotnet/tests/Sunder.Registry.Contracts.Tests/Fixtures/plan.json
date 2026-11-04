@@ -19,17 +19,17 @@
           "kind": "worker",
           "entryPoint": "bin/sample-worker.dll",
           "targetFramework": "net10.0",
-          "sdkVersion": "1.1.0",
+          "sdkVersion": "1.0.0",
           "executionRuntime": {
             "runtimeId": "sunder.runtime.dotnet",
             "versionRange": "\u003E=10.0.0 \u003C11.0.0",
             "moduleAbi": "sunder.dotnet-worker-module.v1"
           },
+          "avaloniaVersion": null,
           "requiredHostCapabilities": [
             "core.v1",
             "execution-runtime.v1",
             "rpc.v1",
-            "sdk-baseline-1-1.v1",
             "worker-protocol.v1"
           ],
           "views": []

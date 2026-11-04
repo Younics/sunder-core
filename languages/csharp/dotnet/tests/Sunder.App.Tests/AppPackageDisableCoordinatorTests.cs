@@ -197,7 +197,6 @@ public sealed class AppPackageDisableCoordinatorTests
     {
         using var temporary = TemporaryDirectoryScope.Create("app-failed-view-drain");
         await using var background = new BackgroundTaskQueueService();
-        using var assemblies = new AppSharedAssemblyRegistry([]);
         var registry = new AppPackageViewRegistry(ImmediateUiDispatcher.Instance);
         registry.RegisterPackageView("agent", new PackageViewRegistration("agent.chat", "Chat"), static () => new ThrowingDisposeView());
         Assert.NotNull(new AppPackageHostedViewFacade(registry, _ => false, static (_, _, _) => false).GetOrCreateView("agent.chat"));
@@ -213,7 +212,7 @@ public sealed class AppPackageDisableCoordinatorTests
         })).BuildServiceProvider();
         _ = provider.GetRequiredService<DelayedOwner>();
         var coordinator = new AppPackageUnloadCoordinator(registry, new AppPackageRuntimeWorkStopper(background),
-            new AppPackageAssemblyTracker(), assemblies, _ => { }, _ => { });
+            new AppPackageAssemblyTracker(), _ => { }, _ => { });
         var package = new ActivePackageDescriptor("agent", "Agent", "1.0.0", PackageHostRoles.App, null, true, PackageReadinessState.Ready, []);
         var handle = new AppLoadedPackageHandle(package, RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, "failed-view-drain"),
             temporary.RootPath, provider, null)

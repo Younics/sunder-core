@@ -4,12 +4,13 @@ import {mkdtemp,mkdir,writeFile,rm} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
 import {loadProjectWithOwnedFrame} from "../src/model";
-import {emptyLock} from "./service-fixtures";
+import {emptyLock, installFixtureSdk} from "./service-fixtures";
 import {methodPoliciesOuter,readMethodPolicies,parseModelProjectionDocument,projectionDocumentBytes,MODEL_PROJECTION_PATH} from "../src/rpc-model-projection";
 import {parseOuter,type Outer} from "../src/rpc-baseline-json";
 
 for(const extension of ["ts","js"] as const)test(`${extension} semantic timeouts preserve descriptor/ABI bytes, omit defaults and bind every generated evidence image`,async()=>{
   const root=await mkdtemp(join(tmpdir(),"sunder-method-policy-"));try{
+    await installFixtureSdk(root);
     await mkdir(join(root,"src"));await writeFile(join(root,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.policies",name:"Policies",version:"1.0.0",workerCapabilities:[],services:{module:`src/services.${extension}`}}));
     await writeFile(join(root,"sunder-contracts.lock.json"),emptyLock);
     const source=(timeout:string)=>`import {defineService} from "@sunder/sdk";export const tasks=defineService({run(){return "ok";}},{exposure:"public",runtimeUse:{},methods:{run:{name:"execute",timeoutSeconds:${timeout}}}});`;

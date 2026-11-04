@@ -1,5 +1,5 @@
 # sunder-public-api-v2
-assembly Sunder.Sdk, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
+assembly Sunder.Sdk, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("background-processes.v1")
 type public sealed class Sunder.Sdk.Abstractions.BackgroundTaskChangedEventArgs : System.EventArgs
   method public .ctor(Sunder.Sdk.Abstractions.BackgroundTaskSnapshot snapshot)
@@ -792,7 +792,6 @@ type public static class Sunder.Sdk.Compatibility.SunderSdkCapabilities
   field public const System.String AuthV1 = "auth.v1"
   field public const System.String BackgroundProcessesV1 = "background-processes.v1"
   field public const System.String BackgroundServicesV1 = "background-services.v1"
-  field public const System.String Baseline11V1 = "sdk-baseline-1-1.v1"
   field public const System.String CallbacksV1 = "callbacks.v1"
   field public const System.String ContributionsV1 = "contributions.v1"
   field public const System.String CoreV1 = "core.v1"

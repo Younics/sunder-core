@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
 import { currentRid } from "../src/model";
-import { emptyLock, fixtureSource } from "./service-fixtures";
+import { emptyLock, fixtureSource, installFixtureSdk } from "./service-fixtures";
 
 const cli = resolve(__dirname, "../../dist/cli.js");
 const nodeModules = resolve(__dirname, "../../../../node_modules");
@@ -249,7 +249,10 @@ for (const extension of ["ts", "js"] as const) test(`watch routes React/${extens
 });
 
 test("watch recovers raw Worker syntax errors and invalidates new resolution candidates", async () => {
-  const root = await mkdtemp(resolve(tmpdir(), "sunder-watch-raw-"));
+  const sandbox = await mkdtemp(resolve(tmpdir(), "sunder-watch-raw-"));
+  await installFixtureSdk(sandbox);
+  const root = resolve(sandbox, "project");
+  await mkdir(root);
   await mkdir(resolve(root, "app"));
   await writeFile(resolve(root, "app/value.js"), 'export const value="RESOLUTION_JS";');
   await writeFile(resolve(root, "app/index.html"), '<!doctype html><script type="module" src="./main.js"></script>');
@@ -291,6 +294,6 @@ test("watch recovers raw Worker syntax errors and invalidates new resolution can
     await watching.close();
   } finally {
     await watching.kill();
-    await rm(root, { recursive: true, force: true });
+    await rm(sandbox, { recursive: true, force: true });
   }
 });

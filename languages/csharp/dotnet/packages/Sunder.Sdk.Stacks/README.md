@@ -47,7 +47,7 @@ The SDK retains an automatic bundle asset for lower-level consumers. Generated
 packages exclude that asset and use their reviewed platform import (as the template does):
 
 ```xml
-<PackageReference Include="Sunder.Sdk.Stacks" Version="[1.1.0,1.2.0)" ExcludeAssets="buildTransitive" />
+<PackageReference Include="Sunder.Sdk.Stacks" Version="1.0.0" ExcludeAssets="buildTransitive" />
 ```
 
 Selection accepts a local Core-exported catalog without a Registry, or the chosen

@@ -6,7 +6,7 @@ import { canonicalRpcDescriptorBytes, computeRpcAbiSha256 } from "@sunder/sdk";
 import { authoringBindingModel, generateTypeScriptBindings } from "./generator";
 import type { ContractUseConfig, LoadedContract, LoadedProject, ProviderConfig, PackageRole } from "./model";
 import { readProjectDescriptorFile } from "./descriptor-files";
-import { packageToolCompatibility } from "./compatibility";
+import { revalidateProjectSdk, type PackageToolCompatibility } from "./compatibility";
 import { NODE_TARGET } from "./toolchains.generated";
 import { captureRpcProducer } from "./rpc-producer";
 import { captureOwnedRuntimeInputs, type OwnedRuntimeInputs } from "./rpc-runtime-inputs";
@@ -45,15 +45,15 @@ export interface OwnedAnalysisOptions extends RegistryOriginOptions {
   readonly physicalBaseline?: BaselineInput; readonly identityBaseline?: OwnedBaseline;
   readonly allowDrift?: boolean; readonly requireBaseline?: boolean;
 }
-function compilerOptions(sdk: string, generated: string): ts.CompilerOptions {
+function compilerOptions(sdk: PackageToolCompatibility, generated: string): ts.CompilerOptions {
   if (ts.version !== "6.0.3") fail("unsupported-source", "Service analysis requires the pinned TypeScript 6.0.3 compiler.");
   return { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler,
     customConditions: ["node"], strict: true, exactOptionalPropertyTypes: true, noUncheckedIndexedAccess: true,
     allowJs: true, checkJs: true, noEmit: true, skipLibCheck: true, types: ["node"], typeRoots: [dirname(dirname(require.resolve("@types/node/package.json")))],
-    paths: { "@sunder/sdk": [resolve(sdk, "index.d.ts")], "@sunder/sdk/core": [resolve(sdk, "core.d.ts")], "@sunder/sdk/browser": [resolve(sdk, "browser.d.ts")], "@sunder/sdk/generated": [resolve(sdk, "generated.d.ts")], "#sunder/api": [resolve(generated, "api.ts")] } };
+    paths: { ...Object.fromEntries(Object.entries(sdk.declarations).map(([name, path]) => [name, [path]])), "#sunder/api": [resolve(generated, "api.ts")] } };
 }
 /** One captured compiler host for source analysis, generated checking and declaration emit. */
-function compilerFrame(root: string, canonical: string, sdk: string, generated: string, virtual: Map<string, string>) {
+function compilerFrame(root: string, canonical: string, sdk: PackageToolCompatibility, generated: string, virtual: Map<string, string>) {
   const inputs = captureRpcCompilerInputs(root, canonical); const options = compilerOptions(sdk, generated); const host = ts.createCompilerHost(options);
   const canonicalGenerated = resolve(canonical, ".sunder/generated/rpc");
   const overlay = (path: string): string | undefined => {
@@ -81,21 +81,21 @@ function compilerFrame(root: string, canonical: string, sdk: string, generated: 
 }
 export async function prepareInitialApiSelection(project: LoadedProject, configBytes: Buffer, lock: ContractLock, cacheRoot: string, baseline: BaselineInput): Promise<() => Promise<void>> {
   if (!project.config.services) fail("unsupported-source", "Package API selection requires services.module.");
-  const generated = resolve(project.root, ".sunder/generated/rpc"); const sdk = resolve(dirname(require.resolve("@sunder/sdk")));
+  const generated = resolve(project.root, ".sunder/generated/rpc"); const sdk = project.sdk;
   const imports = await preparePackageImports(lock, cacheRoot, project.config.id, project.config.dependencies ?? [], presentRoles(project));
   const virtual = new Map([...imports.sources].map(([name, source]) => [resolve(generated, name), source]));
   virtual.set(resolve(generated, "catalogs.ts"), imports.facadeSource);
   virtual.set(resolve(generated, "api.ts"), serviceApiSource(project.config.id, imports.contracts, [], imports, project.config.version));
   const frame = compilerFrame(project.root, await realpath(project.root), sdk, generated, virtual);
   ts.createProgram([resolve(project.root, project.config.services.module), ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
-  const verify = async (): Promise<void> => { producer.revalidate(); await baseline.revalidate(); frame.revalidate();
+  const verify = async (): Promise<void> => { revalidateProjectSdk(project.root, project.sdk); producer.revalidate(); await baseline.revalidate(); frame.revalidate();
     if (!(await readProjectDescriptorFile(project.root, project.configPath, "Package config")).equals(configBytes)) fail("unsupported-source", "Package config changed during selection."); };
   await verify(); return verify;
 }
 export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffer, options: OwnedAnalysisOptions = {}): Promise<OwnedRpcAnalysis> {
   producer.revalidate();
   const modulePath = resolve(project.root, project.config.services!.module); const generated = resolve(project.root, ".sunder/generated/rpc");
-  const sdk = resolve(dirname(require.resolve("@sunder/sdk"))); const virtual = new Map<string, string>();
+  const sdk = project.sdk; const virtual = new Map<string, string>();
   const frame = compilerFrame(project.root, await realpath(project.root), sdk, generated, virtual);
   const source = frame.inputs.readFile(modulePath);
   if (source === undefined || source.charCodeAt(0) === 0xfeff) fail("unsupported-source", "Service module must be regular UTF-8 source without BOM.");
@@ -118,7 +118,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   for (const [name, text] of imports.sources) virtual.set(resolve(generated, name), text);
   virtual.set(resolve(generated, "catalogs.ts"), imports.facadeSource);
   virtual.set(resolve(generated, "api.ts"), serviceApiSource(project.config.id, imports.contracts, [], imports, project.config.version));
-  const program = ts.createProgram([modulePath, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
+  const program = ts.createProgram([modulePath, sdk.declarations["@sunder/sdk"]!, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
   const file = program.getSourceFile(modulePath); if (!file) fail("unsupported-source", "Service module could not be parsed.");
   let nodes = 0; let bytes = 0;
   for (const input of program.getSourceFiles()) if (!input.isDeclarationFile && !input.fileName.startsWith(generated + "/")) {
@@ -173,7 +173,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   validateModelProjectionSet(publicEvidence);
   files.set(MODEL_PROJECTION_PATH, projectionDocumentBytes(project.config.id, project.config.version, publicEvidence).toString());
   const runtime = await captureOwnedRuntimeInputs(project.root, resolve(generated, "worker.ts"), modulePath, "", source, files);
-  const checked = ts.createProgram([modulePath, ...runtime.sourceFiles, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
+  const checked = ts.createProgram([modulePath, sdk.declarations["@sunder/sdk"]!, ...runtime.sourceFiles, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
   const diagnostics = ts.getPreEmitDiagnostics(checked);
   if (diagnostics.length) fail("handler-incomplete", ts.formatDiagnostics(diagnostics, { getCanonicalFileName: path => path, getCurrentDirectory: () => project.root, getNewLine: () => "\n" }));
   const checkedServices = analyzeServices(checked, checked.getSourceFile(modulePath)!, sdk, project.config.id, project.config.version, baseline, imports.providerSurfaces, nodes, {root:generated,contracts:imports.contracts});
@@ -232,9 +232,9 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   const appUses = project.config.app ? ownedAppUses(contracts) : []; const runtimeUses = [...ownedRuntimeUses(contracts),...typedUses];
   if (appUses.length + runtimeUses.length + imports.uses.length > 128) fail("aggregate-materializability-overflow", "Present-role service use projection exceeds 128 entries.");
   const physicalFingerprint = sha(JSON.stringify({ config: configBytes.toString(), physicalLock: physicalLock.toString(), baseline: baselineInput.fingerprint,
-    compiler: frame.inputs.fingerprint(), producer: producer.fingerprint, runtime: runtime.physicalFingerprint }));
+    sdk: project.sdk.sdkMetadata, compiler: frame.inputs.fingerprint(), producer: producer.fingerprint, runtime: runtime.physicalFingerprint }));
   const fingerprint = sha(JSON.stringify({ physicalFingerprint, lock: lock.sha256, contracts: allContracts.map(contract => [contract.descriptor.contractId, contract.descriptor.version, contract.descriptorSha256, modelProjectionBytes(contract.modelProjection).toString(),methodPoliciesBytes(contract.methodPolicies).toString()]),...roleUsesOuter(roleUses) }));
-  const { toolVersion } = packageToolCompatibility();
+  const { toolVersion } = project.sdk;
   for (const role of presentRoles(project)) {
     const selectedImports = importedContractsForRoles(imports, new Set([role]));
     const selected = allContracts.filter(contract => !contract.imported || selectedImports.has(contract.descriptor.contractId));
@@ -269,6 +269,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   files.set("owned-baseline.sha256", baselineInput.fingerprint + "\n");
   if ([...files.values()].reduce((sum, value) => sum + Buffer.byteLength(value), 0) > 67_108_864) fail("aggregate-materializability-overflow", "Complete generated model/binding/evidence output exceeds 64 MiB.");
   const revalidate = async (): Promise<void> => {
+    revalidateProjectSdk(project.root, project.sdk);
     producer.revalidate(); await baselineInput.revalidate(); await verifyBaselineEvidence(); frame.revalidate();
     for (const [path, bytes] of [[project.configPath, configBytes], [lockPath, physicalLock]] as const) if (!(await readProjectDescriptorFile(project.root, path, "Service input", 33_554_432)).equals(bytes)) fail("unsupported-source", `Service input changed: ${path}`);
     await runtime.revalidate(); producer.revalidate();

@@ -468,6 +468,8 @@ public sealed partial class DevPackageOwnerLeaseTests
         {
             var app = manifest["targets"]!.AsArray().Single(value => value!["role"]!.GetValue<string>() == "app")!;
             app["kind"] = "web"; app["entryPoint"] = "index.html"; app["targetFramework"] = null;
+            app["avaloniaVersion"] = null;
+            app["requiredHostCapabilities"] = new JsonArray("rpc.v1", "web-bridge.v1");
             app["views"] = JsonNode.Parse("""[{"viewId":"startup.counted.package.main","displayName":"Main","route":"/","defaultPlacement":"middle","showInHotbar":true}]""");
             File.WriteAllText(Path.Combine(folder, "payload/shared/index.html"), "<main>Web fixture</main>");
         }

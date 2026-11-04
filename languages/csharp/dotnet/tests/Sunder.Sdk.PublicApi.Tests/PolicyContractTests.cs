@@ -94,7 +94,7 @@ public sealed class PolicyContractTests
         { "app-permit-result.json", new RuntimeAppPackageLoadPermitResult(true, null, Nonce, Session, LocalPackage, Lease), "appPermitResult" },
         { "app-permit-denied.json", new RuntimeAppPackageLoadPermitResult(false, PackagePolicyErrorCodes.PolicyExpired, null, Session, LocalPackage, ExpiredLease), "appPermitResult" },
         { "app-tracked-permit-request.json", new RuntimeAppPackageLoadPermitRequest(Session, LocalPackage)
-            { SnapshotId = Nonce, AppActivationId = Activation, AppTarget = new("app", "osx-arm64", "web", "index.html", null, "1.1.0", []) }, "appPermitRequest" },
+            { SnapshotId = Nonce, AppActivationId = Activation, AppTarget = new("app", "osx-arm64", "web", "index.html", null, "1.0.0", ["web-bridge.v1"]) }, "appPermitRequest" },
         { "app-activation-retirement-request.json", new RuntimeAppActivationRetirementRequest(Session, Activation, Nonce), "appActivationRetirementRequest" },
         { "app-activation-retirement-result.json", new RuntimeAppActivationRetirementResult(Session, Activation, Nonce, "retired"), "appActivationRetirementResult" },
         { "app-activation-retirement-requirement.json", Retirement, "appActivationRetirementRequirement" },

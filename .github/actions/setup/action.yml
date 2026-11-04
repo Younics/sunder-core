@@ -20,7 +20,11 @@ runs:
       shell: bash
       env:
         CORE_ROOT: ${{ inputs.root }}
-      run: python3 -B "$CORE_ROOT/scripts/ci/metadata.py" toolchains
+        PACKAGING: ${{ inputs.packaging }}
+      run: |
+        args=()
+        [[ "$PACKAGING" != true ]] || args+=(--packaging)
+        python3 -B "$CORE_ROOT/scripts/ci/metadata.py" toolchains "${args[@]}"
     - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
       if: inputs.dotnet == 'true'
       with:

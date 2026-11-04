@@ -281,9 +281,10 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
 
     def test_ci_binds_before_pack_and_artifact_consumption_using_the_existing_commands(self):
         ci = (d.ROOT / ".github/workflows/sunder-ci.yml").read_text()
-        wrapper = ci.index('sdk_release.py pack')
-        self.assertLess(wrapper, ci.index("core_ci.py templates"))
+        wrapper = ci.index('core_ci.py candidate')
         self.assertLess(wrapper, ci.index("name: Retain the tested candidate feed"))
+        driver = (d.ROOT / "scripts/ci/core_ci.py").read_text().split('elif profile == "candidate":', 1)[1].split("        else:", 1)[0]
+        self.assertLess(driver.index('"pack"'), driver.index("templates(work)"))
         packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(plan, directory):", 1)[1].split("def feed(", 1)[0]
         self.assertIn('documentation.pack_context(ROOT, plan["artifactSourceCommit"])', packer)
         self.assertLess(packer.index("with context:"), packer.index('["dotnet", "pack"'))

@@ -12,7 +12,7 @@ import { captureBaseline, withBaselineLease } from "../src/rpc-baseline-store";
 import { aggregateAndPack, prepareProject } from "../src/package";
 import { loadProject, currentRid } from "../src/model";
 import { withOutputLeases } from "../src/output";
-import { generatedProviders, invocation, fixtureSource, writeSourceFile as writeFile } from "./service-fixtures";
+import { generatedProviders, installFixtureSdk, invocation, fixtureSource, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../src/cli.js");
@@ -27,6 +27,7 @@ call(request/*: string*/,context/*: import("@sunder/sdk").ServiceContext*/)/*: s
 }
 async function project(extension = "ts", text = source()): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-lifecycle-")); await mkdir(resolve(root, "src"));
+  await installFixtureSdk(root);
   await writeFile(resolve(root, `src/rpc.${extension}`), text);
   await writeFile(resolve(root, `src/worker.${extension}`), 'export {};');
   await writeFile(resolve(root, `src/rpc.${extension}`), `import "./worker.js";\n${text}`);

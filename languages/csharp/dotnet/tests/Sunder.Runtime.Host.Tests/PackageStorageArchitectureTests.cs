@@ -24,6 +24,7 @@ public sealed class PackageStorageArchitectureTests
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void AppProductionCode_DoesNotReferenceRuntimeStorageOrCredentialImplementations()
     {
         var source = ReadSources(Path.Combine(RepositoryRoot, "languages", "csharp", "dotnet", "host", "Sunder.App"));
@@ -37,6 +38,7 @@ public sealed class PackageStorageArchitectureTests
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void RuntimeHost_IsOnlyProductionOwnerCreatingPersistentPackageStorage()
     {
         var productionRoots = new[]

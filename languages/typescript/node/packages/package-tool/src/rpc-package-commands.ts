@@ -50,10 +50,11 @@ async function execute(project: string, request: PackageApiRequest): Promise<Pac
     const current = [...before.platformImports].find(([, value]) => value.contractId === request.contractId);
     providerKey = request.localName ?? current?.[0] ?? defaultPlatformKey(request.contractId!);
     if (current) {
-      if (current[0] !== providerKey || request.registryOrigin !== undefined && request.registryOrigin !== current[1].registryOrigin)
+      if (current[0] !== providerKey || request.registryOrigin !== undefined && request.registryOrigin !== current[1].registryOrigin
+        || request.versionRange !== undefined && request.versionRange !== current[1].authorityReleaseRange)
         contractError("platform-api.local-name-collision", "Existing platform intent differs; use the current key and locked origin.");
       if (request.platformCatalog !== undefined && !outerBytes(current[1]).equals(outerBytes(await selectPlatformContract(request.contractId!,
-        current[1].registryOrigin as string | undefined, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog))))
+        current[1].registryOrigin as string | undefined, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog, current[1].authorityReleaseRange as string))))
         contractError("platform-api.catalog-invalid", "The local catalog differs from the existing selection; use targeted update.");
       await verify(); return { changed: false, lock: before };
     }
@@ -61,7 +62,7 @@ async function execute(project: string, request: PackageApiRequest): Promise<Pac
       contractError("platform-api.local-input-required", "Select an explicit local catalog or a canonical Registry origin.");
     if ([...before.providerImports.keys(), ...before.platformImports.keys()].some(key => key.toLowerCase() === providerKey!.toLowerCase()))
       contractError("platform-api.local-name-collision", "The local provider key is already in use.");
-    draft.platformImports[providerKey] = await selectPlatformContract(request.contractId!, request.registryOrigin, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog);
+    draft.platformImports[providerKey] = await selectPlatformContract(request.contractId!, request.registryOrigin, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog, request.versionRange);
     hydrate = true;
   } else if (request.operation === "platform-update") {
     const selected = [...before.platformImports].filter(([, value]) => request.contractId === undefined || value.contractId === request.contractId);
@@ -70,7 +71,7 @@ async function execute(project: string, request: PackageApiRequest): Promise<Pac
       if (value.registryOrigin !== undefined && request.registryOrigin !== undefined)
         contractError("package-api.registry-origin-invalid", "Update retains an existing Registry origin and rejects an override.");
       draft.platformImports[key] = await selectPlatformContract(value.contractId as string, value.registryOrigin as string | undefined ?? request.registryOrigin,
-        request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog);
+        request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog, request.versionRange ?? value.authorityReleaseRange as string);
     }
     hydrate = true;
   } else if (request.operation === "platform-unimplement") {
@@ -132,7 +133,7 @@ async function execute(project: string, request: PackageApiRequest): Promise<Pac
       if (request.consumerRoles !== undefined) { if (!draft.packageImports[id]) missing(); draft.packageImports[id]!.consumerRoles = request.consumerRoles; }
     }
     if (request.packageId === undefined) for (const [key, value] of before.platformImports)
-      draft.platformImports[key] = await selectPlatformContract(value.contractId as string, value.registryOrigin as string | undefined, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog);
+      draft.platformImports[key] = await selectPlatformContract(value.contractId as string, value.registryOrigin as string | undefined, request.fetchImplementation, request.signal, request.allowDevelopmentRegistryOrigin, request.platformCatalog, value.authorityReleaseRange as string);
     hydrate = true;
   } else if (request.operation === "unimplement") {
     const current = [...before.providerImports.values()].find(value => value.packageId === id && value.contractId === request.contractId);
@@ -218,9 +219,9 @@ function validateRequest(value: PackageApiRequest): void {
     contractError("package-api.registry-origin-invalid", "Development Registry mode must be an explicit Boolean.");
   if (typeof value.operation === "string" && value.operation.startsWith("platform-")) {
     if (!["platform-implement", "platform-update", "platform-unimplement", "platform-list"].includes(value.operation)
-      || [value.packageId, value.versionRange, value.includePrerelease, value.presence, value.candidate].some(input => input !== undefined))
-      contractError("platform-api.import-not-found", "Platform commands do not accept package, range, prerelease, presence or candidate overrides.");
-    for (const input of [value.contractId, value.registryOrigin, value.localName, value.cacheRoot, value.platformCatalog])
+      || [value.packageId, value.includePrerelease, value.presence, value.candidate].some(input => input !== undefined))
+      contractError("platform-api.import-not-found", "Platform commands do not accept package, prerelease, presence or candidate overrides.");
+    for (const input of [value.contractId, value.registryOrigin, value.localName, value.cacheRoot, value.platformCatalog, value.versionRange])
       if (input !== undefined && (typeof input !== "string" || !input.trim())) missing();
     if (value.operation === "platform-update" && value.contractId === undefined && value.registryOrigin !== undefined)
       contractError("package-api.registry-origin-invalid", "Binding a local selection to a Registry requires a specific platform contract.");
@@ -228,7 +229,7 @@ function validateRequest(value: PackageApiRequest): void {
       || ["platform-implement", "platform-unimplement"].includes(value.operation) && value.contractId === undefined
       || value.operation === "platform-list" && value.contractId !== undefined
       || value.operation !== "platform-implement" && value.localName !== undefined
-      || !["platform-implement", "platform-update"].includes(value.operation) && (value.registryOrigin !== undefined || value.platformCatalog !== undefined))
+      || !["platform-implement", "platform-update"].includes(value.operation) && (value.registryOrigin !== undefined || value.platformCatalog !== undefined || value.versionRange !== undefined))
       contractError("platform-api.import-not-found", "Platform command target or options do not apply; update uses locked origins.");
     return;
   }

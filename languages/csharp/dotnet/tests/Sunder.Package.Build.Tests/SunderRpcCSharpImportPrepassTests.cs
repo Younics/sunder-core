@@ -261,8 +261,8 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
         Assert.False(Directory.Exists(missingRoot));
 
         var platform = SunderRpcAuthoringDocuments.ReadContractLock(Fixture("authoring/conformance/valid/mixed-contract-lock.json"));
-        var unsupported = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(platform, missingRoot));
-        Assert.StartsWith("rpc-authoring.authority-mismatch:", unsupported.Message, StringComparison.Ordinal); // corpus range predates the coordinated tooling line
+        var missingPlatform = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(platform, missingRoot));
+        Assert.StartsWith("contract-cache.entry-missing:", missingPlatform.Message, StringComparison.Ordinal);
         var metadataOnly = SunderRpcAuthoringDocuments.ReadContractLock(Fixture("authoring/conformance/valid/package-api-mixed-authority-contract-lock.json"));
         var absentCatalog = Assert.Throws<InvalidDataException>(() => SunderRpcCSharpImportPrepass.Prepare(metadataOnly, _root));
         Assert.StartsWith("contract-cache.entry-missing:", absentCatalog.Message, StringComparison.Ordinal);

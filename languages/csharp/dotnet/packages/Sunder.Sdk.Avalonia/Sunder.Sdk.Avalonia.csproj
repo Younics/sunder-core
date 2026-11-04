@@ -6,7 +6,7 @@
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <CentralPackageTransitivePinningEnabled>false</CentralPackageTransitivePinningEnabled>
-    <Version>1.1.0</Version>
+    <Version>1.0.0</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
@@ -24,6 +24,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
     <PackageReference Include="Avalonia" />
   </ItemGroup>
 
@@ -32,4 +34,23 @@
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="..\Sunder.Sdk\LICENSE" Link="LICENSE" Pack="true" PackagePath="" />
   </ItemGroup>
+
+  <Target Name="IncludeAppBridge" BeforeTargets="_GetBuildOutputFilesWithTfm">
+    <ItemGroup>
+      <BuildOutputInPackage Include="$(TargetDir)Sunder.App.Bridge.dll" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Source references expose the same two assemblies as the NuGet lib assets. -->
+  <Target Name="ExposeAppBridge" AfterTargets="GetTargetPathWithTargetPlatformMoniker">
+    <ItemGroup>
+      <TargetPathWithTargetPlatformMoniker Include="$(TargetDir)Sunder.App.Bridge.dll">
+        <MSBuildSourceProjectFile>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj'))</MSBuildSourceProjectFile>
+        <TargetFrameworkIdentifier>$(TargetFrameworkIdentifier)</TargetFrameworkIdentifier>
+        <TargetFrameworkVersion>$(TargetFrameworkVersion)</TargetFrameworkVersion>
+        <TargetPlatformMoniker>$(TargetPlatformMoniker)</TargetPlatformMoniker>
+        <TargetFrameworkMoniker>$(TargetFrameworkMoniker)</TargetFrameworkMoniker>
+      </TargetPathWithTargetPlatformMoniker>
+    </ItemGroup>
+  </Target>
 </Project>

@@ -13,6 +13,7 @@
     <Project Path="languages/csharp/dotnet/host/Sunder.Runtime.Host/Sunder.Runtime.Host.csproj" />
     <Project Path="languages/csharp/dotnet/libraries/Sunder.Package.Format/Sunder.Package.Format.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.App.Tests/Sunder.App.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.App.Integration.Tests/Sunder.App.Integration.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Host.Client.Tests/Sunder.Host.Client.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Host.Supervisor.Tests/Sunder.Host.Supervisor.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Cli.Tests/Sunder.Cli.Tests.csproj" />
@@ -24,6 +25,7 @@
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
   </Folder>
   <Folder Name="/Sdk/">
+    <Project Path="languages/csharp/dotnet/libraries/Sunder.App.Bridge/Sunder.App.Bridge.csproj" />
     <Project Path="languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj" />
     <Project Path="languages/csharp/dotnet/packages/Sunder.Sdk/Sunder.Sdk.csproj" />
     <Project Path="languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/Sunder.Sdk.Avalonia.csproj" />

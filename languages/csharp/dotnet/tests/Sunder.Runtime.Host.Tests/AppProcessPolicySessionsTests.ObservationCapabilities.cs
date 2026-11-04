@@ -118,7 +118,8 @@ public sealed partial class AppProcessPolicySessionsTests
         {
             Role = original.Role, Rid = original.Rid, Kind = original.Kind, EntryPoint = original.EntryPoint,
             TargetFramework = original.TargetFramework, SdkVersion = original.SdkVersion,
-            RequiredHostCapabilities = [SunderSdkCapabilities.Baseline11V1, .. capabilities],
+            RequiredHostCapabilities = ["app-bridge.v1", .. capabilities],
+            AvaloniaVersion = "12.1.4",
         };
         fixture.Snapshots.Source = source with
         {

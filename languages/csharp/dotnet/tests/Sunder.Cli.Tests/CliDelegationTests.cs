@@ -727,7 +727,6 @@ public sealed class CliDelegationTests
                     },
                     RequiredHostCapabilities =
                     [
-                        "sdk-baseline-1-1.v1",
                         "core.v1",
                         SunderSdkCapabilities.DockerEnvironmentV1,
                         "execution-runtime.v1",

@@ -33,7 +33,7 @@ class PackageReleaseTests(unittest.TestCase):
         return get
 
     def test_never_published_newer_equal_and_lower_versions(self):
-        for published, expected in ((None, True), (["1.0.0"], True), (["1.1.0"], False), (["1.10.0"], False)):
+        for published, expected in ((None, True), (["0.9.0"], True), (["1.0.0"], False), (["1.10.0"], False)):
             with self.subTest(published=published):
                 get = (lambda _: None) if published is None else self.history(published)
                 plan = sdk.select(self.packages, SOURCE, [], get)

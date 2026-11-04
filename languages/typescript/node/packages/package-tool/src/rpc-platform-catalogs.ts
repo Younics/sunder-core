@@ -1,7 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { canonicalRpcDescriptorBytes, isPackageId, isSemanticVersion, isVersionInRange } from "@sunder/sdk";
-import { packageToolCompatibility } from "./compatibility";
+import { canonicalRpcDescriptorBytes, isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@sunder/sdk";
 import { verifyPlatformContractCatalog, type PlatformContractPins, type VerifiedPlatformContractCatalog } from "./platform-catalog";
 import { cachePath, contractCacheFiles as files } from "./rpc-contract-cache";
 import { contractError, digest, parseContractWireJson, registryOrigin, type ArtifactContract, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";
@@ -13,31 +12,28 @@ import { publishCatalogPair, readOwnedCatalogPair } from "./rpc-platform-cache";
 export const MAXIMUM_PLATFORM_CATALOG = 67_108_864;
 const DIRECTORY = "platform-catalogs";
 export interface PlatformRequirement extends PlatformContractPins { readonly registryOrigin: string | undefined; readonly descriptorBytes: number }
-export function platformToolRange(): string {
-  const [major, minor] = packageToolCompatibility().sdkVersion.split(".");
-  return `>=${major}.${minor}.0 <${major}.${BigInt(minor!) + 1n}.0`;
-}
 export function defaultPlatformKey(contractId: string): string {
   const parts = contractId.split("."); if (parts[0] === "sunder" && parts.length > 1) parts.shift();
   return parts[0]! + parts.slice(1).map(part => part[0]!.toUpperCase() + part.slice(1)).join("");
 }
 export async function selectPlatformContract(contractId: string, origin: string | undefined, request: typeof fetch = fetch, signal?: AbortSignal,
-  allowDevelopmentRegistryOrigin = false, localCatalog?: string): Promise<OuterObject> {
+  allowDevelopmentRegistryOrigin = false, localCatalog?: string, range = ">=1.0.0"): Promise<OuterObject> {
   if (!isPackageId(contractId)) contractError("platform-api.import-not-found", "A canonical platform contract ID is required.");
   if (origin !== undefined) registryOrigin(origin, allowDevelopmentRegistryOrigin);
-  const range = platformToolRange(); let catalog: VerifiedPlatformContractCatalog;
+  if (!isPackageVersionRange(range)) contractError("platform-api.catalog-version-unsupported", "A canonical catalog release range is required.");
+  let catalog: VerifiedPlatformContractCatalog;
   if (localCatalog !== undefined) {
     signal?.throwIfAborted();
     catalog = await verifyPlatformContractCatalog(await files.read(await cachePath(localCatalog), MAXIMUM_PLATFORM_CATALOG));
     if (!isVersionInRange(catalog.releaseVersion, range))
-      contractError("platform-api.catalog-version-unsupported", "The local catalog must be within the coordinated SDK/tooling line.");
+      contractError("platform-api.catalog-version-unsupported", "The local catalog is outside the requested release range.");
   } else {
     if (origin === undefined) contractError("platform-api.local-input-required", "A local platform selection requires an explicit catalog; no Registry is inferred.");
     const url = new URL("api/v1/platform-contracts/sunder.core/resolve?versionRange=" + encodeURIComponent(range), origin);
     const metadata = record(parseContractWireJson(await readResponse(url, "application/json", 1_048_576, undefined, request, signal, undefined, "platform-api.import-not-found", allowDevelopmentRegistryOrigin), 1_048_576));
     const release = metadata.releaseVersion;
     if (typeof release !== "string" || !isSemanticVersion(release) || release.split("+", 1)[0]!.includes("-")
-      || !isVersionInRange(release, range) || metadata.lifecycleState !== "Supported") invalid("Resolution must select a supported stable catalog within the coordinated SDK/tooling line.");
+      || !isVersionInRange(release, range) || metadata.lifecycleState !== "Supported") invalid("Resolution must select a supported stable catalog within the requested release range.");
     catalog = await readMetadataCatalog(metadata, origin, release, [], request, signal, allowDevelopmentRegistryOrigin);
   }
   const contract = catalog.contracts.find(item => item.contractId === contractId);
@@ -46,22 +42,6 @@ export async function selectPlatformContract(contractId: string, origin: string 
     selectedAuthorityRelease: catalog.releaseVersion, selectedAuthorityContentIdentity: catalog.contentIdentity,
     contractId, resolvedContractVersion: contract.contractVersion, ...(origin === undefined ? {} : { registryOrigin: origin }), descriptorBytes: contract.descriptorBytes,
     descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, etag: `"${contract.descriptorSha256}"` };
-}
-export function validatePlatformToolRange(lock: ContractLock): void {
-  const [major, minor] = packageToolCompatibility().sdkVersion.split(".");
-  const lower = `${major}.${minor}.0`; const upper = `${major}.${BigInt(minor!) + 1n}.0`;
-  for (const item of platformRequirements(lock)) if (!isVersionInRange(item.releaseVersion, `>=${lower} <${upper}`))
-    contractError("platform-api.catalog-version-unsupported", "The platform catalog is outside the coordinated tooling minor line. Upgrade Core tooling.");
-  for (const item of lock.platformImports.values()) {
-    let below = false; let above = false;
-    for (const token of (item.authorityReleaseRange as string).split(" ")) {
-      const value = token.replace(/^[<>=]+/u, ""); const exact = !token.startsWith("<") && !token.startsWith(">");
-      below ||= (exact || token.startsWith(">")) && isVersionInRange(value, ">=" + lower);
-      above ||= (exact || token.startsWith("<")) && (isVersionInRange(value, "<" + upper)
-        || token.startsWith("<") && !token.startsWith("<=") && isVersionInRange(value, "=" + upper));
-    }
-    if (!below || !above) contractError("rpc-authoring.authority-mismatch", "Platform ranges must be contained by the coordinated tooling minor line.");
-  }
 }
 export function platformRequirements(lock: ContractLock): readonly PlatformRequirement[] {
   const result: PlatformRequirement[] = [];

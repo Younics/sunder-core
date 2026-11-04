@@ -64,12 +64,13 @@ internal static class CanonicalPackageTestBuilder
                     ? appEntryPoint ?? $"lib/{entryAssemblyName}"
                     : runtimeEntryPoint ?? "lib/Sunder.Runtime.Host.TestWorker.dll",
                 TargetFramework = "net10.0",
-                SdkVersion = "1.1.0",
+                SdkVersion = "1.0.0",
+                AvaloniaVersion = role == "app" && appTargetKind == "avalonia" ? "12.1.4" : null,
                 RequiredHostCapabilities = role == SunderPackageFormat.RuntimeHostRole
                     ? CreateRuntimeRequiredHostCapabilities(
                         runtimeRequiredHostCapabilities,
                         runtimeTargetKind)
-                    : ["sdk-baseline-1-1.v1", "core.v1"],
+                    : [appTargetKind == "web" ? "web-bridge.v1" : "app-bridge.v1", "core.v1"],
                 ExecutionRuntime = role == SunderPackageFormat.RuntimeHostRole
                                    && runtimeTargetKind == SunderPackageFormat.WorkerTargetKind
                     ? new SunderPackageExecutionRuntimeManifest
@@ -300,7 +301,7 @@ internal static class CanonicalPackageTestBuilder
         string runtimeTargetKind)
     {
         var capabilities = requiredHostCapabilities
-                           ?? ["sdk-baseline-1-1.v1", "core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"];
+                           ?? ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"];
         if (runtimeTargetKind != SunderPackageFormat.WorkerTargetKind
             || capabilities.Contains(SunderPackageFormat.ExecutionRuntimeV1Capability, StringComparer.Ordinal))
         {

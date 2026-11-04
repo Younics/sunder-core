@@ -917,7 +917,7 @@ public sealed class PackagesWindowViewModelTests
                         "lib/Agent.dll",
                         "net10.0",
                         "1.1.0",
-                        ["execution-runtime.v1", "rpc.v1", "worker-protocol.v1", "sdk-baseline-1-1.v1"],
+                        ["execution-runtime.v1", "rpc.v1", "worker-protocol.v1"],
                         ExecutionRuntime: requirement)])),
         };
         var runtimeArtifact = CreateResolvedRuntimeArtifact(rid, RuntimeExecutionRuntimeSupportState.Supported);

@@ -92,12 +92,63 @@ type public sealed class Sunder.Registry.Contracts.RegistryAddStackMaintainerReq
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest? left, Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest? left, Sunder.Registry.Contracts.RegistryAddStackMaintainerRequest? right)
+type public sealed class Sunder.Registry.Contracts.RegistryApiKeyGrant : System.IEquatable<Sunder.Registry.Contracts.RegistryApiKeyGrant>
+  method public .ctor(System.String Permission, System.String ResourceId = "", System.Boolean AllPackages = false)
+  property System.Boolean AllPackages { public get; public init; }
+  property System.String Permission { public get; public init; }
+  property System.String ResourceId { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryApiKeyGrant <Clone>$()
+  method public System.Void Deconstruct(out System.String Permission, out System.String ResourceId, out System.Boolean AllPackages)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryApiKeyGrant? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryApiKeyGrant? left, Sunder.Registry.Contracts.RegistryApiKeyGrant? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryApiKeyGrant? left, Sunder.Registry.Contracts.RegistryApiKeyGrant? right)
+type public sealed class Sunder.Registry.Contracts.RegistryApiKeyPermission : System.IEquatable<Sunder.Registry.Contracts.RegistryApiKeyPermission>
+  method public .ctor(System.String Id, System.String Name, System.String Description, System.String ResourceKind, System.Collections.Generic.IReadOnlyList<System.String> Requires)
+  property System.Collections.Generic.IReadOnlyList<System.String> Requires { public get; public init; }
+  property System.String Description { public get; public init; }
+  property System.String Id { public get; public init; }
+  property System.String Name { public get; public init; }
+  property System.String ResourceKind { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryApiKeyPermission <Clone>$()
+  method public System.Void Deconstruct(out System.String Id, out System.String Name, out System.String Description, out System.String ResourceKind, out System.Collections.Generic.IReadOnlyList<System.String> Requires)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryApiKeyPermission? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryApiKeyPermission? left, Sunder.Registry.Contracts.RegistryApiKeyPermission? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryApiKeyPermission? left, Sunder.Registry.Contracts.RegistryApiKeyPermission? right)
+type public static class Sunder.Registry.Contracts.RegistryApiKeyPermissions
+  field public const System.String PackagePromoteLatest = "package:promote-latest"
+  field public const System.String PackagePublish = "package:publish"
+  field public const System.String PackageRelease = "package:release"
+  field public const System.String StackPublish = "stack:publish"
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyPermission> Catalog { public static get; }
+type public sealed class Sunder.Registry.Contracts.RegistryApiKeySummary : System.IEquatable<Sunder.Registry.Contracts.RegistryApiKeySummary>
+  method public .ctor(System.Guid Id, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset? ExpiresAtUtc)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants { public get; public init; }
+  property System.DateTimeOffset CreatedAtUtc { public get; public init; }
+  property System.Guid Id { public get; public init; }
+  property System.DateTimeOffset? ExpiresAtUtc { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryApiKeySummary <Clone>$()
+  method public System.Void Deconstruct(out System.Guid Id, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset? ExpiresAtUtc)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryApiKeySummary? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryApiKeySummary? left, Sunder.Registry.Contracts.RegistryApiKeySummary? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryApiKeySummary? left, Sunder.Registry.Contracts.RegistryApiKeySummary? right)
 type public static class Sunder.Registry.Contracts.RegistryApiRoutes
+  field public const System.String ApiKeyPermissions = "/api/v1/me/api-keys/permissions"
   field public const System.String CliAuth = "/api/v1/cli-auth"
   field public const System.String CliAuthAuthorize = "/api/v1/cli-auth/authorize"
   field public const System.String CliAuthToken = "/api/v1/cli-auth/token"
   field public const System.String Contracts = "/api/v1/contracts"
   field public const System.String CurrentUser = "/api/v1/me"
+  field public const System.String CurrentUserApiKeys = "/api/v1/me/api-keys"
   field public const System.String CurrentUserCliTokens = "/api/v1/me/tokens"
   field public const System.String CurrentUserContractAuthorities = "/api/v1/me/contract-authorities"
   field public const System.String CurrentUserPackageReservations = "/api/v1/me/package-reservations"
@@ -128,6 +179,7 @@ type public static class Sunder.Registry.Contracts.RegistryApiRoutes
   method public static System.String ContractVersion(System.String contractId, System.String version)
   method public static System.String ContractVersionDescriptor(System.String contractId, System.String version)
   method public static System.String ContractVersions(System.String contractId)
+  method public static System.String CurrentUserApiKey(System.Guid keyId)
   method public static System.String CurrentUserCliToken(System.Guid tokenId)
   method public static System.String CurrentUserContractAuthority(System.String contractId)
   method public static System.String CurrentUserContractAuthorityCancellation(System.String contractId)
@@ -254,13 +306,13 @@ type public sealed class Sunder.Registry.Contracts.RegistryCliTokenResponse : Sy
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryCliTokenResponse? left, Sunder.Registry.Contracts.RegistryCliTokenResponse? right)
 type public sealed class Sunder.Registry.Contracts.RegistryClientCompatibilityProfile : System.IEquatable<Sunder.Registry.Contracts.RegistryClientCompatibilityProfile>
   method public .ctor(System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistrySupportedPackageProfile> profiles, System.String rid)
-  method public .ctor(System.Collections.Generic.IReadOnlyList<System.Int32> manifestVersions, System.Collections.Generic.IReadOnlyList<System.String> runtimeTargetKinds, System.String workerProtocol, System.Collections.Generic.IReadOnlyList<System.String> workerCapabilities, System.String sdkBaseline, System.String rid, System.String sdkVersionRange)
+  field public const System.Int32 MaximumHostCapabilities = 64
   field public const System.Int32 MaximumIdentifierLength = 128
   field public const System.Int32 MaximumManifestVersions = 8
   field public const System.Int32 MaximumProfileQueryLength = 16384
   field public const System.Int32 MaximumProfiles = 8
-  field public const System.Int32 MaximumRuntimeTargetKinds = 8
-  field public const System.Int32 MaximumWorkerCapabilities = 64
+  field public const System.Int32 MaximumSdkMajors = 8
+  field public const System.Int32 MaximumTargetFrameworks = 8
   field public const System.String ProfilesQueryParameter = "profiles"
   field public const System.String RidQueryParameter = "rid"
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistrySupportedPackageProfile> Profiles { public get; }
@@ -362,13 +414,44 @@ type public static class Sunder.Registry.Contracts.RegistryContractProviderPubli
   field public const System.String AllowlistedPackages = "AllowlistedPackages"
   field public const System.String AuthorityPackageOnly = "AuthorityPackageOnly"
   field public const System.String Open = "Open"
+type public sealed class Sunder.Registry.Contracts.RegistryCreateApiKeyRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryCreateApiKeyRequest>
+  method public .ctor(System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants, System.Int32? LifetimeDays = null, System.Boolean NeverExpires = false)
+  property System.Boolean NeverExpires { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants { public get; public init; }
+  property System.Int32? LifetimeDays { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryCreateApiKeyRequest <Clone>$()
+  method public System.Void Deconstruct(out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants, out System.Int32? LifetimeDays, out System.Boolean NeverExpires)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryCreateApiKeyRequest? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryCreateApiKeyRequest? left, Sunder.Registry.Contracts.RegistryCreateApiKeyRequest? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryCreateApiKeyRequest? left, Sunder.Registry.Contracts.RegistryCreateApiKeyRequest? right)
+type public sealed class Sunder.Registry.Contracts.RegistryCreateApiKeyResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCreateApiKeyResponse>
+  method public .ctor(System.Guid Id, System.String Key, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset? ExpiresAtUtc)
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants { public get; public init; }
+  property System.DateTimeOffset CreatedAtUtc { public get; public init; }
+  property System.Guid Id { public get; public init; }
+  property System.DateTimeOffset? ExpiresAtUtc { public get; public init; }
+  property System.String DisplayName { public get; public init; }
+  property System.String Key { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryCreateApiKeyResponse <Clone>$()
+  method public System.Void Deconstruct(out System.Guid Id, out System.String Key, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryApiKeyGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset? ExpiresAtUtc)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryCreateApiKeyResponse? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryCreateApiKeyResponse? left, Sunder.Registry.Contracts.RegistryCreateApiKeyResponse? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryCreateApiKeyResponse? left, Sunder.Registry.Contracts.RegistryCreateApiKeyResponse? right)
 type public sealed class Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest : System.IEquatable<Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest>
-  method public .ctor(System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.Int32? LifetimeDays = null)
+  method public .ctor(System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.Int32? LifetimeDays = null, System.Boolean NeverExpires = false)
+  property System.Boolean NeverExpires { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants { public get; public init; }
   property System.Int32? LifetimeDays { public get; public init; }
   property System.String DisplayName { public get; public init; }
   method public Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest <Clone>$()
-  method public System.Void Deconstruct(out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.Int32? LifetimeDays)
+  method public System.Void Deconstruct(out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.Int32? LifetimeDays, out System.Boolean NeverExpires)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -376,15 +459,15 @@ type public sealed class Sunder.Registry.Contracts.RegistryCreatePublishTokenReq
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest? left, Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest? left, Sunder.Registry.Contracts.RegistryCreatePublishTokenRequest? right)
 type public sealed class Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse : System.IEquatable<Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse>
-  method public .ctor(System.Guid Id, System.String Token, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset ExpiresAtUtc)
+  method public .ctor(System.Guid Id, System.String Token, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset? ExpiresAtUtc)
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants { public get; public init; }
   property System.DateTimeOffset CreatedAtUtc { public get; public init; }
-  property System.DateTimeOffset ExpiresAtUtc { public get; public init; }
   property System.Guid Id { public get; public init; }
+  property System.DateTimeOffset? ExpiresAtUtc { public get; public init; }
   property System.String DisplayName { public get; public init; }
   property System.String Token { public get; public init; }
   method public Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse <Clone>$()
-  method public System.Void Deconstruct(out System.Guid Id, out System.String Token, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset ExpiresAtUtc)
+  method public System.Void Deconstruct(out System.Guid Id, out System.String Token, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset? ExpiresAtUtc)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryCreatePublishTokenResponse? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -1241,10 +1324,11 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageSummary : Syst
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageSummary? left, Sunder.Registry.Contracts.RegistryPackageSummary? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageSummary? left, Sunder.Registry.Contracts.RegistryPackageSummary? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackageTarget : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageTarget>
-  method public .ctor(System.String Role, System.String Rid, System.String Kind, System.String EntryPoint, System.String? TargetFramework, System.String? SdkVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageWebView>? Views = null, Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
+  method public .ctor(System.String Role, System.String Rid, System.String Kind, System.String EntryPoint, System.String? TargetFramework, System.String? SdkVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageWebView>? Views = null, Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement? ExecutionRuntime = null, System.String? AvaloniaVersion = null)
   property Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement? ExecutionRuntime { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageWebView> Views { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities { public get; public init; }
+  property System.String? AvaloniaVersion { public get; public init; }
   property System.String EntryPoint { public get; public init; }
   property System.String Kind { public get; public init; }
   property System.String Rid { public get; public init; }
@@ -1252,7 +1336,7 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageTarget : Syste
   property System.String? SdkVersion { public get; public init; }
   property System.String? TargetFramework { public get; public init; }
   method public Sunder.Registry.Contracts.RegistryPackageTarget <Clone>$()
-  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Kind, out System.String EntryPoint, out System.String? TargetFramework, out System.String? SdkVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageWebView>? Views, out Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement? ExecutionRuntime)
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Kind, out System.String EntryPoint, out System.String? TargetFramework, out System.String? SdkVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageWebView>? Views, out Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement? ExecutionRuntime, out System.String? AvaloniaVersion)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageTarget? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -1622,11 +1706,12 @@ type public sealed class Sunder.Registry.Contracts.RegistryPublishStackResponse 
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPublishStackResponse? left, Sunder.Registry.Contracts.RegistryPublishStackResponse? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPublishStackResponse? left, Sunder.Registry.Contracts.RegistryPublishStackResponse? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPublishTokenGrant : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishTokenGrant>
-  method public .ctor(System.String Scope, System.String ResourceId)
+  method public .ctor(System.String Scope, System.String ResourceId = "", System.Boolean AllPackages = false)
+  property System.Boolean AllPackages { public get; public init; }
   property System.String ResourceId { public get; public init; }
   property System.String Scope { public get; public init; }
   method public Sunder.Registry.Contracts.RegistryPublishTokenGrant <Clone>$()
-  method public System.Void Deconstruct(out System.String Scope, out System.String ResourceId)
+  method public System.Void Deconstruct(out System.String Scope, out System.String ResourceId, out System.Boolean AllPackages)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishTokenGrant? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -1638,15 +1723,15 @@ type public static class Sunder.Registry.Contracts.RegistryPublishTokenScopes
   field public const System.String PackagePublish = "package:publish"
   field public const System.String StackPublish = "stack:publish"
 type public sealed class Sunder.Registry.Contracts.RegistryPublishTokenSummary : System.IEquatable<Sunder.Registry.Contracts.RegistryPublishTokenSummary>
-  method public .ctor(System.Guid Id, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset? LastUsedAtUtc, System.DateTimeOffset ExpiresAtUtc)
+  method public .ctor(System.Guid Id, System.String DisplayName, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset? LastUsedAtUtc, System.DateTimeOffset? ExpiresAtUtc)
   property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants { public get; public init; }
   property System.DateTimeOffset CreatedAtUtc { public get; public init; }
-  property System.DateTimeOffset ExpiresAtUtc { public get; public init; }
   property System.Guid Id { public get; public init; }
+  property System.DateTimeOffset? ExpiresAtUtc { public get; public init; }
   property System.DateTimeOffset? LastUsedAtUtc { public get; public init; }
   property System.String DisplayName { public get; public init; }
   method public Sunder.Registry.Contracts.RegistryPublishTokenSummary <Clone>$()
-  method public System.Void Deconstruct(out System.Guid Id, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset? LastUsedAtUtc, out System.DateTimeOffset ExpiresAtUtc)
+  method public System.Void Deconstruct(out System.Guid Id, out System.String DisplayName, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPublishTokenGrant> Grants, out System.DateTimeOffset CreatedAtUtc, out System.DateTimeOffset? LastUsedAtUtc, out System.DateTimeOffset? ExpiresAtUtc)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPublishTokenSummary? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -2233,15 +2318,16 @@ type public static class Sunder.Registry.Contracts.RegistryStackVisibilityStates
   field public const System.String SecurityBlocked = "SecurityBlocked"
   field public const System.String Unlisted = "Unlisted"
 type public sealed class Sunder.Registry.Contracts.RegistrySupportedPackageProfile : System.IEquatable<Sunder.Registry.Contracts.RegistrySupportedPackageProfile>
-  method public .ctor(System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, System.String WorkerProtocol, System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, System.String SdkBaseline, System.String SdkVersionRange)
+  method public .ctor(System.String Role, System.String Kind, System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, System.Collections.Generic.IReadOnlyList<System.Int32> SdkMajors, System.Collections.Generic.IReadOnlyList<System.String> HostCapabilities, System.Collections.Generic.IReadOnlyList<System.String> TargetFrameworks, System.String? AvaloniaVersion = null)
   property System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions { public get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds { public get; }
-  property System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities { public get; }
-  property System.String SdkBaseline { public get; }
-  property System.String SdkVersionRange { public get; }
-  property System.String WorkerProtocol { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.Int32> SdkMajors { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> HostCapabilities { public get; }
+  property System.Collections.Generic.IReadOnlyList<System.String> TargetFrameworks { public get; }
+  property System.String? AvaloniaVersion { public get; public init; }
+  property System.String Kind { public get; }
+  property System.String Role { public get; }
   method public Sunder.Registry.Contracts.RegistrySupportedPackageProfile <Clone>$()
-  method public System.Void Deconstruct(out System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, out System.Collections.Generic.IReadOnlyList<System.String> RuntimeTargetKinds, out System.String WorkerProtocol, out System.Collections.Generic.IReadOnlyList<System.String> WorkerCapabilities, out System.String SdkBaseline, out System.String SdkVersionRange)
+  method public System.Void Deconstruct(out System.String Role, out System.String Kind, out System.Collections.Generic.IReadOnlyList<System.Int32> ManifestVersions, out System.Collections.Generic.IReadOnlyList<System.Int32> SdkMajors, out System.Collections.Generic.IReadOnlyList<System.String> HostCapabilities, out System.Collections.Generic.IReadOnlyList<System.String> TargetFrameworks, out System.String? AvaloniaVersion)
   method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistrySupportedPackageProfile? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()

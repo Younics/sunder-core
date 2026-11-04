@@ -248,12 +248,10 @@ public sealed class AppPackageSnapshotCacheTests
                 SearchOption.AllDirectories));
             activationLease = Assert.IsType<PackageProjectionAcquisition>(prepared.ProjectionLease.Take());
             await using var runtimeWork = new BackgroundTaskQueueService();
-            using var sharedAssemblies = new AppSharedAssemblyRegistry([]);
             var unload = new AppPackageUnloadCoordinator(
                 new AppPackageViewRegistry(),
                 new AppPackageRuntimeWorkStopper(runtimeWork),
                 new AppPackageAssemblyTracker(),
-                sharedAssemblies,
                 _ => { },
                 _ => { });
 

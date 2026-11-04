@@ -46,7 +46,7 @@ public sealed partial class SunderRpcImportedBuildTests
     [InlineData("missing-catalog")]
     [InlineData("changed-catalog")]
     [InlineData("missing-handler")]
-    [InlineData("broad-range")]
+    [InlineData("range-excludes-pin")]
     public async Task PlatformGeneration_RejectsStaleEvidenceWithoutReplacingBindings(string failure)
     {
         var fixture = await PreparePlatformProviderAsync();
@@ -62,9 +62,9 @@ public sealed partial class SunderRpcImportedBuildTests
         {
             File.Delete(Path.Combine(_root, "Provider.cs")); File.WriteAllText(Path.Combine(_root, "Program.cs"), WorkerSource);
         }
-        if (failure == "broad-range")
+        if (failure == "range-excludes-pin")
         {
-            var value = ReadJson(LockPath); value["platformImports"]!["stackContributor"]!["authorityReleaseRange"] = ">=1.0.0 <2.0.0"; WriteJson(LockPath, value);
+            var value = ReadJson(LockPath); value["platformImports"]!["stackContributor"]!["authorityReleaseRange"] = ">=2.0.0"; WriteJson(LockPath, value);
         }
         Assert.False(CreateGeneration().Execute());
         Assert.Equal(before, Snapshot(generation.IntermediateOutputPath));

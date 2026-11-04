@@ -85,7 +85,7 @@ public sealed class RuntimeRegistryContractCompatibilityTests
                     "lib/Test.Worker.dll",
                     "net10.0",
                     "1.1.0",
-                    ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+                    ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"],
                     [],
                     new RegistryExecutionRuntimeRequirement(
                         SunderPackageFormat.DotNetExecutionRuntimeId,
@@ -167,21 +167,19 @@ public sealed class RuntimeRegistryContractCompatibilityTests
     public void RegistryCompatibilityProfile_TracksCurrentManifestWorkerAndSdkSupport()
     {
         var compatibility = RuntimeRegistryContractMapper.CompatibilityProfile;
-        var profile = Assert.Single(compatibility.Profiles);
+        Assert.Equal(3, compatibility.Profiles.Count);
+        var profile = Assert.Single(compatibility.Profiles, value => value.Role == "runtime");
 
         Assert.Equal([SunderPackageFormat.CurrentManifestVersion], profile.ManifestVersions);
-        Assert.Equal([SunderPackageFormat.WorkerTargetKind], profile.RuntimeTargetKinds);
-        Assert.Equal(SunderWorkerProtocol.V1Capability, profile.WorkerProtocol);
+        Assert.Equal(SunderPackageFormat.WorkerTargetKind, profile.Kind);
         Assert.Equal(
             SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification
                 .Where(static capability => capability.Value)
                 .Select(static capability => capability.Key)
                 .Order(StringComparer.Ordinal),
-            profile.WorkerCapabilities);
-        Assert.Contains(profile.WorkerProtocol, profile.WorkerCapabilities);
-        Assert.Equal(SunderSdkCapabilities.Baseline11V1, profile.SdkBaseline);
-        Assert.Contains(profile.SdkBaseline, profile.WorkerCapabilities);
-        Assert.Equal(Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles).SdkVersionRange, profile.SdkVersionRange);
+            profile.HostCapabilities);
+        Assert.Contains(SunderWorkerProtocol.V1Capability, profile.HostCapabilities);
+        Assert.Equal([1], profile.SdkMajors);
         Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), compatibility.Rid);
     }
 

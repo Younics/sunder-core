@@ -1995,9 +1995,9 @@ public sealed partial class MainWindowViewModelShellViewTests
             )
         );
 
+        Assert.Contains("requested navigation failure", error.Message, StringComparison.Ordinal);
         var candidateView = Assert.Single(harness.StagingSurface.StagedViews);
         await packageViewHostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Contains("requested navigation failure", error.Message, StringComparison.Ordinal);
         Assert.Same(originalBoundary, harness.ViewModel.MiddlePanel.HostedView);
         Assert.Same(originalView, packageViewHostService.GetOrCreateView("agent.chat"));
         Assert.False(GetIsDisposed(originalView));
@@ -3779,8 +3779,10 @@ public sealed partial class MainWindowViewModelShellViewTests
     }
 }
 
-public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule
+public sealed class ShellLifecycleTestPackageModule : ISunderAppPackageModule, Sunder.App.Bridge.IAppPackageEntryPointV1
 {
+    public ValueTask<Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(Sunder.App.Bridge.IAppPackageHostV1 host, Sunder.App.Bridge.IAppContributionSinkV1 contributions)
+        => Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime.CreateAsync(this, host, contributions);
     public const string ActivationGatePathFileName = "activation-gate-path";
 
     public const string NavigationGatePathFileName = "navigation-gate-path";
@@ -3957,6 +3959,20 @@ public sealed class ShellLifecycleThreadAffinedPackageView
     }
 
     public IServiceProvider ServiceProvider { get; }
+
+    // BCL-only test probes execute against this view's package-local SDK and container.
+    public string ContentRootPath => ServiceProvider.GetRequiredService<IPackageContext>().ContentRootPath;
+
+    public async Task<(IAsyncDisposable Lifetime, Func<Task<string>> Status, Func<bool, Task> SetWatch)> LoadDevelopmentAsync(string folder, bool watch)
+    {
+        var session = await ServiceProvider.GetRequiredService<IPackageDevelopmentService>().LoadAsync(folder, watch);
+        return (session, async () => System.Text.Json.JsonSerializer.Serialize(await session.GetStatusAsync()),
+            enabled => session.SetWatchAsync(enabled));
+    }
+
+    public void QueueRetentionWork(Func<CancellationToken, Task> execute)
+        => ServiceProvider.GetRequiredService<IBackgroundTaskQueue>().Enqueue(new("Builder work", "retention-test", BackgroundTaskIndicator.Hidden,
+            BackgroundTaskConcurrencyMode.ParallelWithinGroup, true, context => execute(context.CancellationToken)));
 
     public ISunderRpcClient RuntimeClient => _runtime;
 

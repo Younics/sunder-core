@@ -56,8 +56,8 @@ internal static class RuntimeRpcTestPackages
                     Rid = System.Runtime.InteropServices.RuntimeInformation.RuntimeIdentifier,
                     Kind = SunderPackageFormat.WebTargetKind,
                     EntryPoint = "index.html",
-                    SdkVersion = "1.1.0",
-                    RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v1"],
+                    SdkVersion = "1.0.0",
+                    RequiredHostCapabilities = ["web-bridge.v1", "rpc.v1"],
                     Views =
                     [
                         new SunderPackageWebViewManifest

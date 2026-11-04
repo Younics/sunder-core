@@ -1,6 +1,6 @@
 # Sunder Package Development
 
-> **Source channel:** This manual tracks unreleased Sunder V1 source, coordinated SDK `1.1.x` (`[1.1.0,1.2.0)`), .NET 10, and Runtime protocol revision 1. Read it from the matching `sdk/v*` tag for released SDK behavior.
+> **Source channel:** This manual tracks the first supported SDK release, `1.0.0`, .NET 10, and Runtime protocol revision 1. Use the selected component's release tag for released behavior.
 
 > **Current RPC authoring:** Use
 > [ordinary C# services](package-development/ORDINARY-SERVICES.md) or

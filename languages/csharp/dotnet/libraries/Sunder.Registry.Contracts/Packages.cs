@@ -99,7 +99,8 @@ public sealed record RegistryPackageTarget(
     [property: JsonRequired] string? SdkVersion,
     IReadOnlyList<string> RequiredHostCapabilities,
     IReadOnlyList<RegistryPackageWebView>? Views = null,
-    RegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
+    RegistryExecutionRuntimeRequirement? ExecutionRuntime = null,
+    string? AvaloniaVersion = null)
 {
     private IReadOnlyList<string> _requiredHostCapabilities = PolicyCollections.FreezeBounded(RequiredHostCapabilities);
     private IReadOnlyList<RegistryPackageWebView> _views = PolicyCollections.FreezeBounded(Views ?? []);

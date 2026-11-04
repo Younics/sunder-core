@@ -13,7 +13,7 @@ import { publishContractCache } from "../src/rpc-contract-cache";
 import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
 import { preparePackageImports } from "../src/rpc-package-imports";
 import { canonicalCandidateFixture } from "./model-projection-fixtures";
-import { emptyLock, fixtureSource } from "./service-fixtures";
+import { emptyLock, fixtureSource, installFixtureSdk } from "./service-fixtures";
 
 type Action = "discover" | "invoke" | "subscribe";
 interface Intent { behavior?: readonly Action[]; control?: readonly Action[]; runtimeBehavior?: boolean; streamError?: boolean }
@@ -54,6 +54,7 @@ export const controlProvider=defineService({
 
 async function fixture(language: "ts" | "js") {
   const root = await mkdtemp(join(tmpdir(), "sunder-reference-roles-"));
+  await installFixtureSdk(root);
   await mkdir(join(root, "src")); await mkdir(join(root, "app"));
   const config = { schemaVersion: 3, id: "example.roles", name: "Role closure", version: "1.0.0", workerCapabilities: [], services: {module: `src/services.${language}`} };
   const path = join(root, config.services.module);

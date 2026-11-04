@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { exerciseServiceApiScopes } from "./service-api-fixtures";
+import { installFixtureSdk } from "./service-fixtures";
 
 const exec = promisify(execFile);
 
@@ -14,6 +15,7 @@ export async function exercisePackedImports(tool: string, extension: string, nod
   await exerciseServiceApiScopes(dirname(tool), extension);
   const root = await mkdtemp(resolve(tmpdir(), "sunder-packed-imports-"));
   try {
+    await installFixtureSdk(root, resolve(dirname(tool), "../../sdk"));
     await mkdir(resolve(root, "src"));
     const corpus = resolve(nodeRoot, "../../../specs/rpc/v1");
     const value = JSON.parse(await readFile(resolve(corpus, "authoring/conformance/valid/package-api-contract-lock.json"), "utf8"));

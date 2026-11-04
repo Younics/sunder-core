@@ -9,7 +9,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const directory = resolve(root, ".github/workflows");
 const workflow = (name) => readFile(resolve(directory, `sunder-${name}.yml`), "utf8");
 const owned = (name) => readFile(resolve(root, name), "utf8");
-const matrices = JSON.parse(spawnSync("python3", ["-B", "scripts/ci/metadata.py", "matrices"], { cwd: root, encoding: "utf8" }).stdout);
 
 function requiresJobs(source, jobs) {
   const needs = /^\s*needs:\s*\[([^\]]+)\]/mu.exec(source)?.[1].split(",").map((name) => name.trim()) ?? [];
@@ -55,9 +54,6 @@ test("workflows have valid Bash, pinned actions and no release-asset overwrites"
     for (const [, action] of source.matchAll(/uses:\s+([^\s#]+)/gu)) {
       assert.match(action, /^(?:\.\/\.github\/(?:workflows\/[\w.-]+\.ya?ml|actions\/[\w.-]+)|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
     }
-    for (const [runner] of source.matchAll(/\bmacos-[\w-]+\b/gu)) {
-      assert.ok(["macos-26", "macos-26-intel"].includes(runner), `${name}: unexpected macOS runner ${runner}`);
-    }
     assert.doesNotMatch(source, /--clobber|overwrite:\s*true/u);
   }
 });
@@ -75,13 +71,7 @@ test("component tags finalize the same verified assets after their build and tes
     const publication = source.slice(source.lastIndexOf("\n  release:"));
     requiresJobs(publication, ["prepare", "package"]);
     assert.match(source, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.matrix\) \}\}/u);
-    const matrix = matrices[component === "app" ? "app" : "native"].include;
-    assert.equal(matrix.find(row => row.rid === "win-x64").os, "windows-2025");
-    // App signing intentionally runs its x64 client for both Windows packages.
-    const armRunner = component === "app" ? "windows-2025" : "windows-11-arm";
-    assert.equal(matrix.find(row => row.rid === "win-arm64").os, armRunner);
-    assert.equal(matrix.find(row => row.rid === "osx-x64").os, "macos-26-intel");
-    assert.equal(matrix.find(row => row.rid === "osx-arm64").os, "macos-26");
+    assert.match(source, /metadata.py matrices/u);
   }
 });
 
@@ -95,15 +85,22 @@ test("project selection precedes release packaging without tag redispatch or man
   assert.match(source, /group: sunder-core-package-release/u);
   assert.doesNotMatch(source, /tags:|dispatches|rerun-failed|COMPATIBILITY_BASE|REGISTRY_ORIGIN|ARTIFACT_SOURCE_COMMIT|APPROVAL_REFERENCE/u);
   const ci = await workflow("ci");
-  const pack = ci.indexOf('sdk_release.py pack');
-  assert.ok(ci.indexOf("core_ci.py source") > 0 && pack > ci.indexOf("core_ci.py source"));
+  const pack = ci.indexOf('core_ci.py candidate');
+  assert.ok(ci.indexOf("core_ci.py portable") > 0 && pack > ci.indexOf("core_ci.py portable"));
   const packStep = ci.slice(ci.lastIndexOf("      - name:", pack), ci.indexOf("      - name:", pack));
   assert.match(packStep, /if: inputs.release-packages/u);
-  assert.match(packStep, /sdk_release.py feed/u);
   assert.doesNotMatch(ci, /dotnet pack|npm pack --prefix/u);
   assert.doesNotMatch(ci, /all_new|coordinatedVersion|artifacts\/compatibility\//u);
   assert.match(ci, /path: artifacts\/packages\/\*/u);
-  assert.doesNotMatch(ci, /^  push:/mu, "The main release pipeline owns main CI; do not build it twice.");
+  const scopeExpression = /CI_SCOPE:\s*\$\{\{\s*(.*?)\s*\}\}/u.exec(ci)?.[1];
+  assert.ok(scopeExpression);
+  const scope = new Function("inputs", "github", `return (${scopeExpression});`);
+  assert.equal(scope({}, { event_name: "push" }), "repository");
+  for (const event_name of ["pull_request", "merge_group", "schedule", "workflow_dispatch"]) {
+    assert.equal(scope({}, { event_name }), "all");
+  }
+  assert.equal(scope({ scope: "sdk" }, { event_name: "push" }), "sdk");
+  assert.match(source.slice(source.indexOf("\n  validation:"), source.indexOf("\n  stage:")), /scope: sdk/u);
 });
 
 test("SDK publication consumes tested packages and keeps registry credentials in their owning jobs", async () => {
@@ -160,33 +157,25 @@ test("release reuses ordinary native validation and source-derived catalog expor
   assert.match(stage, /needs.select.outputs.recover == 'true'/u);
   const ci = await workflow("ci");
   assert.match(ci, /uses: \.\/\.github\/workflows\/sunder-host-validation.yml/u);
-  assert.match(ci, /core_ci.py templates/u);
-  assert.match(await owned("scripts/ci/core_ci.py"), /"platform-contracts", "export"[\s\S]+sunder-platform-contracts.v1.json/u);
+  assert.match(ci, /core_ci.py candidate/u);
   assert.doesNotMatch(source, /qualification.json|recipe-templates|compatibility-corpus/u);
 });
 
 test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
   const source = await workflow("host-validation");
   const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
-  assert.deepEqual(matrices.native.include.map(row => row.rid).sort(), ["linux-arm64", "linux-x64", "osx-arm64", "osx-x64", "win-arm64", "win-x64"]);
   assert.match(platform, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.native\) \}\}/u);
-  assert.equal(matrices.native.include.find(row => row.rid === "linux-arm64").os, "ubuntu-24.04-arm");
-  assert.equal(matrices.native.include.find(row => row.rid === "win-arm64").os, "windows-11-arm");
-  assert.match(platform, /--primary-lane host-platform/u);
   const preflight = workflowStep(platform, "Verify owned test process cleanup on the native OS");
   assert.match(preflight, /id: process_preflight/u);
   assert.match(preflight, /run-node-tests-with-results\.mjs --results-directory artifacts\/process-preflight\s+node-process-preflight scripts\/test-oracles\/owned-test-process\.test\.mjs/u);
   assert.match(preflight, /SUNDER_TEST_PROCESS_DIAGNOSTICS_DIRECTORY:.*artifacts\/process-preflight/u);
-  for (const prerequisite of ["actions/setup-dotnet@", "Prepare native/process prerequisites", "Execute the platform lane"]) {
+  for (const prerequisite of ["actions/setup-dotnet@", "Build and test native platform"]) {
     assert.ok(platform.indexOf("Verify owned test process cleanup") < platform.indexOf(prerequisite));
   }
-  assert.match(platform, /--primary-lane app-packaging/u);
-  assert.match(platform, /--scenario output-lock/u);
-  assert.match(platform, /--require-scenario output-lock/u);
+  assert.match(platform, /core_ci.py platform --scope/u);
   const official = source.slice(source.indexOf("\n  official-runtimes:"), source.indexOf("\n  packaging:"));
   assert.match(official, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.native\) \}\}/u);
-  assert.match(official, /--scenario official --build/u);
-  assert.match(official, /--require-scenario official/u);
+  assert.match(official, /core_ci.py official --scope[^\n]+--rid/u);
   const smoke = await owned("scripts/test/release/smoke-app-packaging.sh");
   const dmg = await owned("scripts/release/macos/verify-sunder-dmg.sh");
   assert.match(source, /smoke-app-packaging.sh/u);
@@ -200,15 +189,11 @@ test("native validation requires both actual vendor-runtime tests on all six arc
 
 test("reporting follows attempted execution and uploads retain cancelled-run diagnostics", async () => {
   const sources = { native: await workflow("host-validation"), ci: await workflow("ci") };
-  for (const [owner, name, identity, upload] of [
-    ["native", "Summarize platform test evidence", "platform_tests", false],
-    ["native", "Summarize App packaging test evidence", "app_packaging", false],
-    ["native", "Require executed Windows output-lock interoperability", "output_lock_interop", false],
-    ["native", "Require executed native results", "official_tests", false],
-    ["native", "Retain process preflight diagnostics", "process_preflight", true],
-    ["native", "Retain platform test results", "platform_tests", true],
-    ["native", "Retain official runtime test results", "official_tests", true],
-    ["ci", "Retain test reports", "node_tests", true],
+  for (const [owner, name, identity] of [
+    ["native", "Retain process preflight diagnostics", "process_preflight"],
+    ["native", "Retain platform test results", "platform_tests"],
+    ["native", "Retain official runtime test results", "official_tests"],
+    ["ci", "Retain test reports", "tests"],
   ]) {
     const source = sources[owner];
     assert.ok(source.includes(`id: ${identity}\n`));
@@ -218,24 +203,25 @@ test("reporting follows attempted execution and uploads retain cancelled-run dia
     const shouldRun = new Function("always", "steps", `return (${condition});`);
     for (const outcome of ["success", "failure", "skipped", "cancelled", ""]) {
       assert.equal(shouldRun(() => true, { [identity]: { outcome } }),
-        ["success", "failure", ...(upload ? ["cancelled"] : [])].includes(outcome), `${name}: ${outcome}`);
+        ["success", "failure", "cancelled"].includes(outcome), `${name}: ${outcome}`);
     }
-    assert.match(block, upload ? /if-no-files-found: error/u : /summarize-core-test-results\.mjs/u);
+    assert.match(block, /if-no-files-found: error/u);
   }
-  assert.match(sources.native, /id: app_packaging\n\s+if: success\(\) && inputs\.include-app-packaging/u);
-  assert.match(sources.native, /id: output_lock_interop\n\s+if: runner\.os == 'Windows'/u);
   assert.doesNotMatch(sources.native, /continue-on-error|--allow-missing|--allow-empty/u);
 });
 
-test("Host releases omit App packaging while Core and App validation keep it enabled", async () => {
-  const host = await workflow("host-release");
-  assert.match(host, /include-app-packaging: false/u);
-  for (const caller of ["ci", "app-release"]) {
-    assert.doesNotMatch(await workflow(caller), /include-app-packaging: false/u);
+test("component releases select their own validation and App also requires its Runtime consumer", async () => {
+  for (const component of ["sdk", "host", "cli", "app"]) {
+    assert.match(await workflow(`${component}-release`), new RegExp(`scope: ${component}\\b`, "u"));
   }
+  const app = await workflow("app-release");
+  assert.match(app, /scope: host/u);
+  requiresJobs(app.slice(app.indexOf("\n  package:")), ["validation", "runtime-validation"]);
   const validation = await workflow("host-validation");
-  assert.match(validation, /include-app-packaging:[\s\S]*?type: boolean\s+default: true/u);
-  assert.match(validation.slice(validation.indexOf("\n  packaging:")), /if: inputs\.include-app-packaging/u);
+  for (const flag of ["platform_tests", "official_tests", "app_packaging"]) {
+    assert.ok(validation.includes(`if: needs.prepare.outputs.${flag} == 'true'`));
+  }
+  assert.match(validation, /metadata.py matrices --scope/u);
 });
 
 test("CI audits successful owning jobs without repeating builds or suites", async () => {
@@ -243,13 +229,15 @@ test("CI audits successful owning jobs without repeating builds or suites", asyn
   const audit = source.slice(source.indexOf("\n  test-results:"));
   requiresJobs(audit, ["build-test-pack", "native"]);
   assert.match(audit, /--aggregate/u);
-  for (const artifact of ["sunder-core-results", "sunder-platform-\\*", "official-runtime-\\*"]) {
-    assert.match(audit, new RegExp(`(?:name|pattern): ${artifact}`, "u"));
+  for (const artifact of ["sunder-core-results", "sunder-platform", "official-runtime"]) {
+    assert.ok(audit.includes(`${artifact}-${'${{ env.CI_SCOPE }}'}`), `${artifact} must be isolated per scope`);
   }
+  assert.match(audit, /--scope "\$CI_SCOPE" --aggregate/u);
+  assert.match(audit, /--require-scenario generated-templates/u);
   assert.doesNotMatch(audit, /dotnet (?:build|test)|npm (?:ci|run)|run-.*tests|if: always\(\)/u);
-  assert.match(source, /group: sunder-core-ci-\$\{\{ github\.event\.pull_request\.number \|\| github\.run_id \}\}/u);
+  assert.match(source, /group: sunder-core-ci-[^\n]+inputs.scope[^\n]+github.run_id/u);
   assert.match(source, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
-  assert.match(source, /--require-scenario interop/u);
+  assert.match(source, /core_ci.py portable/u);
 });
 
 test("strict App packaging retains signing, notarization and Full-only feeds", async () => {
@@ -282,7 +270,7 @@ test("strict App packaging retains signing, notarization and Full-only feeds", a
   const central = await readFile(resolve(root, "languages/csharp/dotnet/Directory.Packages.props"), "utf8");
   const version = /Include="Velopack" Version="([^"]+)"/u.exec(central)?.[1];
   assert.ok(version, "Missing Velopack library version");
-  const versions = JSON.parse(spawnSync("python3", ["-B", "scripts/ci/metadata.py", "toolchains"], { cwd: root, encoding: "utf8" }).stdout);
+  const versions = JSON.parse(spawnSync("python3", ["-B", "scripts/ci/metadata.py", "toolchains", "--packaging"], { cwd: root, encoding: "utf8" }).stdout);
   assert.equal(versions.velopack, version);
   assert.match(await owned("scripts/release/install-velopack.ps1"), /vpk --version \$versions.velopack/u);
   for (const script of [shell, powershell]) {

@@ -1,8 +1,16 @@
 import { build } from "esbuild";
 import type { RpcProviderRegistration } from "@sunder/sdk";
-import { resolve } from "node:path";
-import { writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { workerResolutionOptions } from "../src/rpc-runtime-inputs";
+import { packageToolCompatibility, projectSdkCompatibility } from "../src/compatibility";
+
+/** Provision the ordinary installed SDK selection used by a package fixture. */
+export async function installFixtureSdk(root: string, sdkRoot = packageToolCompatibility().sdkPackageRoot): Promise<void> {
+  const destination = resolve(root, "node_modules/@sunder/sdk");
+  await mkdir(dirname(destination), { recursive: true });
+  await symlink(sdkRoot, destination, process.platform === "win32" ? "junction" : "dir");
+}
 
 /** Shared bodies have independently checked JSDoc plus explicit TS-only annotation
  * markers. JS is authored JS, not emitted/transpiled TS or a schema translator. */
@@ -16,10 +24,11 @@ export async function writeSourceFile(path: string, value: Parameters<typeof wri
 /** Test-only execution of the same generated adapter used by Worker bootstrap.
  * Process/protocol behavior remains covered by owned-rpc-worker and packed cases. */
 export async function generatedProviders(root: string): Promise<readonly RpcProviderRegistration[]> {
+  const resolution = workerResolutionOptions(projectSdkCompatibility(root));
   const result = await build({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.ts")], bundle: true,
     platform: "node", format: "cjs", write: false, logLevel: "silent",
-    ...workerResolutionOptions,
-    alias: { ...workerResolutionOptions.alias, "#sunder/api": resolve(root, ".sunder/generated/rpc/api.js") } });
+    ...resolution,
+    alias: { ...resolution.alias, "#sunder/api": resolve(root, ".sunder/generated/rpc/api.js") } });
   const module = { exports: {} as { providers: readonly RpcProviderRegistration[] } };
   new Function("require", "module", "exports", result.outputFiles[0]!.text)(require, module, module.exports);
   return module.exports.providers;

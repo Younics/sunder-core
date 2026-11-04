@@ -39,8 +39,8 @@ point is the managed `.dll` loaded by the exact bound execution runtime:
   <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
 </PropertyGroup>
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk.Worker" Version="1.1.0" />
-  <PackageReference Include="Sunder.Package.Build" Version="[1.1.0,1.2.0)" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.0" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
   <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)"
                        Role="runtime"
                        Rid="$(RuntimeIdentifier)"
@@ -75,7 +75,14 @@ Standard input and standard output are reserved exclusively for exact `Content-L
 
 The worker binds `host.hello` to the sanitized `SUNDER_WORKER_PROTOCOL`, `SUNDER_PACKAGE_ID`, `SUNDER_PACKAGE_VERSION`, `SUNDER_ACTIVATION_ID`, and `SUNDER_SESSION_ID` environment. Runtime also supplies only the minimal OS process/home/locale/package-temp baseline required by local tools and child processes; it does not inherit tokens, cloud credentials, profilers, startup hooks, or Host bootstrap variables. Registered providers must exactly match the Host declaration. The Host remains the deadline authority for inbound invocations.
 
-Packages that intentionally consume a configured Docker CLI connection declare `<SunderSdkCapability Include="docker-environment.v1" />`. With install/update consent, Runtime additionally copies only `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, and `DOCKER_TLS_VERIFY`. Secret-bearing Docker variables remain excluded.
+Packages that intentionally consume a configured Docker CLI connection scope the capability to their generated Worker build:
+
+```xml
+<SunderSdkCapability Include="docker-environment.v1"
+    Condition="'$(SunderPackageCompilationRole)' == 'worker'" />
+```
+
+This requirement belongs to the Worker target; declaring it on an App target fails App admission. With install/update consent, Runtime additionally copies only `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, and `DOCKER_TLS_VERIFY`. Secret-bearing Docker variables remain excluded.
 
 `SunderWorkerContext.Rpc` supports provider lookup, discovery, catalog watch, unary invocation, server streams, caller-owned call scopes, and invariant reporting. Invocation-bound `SunderRpcInvocationContext` content registration and opening are supported; opened content is released when its returned stream is disposed. Generated RPC handlers expose their exact method-level declared-error catalog, which `SunderWorkerProviderRegistration` snapshots. Any local domain error not present in that catalog is normalized to the generic provider fault before crossing the process boundary.
 

@@ -47,6 +47,7 @@ jobs:
     permissions:
       contents: read
     with:
+      scope: sdk
       release-packages: ${{ needs.select.outputs.selected_count != '0' }}
 
   stage:

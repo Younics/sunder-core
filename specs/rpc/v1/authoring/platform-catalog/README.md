@@ -51,7 +51,7 @@ The [schema](../platform-catalog.schema.json) requires these members, in order:
 1. `schemaVersion`: `1`.
 2. `authorityKind`: `platform`.
 3. `authorityId`: `sunder.core`.
-4. `releaseVersion`: stable strict SemVer for the coordinated Core release.
+4. `releaseVersion`: stable strict SemVer for the catalog release, independent of SDK versions.
 5. `contractCount`: the complete inventory count.
 6. `contracts`: 1–128 records, strictly ordered by unique contract ID.
 
@@ -81,9 +81,10 @@ contract ID/version and descriptor/ABI hashes.
 
 ## Local/Registry Selection And Offline Restore
 
-Local platform intent selects the explicit catalog within the coordinated SDK minor
-line, before first owned Accept if needed. Published intent resolves a Supported catalog through the explicitly chosen
-Registry. The tool's coordinated SDK minor line supplies the stable version range.
+Local platform intent selects the explicit catalog, before first owned Accept if
+needed. Published intent resolves a Supported catalog through the explicitly chosen
+Registry. New selections default to stable `>=1.0.0`; an explicit release range may
+be supplied. Update preserves the reviewed range unless explicitly overridden.
 The returned same-origin catalog URL, exact byte count, strong hash ETag, complete
 descriptor inventory and release identity must agree. The tracked lock retains
 that origin and the selected immutable catalog/descriptor identities.

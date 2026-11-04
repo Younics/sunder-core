@@ -48,5 +48,5 @@ internal static class PackageTargetSelection
                 view.Route!,
                 view.Icon,
                 view.DefaultPlacement!,
-                view.ShowInHotbar!.Value)).ToArray());
+                view.ShowInHotbar!.Value)).ToArray(), AvaloniaVersion: target.AvaloniaVersion);
 }

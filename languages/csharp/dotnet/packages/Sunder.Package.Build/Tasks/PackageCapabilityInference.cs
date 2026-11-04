@@ -59,7 +59,6 @@ internal sealed class PackageCapabilityInference(
         IsComplete = false;
         var capabilities = new SortedSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            SunderSdkCapabilities.Baseline11V1,
             SunderSdkCapabilities.CoreV1,
             SunderSdkCapabilities.PackagingV1,
             SunderSdkCapabilities.ContributionsV1,
@@ -525,7 +524,7 @@ internal sealed class PackageCapabilityInference(
            || value?.Contains("Sunder.Spacing.", StringComparison.Ordinal) == true
            || value?.Contains("Sunder.FontSize.", StringComparison.Ordinal) == true
            || value?.Contains("Sunder.Theme", StringComparison.Ordinal) == true
-           || value?.Contains("avares://Sunder.Sdk.Avalonia/", StringComparison.OrdinalIgnoreCase) == true;
+           || value?.Contains("avares://Sunder.App.Bridge/", StringComparison.OrdinalIgnoreCase) == true;
 
     private static string? TryReadUserString(MetadataReader metadata, int token)
     {

@@ -1,6 +1,6 @@
 # Data And Logging
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Sunder separates user settings, opaque state, files, local-path workspaces, secrets, and logs. Choose the narrowest capability that matches the data.
 

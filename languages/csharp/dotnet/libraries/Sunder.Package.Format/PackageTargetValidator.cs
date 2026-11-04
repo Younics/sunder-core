@@ -173,15 +173,19 @@ internal static class PackageTargetValidator
         {
             errors.Add($"{prefix} target '{DisplayKey(target)}' targetFramework must be non-empty portable ASCII of at most 128 characters.");
         }
-        if (target.SdkVersion is not null && !SemanticVersion.TryParse(target.SdkVersion, out _))
+        if (!SemanticVersion.TryParse(target.SdkVersion, out _))
         {
-            errors.Add($"{prefix} target '{DisplayKey(target)}' sdkVersion must be strict SemVer 2.0 when declared.");
+            errors.Add($"{prefix} target '{DisplayKey(target)}' must declare sdkVersion as strict SemVer 2.0.");
         }
-        else if (string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal)
-                 && target.SdkVersion is null)
+        if (target.Kind == SunderPackageFormat.AvaloniaTargetKind)
         {
-            errors.Add($"{prefix} Runtime target '{DisplayKey(target)}' must declare sdkVersion.");
+            if (!IsDotNetTargetFramework(target.TargetFramework))
+                errors.Add($"{prefix} managed App target '{DisplayKey(target)}' must declare a net<major>.<minor> targetFramework.");
+            if (!SemanticVersion.TryParse(target.AvaloniaVersion, out _))
+                errors.Add($"{prefix} managed App target '{DisplayKey(target)}' must declare avaloniaVersion as strict SemVer 2.0.");
         }
+        else if (target.AvaloniaVersion is not null)
+            errors.Add($"{prefix} target '{DisplayKey(target)}' cannot declare avaloniaVersion.");
 
         if (string.Equals(target.ExecutionRuntime?.ModuleAbi, SunderPackageFormat.DotNetWorkerModuleAbi, StringComparison.Ordinal)
             && !IsDotNetTargetFramework(target.TargetFramework))
@@ -223,6 +227,13 @@ internal static class PackageTargetValidator
             }
         }
 
+        if (seen.Any(static capability => capability.StartsWith("sdk-baseline-", StringComparison.Ordinal)))
+            errors.Add($"{prefix} target '{DisplayKey(target)}' cannot declare removed SDK baseline capabilities.");
+        if (target.Kind == SunderPackageFormat.AvaloniaTargetKind && !seen.Contains("app-bridge.v1"))
+            errors.Add($"{prefix} managed App target '{DisplayKey(target)}' must require 'app-bridge.v1'.");
+        if (target.Kind == SunderPackageFormat.WebTargetKind && !seen.Contains("web-bridge.v1"))
+            errors.Add($"{prefix} web App target '{DisplayKey(target)}' must require 'web-bridge.v1'.");
+
         if (!string.Equals(target.Role, SunderPackageFormat.RuntimeHostRole, StringComparison.Ordinal))
         {
             return;
@@ -249,21 +260,6 @@ internal static class PackageTargetValidator
                 $"{prefix} Runtime target '{DisplayKey(target)}' cannot require unsupported worker protocol capability '{capability}'.");
         }
 
-        if (!SemanticVersion.TryParse(target.SdkVersion, out var sdkVersion))
-        {
-            return;
-        }
-
-        var expectedBaseline = $"sdk-baseline-{sdkVersion.Major}-{sdkVersion.Minor}.v1";
-        RequireRuntimeCapability(target, seen, expectedBaseline, errors, prefix);
-        foreach (var capability in seen.Where(static value => value.StartsWith("sdk-baseline-", StringComparison.Ordinal)))
-        {
-            if (!string.Equals(capability, expectedBaseline, StringComparison.Ordinal))
-            {
-                errors.Add(
-                    $"{prefix} Runtime target '{DisplayKey(target)}' SDK baseline capability '{capability}' does not match sdkVersion '{target.SdkVersion}'.");
-            }
-        }
     }
 
     internal static void ValidateExecutionRuntime(

@@ -16,7 +16,7 @@ internal static class ServiceAuthoringSemantics
             var name = contract.ToDisplayString();
             if (name.StartsWith("Sunder.Sdk.", StringComparison.Ordinal)
                 && (contract.ContainingAssembly.Identity.Name is not ("Sunder.Sdk" or "Sunder.Sdk.Worker")
-                    || contract.ContainingAssembly.Identity.Version != new Version(1, 1, 0, 0))) continue;
+                    || contract.ContainingAssembly.Identity.Version != new Version(1, 0, 0, 0))) continue;
             if (name != "System.IDisposable" && name != "System.IAsyncDisposable"
                 && name != "Sunder.Sdk.Abstractions.IPackageCallbackHandler" && name != "Sunder.Sdk.Abstractions.IPackageAuthHandler"
                 && !name.StartsWith("Sunder.Sdk.Worker.ISunderWorker", StringComparison.Ordinal)) continue;

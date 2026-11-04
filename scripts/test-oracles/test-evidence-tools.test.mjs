@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   discoverDotnetTests,
   loadCoreTestModel,
+  scopeModel,
   validateProjectLaneOwnership,
   validateWorkflowTestSelections,
 } from "./core-test-policy.mjs";
@@ -28,9 +29,44 @@ test("CI scenarios discover added cases and reject missing owners without workfl
   assert.ok(selectScenario("official", [...declarations, added], "Linux").tests.includes(added));
   assert.throws(() => selectScenario("official", declarations.filter(test => !test.id.includes("CurrentRidNodeRuntimeHostIntegrationTests")), "Linux"), /no declared tests/u);
   assert.throws(() => selectScenario("missing", declarations), /Unknown/u);
-  const interop = selectScenario("interop", declarations, "Linux");
+  const interop = selectScenario("app-interop", declarations, "Linux");
   for (const name of ["ExecutesExactNativeContractAcrossNavigation", "RejectsSeededNonceOwnershipMutation"]) {
     assert.ok(interop.tests.some(test => test.id.endsWith(name)));
+  }
+});
+
+test("component scopes partition the full inventory and cannot hide missing owned lanes", () => {
+  const all = loadCoreTestModel();
+  const sdk = loadCoreTestModel(repositoryRoot, undefined, "sdk");
+  const repository = loadCoreTestModel(repositoryRoot, undefined, "repository");
+  const sdkIds = new Set(sdk.declarations.map(test => test.id));
+  assert.ok(repository.declarations.every(test => !sdkIds.has(test.id)));
+  assert.deepEqual(new Set([...sdk.declarations, ...repository.declarations].map(test => test.id)), new Set(all.declarations.map(test => test.id)));
+  assert.ok(sdk.declarations.every(test => !test.project.startsWith("Sunder.App.")));
+  for (const source of ["public-package-contracts", "policy-contracts", "toolchains", "checkout-bytes"]) {
+    assert.ok(sdk.declarations.some(test => test.source === `scripts/test-oracles/${source}.test.mjs`),
+      `${source} must gate SDK publication`);
+  }
+  for (const name of ["RuntimeHost_IsWorkerOnly", "App_RetainsAppModuleLoading"]) {
+    assert.equal(sdk.declarations.some(test => test.name === name), name.startsWith("RuntimeHost"));
+    assert.equal(repository.declarations.some(test => test.name === name), name.startsWith("App_"));
+  }
+  assert.ok(selectScenario("interop", sdk.declarations).tests.length > 0);
+  assert.throws(() => selectScenario("app-interop", sdk.declarations), /no declared tests/u);
+  assert.ok(selectScenario("app-interop", repository.declarations).tests.length > 0);
+  const missing = { ...all, declarations: all.declarations.filter(test =>
+    test.project !== "Sunder.Package.Build.Tests" || test.primaryLane !== "host-platform") };
+  const narrowed = scopeModel(missing, "sdk");
+  assert.throws(() => validateProjectLaneOwnership(narrowed.declarations, narrowed.policy), /ownership drift/u);
+  const wrongScope = structuredClone(all.policy);
+  wrongScope.scopes.sdk.push("unowned");
+  assert.throws(() => loadCoreTestModel(repositoryRoot, wrongScope, "sdk"), /scope ownership/u);
+  for (const script of ["run-core-test-lane", "summarize-core-test-results", "run-dotnet-tests-with-results"]) {
+    for (const args of [["--scope"], ["--scope", "--list"], ["--scope", "sdk", "--scope", "app"]]) {
+      const result = spawnSync(process.execPath, [resolve(repositoryRoot, `scripts/test-oracles/${script}.mjs`), ...args], { encoding: "utf8" });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /--scope must be specified once with one value/u);
+    }
   }
 });
 
@@ -210,8 +246,12 @@ test(".NET reporter scopes integration budgets and crash diagnostics without rel
     const budget = JSON.parse(result.stdout).projects[0];
     assert.equal(budget.hangTimeout, hang);
     assert.equal(budget.timeoutMilliseconds, minutes * 60_000);
-    const args = dotnetTestArguments({ projectPath: `${project}.csproj`, projectName: project,
-      outputDirectory: "results", logStem: "results/diagnostics/project", build: false, budget, extraArguments: [] });
+    const options = { projectPath: `${project}.csproj`, projectName: project,
+      outputDirectory: "results", logStem: "results/diagnostics/project", build: false, budget, extraArguments: [] };
+    const normal = dotnetTestArguments({ ...options, diagnostics: false });
+    assert.equal(normal.includes("--diag"), false);
+    assert.equal(normal.includes("--blame-crash"), false);
+    const args = dotnetTestArguments({ ...options, diagnostics: true });
     assert.equal(args[args.indexOf("--blame-hang-timeout") + 1], hang);
     assert.equal(args.includes("--blame-crash"), project === "Sunder.Package.Build.Tests");
     assert.equal(args.includes("--diag"), budget.diagnostics);
@@ -306,18 +346,15 @@ test("Node reporter keeps failed preflight evidence and removes successful proce
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("lane entry retains the renamed process suspension regression and fails closed on missing release inputs", () => {
+test("lane entry includes the IPC publisher regression on every OS and fails closed on missing release inputs", () => {
   const model = loadCoreTestModel();
-  const suspension = model.policy.expectedSkips.find((item) => item.id === "node-process-suspension");
-  assert.ok(suspension);
-  assert.equal(suspension.name, "a suspended CLI publisher reads the new source after acquiring the output lease");
   const declaration = model.declarations.find((item) => item.framework === "node"
-    && item.source === suspension.source && item.name === suspension.name);
+    && item.name === "a suspended CLI publisher reads the new source after acquiring the output lease");
   assert.equal(declaration?.primaryLane, "node");
-  assert.deepEqual(suspension.skipOn, ["Windows"]);
+  assert.ok(!model.policy.expectedSkips.some(item => item.name === declaration.name));
   const stale = structuredClone(model.policy);
-  stale.expectedSkips.find((item) => item.id === suspension.id).name = "missing suspension regression";
-  assert.throws(() => loadCoreTestModel(repositoryRoot, stale), /node-process-suspension.*missing Node declaration/u);
+  stale.expectedSkips.find((item) => item.framework === "node").name = "missing regression";
+  assert.throws(() => loadCoreTestModel(repositoryRoot, stale), /missing Node declaration/u);
 
   const runner = resolve(repositoryRoot, "scripts/test-oracles/run-core-test-lane.mjs");
   const env = { ...process.env, PATH: `${dirname(process.execPath)}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}` };
@@ -525,8 +562,7 @@ test("workflow required-test selections resolve current declarations and reject 
   const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
   const declarations = loadCoreTestModel().declarations;
   validateWorkflowTestSelections([{ source: "ci", content: workflow }, { source: "host", content: host }], declarations);
-  const oldOwner = workflow.replaceAll("--require-scenario interop", "--require-scenario removed-interop");
-  assert.notEqual(oldOwner, workflow);
+  const oldOwner = `${workflow}\n        run: node reporter.mjs --require-scenario removed-interop\n`;
   assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: oldOwner }], declarations), /Unknown or empty CI scenario/u);
   assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: "--require-test Removed.Tests.Case" }], declarations), /required workflow test.*not declared/u);
 });
@@ -538,6 +574,8 @@ test("Node matrix builds every packed input before selecting all packed scenario
     await mkdir(scripts, { recursive: true });
     const runner = resolve(scripts, "run-node-test-matrix-with-results.mjs");
     await writeFile(runner, await readFile(resolve(repositoryRoot, "scripts/test-oracles/run-node-test-matrix-with-results.mjs")));
+    await writeFile(resolve(scripts, "core-test-policy.mjs"), `import { loadCoreTestModel as load } from ${JSON.stringify(pathToFileURL(resolve(repositoryRoot, "scripts/test-oracles/core-test-policy.mjs")).href)};
+      export const loadCoreTestModel = (_, policy, scope) => load(${JSON.stringify(repositoryRoot)}, policy, scope);`);
     await writeFile(resolve(scripts, "fixture.test.mjs"), "");
     const log = resolve(root, "commands.jsonl");
     const hook = resolve(root, "record commands #100%.mjs");

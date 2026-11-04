@@ -4,6 +4,16 @@ namespace Sunder.Package.Format;
 
 public static class SunderPackageManifestValidator
 {
+    public static IReadOnlyList<string> ValidateTargetMetadata(SunderPackageTargetManifest target)
+    {
+        var errors = new List<string>();
+        PackageTargetValidator.ValidateKind(target, errors, "Package");
+        PackageTargetValidator.ValidateOptionalMetadata(target, errors, "Package");
+        PackageTargetValidator.ValidateCapabilities(target, errors, "Package");
+        PackageTargetValidator.ValidateExecutionRuntime(target, errors, "Package");
+        return errors;
+    }
+
     public static IReadOnlyList<string> Validate(
         SunderPackageManifest? manifest,
         string rootPath)

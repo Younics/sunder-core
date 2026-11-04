@@ -2,8 +2,8 @@
   <PropertyGroup>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Sunder.Sdk</AssemblyName>
-    <Version>1.1.0</Version>
-    <InformationalVersion>1.1.0+source.fixture</InformationalVersion>
+    <Version>1.0.0</Version>
+    <InformationalVersion>1.0.0+source.fixture</InformationalVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>

@@ -2617,7 +2617,7 @@ public sealed partial class ProcessRuntimeWorkerTests
                 SdkVersion = "1.1.0",
                 RequiredHostCapabilities =
                 [
-                    "core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1",
+                    "core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1",
                     .. extendedDeadline ? new[] { "rpc.extended-deadline.v1" } : [],
                     .. callOwnership ? new[] { SunderSdkCapabilities.RpcCallOwnershipV1 } : [],
                 ],

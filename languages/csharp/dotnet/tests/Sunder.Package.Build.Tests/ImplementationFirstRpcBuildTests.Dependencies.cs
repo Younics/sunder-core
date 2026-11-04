@@ -53,7 +53,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var sdkReferences = sourceSdk
             ? string.Join(Environment.NewLine, new[] { "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }
                 .Select(name => $"<ProjectReference Include=\"{SecurityElement.Escape(Path.Combine(packages, name, name + ".csproj"))}\" />"))
-            : string.Join(Environment.NewLine, new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }
+            : string.Join(Environment.NewLine, new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.App.Bridge" }
                 .Select(name => $"<Reference Include=\"{name}\" HintPath=\"{SecurityElement.Escape(Path.Combine(Path.GetDirectoryName(taskAssembly)!, name + ".dll"))}\" Private=\"true\" />"));
         var project = Path.Combine(root, "RestoreRoles.csproj");
         await File.WriteAllTextAsync(project, $$"""

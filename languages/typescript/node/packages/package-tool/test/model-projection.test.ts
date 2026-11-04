@@ -9,7 +9,7 @@ import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescr
 import { currentRid, loadProjectWithOwnedFrame, type LoadedProject } from "../src/model";
 import { aggregateAndPack, bundleProduction, writeTargetLeaf } from "../src/package";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
-import { emptyLock } from "./service-fixtures";
+import { emptyLock, installFixtureSdk } from "./service-fixtures";
 import { fields, ordered, outerBytes, parseOuter } from "../src/rpc-baseline-json";
 import { emptyModelProjection, MAX_MODEL_PROJECTION_BYTES, MODEL_PROJECTION_PATH, MODEL_PROJECTION_ARCHIVE_PATH, modelProjectionBytes, modelProjectionOuter, parseModelProjectionDocument, projectionDocumentBytes, readModelProjection, serviceReferenceSchema, validateServiceReferenceSchema, validateProjectionDocument, validateModelProjectionSet, portableModelName } from "../src/rpc-model-projection";
 import { hashBytes, inventoryBytes, parseContractLock, type ArtifactContract, type PackageArtifact } from "../src/rpc-contract-lock";
@@ -24,6 +24,7 @@ import { rebindFixtureProjection } from "./model-projection-fixtures";
 
 async function fixture(extension: "ts" | "js", source?: string) {
   const root = await mkdtemp(join(tmpdir(), "sunder-projection-")); await mkdir(join(root, "src"));
+  await installFixtureSdk(root);
   const types = extension === "ts" ? `import type {RpcContentReference} from "@sunder/sdk";
 export type Attachment = RpcContentReference;
 export type Label = string;

@@ -1,6 +1,7 @@
 using System.Reflection;
 using Avalonia.Controls;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Bridge;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Avalonia;
 using Sunder.Sdk.Packaging;
@@ -9,8 +10,10 @@ using Sunder.Sdk.Packaging;
 
 namespace Compatibility.App;
 
-public sealed class ProbeModule : ISunderAppPackageModule
+public sealed class ProbeModule : ISunderAppPackageModule, IAppPackageEntryPointV1
 {
+    public ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions)
+        => Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime.CreateAsync(this, host, contributions);
     public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
         => services.AddSingleton(new ProbeModel(context.PackageId));
     public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
@@ -24,6 +27,7 @@ public sealed class ProbeView : ContentControl, IDisposable
     public ProbeView(ProbeModel model) { DataContext = model; Content = "retained-app-probe:" + model.PackageId; }
     public Assembly SdkAssembly => typeof(IPackageContext).Assembly;
     public Assembly AvaloniaSdkAssembly => typeof(IAvaloniaPackageContributionRegistry).Assembly;
+    public Assembly BridgeAssembly => typeof(IAppPackageEntryPointV1).Assembly;
     public bool IsDisposed { get; private set; }
     public string Echo(string nonce) => "app:" + nonce;
     public void Dispose() => IsDisposed = true;

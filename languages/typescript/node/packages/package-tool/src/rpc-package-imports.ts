@@ -2,7 +2,7 @@ import { authoringBindingModel, generateTypeScriptBindings } from "./generator";
 import { readContractVerificationCache } from "./rpc-contract-cache";
 import { contractError, type ArtifactContract, type ContractLock } from "./rpc-contract-lock";
 import type { ContractUseConfig, LoadedContract, PackageRole, ProviderConfig } from "./model";
-import { readPlatformCatalogs, validatePlatformToolRange } from "./rpc-platform-catalogs";
+import { readPlatformCatalogs } from "./rpc-platform-catalogs";
 import { readModelProjectionCache } from "./rpc-model-projection-cache";
 import { emptyModelProjection, modelProjectionBytes, methodPoliciesBytes, validateModelProjectionSet, type RpcModelProjectionContract } from "./rpc-model-projection";
 import { serviceReferenceTypes } from "./service-bindings";
@@ -24,7 +24,6 @@ export function authority(contract: ArtifactContract) {
     selectedAuthorityContentIdentity: contract.selectedAuthorityContentIdentity };
 }
 export async function preparePackageImports(lock: ContractLock, cacheRoot: string, ownerId: string, authoredDependencies: readonly { packageId: string }[], presentRoles: ReadonlySet<PackageRole> = new Set(["runtime"])): Promise<PackageImportAnalysis> {
-  validatePlatformToolRange(lock);
   await readPlatformCatalogs(lock, cacheRoot);
   const requirements = new Map(lock.requirements);
   for (const artifact of lock.packageArtifacts.values()) for (const contract of artifact.contracts.values()) requirements.set(contract.descriptorSha256, contract);

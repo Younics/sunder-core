@@ -13,7 +13,7 @@ import { publishContractCache } from "../src/rpc-contract-cache";
 import { currentRid, loadProjectWithOwnedFrame } from "../src/model";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { packageApiCommand, type PackageApiRequest } from "../src/rpc-package-commands";
-import { generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
+import { generatedProviders, installFixtureSdk, invocation, writeSourceFile as writeFile } from "./service-fixtures";
 import { rebindFixtureProjection } from "./model-projection-fixtures";
 import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
 import { serviceApiSource } from "../src/service-bindings";
@@ -25,6 +25,7 @@ const source = (providers = 'export const extension=defineService({examplePing(r
   `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";\n${providers}`;
 async function fixture(extension = "ts", consumer = false, stream = false, additionalService = false, providerPresence: "required" | "optional" = "required") {
   const root = await mkdtemp(join(tmpdir(), "sunder-imported-providers-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
+  await installFixtureSdk(root);
   const value = JSON.parse(await readFile(join(ROOT, "authoring/conformance/valid/package-api-contract-lock.json"), "utf8"));
   if (consumer) { value.packageImports["example.dependency"].presence = "optional"; value.packageImports["example.dependency"].requiredContracts = []; }
   else value.packageImports = {};

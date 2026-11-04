@@ -135,16 +135,15 @@ public sealed class AppPackageWorkerExecutionObservationTests
     }
 
     [Fact]
-    public void PackageCannotReplaceTheReservedObservationService()
+    public async Task PackageCannotReplaceTheReservedObservationService()
     {
         var publication = Published();
         var replacement = new AppPackageWorkerExecutionObservations(new ProbeClient(), publication);
-        var factory = new AppPackageServiceProviderFactory(null, null, null, null!, publication);
         // This assembly is also the ShellLifecycle package fixture. An on-disk
         // second module would correctly invalidate every metadata-loader fixture.
         var module = DispatchProxy.Create<ISunderAppPackageModule, ReplacingModuleProxy>();
         ((ReplacingModuleProxy)(object)module).Replacement = replacement;
-        var error = Assert.Throws<InvalidOperationException>(() => factory.Create(null!, null!, module, new ProbeClient()));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime.CreateAsync(module, null!, null!).AsTask());
         Assert.Contains(typeof(IPackageWorkerExecutionObservations).FullName!, error.Message, StringComparison.Ordinal);
     }
 

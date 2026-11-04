@@ -179,7 +179,6 @@ public sealed class OfficialRuntimeFixture : IAsyncLifetime
                 "core.v1",
                 "execution-runtime.v1",
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
                 "worker-protocol.v1",
             ],
             ExecutionRuntime = new SunderPackageExecutionRuntimeManifest

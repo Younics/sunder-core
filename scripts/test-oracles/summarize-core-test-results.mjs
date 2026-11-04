@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
+import { componentFor, expectedScriptReports, loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
-import { selectScenario } from "./ci-scenarios.mjs";
+import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
 
 export function parseTrxReport(xml, source) {
   const summary = /<ResultSummary\b([^>]*?)>/u.exec(xml);
@@ -140,6 +140,7 @@ export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), opti
     ));
   return {
     schemaVersion: 1,
+    ...(model.scope === undefined ? {} : { scope: model.scope }),
     authority: "TRX definitions/results and JUnit testcases",
     operatingSystem,
     counts: counts(results),
@@ -150,9 +151,9 @@ export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), opti
   };
 }
 
-export function auditCoreTestReports(reports, model = loadCoreTestModel()) {
+export function auditCoreTestReports(reports, model = loadCoreTestModel(), requiredTests = []) {
   const results = ownedResults(reports, model);
-  for (const name of [...model.policy.reports.node, model.policy.reports.releaseFixtures]) {
+  for (const name of expectedScriptReports(model)) {
     if (reports.filter((report) => basename(report.source) === name).length !== 1) {
       throw new Error(`Core aggregate requires exactly one '${name}' report from its owning job.`);
     }
@@ -163,6 +164,10 @@ export function auditCoreTestReports(reports, model = loadCoreTestModel()) {
   requireDotnetDeclarations(model.declarations.filter((item) =>
     item.framework === "dotnet" && item.externalEnvironment === undefined), results);
   requireFixtureDeclarations(model.declarations.filter((item) => ["python", "shell"].includes(item.framework)), results);
+  requireNodeSources(model.declarations, results);
+  const components = model.policy.scopes?.[model.scope ?? "all"];
+  const scenarios = components === undefined ? [] : ["portable", "official"].flatMap(profile => ciScenarios(components, profile));
+  requireSelectedTests([...requiredTests, ...scenarios.flatMap(name => selectScenario(name, model.declarations).tests.map(test => test.id))], model, results);
   return counts(results);
 }
 
@@ -173,7 +178,17 @@ function ownedResults(reports, model) {
   const declarationsByRuntimeKey = new Map(model.declarations
     .filter((item) => item.framework !== "dotnet")
     .map((item) => [runtimeKey(item.framework, item.source, item.name), item]));
+  const scriptSources = [...new Set((model.allDeclarations ?? model.declarations)
+    .filter(item => item.framework !== "dotnet").map(item => item.source))];
   return reports.flatMap((report) => report.results).map((result) => {
+    if (result.framework !== "dotnet" && /^(?:\/|[A-Za-z]:\/)/u.test(result.source ?? "")) {
+      // Owning jobs may run in different checkout roots. Match a complete declared
+      // source path, including foreign components so scope checks still apply.
+      const matches = scriptSources.filter(source => result.source.endsWith("/" + source));
+      if (matches.length > 1) throw new Error(`Ambiguous test source '${result.source}'.`);
+      if (matches.length === 1) result = { ...result, source: matches[0],
+        ...(result.framework === "node" ? { project: nodeProject(matches[0]) } : {}) };
+    }
     const declaration = result.framework === "dotnet"
       ? declarationsById.get(result.declarationId)
       : declarationsByRuntimeKey.get(runtimeKey(result.framework, result.source, result.name));
@@ -183,6 +198,10 @@ function ownedResults(reports, model) {
     const primaryLane = declaration?.primaryLane
       ?? (result.framework === "node" ? "node" : "release-artifact");
     const project = declaration?.project ?? result.project;
+    if (model.scope && model.scope !== "all" && !model.policy.scopes[model.scope].includes(
+      declaration?.component ?? componentFor({ ...result, project }, model.policy))) {
+      throw new Error(`Result '${result.name}' is outside validation scope '${model.scope}'.`);
+    }
     if (!(model.policy.projectLanes[project] ?? []).includes(primaryLane)) {
       throw new Error(`Runtime result '${result.name}' has unowned project/lane '${project}/${primaryLane}'.`);
     }
@@ -206,8 +225,7 @@ export function validateResultCoverage(reports, results, model, options = {}) {
         .filter((project, index, values) => values.indexOf(project) === index)
         .sort(ordinal)
         .map((project) => `dotnet/${project}.trx`),
-      ...model.policy.reports.node,
-      model.policy.reports.releaseFixtures,
+      ...expectedScriptReports(model),
     ].sort(ordinal);
     const actualReports = reports.map((report) => report.source).sort(ordinal);
     if (JSON.stringify(actualReports) !== JSON.stringify(expectedReports)) {
@@ -215,18 +233,11 @@ export function validateResultCoverage(reports, results, model, options = {}) {
     }
     requireDotnetDeclarations(model.declarations.filter((item) => item.framework === "dotnet"), results);
     requireFixtureDeclarations(model.declarations.filter((item) => ["python", "shell"].includes(item.framework)), results);
+    requireNodeSources(model.declarations, results);
     requireProjectLanePairs(expectedProjectLanePairs(model.policy), projectLanePairs(results), "complete Core result set");
   }
 
-  for (const selection of requiredTests) {
-    const declaration = model.declarations.find((item) => item.id === selection);
-    if (declaration === undefined) throw new Error(`Required test selection '${selection}' is not declared.`);
-    const selectedResults = results.filter((result) => result.declaration?.id === selection || result.name === selection);
-    if (selectedResults.length === 0) throw new Error(`Required selected test '${selection}' produced no result.`);
-    if (selectedResults.some((result) => result.outcome === "Skipped")) {
-      throw new Error(`Required selected test '${selection}' was reported as skipped after its prerequisite gate was READY.`);
-    }
-  }
+  requireSelectedTests(requiredTests, model, results);
 
   if (requiredPrimaryLanes.length > 0) {
     const requiredLaneSet = new Set(requiredPrimaryLanes);
@@ -245,6 +256,19 @@ export function validateResultCoverage(reports, results, model, options = {}) {
     const expectedPairs = [...new Set(selectedDeclarations.map((item) => `${item.project}\0${item.primaryLane}`))].sort(ordinal);
     requireProjectLanePairs(expectedPairs, projectLanePairs(results), "selected primary lane");
     requireDotnetDeclarations(selectedDeclarations.filter((item) => item.framework === "dotnet"), results);
+    requireNodeSources(selectedDeclarations, results);
+  }
+}
+
+function requireSelectedTests(selections, model, results) {
+  for (const selection of new Set(selections)) {
+    const declaration = model.declarations.find(item => item.id === selection);
+    if (declaration === undefined) throw new Error(`Required test selection '${selection}' is not declared.`);
+    const selectedResults = results.filter(result => result.declaration?.id === selection || result.name === selection);
+    if (selectedResults.length === 0) throw new Error(`Required selected test '${selection}' produced no result.`);
+    if (selectedResults.some(result => result.outcome === "Skipped")) {
+      throw new Error(`Required selected test '${selection}' was reported as skipped after its prerequisite gate was READY.`);
+    }
   }
 }
 
@@ -279,6 +303,13 @@ export function materializeExpectedSkip(result, policy, operatingSystem) {
 
 function main() {
   const arguments_ = process.argv.slice(2);
+  const scopeIndex = arguments_.indexOf("--scope");
+  if (scopeIndex >= 0 && (!arguments_[scopeIndex + 1] || arguments_[scopeIndex + 1].startsWith("--")
+      || arguments_.indexOf("--scope", scopeIndex + 1) >= 0)) {
+    throw new Error("--scope must be specified once with one value.");
+  }
+  const scope = scopeIndex < 0 ? "all" : arguments_.splice(scopeIndex, 2)[1];
+  const model = loadCoreTestModel(repositoryRoot, undefined, scope);
   const aggregateIndex = arguments_.indexOf("--aggregate");
   const aggregate = aggregateIndex >= 0;
   if (aggregate) arguments_.splice(aggregateIndex, 1);
@@ -294,11 +325,11 @@ function main() {
     }
     if (arguments_[index + 1] === undefined) throw new Error(`${arguments_[index]} requires a value.`);
     if (arguments_[index] === "--require-scenario") {
-      requiredTests.push(...selectScenario(arguments_[index + 1], loadCoreTestModel().declarations, currentOperatingSystem()).tests.map(test => test.id));
+      requiredTests.push(...selectScenario(arguments_[index + 1], model.declarations, aggregate ? undefined : currentOperatingSystem()).tests.map(test => test.id));
     } else (arguments_[index] === "--require-test" ? requiredTests : requiredPrimaryLanes).push(arguments_[index + 1]);
     arguments_.splice(index, 2);
   }
-  if (arguments_.length > 1 || aggregate && (allowPartial || requiredTests.length > 0 || requiredPrimaryLanes.length > 0)) {
+  if (arguments_.length > 1 || aggregate && (allowPartial || requiredPrimaryLanes.length > 0)) {
     throw new Error("Usage: summarize-core-test-results.mjs [directory] [--aggregate | --allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
   }
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
@@ -318,12 +349,12 @@ function main() {
     return path.endsWith(".trx") ? parseTrxReport(xml, source) : parseJunitReport(xml, source);
   }).sort((left, right) => ordinal(left.source, right.source));
   if (aggregate) {
-    const outcomes = auditCoreTestReports(reports);
+    const outcomes = auditCoreTestReports(reports, model, requiredTests);
     process.stdout.write(`Audited ${reports.length} owning-job reports: discovered=${outcomes.discovered}; passed=${outcomes.passed}; failed=${outcomes.failed}; skipped=${outcomes.skipped}\n`);
     if (outcomes.failed > 0) process.exitCode = 1;
     return;
   }
-  const evidence = buildCoreTestEvidence(reports, loadCoreTestModel(), {
+  const evidence = buildCoreTestEvidence(reports, model, {
     allowPartial,
     requiredTests,
     requiredPrimaryLanes,
@@ -352,6 +383,15 @@ function requireFixtureDeclarations(declarations, results) {
   if (missing.length > 0) {
     throw new Error(`Release fixture results omitted ${missing.length} declaration(s): ${missing.map((item) => item.id).join(", ")}`);
   }
+}
+
+function requireNodeSources(declarations, results) {
+  // Node expands dynamic declarations and nested cases at runtime. Every selected
+  // source must still contribute evidence, including files sharing one report.
+  const observed = new Set(results.filter(result => result.framework === "node").map(result => result.source));
+  const missing = [...new Set(declarations.filter(test => test.framework === "node").map(test => test.source))]
+    .filter(source => !observed.has(source));
+  if (missing.length > 0) throw new Error(`Node results omitted selected source(s): ${missing.join(", ")}`);
 }
 
 function requireProjectLanePairs(expected, actual, label) {

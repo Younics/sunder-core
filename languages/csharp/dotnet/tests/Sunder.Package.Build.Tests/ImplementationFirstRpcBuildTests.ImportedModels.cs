@@ -124,7 +124,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await File.WriteAllBytesAsync(Path.Combine(root, SunderRpcAuthoringDocuments.ContractLockFileName),
             SunderRpcAuthoringDocuments.WriteDeterministicDocument(emptyLock.RootElement));
         var taskAssembly = typeof(GenerateSunderRpcBindingsTask).Assembly.Location;
-        var references = app ? new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" } : ["Sunder.Sdk", "Sunder.Sdk.Worker"];
+        var references = app ? new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.App.Bridge" } : ["Sunder.Sdk", "Sunder.Sdk.Worker"];
         var project = Path.Combine(root, "ProjectedConsumer.csproj");
         await File.WriteAllTextAsync(project, $$"""
             <Project Sdk="Microsoft.NET.Sdk">

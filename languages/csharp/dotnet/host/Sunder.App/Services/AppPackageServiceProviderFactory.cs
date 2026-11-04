@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Sunder.Package.Hosting;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
@@ -17,36 +16,15 @@ internal sealed class AppPackageServiceProviderFactory(
     Guid? ownerId = null,
     IAppPackageDevelopmentBackend? developerServices = null)
 {
-    private static readonly Type[] ReservedServiceTypes =
-    [
-        typeof(IPackageContext),
-        typeof(IPackageCallbackClient),
-        typeof(ILoggerFactory),
-        typeof(ILogger<>),
-        typeof(ISunderRpcClient),
-        typeof(IPackageShellViewService),
-        typeof(IPackageSettingsNavigationService),
-        typeof(IPackageDevelopmentService),
-        typeof(IPackageLogNavigationService),
-        typeof(IPackageAppStateUpdates),
-        typeof(IPackageWorkerExecutionObservations),
-        typeof(IBackgroundTaskQueue),
-        typeof(IPackageNotificationService),
-    ];
-
     internal AppPackageGenerationPublication Publication => publication;
 
     public ServiceProvider Create(
         ActivePackageDescriptor package,
         AppPackageContext packageContext,
-        ISunderAppPackageModule? module,
         ISunderRpcClient rpcClient)
     {
-        var packageServices = new ConstrainedPackageServiceCollection(ReservedServiceTypes);
-        module?.ConfigureAppServices(packageServices, packageContext);
-
         var services = new ServiceCollection();
-        packageServices.CopyTo(services);
+        services.AddSingleton<AppPackageBridgeLifetime>();
         services.AddSingleton<IPackageContext>(_ => packageContext);
         services.AddSingleton<IPackageCallbackClient>(packageContext.Callbacks);
         services.AddSingleton<ILoggerFactory>(packageContext.Logging.LoggerFactory);
@@ -74,6 +52,8 @@ internal sealed class AppPackageServiceProviderFactory(
         services.AddSingleton<IPackageNotificationService>(notificationCenter is null
             ? NullPackageNotificationService.Instance
             : new AppPackageNotificationService(notificationCenter, package.PackageId, package.DisplayName, publication));
-        return services.BuildServiceProvider();
+        var provider = services.BuildServiceProvider();
+        _ = provider.GetRequiredService<IPackageContext>();
+        return provider;
     }
 }

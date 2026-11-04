@@ -12,6 +12,7 @@ import { validateDependencyVersionRange } from "./dependency-range";
 import { analyzeOwnedRpc, type OwnedRpcAnalysis, type OwnedAnalysisOptions } from "./rpc-authoring";
 import { BASELINE_FILE, exists } from "./rpc-baseline-store";
 import { readProjectDescriptorFile } from "./descriptor-files";
+import { projectSdkCompatibility, type PackageToolCompatibility } from "./compatibility";
 
 export const SUPPORTED_RIDS = ["win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"] as const;
 export type SunderRid = (typeof SUPPORTED_RIDS)[number];
@@ -133,6 +134,7 @@ export interface LoadedContract {
 }
 
 export interface LoadedProject {
+  readonly sdk: PackageToolCompatibility;
   readonly ownedRpc?: OwnedRpcAnalysis;
   readonly root: string;
   readonly configPath: string;
@@ -199,7 +201,7 @@ export async function loadProjectConfiguration(projectPath: string): Promise<{ p
   }
   const outputRoot = resolveInside(root, outputDirectory, "outputDirectory");
   if (config.services !== undefined && portablePathsContainOneAnother(outputDirectory, config.services.module)) throw new Error("Service source must remain outside generated outputDirectory.");
-  const project = { root, configPath, config, outputRoot, contracts: [] };
+  const project = { root, configPath, config, outputRoot, contracts: [], sdk: projectSdkCompatibility(root) };
   return { project, configBytes };
 }
 

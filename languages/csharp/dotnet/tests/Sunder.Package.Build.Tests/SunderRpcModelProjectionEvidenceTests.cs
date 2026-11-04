@@ -166,6 +166,8 @@ public sealed partial class SunderRpcModelProjectionEvidenceTests
     [InlineData("rename")]
     [InlineData("linked-add")]
     [InlineData("linked-remove")]
+    [InlineData("project-directory-remove")]
+    [InlineData("linked-directory-remove")]
     [InlineData("evaluated-add")]
     public void InputSnapshot_RejectsChangedAuthoredOrLinkedMembership(string change)
     {
@@ -183,6 +185,8 @@ public sealed partial class SunderRpcModelProjectionEvidenceTests
         else if (change == "rename") File.Move(source, Path.Combine(project, "Renamed.cs"));
         else if (change == "linked-add") File.WriteAllText(Path.Combine(linked, "Added.cs"), "class Added {}\n");
         else if (change == "linked-remove") File.Delete(link);
+        else if (change == "project-directory-remove") Directory.Delete(project, recursive: true);
+        else if (change == "linked-directory-remove") Directory.Delete(linked, recursive: true);
         else paths.Add(Path.Combine(project, "Evaluated.cs"));
         Assert.Throws<IOException>(snapshot.Verify);
     }

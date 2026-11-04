@@ -35,6 +35,30 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(0, host.LoadedPackageCount);
     }
 
+    [Theory]
+    [InlineData("sdkVersion", "2.0.0", "supported SDK majors")]
+    [InlineData("targetFramework", "net11.0", "Target framework")]
+    [InlineData("avaloniaVersion", "13.0.0", "Avalonia")]
+    [InlineData("avaloniaVersion", "12.1.5", "Avalonia")]
+    public async Task UnsupportedTargetIsRejectedBeforeLoadingItsAssembly(string field, string value, string diagnostic)
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-app-admission");
+        var package = CreateActivePackage("example.admission");
+        var folder = CreateAppPackageSource(scope.RootPath, package.PackageId);
+        var manifestPath = Path.Combine(folder, "manifest", "sunder-package.json");
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(manifestPath))!;
+        manifest["targets"]![0]![field] = value;
+        File.WriteAllText(manifestPath, manifest.ToJsonString());
+        var source = RuntimeContractTestData.Snapshot(package.PackageId, PackageSourceKind.Dev, folder);
+        await using var host = TestAppPackageHost.Create(new AppPackageViewRegistry(), [], [], [], scope.RootPath,
+            downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync, uiDispatcher: TestUiDispatcher);
+        await host.ApplyPackageDeltaAsync([], []);
+        var fault = await Assert.ThrowsAsync<InvalidOperationException>(() => host.ApplyPackageDeltaAsync([package], [source]));
+        Assert.Contains(diagnostic, fault.Message, StringComparison.Ordinal);
+        Assert.Equal(0, host.LoadContextCount);
+        Assert.Equal(0, host.LoadedPackageCount);
+    }
+
     [Fact]
     public async Task ApplyPackageDeltaAsync_RuntimeOnlyPackageDoesNotMaterializeOrCreateAppLoadContext()
     {
@@ -106,12 +130,15 @@ public sealed partial class PackageViewHostServiceTests
     private static readonly IUiDispatcher TestUiDispatcher = new ImmediateUiDispatcher();
 
     [Fact]
-    public void AppSharedAssemblyRegistry_ResolvesHostStackSdkAssembly()
+    public void AppSharedAssemblyRegistry_SharesBridgeButNotPackageSdkOrDi()
     {
-        using var registry = new AppSharedAssemblyRegistry([]);
-        var stackSdkAssembly = typeof(IPackageStackExporter).Assembly;
-
-        Assert.Same(stackSdkAssembly, registry.ResolveSharedAssembly(stackSdkAssembly.GetName()));
+        using var registry = new AppSharedAssemblyRegistry();
+        var bridge = typeof(Sunder.App.Bridge.IAppPackageEntryPointV1).Assembly;
+        Assert.Same(bridge, registry.ResolveSharedAssembly(bridge.GetName()));
+        foreach (var assembly in new[] { typeof(IPackageStackExporter).Assembly, typeof(IPackageContext).Assembly,
+                     typeof(Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime).Assembly, typeof(IServiceCollection).Assembly,
+                     typeof(Microsoft.Extensions.Logging.ILoggerFactory).Assembly })
+            Assert.Null(registry.ResolveSharedAssembly(assembly.GetName()));
     }
 
     [Fact]
@@ -2356,8 +2383,8 @@ public sealed partial class PackageViewHostServiceTests
         {
             await hostService.ApplyPackageDeltaAsync([package], [source]);
             await hostService.WaitForRetirementsAsync().WaitAsync(TimeSpan.FromSeconds(2));
-            var retiredView = Assert.IsAssignableFrom<IPackageViewNavigationTarget>(
-                hostService.GetOrCreateView("agent.chat"));
+            var retiredView = hostService.GetOrCreateView("agent.chat");
+            Assert.NotNull(retiredView);
             var replacementSource = source;
             if (!sameContent)
             {
@@ -2374,9 +2401,7 @@ public sealed partial class PackageViewHostServiceTests
             await hostService.ApplyPackageDeltaAsync([package], [replacementSource]);
             await oldRetirementStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
             var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                retiredView.OnNavigatedToAsync(new PackageViewNavigationContext(
-                    "agent.chat",
-                    new Dictionary<string, string?>())).AsTask());
+                AppPackageViewNavigator.NotifyViewNavigatedAsync(retiredView, "agent.chat", null, default).AsTask());
 
             Assert.Equal(
                 sameContent,
@@ -2635,7 +2660,7 @@ public sealed partial class PackageViewHostServiceTests
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 hostService.ApplyPackageDeltaAsync([package], [rejectedSource], ["agent"]));
 
-            Assert.Contains("reserved host capability", error.ToString(), StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("App-owned capability", error.ToString(), StringComparison.OrdinalIgnoreCase);
             Assert.Contains(typeof(IPackageContext).FullName!, error.ToString(), StringComparison.Ordinal);
             Assert.NotNull(hostService.GetOrCreateView("agent.chat"));
         }

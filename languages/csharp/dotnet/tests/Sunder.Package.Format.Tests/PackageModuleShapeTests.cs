@@ -1,5 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
-using Sunder.Sdk.Abstractions;
+using Sunder.App.Bridge;
 using Xunit;
 
 namespace Sunder.Package.Format.Tests;
@@ -14,7 +13,7 @@ public sealed class PackageModuleShapeTests
         var errors = shape.Validate();
 
         Assert.Contains(errors, error =>
-            error.Contains("multiple ISunderAppPackageModule", StringComparison.Ordinal)
+            error.Contains("multiple IAppPackageEntryPointV1", StringComparison.Ordinal)
             && error.Contains(typeof(InheritedAppModule).FullName!, StringComparison.Ordinal)
             && error.Contains(typeof(SecondAppModule).FullName!, StringComparison.Ordinal));
         Assert.Contains(errors, error =>
@@ -30,77 +29,37 @@ public sealed class PackageModuleShapeTests
     }
 }
 
-public abstract class AppModuleBase : ISunderAppPackageModule
+public abstract class AppModuleBase : IAppPackageEntryPointV1
 {
-    public abstract void ConfigureAppServices(IServiceCollection services, IPackageContext context);
-
-    public abstract void RegisterAppContributions(
-        ISunderAppContributionRegistry registry,
-        IServiceProvider services);
+    public abstract ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions);
 }
 
 public sealed class InheritedAppModule : AppModuleBase
 {
-    public override void ConfigureAppServices(IServiceCollection services, IPackageContext context)
-    {
-    }
-
-    public override void RegisterAppContributions(
-        ISunderAppContributionRegistry registry,
-        IServiceProvider services)
-    {
-    }
+    public override ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions) => throw new NotSupportedException();
 }
 
-public sealed class SecondAppModule : ISunderAppPackageModule
+public sealed class SecondAppModule : IAppPackageEntryPointV1
 {
-    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
-    {
-    }
-
-    public void RegisterAppContributions(
-        ISunderAppContributionRegistry registry,
-        IServiceProvider services)
-    {
-    }
+    public ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions) => throw new NotSupportedException();
 }
 
-public sealed class OpenGenericAppModule<T> : ISunderAppPackageModule
+public sealed class OpenGenericAppModule<T> : IAppPackageEntryPointV1
 {
-    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
-    {
-    }
-
-    public void RegisterAppContributions(
-        ISunderAppContributionRegistry registry,
-        IServiceProvider services)
-    {
-    }
+    public ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions) => throw new NotSupportedException();
 }
 
-public sealed class AppModuleWithoutDefaultConstructor(string value) : ISunderAppPackageModule
+public sealed class AppModuleWithoutDefaultConstructor(string value) : IAppPackageEntryPointV1
 {
     public string Value { get; } = value;
 
-    public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
-    {
-    }
-
-    public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
-    {
-    }
+    public ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions) => throw new NotSupportedException();
 }
 
 public static class ModuleContainer
 {
-    public sealed class NestedAppModule : ISunderAppPackageModule
+    public sealed class NestedAppModule : IAppPackageEntryPointV1
     {
-        public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
-        {
-        }
-
-        public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services)
-        {
-        }
+        public ValueTask<IAppPackageActivationV1> CreateAsync(IAppPackageHostV1 host, IAppContributionSinkV1 contributions) => throw new NotSupportedException();
     }
 }

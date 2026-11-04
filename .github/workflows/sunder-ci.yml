@@ -1,11 +1,22 @@
 name: Sunder Core CI
 
 on:
+  push:
+    branches: [main]
   pull_request:
   merge_group:
   workflow_dispatch:
+    inputs:
+      scope:
+        type: choice
+        default: all
+        options: [all, sdk, app, host, cli, repository]
   workflow_call:
     inputs:
+      scope:
+        description: Component validation scope; main repository checks complement the SDK run.
+        type: string
+        required: true
       release-packages:
         description: Pack and validate the caller's selected project versions.
         type: boolean
@@ -16,11 +27,10 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: sunder-core-ci-${{ github.event.pull_request.number || github.run_id }}
+  group: sunder-core-ci-${{ inputs.scope || 'repository' }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
-  SUNDER_REQUIRE_APP_WEB_BRIDGE_VM: "1"
-
+  CI_SCOPE: ${{ inputs.scope || (github.event_name == 'push' && 'repository' || 'all') }}
 jobs:
   build-test-pack:
     runs-on: ubuntu-24.04
@@ -31,14 +41,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - name: Read authored package versions
-        run: node scripts/release/check-sdk-version.mjs
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         if: inputs.release-packages
         with:
           name: core-release-selection
           path: artifacts
       - name: Compare supported release history and public surfaces
+        if: env.CI_SCOPE == 'all' || env.CI_SCOPE == 'sdk'
         env:
           COMPATIBILITY_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
@@ -49,46 +58,12 @@ jobs:
             if [[ "$base" == "$(git rev-parse HEAD)" ]]; then base="$(git rev-parse HEAD^)"; fi
           fi
           node scripts/compatibility/check-supported-releases.mjs --base-ref "$base"
-      - name: Verify toolchain and restore Node dependencies
-        run: |
-          node scripts/toolchains.mjs
-          node scripts/test-oracles/check-core-test-policy.mjs
-          npm ci --prefix languages/typescript/node
-          python3 -B scripts/test/check-markdown-links.py .
-      - name: Node SDK, tooling and artifact tests
-        id: node_tests
-        run: |
-          node scripts/test-oracles/run-core-test-lane.mjs --primary-lane node
-          node scripts/test-oracles/run-node-test-matrix-with-results.mjs
-          node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results --allow-partial --require-primary-lane node
-      # The Node artifact oracle cleans outputs. Finish it before preparing interop inputs.
-      - name: Prepare Node interop and build Core
-        run: python3 -B scripts/ci/core_ci.py source
-      - name: Portable .NET tests and script contracts
-        run: |
-          node scripts/test-oracles/run-core-test-lane.mjs --primary-lane dotnet-linux
-          node scripts/test-oracles/run-dotnet-tests-with-results.mjs --configuration Release --primary-lane dotnet-linux --results-directory artifacts/test-results/dotnet
-          node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/dotnet --allow-partial --require-primary-lane dotnet-linux
-          node scripts/test-oracles/run-release-fixtures-with-results.mjs
-      - name: Pack only newer developer packages with source-bound release documentation
+      - name: Build and test
+        id: tests
+        run: python3 -B scripts/ci/core_ci.py portable --scope "$CI_SCOPE"
+      - name: Pack and test selected developer packages
         if: inputs.release-packages
-        run: |
-          python3 -B scripts/release/sdk_release.py pack
-          python3 -B scripts/release/sdk_release.py feed --directory artifacts/test-feed
-      - name: Source catalog and generated template variants
-        if: inputs.release-packages
-        run: python3 -B scripts/ci/core_ci.py templates
-      - name: Require generated-package Host smoke tests for a complete new candidate
-        if: inputs.release-packages
-        run: |
-          node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scenario generated-templates --configuration Release --results-directory artifacts/test-results/generated-templates
-          node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/generated-templates --allow-partial --require-scenario generated-templates
-      - name: Build the universal test module
-        run: python3 -B scripts/ci/core_ci.py module
-      - name: Required cross-language Host integration
-        run: |
-          node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scenario interop --configuration Release --results-directory artifacts/test-results/interop
-          node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/interop --allow-partial --require-scenario interop
+        run: python3 -B scripts/ci/core_ci.py candidate --scope "$CI_SCOPE"
       - name: Retain the tested candidate feed
         if: inputs.release-packages
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -97,18 +72,22 @@ jobs:
           path: artifacts/packages/*
           if-no-files-found: error
       - name: Retain test reports
-        if: always() && steps.node_tests.outcome != 'skipped' && steps.node_tests.outcome != ''
+        if: always() && steps.tests.outcome != 'skipped' && steps.tests.outcome != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-core-results
-          path: artifacts/test-results
+          name: sunder-core-results-${{ env.CI_SCOPE }}
+          path: artifacts/test-results/${{ env.CI_SCOPE }}
           if-no-files-found: error
+          retention-days: 14
 
   native:
+    if: inputs.scope != 'cli'
     uses: ./.github/workflows/sunder-host-validation.yml
+    with:
+      scope: ${{ inputs.scope || (github.event_name == 'push' && 'repository' || 'all') }}
 
   test-results:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || inputs.release-packages
+    if: ${{ !cancelled() && needs.build-test-pack.result == 'success' && (needs.native.result == 'success' || needs.native.result == 'skipped') }}
     needs: [build-test-pack, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -121,15 +100,22 @@ jobs:
           dotnet: 'false'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: sunder-core-results
-          path: artifacts/ci-results/core
+          name: sunder-core-results-${{ env.CI_SCOPE }}
+          path: artifacts/ci-results/${{ env.CI_SCOPE }}/core
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.native.result == 'success'
         with:
-          pattern: sunder-platform-*
-          path: artifacts/ci-results/platform
+          pattern: sunder-platform-${{ env.CI_SCOPE }}-*
+          path: artifacts/ci-results/${{ env.CI_SCOPE }}/platform
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: env.CI_SCOPE == 'all' || env.CI_SCOPE == 'sdk' || env.CI_SCOPE == 'host'
         with:
-          pattern: official-runtime-*
-          path: artifacts/ci-results/official
+          pattern: official-runtime-${{ env.CI_SCOPE }}-*
+          path: artifacts/ci-results/${{ env.CI_SCOPE }}/official
       - name: Audit owning-job reports without rebuilding or rerunning tests
-        run: node scripts/test-oracles/summarize-core-test-results.mjs artifacts/ci-results --aggregate
+        env:
+          RELEASE_PACKAGES: ${{ inputs.release-packages }}
+        run: |
+          args=()
+          [[ "$RELEASE_PACKAGES" != true ]] || args+=(--require-scenario generated-templates)
+          node scripts/test-oracles/summarize-core-test-results.mjs "artifacts/ci-results/$CI_SCOPE" --scope "$CI_SCOPE" --aggregate "${args[@]}"

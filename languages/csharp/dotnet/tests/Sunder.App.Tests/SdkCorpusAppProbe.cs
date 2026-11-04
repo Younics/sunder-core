@@ -13,6 +13,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using System.Text.Json;
 using Avalonia.Controls;
+using Sunder.App.Bridge;
 using Sunder.App.Services;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
@@ -47,7 +48,8 @@ internal static class SdkCorpusAppProbe
     {
         var sdk = typeof(IPackageContext).Assembly;
         var avaloniaSdk = typeof(IAvaloniaPackageContributionRegistry).Assembly;
-        foreach (var assembly in new[] { typeof(PackageViewHostService).Assembly, sdk, avaloniaSdk, typeof(Control).Assembly })
+        var bridge = typeof(IAppPackageEntryPointV1).Assembly;
+        foreach (var assembly in new[] { typeof(PackageViewHostService).Assembly, sdk, avaloniaSdk, bridge, typeof(Control).Assembly })
             Check(Path.GetDirectoryName(assembly.Location) == _appRoot, "Current test output substituted for provided App/SDK: " + assembly.Location);
         var extracted = Path.Combine(work, "package");
         var inspected = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, extracted);
@@ -72,21 +74,26 @@ internal static class SdkCorpusAppProbe
         Check(host.LoadedPackageCount == 1 && host.LoadContextCount == 1, "Provided App did not activate the retained module.");
         var view = host.GetOrCreateView("compatibility.app.probe") ?? throw new InvalidDataException("Retained view missing.");
         Check(view.GetType().FullName == "Compatibility.App.ProbeView", "Unexpected retained App view.");
-        Check(AssemblyLoadContext.GetLoadContext(view.GetType().Assembly) != AssemblyLoadContext.Default, "Package did not use its isolated App ALC.");
-        Check(ReferenceEquals(view.GetType().GetProperty("SdkAssembly")!.GetValue(view), sdk), "Package SDK was not substituted with provided App SDK.");
-        Check(ReferenceEquals(view.GetType().GetProperty("AvaloniaSdkAssembly")!.GetValue(view), avaloniaSdk), "Avalonia SDK identity substitution failed.");
-        foreach (var requested in view.GetType().Assembly.GetReferencedAssemblies().Where(x => x.Name is "Sunder.Sdk" or "Sunder.Sdk.Avalonia"))
+        var packageContext = AssemblyLoadContext.GetLoadContext(view.GetType().Assembly);
+        Check(packageContext != AssemblyLoadContext.Default, "Package did not use its isolated App ALC.");
+        var packageSdk = (Assembly)view.GetType().GetProperty("SdkAssembly")!.GetValue(view)!;
+        var packageAvaloniaSdk = (Assembly)view.GetType().GetProperty("AvaloniaSdkAssembly")!.GetValue(view)!;
+        foreach (var local in new[] { packageSdk, packageAvaloniaSdk })
         {
-            using var registry = new AppSharedAssemblyRegistry([]);
-            Check(ReferenceEquals(registry.ResolveSharedAssembly(requested), requested.Name == "Sunder.Sdk" ? sdk : avaloniaSdk), "Retained assembly reference is not compatible.");
+            Check(AssemblyLoadContext.GetLoadContext(local) == packageContext, "Package SDK escaped its owning load context.");
+            var logical = Path.Combine(projection, "lib", local.GetName().Name + ".dll");
+            Check(File.ReadAllBytes(local.Location).SequenceEqual(File.ReadAllBytes(logical)), "Package SDK bytes were substituted.");
+            using var registry = new AppSharedAssemblyRegistry();
+            Check(registry.ResolveSharedAssembly(local.GetName()) is null, "SDK identity was shared with the shell.");
         }
+        Check(ReferenceEquals(view.GetType().GetProperty("BridgeAssembly")!.GetValue(view), bridge), "App bridge identity was not shared.");
         Check(((ContentControl)view).Content?.ToString() == "retained-app-probe:compatibility.app.probe", "Retained view/DI behavior changed.");
         Check((string?)view.GetType().GetMethod("Echo")!.Invoke(view, [nonce]) == "app:" + nonce, "Retained view behavior did not execute.");
         await host.DisposeAsync();
         Check((bool)view.GetType().GetProperty("IsDisposed")!.GetValue(view)!, "Retained view was not disposed.");
-        Console.WriteLine(JsonSerializer.Serialize(new { nonce, sdk = sdk.Location, avaloniaSdk = avaloniaSdk.Location,
+        Console.WriteLine(JsonSerializer.Serialize(new { nonce, sdk = sdk.Location, avaloniaSdk = avaloniaSdk.Location, bridge = bridge.Location,
             app = typeof(PackageViewHostService).Assembly.Location, packageId = manifest.Id, packageVersion = manifest.Version,
-            rid = RuntimeInformation.RuntimeIdentifier, disposed = true, isolatedPackage = true }));
+            rid = RuntimeInformation.RuntimeIdentifier, disposed = true, isolatedPackage = true, packageLocalSdk = true }));
     }
 
     private static void Check(bool value, string message) { if (!value) throw new InvalidDataException(message); }

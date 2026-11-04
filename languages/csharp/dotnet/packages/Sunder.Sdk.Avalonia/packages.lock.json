@@ -13,6 +13,15 @@
           "MicroCom.Runtime": "0.11.6"
         }
       },
+      "Microsoft.Extensions.DependencyInjection": {
+        "type": "Direct",
+        "requested": "[10.0.13, )",
+        "resolved": "10.0.13",
+        "contentHash": "4tnWU9vrU/A8NwYe9Z6wvieZ0EBb/uM82LAT+edNhdepOBWREZ7M7mzb941EIDPJaeOFdbVrDd5+7s9e89U6bQ==",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.13"
+        }
+      },
       "Avalonia.BuildServices": {
         "type": "Transitive",
         "resolved": "11.3.2",
@@ -27,6 +36,12 @@
         "type": "Transitive",
         "resolved": "0.11.6",
         "contentHash": "NdNWGDiZ6eS/Mf/9+QHR91cj1K7Hy+PX9yrHI/zM7xFYuj9IWT2uxtB6sCHjrnxAeLV9fut1R6zHDUGKX6f9lQ=="
+      },
+      "sunder.app.bridge": {
+        "type": "Project",
+        "dependencies": {
+          "Avalonia": "[12.1.4, )"
+        }
       },
       "sunder.sdk": {
         "type": "Project",

@@ -4,5 +4,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj" />
   </ItemGroup>
 </Project>

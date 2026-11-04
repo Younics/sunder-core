@@ -21,17 +21,17 @@ public sealed class WorkerExecutionObservationCapabilityProfileTests
         var app = new SunderPackageTargetManifest
         {
             Role = "app", Rid = "win-x64", Kind = "avalonia", EntryPoint = "App.dll", TargetFramework = "net10.0",
-            SdkVersion = "1.1.0", RequiredHostCapabilities = [SunderSdkCapabilities.Baseline11V1, capability],
+            SdkVersion = "1.0.0", AvaloniaVersion = "12.1.4", RequiredHostCapabilities = ["app-bridge.v1", capability],
         };
         Assert.Empty(SunderSdkCompatibilityProfile.Validate("test.package", new("app", "win-x64"), app));
         var worker = new SunderPackageTargetManifest
         {
             Role = "runtime", Rid = "win-x64", Kind = SunderPackageFormat.WorkerTargetKind, EntryPoint = "Worker.dll",
-            TargetFramework = "net10.0", SdkVersion = "1.1.0",
-            RequiredHostCapabilities = [SunderSdkCapabilities.Baseline11V1, SunderWorkerProtocol.V1Capability, capability],
+            TargetFramework = "net10.0", SdkVersion = "1.0.0",
+            RequiredHostCapabilities = [SunderWorkerProtocol.V1Capability, capability],
         };
         var error = Assert.Single(SunderSdkCompatibilityProfile.Validate("test.package", new("runtime", "win-x64"), worker));
-        Assert.Contains("Worker protocol 'worker-protocol.v1' does not implement", error, StringComparison.Ordinal);
+        Assert.Contains("not implemented by 'runtime/worker'", error, StringComparison.Ordinal);
         Assert.False(SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification[capability]);
     }
 
@@ -48,11 +48,11 @@ public sealed class WorkerExecutionObservationCapabilityProfileTests
     {
         var web = new SunderPackageTargetManifest
         {
-            Role = "app", Rid = "win-x64", Kind = "web", EntryPoint = "index.html", SdkVersion = "1.1.0",
-            RequiredHostCapabilities = [SunderSdkCapabilities.Baseline11V1, capability],
+            Role = "app", Rid = "win-x64", Kind = "web", EntryPoint = "index.html", SdkVersion = "1.0.0",
+            RequiredHostCapabilities = ["web-bridge.v1", capability],
         };
         var error = Assert.Single(SunderSdkCompatibilityProfile.Validate("test.package", new("app", "win-x64"), web));
         Assert.Contains(capability, error, StringComparison.Ordinal);
-        Assert.Contains("managed App", error, StringComparison.Ordinal);
+        Assert.Contains("not implemented by 'app/web'", error, StringComparison.Ordinal);
     }
 }

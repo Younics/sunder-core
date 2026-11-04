@@ -1510,16 +1510,8 @@
                            Exclude="$(TargetDir)runtimes\**\*;$(SunderDevOutputPath)**\*" />
       <_SunderNativeRuntimeFiles Include="$(TargetDir)runtimes\**\*"
                                  Condition="Exists('$(TargetDir)runtimes')" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.dll" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.pdb" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.Stacks.dll" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.Stacks.pdb" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.Avalonia.dll" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.Sdk.Avalonia.pdb" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.dll" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.DependencyInjection.Abstractions.pdb" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.dll" />
-      <_SunderRuntimeFiles Remove="$(TargetDir)Microsoft.Extensions.Logging.Abstractions.pdb" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.App.Bridge.dll" />
+      <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.App.Bridge.pdb" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Controls.dll" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Controls.pdb" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Base.dll" />
@@ -1727,7 +1719,7 @@
             Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
-      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
+      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.0.0</_SunderPackageVersion>
       <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
       <_SunderPackagePackOutputRoot Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputRoot)</_SunderPackagePackOutputRoot>
       <_SunderPackagePackOutputRoot Condition="'$(_SunderPackagePackOutputRoot)' == ''">$(TargetDir)</_SunderPackagePackOutputRoot>
@@ -1759,7 +1751,7 @@
            Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageProject)' != 'false'">
     <PropertyGroup>
       <_SunderPackageVersion Condition="'$(Version)' != ''">$(Version)</_SunderPackageVersion>
-      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.1.0</_SunderPackageVersion>
+      <_SunderPackageVersion Condition="'$(_SunderPackageVersion)' == ''">1.0.0</_SunderPackageVersion>
       <SunderPackageFileName Condition="'$(SunderPackageFileName)' == ''">$(AssemblyName).$(_SunderPackageVersion).sunderpkg</SunderPackageFileName>
       <SunderPublishPackageOutputPath Condition="'$(SunderPublishPackageOutputPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(PublishDir)', '$(SunderPackageFileName)'))))</SunderPublishPackageOutputPath>
       <_SunderPackagePublishInputPath Condition="'$(SunderPackagePrimaryProject)' == 'true'">$(SunderPackageComposedOutputPath)</_SunderPackagePublishInputPath>

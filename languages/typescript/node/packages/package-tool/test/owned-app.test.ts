@@ -12,7 +12,7 @@ import { loadProject, currentRid } from "../src/model";
 import { generateRpcBindings } from "../src/rpc-bindings";
 import { assertServiceOptions } from "@sunder/sdk/generated";
 import { contractsCommand } from "../src/rpc-contracts";
-import { liveCatalogWatch, writeSourceFile as writeFile } from "./service-fixtures";
+import { installFixtureSdk, liveCatalogWatch, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../../dist/cli.js");
@@ -34,6 +34,7 @@ async *watch(request/*: Message*/)/*: AsyncIterable<Message>*/{yield request;}
 
 async function project(extension: "ts" | "js", text = source): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-app-"));
+  await installFixtureSdk(root);
   await mkdir(resolve(root, "src")); await mkdir(resolve(root, "app"));
   await writeFile(resolve(root, `src/rpc.${extension}`), text);
   await writeFile(resolve(root, "app/index.html"), '<!doctype html><html><head><title>Owned App</title></head><body>Owned App</body></html>');

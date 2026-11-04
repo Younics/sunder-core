@@ -46,6 +46,8 @@ public sealed class CorePublicPackageContractTests
             var projectPath = Path.Combine(repositoryRoot, package.Project.Replace('/', Path.DirectorySeparatorChar));
             await BuildProjectAsync(projectPath, repositoryRoot);
             var evaluation = await EvaluateProjectAsync(projectPath, repositoryRoot);
+            var version = evaluation.Properties.GetProperty("PackageVersion").GetString();
+            Assert.False(string.IsNullOrWhiteSpace(version));
             Assert.Equal(package.PackageId, evaluation.Properties.GetProperty("PackageId").GetString());
             Assert.Equal("true", evaluation.Properties.GetProperty("IsPackable").GetString());
             Assert.Equal(package.PackageType, evaluation.Properties.GetProperty("PackageType").GetString());
@@ -80,8 +82,8 @@ public sealed class CorePublicPackageContractTests
 
             var firstDirectory = scope.CreateDirectory("first", package.PackageId);
             var secondDirectory = scope.CreateDirectory("second", package.PackageId);
-            var first = await PackAsync(projectPath, firstDirectory, repositoryRoot, inventory.CoordinatedVersion);
-            var second = await PackAsync(projectPath, secondDirectory, repositoryRoot, inventory.CoordinatedVersion);
+            var first = await PackAsync(projectPath, firstDirectory, repositoryRoot);
+            var second = await PackAsync(projectPath, secondDirectory, repositoryRoot);
             var firstBytes = await File.ReadAllBytesAsync(first);
             await AssertCanonicalPackageContentEqualAsync(first, second);
             Assert.InRange(firstBytes.LongLength, 1, package.MaximumBytes);
@@ -109,7 +111,7 @@ public sealed class CorePublicPackageContractTests
             XNamespace ns = nuspec.Root!.Name.Namespace;
             var metadata = nuspec.Root.Element(ns + "metadata")!;
             Assert.Equal(package.PackageId, metadata.Element(ns + "id")?.Value);
-            Assert.Equal(inventory.CoordinatedVersion, metadata.Element(ns + "version")?.Value);
+            Assert.Equal(version, metadata.Element(ns + "version")?.Value);
             if (package.PackageId == "Sunder.Sdk.Stacks")
             {
                 Assert.Equal(
@@ -215,7 +217,7 @@ public sealed class CorePublicPackageContractTests
         startInfo.ArgumentList.Add("-nologo");
         startInfo.ArgumentList.Add("-nodeReuse:false");
         startInfo.ArgumentList.Add("-p:Configuration=Release");
-        startInfo.ArgumentList.Add("-getProperty:PackageId,IsPackable,PackageType,IncludeBuildOutput,TargetFramework");
+        startInfo.ArgumentList.Add("-getProperty:PackageId,PackageVersion,IsPackable,PackageType,IncludeBuildOutput,TargetFramework");
         startInfo.ArgumentList.Add("-getItem:ProjectReference");
         await using var process = CapturedProcess.Start(startInfo);
         var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(30));
@@ -247,11 +249,11 @@ public sealed class CorePublicPackageContractTests
     private static async Task<string> PackAsync(
         string projectPath,
         string outputDirectory,
-        string repositoryRoot,
-        string version)
+        string repositoryRoot)
     {
         var startInfo = DotnetStartInfo(repositoryRoot);
         startInfo.ArgumentList.Add("pack");
+        startInfo.ArgumentList.Add("--no-build");
         startInfo.ArgumentList.Add(projectPath);
         startInfo.ArgumentList.Add("--configuration");
         startInfo.ArgumentList.Add("Release");
@@ -260,7 +262,6 @@ public sealed class CorePublicPackageContractTests
         startInfo.ArgumentList.Add("--output");
         startInfo.ArgumentList.Add(outputDirectory);
         startInfo.ArgumentList.Add("--nologo");
-        startInfo.ArgumentList.Add($"-p:PackageVersion={version}");
         startInfo.ArgumentList.Add("-p:UseSharedCompilation=false");
         await using var process = CapturedProcess.Start(startInfo);
         await process.EnsureSuccessAsync(TimeSpan.FromMinutes(2));
@@ -442,7 +443,6 @@ public sealed class CorePublicPackageContractTests
 
     private sealed record PublicPackageInventory(
         int SchemaVersion,
-        string CoordinatedVersion,
         IReadOnlyList<NugetPackageContract> Nuget,
         IReadOnlyList<NpmPackageContract> Npm,
         RuntimePackageManifestContract RuntimePackageManifest);

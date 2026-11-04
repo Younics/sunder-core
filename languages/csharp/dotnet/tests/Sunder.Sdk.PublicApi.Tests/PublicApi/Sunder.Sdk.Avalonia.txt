@@ -1,5 +1,5 @@
 # sunder-public-api-v2
-assembly Sunder.Sdk.Avalonia, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
+assembly Sunder.Sdk.Avalonia, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
 type public static class Sunder.Sdk.Avalonia.AvaloniaPackageContributionRegistryExtensions
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("views.v1")
   method public static System.Void RegisterPackageView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, Sunder.Sdk.Abstractions.PackageViewRegistration registration) where TView : Avalonia.Controls.Control
@@ -7,6 +7,8 @@ type public static class Sunder.Sdk.Avalonia.AvaloniaPackageContributionRegistry
   method public static System.Void RegisterPackageView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry, System.String viewId) where TView : Avalonia.Controls.Control
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("settings-views.v1")
   method public static System.Void RegisterSettingsView<TView>(Sunder.Sdk.Abstractions.ISunderAppContributionRegistry registry) where TView : Avalonia.Controls.Control
+type public static class Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime
+  method public static System.Threading.Tasks.ValueTask<Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(Sunder.Sdk.Abstractions.ISunderAppPackageModule module, Sunder.App.Bridge.IAppPackageHostV1 host, Sunder.App.Bridge.IAppContributionSinkV1 contributions)
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("contributions.v1")
 type public interface Sunder.Sdk.Avalonia.IAvaloniaPackageContributionRegistry : Sunder.Sdk.Abstractions.ISunderAppContributionRegistry
   attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("views.v1")

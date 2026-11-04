@@ -113,7 +113,7 @@ public sealed class AppWebContentServerTests
             Kind = SunderPackageFormat.WebTargetKind,
             EntryPoint = "index.html",
             SdkVersion = "1.1.0",
-            RequiredHostCapabilities = ["sdk-baseline-1-1.v1"],
+            RequiredHostCapabilities = ["web-bridge.v1"],
             Views =
             [
                 new SunderPackageWebViewManifest

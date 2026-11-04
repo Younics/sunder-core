@@ -41,8 +41,8 @@ internal static class RuntimeContractTestData
             "avalonia",
             entryPoint,
             "net10.0",
-            "1.1.0",
-            ["sdk-baseline-1-1.v1", "core.v1"]);
+            "1.0.0",
+            ["app-bridge.v1", "core.v1"], AvaloniaVersion: "12.1.4");
 
     public static string CreateAppManifestJson(
         string packageId,
@@ -67,8 +67,9 @@ internal static class RuntimeContractTestData
                     Kind = SunderPackageFormat.AvaloniaTargetKind,
                     EntryPoint = entryPoint,
                     TargetFramework = "net10.0",
-                    SdkVersion = "1.1.0",
-                    RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "core.v1"],
+                    SdkVersion = "1.0.0",
+                    AvaloniaVersion = "12.1.4",
+                    RequiredHostCapabilities = ["app-bridge.v1", "core.v1"],
                 })
                 .Cast<SunderPackageTargetManifest?>()
                 .ToArray(),
@@ -130,6 +131,6 @@ internal static class RuntimeContractTestData
             target.EntryPoint!,
             target.TargetFramework,
             target.SdkVersion,
-            target.RequiredHostCapabilities?.Select(value => value!).ToArray() ?? []);
+            target.RequiredHostCapabilities?.Select(value => value!).ToArray() ?? [], AvaloniaVersion: target.AvaloniaVersion);
     }
 }

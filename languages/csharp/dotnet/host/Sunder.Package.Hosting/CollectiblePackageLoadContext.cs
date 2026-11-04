@@ -42,6 +42,9 @@ internal abstract class CollectiblePackageLoadContext : AssemblyLoadContext
         }
 
         var candidatePath = _dependencyResolver.ResolveAssemblyToPath(assemblyName);
+        if (candidatePath is null && (assemblyName.Name == "Sunder.Sdk" || assemblyName.Name.StartsWith("Sunder.Sdk.", StringComparison.Ordinal)))
+            // FileNotFoundException permits the CLR to try Default; FileLoadException stops that fallback.
+            throw new FileLoadException($"Package-local SDK assembly '{assemblyName.FullName}' is missing from the selected App payload.", assemblyName.Name + ".dll");
         return candidatePath is null ? null : LoadAndTrack(candidatePath);
     }
 

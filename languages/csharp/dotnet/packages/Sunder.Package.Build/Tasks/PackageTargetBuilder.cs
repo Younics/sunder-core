@@ -16,6 +16,7 @@ internal static class PackageTargetBuilder
         string entryAssembly,
         string targetFramework,
         string sdkVersion,
+        string? avaloniaVersion,
         IReadOnlyList<string> capabilities,
         string? runtimeIdentifier,
         string? outputType,
@@ -38,6 +39,7 @@ internal static class PackageTargetBuilder
                 entryPoint,
                 targetFramework,
                 sdkVersion,
+                avaloniaVersion,
                 capabilities,
                 runtimeIdentifier,
                 outputType,
@@ -46,7 +48,7 @@ internal static class PackageTargetBuilder
                 publishSingleFile,
                 publishTrimmed,
                 log)
-            : BuildInferred(configuredRuntimeIdentifiers, configuredViews, packageId, roles, entryPoint, targetFramework, sdkVersion, capabilities, log);
+            : BuildInferred(configuredRuntimeIdentifiers, configuredViews, packageId, roles, entryPoint, targetFramework, sdkVersion, avaloniaVersion, capabilities, log);
         if (targets is null)
         {
             return null;
@@ -105,6 +107,7 @@ internal static class PackageTargetBuilder
             item.SetMetadata("EntryPoint", target.EntryPoint);
             item.SetMetadata("TargetFramework", target.TargetFramework);
             item.SetMetadata("SdkVersion", target.SdkVersion);
+            item.SetMetadata("AvaloniaVersion", target.AvaloniaVersion ?? string.Empty);
             item.SetMetadata("RequiredHostCapabilities", string.Join(';', target.RequiredHostCapabilities ?? []));
             item.SetMetadata("ExecutionRuntimeId", target.ExecutionRuntime?.Id ?? string.Empty);
             item.SetMetadata("ExecutionRuntimeVersionRange", target.ExecutionRuntime?.VersionRange ?? string.Empty);
@@ -151,6 +154,7 @@ internal static class PackageTargetBuilder
                 EntryPoint = target.EntryPoint,
                 TargetFramework = target.TargetFramework,
                 SdkVersion = target.SdkVersion,
+                AvaloniaVersion = target.AvaloniaVersion,
                 RequiredHostCapabilities = capabilities.Order(StringComparer.Ordinal).Cast<string?>().ToArray(),
                 ExecutionRuntime = target.ExecutionRuntime,
                 Views = target.Views,
@@ -167,6 +171,7 @@ internal static class PackageTargetBuilder
         string entryPoint,
         string targetFramework,
         string sdkVersion,
+        string? avaloniaVersion,
         IReadOnlyList<string> capabilities,
         TaskLoggingHelper log)
     {
@@ -201,6 +206,7 @@ internal static class PackageTargetBuilder
                 entryPoint,
                 targetFramework,
                 sdkVersion,
+                avaloniaVersion,
                 capabilities,
                 [])))
             .ToArray();
@@ -214,6 +220,7 @@ internal static class PackageTargetBuilder
         string defaultEntryPoint,
         string targetFramework,
         string sdkVersion,
+        string? avaloniaVersion,
         IReadOnlyList<string> capabilities,
         string? runtimeIdentifier,
         string? outputType,
@@ -260,6 +267,7 @@ internal static class PackageTargetBuilder
                     : PackageAssetDiscovery.NormalizePath(configuredEntryPoint),
                 targetFramework,
                 sdkVersion,
+                avaloniaVersion,
                 capabilities,
                 string.Equals(kind, SunderPackageFormat.WebTargetKind, StringComparison.Ordinal)
                     ? PackageWebViewBuilder.BuildForTarget(configuredViews, packageId, role!, rid ?? string.Empty, log)
@@ -369,6 +377,7 @@ internal static class PackageTargetBuilder
         string entryPoint,
         string targetFramework,
         string sdkVersion,
+        string? avaloniaVersion,
         IReadOnlyList<string> capabilities,
         IReadOnlyList<SunderPackageWebViewManifest> views)
     {
@@ -377,6 +386,8 @@ internal static class PackageTargetBuilder
         {
             requiredCapabilities.Add(SunderPackageFormat.ExecutionRuntimeV1Capability);
         }
+        if (kind == SunderPackageFormat.AvaloniaTargetKind) requiredCapabilities.Add("app-bridge.v1");
+        if (kind == SunderPackageFormat.WebTargetKind) requiredCapabilities.Add("web-bridge.v1");
 
         return new SunderPackageTargetManifest
         {
@@ -386,6 +397,7 @@ internal static class PackageTargetBuilder
             EntryPoint = entryPoint,
             TargetFramework = targetFramework,
             SdkVersion = sdkVersion,
+            AvaloniaVersion = kind == SunderPackageFormat.AvaloniaTargetKind ? avaloniaVersion : null,
             RequiredHostCapabilities = requiredCapabilities
                 .Order(StringComparer.Ordinal)
                 .Cast<string?>()

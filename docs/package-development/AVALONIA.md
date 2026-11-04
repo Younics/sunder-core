@@ -1,6 +1,6 @@
 # Avalonia Views
 
-> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Avalonia` `1.1.x`, Avalonia 12, package manifest V1, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, `Sunder.Sdk.Avalonia` `1.0.0`, Avalonia 12, package manifest V1, and Runtime protocol revision 1.
 
 Avalonia UI belongs to the App role. Headless packages should not reference `Sunder.Sdk.Avalonia` or Avalonia.
 

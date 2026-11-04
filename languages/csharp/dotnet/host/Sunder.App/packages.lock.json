@@ -285,6 +285,12 @@
         "resolved": "0.94.1",
         "contentHash": "11YMr7FnAbL83bQmVxlhbIKHvSLxjO81D12Ej0QMSGXMDTxNA9MTOa4MQxx43nv5el/efuPHwzyrj6a5ha2gug=="
       },
+      "sunder.app.bridge": {
+        "type": "Project",
+        "dependencies": {
+          "Avalonia": "[12.1.4, )"
+        }
+      },
       "sunder.host.client": {
         "type": "Project",
         "dependencies": {
@@ -298,14 +304,15 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.package.hosting": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.13, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Package.Format": "[1.0.0, )",
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.package.projections": {
@@ -346,13 +353,14 @@
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.1.4, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "Markdig": {

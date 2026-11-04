@@ -132,10 +132,11 @@
     },
     "appTarget": {
       "type": "object", "additionalProperties": false,
-      "required": ["role", "rid", "kind", "entryPoint", "targetFramework", "sdkVersion", "requiredHostCapabilities", "views", "executionRuntime", "executionRuntimeBinding"],
+      "required": ["role", "rid", "kind", "entryPoint", "targetFramework", "sdkVersion", "requiredHostCapabilities", "views", "executionRuntime", "executionRuntimeBinding", "avaloniaVersion"],
       "properties": {
         "role": { "const": "app" }, "rid": { "$ref": "#/$defs/text" }, "kind": { "enum": ["avalonia", "web"] },
         "entryPoint": { "$ref": "#/$defs/text" }, "targetFramework": { "$ref": "#/$defs/optionalText" }, "sdkVersion": { "anyOf": [{ "$ref": "#/$defs/version" }, { "type": "null" }] },
+        "avaloniaVersion": { "anyOf": [{ "$ref": "#/$defs/version" }, { "type": "null" }] },
         "requiredHostCapabilities": { "type": "array", "maxItems": 128, "uniqueItems": true, "items": { "$ref": "#/$defs/text" } },
         "views": { "type": "array", "maxItems": 128, "items": { "$ref": "#/$defs/appView" } },
         "executionRuntime": { "type": "null" }, "executionRuntimeBinding": { "type": "null" }

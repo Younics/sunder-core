@@ -866,7 +866,8 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
             document["targets"]!.AsArray().Add(new JsonObject
             {
                 ["role"] = "app", ["rid"] = "linux-x64", ["kind"] = "web", ["entryPoint"] = "web/index.html",
-                ["requiredHostCapabilities"] = new JsonArray("rpc.v1"),
+                ["sdkVersion"] = "1.0.0",
+                ["requiredHostCapabilities"] = new JsonArray("rpc.v1", "web-bridge.v1"),
                 ["views"] = new JsonArray(new JsonObject
                 {
                     ["viewId"] = "example.generated.main", ["displayName"] = "App", ["route"] = "/", ["defaultPlacement"] = "middle", ["showInHotbar"] = true,
@@ -1076,7 +1077,7 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         {
             BuildEngine = new BuildEngine(), TargetAssemblyPath = assemblyPath, EntryAssembly = Path.GetFileName(assemblyPath),
             ManifestOutputPath = Path.Combine(Intermediate, "sunder-package.json"), ProjectDirectory = _root,
-            PackageVersion = generation.PackageVersion, TargetFramework = "net10.0", SdkPackageVersion = "1.1.0", ReferencePaths = generation.ReferencePaths,
+            PackageVersion = generation.PackageVersion, TargetFramework = "net10.0", ReferencePaths = generation.ReferencePaths,
             AuthoredAssemblyPaths = [new TaskItem(assemblyPath)], PackageTargets = [target], OutputType = "Exe", RuntimeIdentifier = "linux-x64",
             ContractBundles = generation.ContractBundles, BindingSnapshots = generation.BindingSnapshots,
             RpcProviders = generation.RpcProviders, UsesContracts = generation.RpcUses, AuthoringReceipts = generation.AuthoringReceipts,

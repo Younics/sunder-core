@@ -7,5 +7,11 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="AppTargetFramework" Value="$(TargetFramework)" />
+    <AssemblyMetadata Include="AppAvaloniaVersion" Value="$(SunderAvaloniaVersion)" />
   </ItemGroup>
 </Project>

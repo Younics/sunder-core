@@ -1098,7 +1098,6 @@ public sealed class SunderPackageArchiveInstallerTests
             runtimeIdentifiers: runtimeIdentifiers,
             runtimeRequiredHostCapabilities: sensitiveDockerEnvironment
                 ? [
-                    "sdk-baseline-1-1.v1",
                     "core.v1",
                     SunderSdkCapabilities.DockerEnvironmentV1,
                     "rpc.v1",

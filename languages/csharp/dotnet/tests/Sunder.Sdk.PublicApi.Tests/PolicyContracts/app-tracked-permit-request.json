@@ -17,10 +17,13 @@
     "kind": "web",
     "entryPoint": "index.html",
     "targetFramework": null,
-    "sdkVersion": "1.1.0",
+    "sdkVersion": "1.0.0",
     "executionRuntime": null,
     "executionRuntimeBinding": null,
-    "requiredHostCapabilities": [],
+    "avaloniaVersion": null,
+    "requiredHostCapabilities": [
+      "web-bridge.v1"
+    ],
     "views": []
   }
 }

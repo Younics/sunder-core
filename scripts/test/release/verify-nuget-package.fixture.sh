@@ -24,8 +24,6 @@ unsigned_package="$fixture_dir/local-unsigned.nupkg"
 tampered_package="$fixture_dir/published-tampered.nupkg"
 wrong_signer_package="$fixture_dir/published-wrong-signer.nupkg"
 
-bash "$fixture_scripts/verify-nuget-source.fixture.sh"
-
 if [[ $# -eq 1 ]]; then
   cp "$1" "$signed_package"
 else

@@ -80,9 +80,10 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
       "kind": "avalonia",
       "entryPoint": "lib/Example.Notes.App.dll",
       "targetFramework": "net10.0",
-      "sdkVersion": "1.1.0",
+      "sdkVersion": "1.0.0",
+      "avaloniaVersion": "12.1.4",
       "requiredHostCapabilities": [
-        "sdk-baseline-1-1.v1",
+        "app-bridge.v1",
         "core.v1",
         "contributions.v1",
         "views.v1"
@@ -94,9 +95,8 @@ The canonical manifest is `manifest/sunder-package.json`. JSON member names are 
       "kind": "worker",
       "entryPoint": "lib/Example.Notes.Worker.dll",
       "targetFramework": "net10.0",
-      "sdkVersion": "1.1.0",
+      "sdkVersion": "1.0.0",
       "requiredHostCapabilities": [
-        "sdk-baseline-1-1.v1",
         "core.v1",
         "contributions.v1",
         "execution-runtime.v1",
@@ -161,14 +161,20 @@ Each target is keyed by exact `(role, rid)` and contains its own activation and 
 - `rid`: `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, or `osx-arm64`;
 - `kind`: `avalonia` or `web` for App and exactly `worker` for Runtime;
 - `entryPoint`: a logical path resolved from that target's payload union;
-- `targetFramework`: optional portable target metadata;
-- `sdkVersion`: strict SemVer for every Runtime target and optional strict SemVer for other SDK-backed targets;
+- `targetFramework`: required for managed App and Worker targets;
+- `sdkVersion`: exact project-resolved SDK SemVer, admitted by supported SDK major;
+- `avaloniaVersion`: required resolved Avalonia SemVer for managed App targets;
 - `requiredHostCapabilities`: distinct capabilities validated before target loading;
 - `views`: optional declarations for web App targets.
 
 An exact target key may appear only once. Payload layers without a matching declared role or target are invalid.
 
-Every Runtime target must require `execution-runtime.v1`, `rpc.v1`, `worker-protocol.v1`, and exactly the `sdk-baseline-<major>-<minor>.v1` capability matching its `sdkVersion`. Its entry point is a module loaded by the exact bound execution runtime in an independently supervised process. A C# worker entry point is the official managed `.dll` directly under `lib/`; a Node worker entry point is a `.cjs` module. Package apphosts, directly executable entry points, legacy protocol capabilities, and generic `dotnet` or `process` capabilities are rejected rather than launched, upgraded, or interpreted as aliases.
+Every Runtime target must require `execution-runtime.v1`, `rpc.v1` and `worker-protocol.v1`. Its entry point is a module loaded by the exact bound execution runtime in an independently supervised process. A C# worker entry point is the official managed `.dll` directly under `lib/`; a Node worker entry point is a `.cjs` module. Package apphosts, directly executable entry points, legacy protocol capabilities, and generic `dotnet` or `process` capabilities are rejected rather than launched, upgraded, or interpreted as aliases.
+
+Managed App targets require `app-bridge.v1`; web App targets require `web-bridge.v1`.
+Each target must fit one complete Host implementation profile, including its SDK
+major and capabilities. Managed App admission also checks an implemented target
+framework and same-major Avalonia at least as new as the package requirement.
 
 ## Layered Payload
 

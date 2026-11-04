@@ -4,7 +4,24 @@ This document defines the Sunder V1 compatibility contract for independently ins
 
 ## Compatibility Boundary
 
-The compatibility boundary is each exact target's generated manifest metadata, the public `Sunder.Sdk*` assemblies, and Host support for those contracts. The Host validates target compatibility before loading an assembly or starting a process.
+SDK `1.0.0` is the first supported SDK release. Each exact target records its resolved
+project SDK version and the Host features it needs. App and Runtime validate these
+requirements before loading an assembly or starting a process. SDK minor/patch
+updates preserve supported older packages; supported SDK majors coexist until
+explicit retirement. Developers update ordinary NuGet/npm references, with no
+authored SDK-version list or version-switching code.
+
+SDK implementations and dependency-injection containers belong to each package.
+Managed App packages communicate with the shell through `Sunder.App.Bridge` V1:
+BCL/Avalonia signatures, JSON operations, scoped child channels, view factories and
+SDK-owned navigation callbacks. The bridge assembly is bundled in the
+`Sunder.Sdk.Avalonia` developer package, supplied by App at runtime and omitted from
+App package payloads. SDK and DI assemblies remain package-local. Shared themes
+belong to the bridge; package resources resolve in their owning load context.
+
+SDK, Worker/RPC/HTTP/browser protocols, App bridge, language runtime, package and
+domain-contract versions are independent. A new SDK major does not by itself
+require a new protocol, nor does a protocol revision reset package versions.
 
 The App/CLI-to-Runtime HTTP protocol is a separate compatibility boundary. Authenticated clients first call the unversioned `/api/handshake` endpoint and require protocol identity `dev.sunder.runtime`, a valid supported range containing the client's implemented revision, a non-empty Runtime instance id, and required feature ids before using `/api/v1`. A server advertising revisions 1–2 is accepted by a V1 client, which continues using V1 routes and payloads. The server's preferred revision must itself lie inside its advertised range. Supervisor `/api/host/handshake` follows the same rule for `/api/host/v1` clients. Product, file, and informational versions are diagnostic fields and are never interpreted as protocol SemVer. Unknown or malformed protocol data fails closed.
 
@@ -13,16 +30,25 @@ The current App and Runtime use protocol revision `1`. RPC V1 clients require th
 ## Target Compatibility Fields
 
 - `archiveFormatVersion` and `manifestVersion`: package archive and manifest schema versions.
-- `sdkVersion`: required strict SemVer for Runtime and optional strict SemVer identifying the SDK used to build another SDK-backed target.
+- `sdkVersion`: required exact strict SemVer identifying the project-resolved SDK; its major is checked against implemented support.
 - `requiredHostCapabilities`: granular Host requirements for one exact target, inferred from authored SDK usage or declared by non-.NET tooling.
+- Managed App targets also declare `targetFramework`, the resolved `avaloniaVersion`, and `app-bridge.v1`. App implements explicit target frameworks and supports an Avalonia requirement only within the same major and at least the required version.
+- Web App targets require `web-bridge.v1`; Worker targets require `worker-protocol.v1`. These capability names identify independent implementation boundaries.
 
 Every Manifest V1 Runtime target requires `worker-protocol.v1` and selects exact wire identity `sunder.worker.v1` before process launch. Missing V1 capability, Worker V3, `dotnet`, and `process` fail compatibility validation; there is no probing, downgrade, or handshake fallback.
 
 Installed package catalogs accept only current schema 5 records with complete provenance, capability grants, content identity, and inventory. Older catalogs and package layouts are rejected without migration or rewrite. `Unknown` remains valid explicit provenance for current unmanaged packages, and those packages can adopt a Registry source through the normal source-adoption operation.
 
-SDK-backed targets contain distinct V1-form capability ids. Targets built on the coordinated 1.1 line require `sdkVersion >=1.1.0 <1.2.0` and `sdk-baseline-1-1.v1`. Every Runtime target additionally requires `rpc.v1` and `worker-protocol.v1`. Missing, malformed, mismatched, or unsupported target metadata is rejected before target code runs.
+SDK-backed targets contain distinct versioned capability ids. SDK-baseline tokens
+are removed. Every Runtime target additionally requires `rpc.v1`,
+`execution-runtime.v1` and `worker-protocol.v1`. Missing, malformed, mismatched or
+unsupported metadata is rejected before target code runs.
 
-Published Sunder-to-Sunder NuGet dependencies use `[1.1.0,1.2.0)`. Coordinated npm package dependencies, generated Node templates, and runtime package dependencies use `>=1.1.0 <1.2.0`. Because `1.1.0-beta.*` sorts before the stable lower bound, the initial 1.1 baseline does not publish prereleases. Prereleases after a stable 1.1 baseline may use the same minor range.
+Developer packages own their release versions and dependency ranges. Current Node
+templates select `>=1.0.0 <2.0.0`; generation resolves the project's SDK rather than
+stamping the tooling process's SDK. Platform catalog releases are also independent:
+new selections default to stable `>=1.0.0`, explicit ranges are supported, restore
+preserves exact pins and update preserves the reviewed range unless overridden.
 
 The four `Sunder.Sdk*` developer NuGets include matching XML API documentation beside
 their consumer DLLs for IntelliSense. Release verification requires the expected
@@ -33,9 +59,19 @@ retaining explicitly authored XML content.
 
 ## Registry Resolution Profile
 
-Installable Registry resolution is filtered against the requesting Host, not only against the Registry's publication baseline. `RegistryClientCompatibilityProfile` carries the exact current `rid` and 1–8 complete `profiles`. Each `RegistrySupportedPackageProfile` contains bounded, non-empty collections of manifest versions, Runtime target kinds and Worker capabilities, plus one Worker protocol, one SDK baseline and its implemented `sdkVersionRange`. Every target must match one whole profile, including its numeric SDK range; capabilities from different profiles are never combined. Duplicate SDK-baseline/Worker-protocol pairs are rejected. Profiles and their collections are normalized before plan fingerprinting, so their input order does not affect the plan identity.
+Installable Registry resolution is filtered against the requesting Host.
+`RegistryClientCompatibilityProfile` carries the exact current `rid` and 1–8
+complete `profiles`. Each profile describes one `role`/`kind`, `manifestVersions`,
+positive `sdkMajors`, `hostCapabilities`, `targetFrameworks` and optional
+`avaloniaVersion`. Managed App profiles require shared-framework metadata. Each
+selected target must match one whole profile; capabilities from different profiles
+are never combined. Duplicate profiles are rejected. Profiles and their collections
+are normalized before fingerprinting, so input order does not affect plan identity.
 
-The current Runtime advertises one implemented profile: Manifest V1, Runtime kind `worker`, `worker-protocol.v1`, `sdk-baseline-1-1.v1`, and its complete Worker V1 allowlist. SDK range/capability admission and Registry declarations derive from the same Host-owned profile list. A future implementation can add another profile while retaining the existing one; this does not claim that Worker V2 or an incompatible App framework is implemented today.
+Current profiles implement Runtime `worker`, App `avalonia` and App `web`, each with
+supported SDK majors `[1]` and its own capabilities. Local admission and Registry
+declarations derive from the same Host-owned profile list. A future implementation
+can add another supported major while retaining existing implementations.
 
 `RegistryResolveUpdatesRequest`, `RegistryResolveInstallPlanRequest`, and `RegistryResolvePackageChangesRequest` require the envelope in their `compatibility` property. Package exact/tag GET resolution repeats `profiles`, with each value a URL-encoded JSON `RegistrySupportedPackageProfile`, and sends `rid` once. Each JSON query value is bounded to 16,384 characters and uses the same closed JSON reader as POST requests. `version` and `tag` remain mutually exclusive selection parameters. The desired target RIDs must agree with the envelope RID. The former flat, singular pre-release wire shape is not accepted as an alternative.
 
@@ -82,8 +118,8 @@ ownership are unchanged. Compatibility is not an authorization grant.
 
 Tooling stamps `rpc.consumer-requirements.v1` on consuming targets. Older Hosts
 without that capability reject those targets before activation. This is an additive
-feature on the unreleased `1.1.0` candidate, not Worker V2 or a new App framework.
-Supporting another line requires a separately implemented complete profile; explicitly
+feature in SDK `1.0.0`, independent of Worker or App framework versions.
+Supporting another major requires a complete implementation; explicitly
 removing an old profile/revision stops admitting it rather than silently upgrading
 its packages. Retained release evidence is never deleted by that runtime choice.
 
@@ -118,7 +154,7 @@ captures are inert byte-preserved archives, not current runtime/build gates or
 sources of current expected identities/hashes. They are not refreshed to create
 release evidence. A separately collected `core-current-compatibility-candidate.json`
 remains UNFROZEN / UNRELEASED and cannot replace independent released references.
-The supported-release ledger does not claim that SDK `1.1.0` or any retained
+The supported-release ledger does not claim that SDK `1.0.0` or any retained
 package has shipped.
 
 The two checks are complementary:
@@ -263,7 +299,7 @@ probes, and provided App/SDK assembly identity with retained App package activat
 | Old source / new SDK | Source archive, original locks/toolchain/options and original NuGet/npm packages. Compile unchanged C#, TS and checked-JS consumers against the new SDK/tooling: implement interfaces, derive extensible classes, use generic variance and properties/events, build generated bindings and package outputs, then execute representative behavior. | `Sunder.Sdk.PublicApi.Tests`, `Sunder.Package.Build.Tests`, template tests and Node SDK/package-tool tests |
 | Newer feature / older Host | Original older Host/App/runtime binaries plus a current package that requires the newer capability. Prove precise rejection before loading/launching target code; a baseline-only control still succeeds. Also test current Host acceptance. | `RuntimePackageManifestValidatorTests`, `RuntimeArchitectureRatchetTests`, App load-context and Host process integration suites |
 
-The existing admission tests cover compatible `1.1.x` metadata and unknown or
+The existing admission tests cover compatible SDK `1.x` metadata and unknown or
 reserved capability rejection. Existing App tests cover older requested assembly
 versions and identity/major mismatches. These are useful current-source safeguards,
 not a retained older-Host binary corpus. Register genuine inputs, then require the
@@ -272,7 +308,12 @@ API comparison cannot substitute for their source, wire or behavioral results.
 
 ## Host-Owned Type Identity
 
-Host-owned SDK/framework boundary assemblies are authoritative for in-process App targets. App substitutes only assemblies on explicit Host allowlists; package-authored assembly names never grant shared identity. Workers carry package-owned modules and dependencies while exact trusted execution runtimes provide language-runtime bytes; cross-package behavior uses schema-first RPC rather than shared CLR types. For an allowlisted Host assembly:
+The Host owns App bridge and Avalonia framework type identity. SDK, DI and logging
+assemblies remain package-local. App substitutes only assemblies on explicit Host
+allowlists; package-authored assembly names never grant shared identity. Workers
+carry package-owned modules and dependencies while exact trusted execution runtimes
+provide language-runtime bytes; cross-package behavior uses schema-first RPC rather
+than shared CLR types. For an allowlisted Host assembly:
 
 - simple name, culture, and public-key token must match exactly;
 - substitution is allowed only within the requested assembly major version;
@@ -286,7 +327,8 @@ Current SDK capabilities are:
 
 | Capability | SDK Surface |
 | --- | --- |
-| `sdk-baseline-1-1.v1` | clean-break 1.1 contract identity required on every package |
+| `app-bridge.v1` | managed App bridge activation and scoped host channels |
+| `web-bridge.v1` | browser App bridge |
 | `core.v1` | `ISunderAppPackageModule`, `IPackageContext`, and Worker context contracts |
 | `packaging.v1` | canonical package id, strict SemVer, version-range primitives, and package metadata attributes |
 | `contributions.v1` | `ISunderAppContributionRegistry` and immutable Worker contribution options |

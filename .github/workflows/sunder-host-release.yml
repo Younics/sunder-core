@@ -10,9 +10,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validation:
-    uses: ./.github/workflows/sunder-host-validation.yml
+    uses: ./.github/workflows/sunder-ci.yml
     with:
-      include-app-packaging: false
+      scope: host
     permissions:
       contents: read
 

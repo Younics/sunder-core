@@ -27,10 +27,13 @@ prerelease announcements use `make_latest=false`. npm consumer channels are
 ## Existing workflow checks
 
 `sunder-sdk-release.yml` owns protected-main pushes and manual dispatch on `main`.
-It selects versions, calls the reusable `sunder-ci.yml`, stages tested archives,
+It selects versions, calls the reusable `sunder-ci.yml` with `scope: sdk`, stages tested archives,
 publishes selected packages and finalizes their project releases in the same run.
 There is no tag redispatch, separate approval workflow or per-release configuration.
-`sunder-ci.yml` also runs for PRs, merge queues, weekly schedules and manual source validation.
+On main, `sunder-ci.yml` runs complementary `repository` checks for the App and CI
+policy. PRs, merge queues, weekly schedules and default manual validation use `all`.
+Desktop build, test and installer failures therefore belong to App validation, while
+SDK validation retains package-side Avalonia/bridge contracts and Host/CLI consumers.
 
 ### Configuration ownership
 
@@ -43,12 +46,15 @@ Routine source, package-version and toolchain changes do not require workflow ed
 | `eng/ci/platforms.json` | Native RIDs, runner labels, signing runner exceptions and packaging-smoke platforms |
 | `Directory.Packages.props`, `eng/release/tooling.json` | Velopack version and release-tool SDK/signing-client pins |
 | `eng/test-oracles/ci-scenarios.json`, `template-smoke.json` | Required test scenarios and generated-template variants |
+| `eng/test-oracles/core-test-policy.json` | Component scopes, test/lane ownership and expected skips |
 
 `scripts/ci/core_ci.py` prepares source, templates and interop inputs using project
 metadata and generated output identities. `scripts/release/` owns component packaging,
 signing setup, DMG verification and Full-only feeds. Workflows retain job order,
 permissions, protected environments, credential scopes, artifact transport and action
 SHA pins. Test additions under a scenario's declared owner are discovered automatically.
+Build roots, prerequisites and report audits use the same scope. Ordinary setup reads
+only development toolchains; App packaging explicitly requests Velopack/signing metadata.
 
 Validation retains:
 
@@ -67,8 +73,9 @@ The test feed is separate from the archives eligible for publication.
 
 `sunder-host-validation.yml` provides native platform/process and App packaging
 checks, including actual official .NET/Node installation and Worker launch on all
-six RIDs. App and Host tags depend on native validation; Host tags omit App
-bundle/installer checks. CLI tags execute every produced self-contained binary.
+six RIDs for scopes containing Host consumers. App tags require App and Host
+validation; Host tags use the Host scope, and CLI tags use the CLI scope.
+CLI tags execute every produced self-contained binary.
 Host tags exercise authenticated Supervisor/Runtime readiness and shutdown.
 
 Supported RIDs are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`

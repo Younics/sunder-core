@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readlink, rm, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { editPrivateProjectMetadata, type PrivateMetadataEdit } from "../src/metadata-edit";
 import { generateRpcBindings, rpcBindingsOutputRoot } from "../src/rpc-bindings";
 import { contractsCommand } from "../src/rpc-contracts";
-import { emptyLock } from "./service-fixtures";
+import { emptyLock, installFixtureSdk } from "./service-fixtures";
 
 const template = resolve(__dirname, "../../../create-sunder-package/template-react-node");
 async function project(): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-metadata-edit-"));
+  await installFixtureSdk(root);
   for (const path of ["sunder.package.json", "src/services.ts", "app/src/App.tsx", "app/index.html"]) {
     const text = (await readFile(resolve(template, path), "utf8"))
       .replaceAll("sunderpackageidscaffoldtoken", "example.old")
@@ -40,7 +41,8 @@ async function files(root: string): Promise<Map<string, Buffer>> {
   const walk = async (directory: string, prefix: string): Promise<void> => {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       const path = resolve(directory, entry.name); const relative = prefix + entry.name;
-      if (entry.isDirectory()) await walk(path, relative + "/"); else result.set(relative, await readFile(path));
+      if (entry.isDirectory()) await walk(path, relative + "/");
+      else result.set(relative, entry.isSymbolicLink() ? Buffer.from("link:" + await readlink(path)) : await readFile(path));
     }
   }; await walk(root, ""); return result;
 }

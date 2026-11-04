@@ -1,5 +1,5 @@
 # sunder-public-api-v2
-assembly Sunder.Sdk.Worker, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
+assembly Sunder.Sdk.Worker, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("worker-protocol.v1")
 type public interface Sunder.Sdk.Worker.ISunderWorkerActivationService
   method public abstract virtual System.Threading.Tasks.ValueTask ActivateAsync(Sunder.Sdk.Worker.SunderWorkerContext context, System.Threading.CancellationToken cancellationToken = null)

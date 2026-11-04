@@ -32,7 +32,6 @@ import {
 import type { BuildOptions, Metafile } from "esbuild";
 import { build as buildEsbuild, context, type BuildContext } from "esbuild";
 import type { Plugin as VitePlugin } from "vite" with { "resolution-mode": "import" };
-import { packageToolCompatibility } from "./compatibility";
 import { NODE_TARGET, NODE_RUNTIME_RANGE, NODE_RUNTIME_RANGES, SUPPORTED_NODE_TARGETS } from "./toolchains.generated";
 import type { RegistryOriginOptions } from "./rpc-contract-lock";
 import { validateDependencyVersionRange } from "./dependency-range";
@@ -252,7 +251,7 @@ function devBuildOptions(project: PreparedProject, bundlePath: string): BuildOpt
     sourcemap: false,
     metafile: true,
     logLevel: "info",
-    ...workerResolutionOptions,
+    ...workerResolutionOptions(project.sdk),
     ...(project.ownedRpc === undefined ? {} : { tsconfigRaw: {} }),
     plugins: ownedRpcPlugins(project),
   };
@@ -263,6 +262,7 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
   const inputWatchers = new Map<string, FSWatcher>();
   let watchedInputs = new Set<string>();
   let producerInputs = new Set<string>();
+  let watchedSdk = "";
   const realProjectRoot = await realpath(projectRoot);
   const inputIdentity = (path: string): string => {
     const part = relative(projectRoot, path);
@@ -304,8 +304,15 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
     }
   };
   const updateInputWatchers = (session: DevWatchSession): void => {
+    const sdk = session.project.sdk;
+    const selection = JSON.stringify([sdk.sdkPackageRoot, sdk.sdkMetadata]);
+    if (selection !== watchedSdk) {
+      for (const watcher of inputWatchers.values()) watcher.close();
+      inputWatchers.clear();
+      watchedSdk = selection;
+    }
     producerInputs = new Set(session.project.ownedRpc?.producerFiles.map(inputIdentity) ?? []);
-    watchedInputs = new Set([...producerInputs, ...session.workerInputs,
+    watchedInputs = new Set([...producerInputs, ...[sdk.sdkPackageJson, dirname(sdk.sdkPackageJson), dirname(dirname(sdk.sdkPackageJson))].map(inputIdentity), ...session.workerInputs,
       ...(session.webInputs?.files ?? []), ...(session.webInputs?.configFiles ?? [])]);
     const directories = new Set([...watchedInputs].filter(path => !isInside(realProjectRoot, path)
       || relative(realProjectRoot, path).split(sep).includes("node_modules")).map(dirname));
@@ -487,6 +494,8 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
     // node_modules/.vite-temp is available (for example a raw Worker fixture).
     if (/(?:^|\/)vite\.config\.[cm]?[jt]s\.timestamp-\d+-[a-f0-9]+\.mjs$/u.test(relativeName)) return;
     const segments = relativeName.split("/");
+    if (relativeName === "node_modules" || relativeName === "node_modules/@sunder" || relativeName === "node_modules/@sunder/sdk"
+      || relativeName.startsWith("node_modules/@sunder/sdk/")) { scheduleOperation(); return; }
     if (segments.some((segment) => segment === "node_modules"
       || segment === ".vite-temp"
       || segment === ".git"
@@ -547,7 +556,7 @@ export async function bundleProductionWithGeneratedRpcBindings(project: Prepared
     minify: true,
     legalComments: "none",
     logLevel: "info",
-    ...workerResolutionOptions,
+    ...workerResolutionOptions(project.sdk),
     ...(project.ownedRpc === undefined ? {} : { tsconfigRaw: {} }),
     plugins: ownedRpcPlugins(project),
   });
@@ -578,7 +587,7 @@ export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {
   const discoveryRoot = requireDiscoveryRoot(input.discoveryRoot, leafRoot);
   await requireRegularFile(input.modulePath, "Bundled Worker module");
   await requireRegularFile(input.workerNoticePath, "Bundled worker dependency notice");
-  const compatibility = packageToolCompatibility();
+  const compatibility = input.project.sdk;
   const manifest = createManifest(input.project, [{
     role: "runtime",
     rid: input.rid,
@@ -644,7 +653,7 @@ async function writeWebTargetLeafLocked(
       await validateWebOutput(app, webRoot);
       await copyDirectory(webRoot, resolve(stagingRoot, "payload", "app", rid));
       await copyContracts(project, stagingRoot, new Set(["app"]));
-      await writeCanonicalPackageMetadata(stagingRoot, createManifest(project, [webTarget(app, rid,project.config)]));
+      await writeCanonicalPackageMetadata(stagingRoot, createManifest(project, [webTarget(app, rid, project)]));
     },
     false,
     () => revalidateOwnedRpc(project),
@@ -734,7 +743,7 @@ export async function aggregateAndPack(
         // and compare the production module too, even for metadata-identical edits.
         const fresh = await buildEsbuild({ absWorkingDir: project.root, entryPoints: [resolveInside(project.root, project.config.entry, "entry")],
           bundle: true, platform: "node", format: "cjs", target: NODE_TARGET, sourcemap: false, minify: true, legalComments: "none", logLevel: "silent",
-          ...workerResolutionOptions, tsconfigRaw: {}, write: false, plugins: ownedRpcPlugins(project) });
+          ...workerResolutionOptions(project.sdk), tsconfigRaw: {}, write: false, plugins: ownedRpcPlugins(project) });
         const expectedHash = sha256(fresh.outputFiles![0]!.contents);
         for (const leaf of leaves) if (leaf.manifest.targets[0]!.role === "runtime" && leaf.files.get(NODE_WORKER_ENTRY_POINT)?.sha256 !== expectedHash) throw new Error("Prebuilt Worker module differs from fresh full ordinary source; rebuild before release packing.");
       }
@@ -827,12 +836,10 @@ export async function aggregateAndPack(
 }
 
 function workerTargetCapabilities(config: SunderNodePackageConfig): readonly string[] {
-  const compatibility = packageToolCompatibility();
   return [
     "core.v1",
     "execution-runtime.v1",
     "rpc.v1",
-    compatibility.sdkBaselineCapability,
     "worker-protocol.v1",
     ...config.workerCapabilities,
   ].sort(ordinal);
@@ -847,7 +854,7 @@ async function emitDevTree(
   beforeCommit?: () => void,
 ): Promise<void> {
   const root = resolve(project.outputRoot, "sunder-dev");
-  const compatibility = packageToolCompatibility();
+  const compatibility = project.sdk;
   const targets: TargetManifest[] = [{
     role: "runtime",
     rid,
@@ -858,7 +865,7 @@ async function emitDevTree(
     requiredHostCapabilities: workerTargetCapabilities(project.config),
     executionRuntime: NODE_EXECUTION_RUNTIME,
   }];
-  if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid,project.config));
+  if (project.config.app !== undefined) targets.push(webTarget(project.config.app, rid, project));
   const manifest = createManifest(project, targets);
   await withOutputLocks([root], async () => {
     await assertReplaceableGeneratedDirectory(root);
@@ -1093,6 +1100,7 @@ async function buildWebAssetsLocked(
       await buildVite({
         root: appRoot,
         base: "./",
+        resolve: { alias: Object.entries(project.sdk.modules).map(([find, replacement]) => ({ find: new RegExp("^" + find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"), replacement })) },
         plugins: [metadataPlugin],
         build: {
           outDir: stagingRoot,
@@ -1163,10 +1171,10 @@ async function copyDirectory(source: string, destination: string): Promise<void>
 }
 
 function webTargetCapabilities(config:SunderNodePackageConfig):readonly string[]{
-  return ["core.v1","rpc.v1",packageToolCompatibility().sdkBaselineCapability,"views.v1",...(config.workerCapabilities.includes("rpc.extended-deadline.v1")?["rpc.extended-deadline.v1"]:[])].sort(ordinal);
+  return ["core.v1","rpc.v1","views.v1","web-bridge.v1",...(config.workerCapabilities.includes("rpc.extended-deadline.v1")?["rpc.extended-deadline.v1"]:[])].sort(ordinal);
 }
-function webTarget(app: AppConfig, rid: SunderRid,config:SunderNodePackageConfig): TargetManifest {
-  const compatibility = packageToolCompatibility();
+function webTarget(app: AppConfig, rid: SunderRid, project: LoadedProject): TargetManifest {
+  const compatibility = project.sdk;
   return {
     role: "app",
     rid,
@@ -1174,7 +1182,7 @@ function webTarget(app: AppConfig, rid: SunderRid,config:SunderNodePackageConfig
     entryPoint: app.entryPoint,
     targetFramework: "web",
     sdkVersion: compatibility.sdkVersion,
-    requiredHostCapabilities: webTargetCapabilities(config),
+    requiredHostCapabilities: webTargetCapabilities(project.config),
     views: app.views.map((view) => ({ ...view })),
   };
 }
@@ -1351,7 +1359,7 @@ async function readLeaf(root: string, config: SunderNodePackageConfig, project: 
   }
   if (index.files.length > MAXIMUM_ARCHIVE_ENTRIES) throw new Error(`Target leaf '${root}' contains too many indexed files.`);
   const target = manifest.targets[0]!;
-  validateTarget(target, manifest.id, root, config, manifest.usesContracts.some(use => use.role === target.role && use.consumerRequirements !== undefined));
+  validateTarget(target, manifest.id, root, config, project.sdk.sdkVersion, manifest.usesContracts.some(use => use.role === target.role && use.consumerRequirements !== undefined));
   validateManifestMetadata(manifest, new Set([target.role]), `Target leaf '${root}'`, project.ownedRpc ? createManifest(project, manifest.targets) : undefined);
   const bundledDescriptorPaths = new Set(manifest.contractBundles.map((bundle) => bundle.descriptorPath));
   const files = new Map<string, LeafFile>();
@@ -1658,6 +1666,7 @@ function validateTarget(
   packageId: string,
   root: string,
   config: SunderNodePackageConfig,
+  sdkVersion: string,
   consumerCompatible = false,
 ): void {
   const value = manifestRecord(target, `Target leaf '${root}' target`);
@@ -1679,7 +1688,6 @@ function validateTarget(
   if (target.role === "runtime" && target.kind !== "worker") {
     throw new Error(`Target leaf '${root}' Runtime target kind '${target.kind}' is invalid; Manifest V1 Runtime targets must use 'worker'.`);
   }
-  const compatibility = packageToolCompatibility();
   const baselineCapabilities = target.role === "app"
     ? webTargetCapabilities(config)
     : workerTargetCapabilities(config);
@@ -1691,7 +1699,7 @@ function validateTarget(
     throw new Error(`Target leaf '${root}' Runtime target requiredHostCapabilities must exactly match [${expectedCapabilities.join(", ")}].`);
   }
   const common = SUPPORTED_RIDS.includes(target.rid as SunderRid)
-    && target.sdkVersion === compatibility.sdkVersion
+    && target.sdkVersion === sdkVersion
     && capabilitiesMatch
     && normalizeLogicalPath(target.entryPoint) === target.entryPoint;
   const workerTarget = target.role === "runtime"

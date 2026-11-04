@@ -9,6 +9,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
     <ProjectReference Include="..\Sunder.Package.Projections\Sunder.Package.Projections.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Contracts\Sunder.Runtime.Contracts.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.LocalState\Sunder.Runtime.LocalState.csproj" />

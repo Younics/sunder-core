@@ -1,5 +1,5 @@
 # sunder-public-api-v2
-assembly Sunder.Package.Build, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
+assembly Sunder.Package.Build, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
 type public sealed class Sunder.Package.Build.Tasks.AggregateSunderPackageTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method public .ctor()
   field public const System.String MarkerFileSuffix = ".sunder-aggregate-generated-output"

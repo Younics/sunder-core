@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import {computeRpcDescriptorSha256,computeRpcAbiSha256} from "@sunder/sdk";
 import { loadProjectWithOwnedFrame } from "../src/model";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
-import { emptyLock,fixtureSource,catalogFeed } from "./service-fixtures";
+import { emptyLock,fixtureSource,catalogFeed,installFixtureSdk } from "./service-fixtures";
 import { MODEL_PROJECTION_PATH,parseModelProjectionDocument,validateServiceReferenceSchema,readModelProjection,modelProjectionOuter,validateModelProjectionSet } from "../src/rpc-model-projection";
 import { canonicalCandidateFixture } from "./model-projection-fixtures";
 import { parseContractLock } from "../src/rpc-contract-lock";
@@ -73,6 +73,7 @@ export const documents=defineService({
 
 async function fixture(extension:"ts"|"js"){
   const root=await mkdtemp(join(tmpdir(),"sunder-natural-resources-"));await mkdir(join(root,"src"));
+  await installFixtureSdk(root);
   await writeFile(join(root,`src/services.${extension}`),fixtureSource(authored,extension));
   await writeFile(join(root,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.resources",name:"Natural resources",version:"1.0.0",workerCapabilities:[],services:{module:`src/services.${extension}`}}));
   await writeFile(join(root,"sunder-contracts.lock.json"),emptyLock);

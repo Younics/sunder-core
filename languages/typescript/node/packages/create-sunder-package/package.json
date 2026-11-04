@@ -1,6 +1,6 @@
 {
   "name": "create-sunder-package",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "description": "Scaffold runtime-backed Sunder Node Worker packages and combined React App packages.",
   "license": "MIT",
   "repository": {
@@ -38,6 +38,6 @@
     "test": "npm run typecheck && npm run build && node -e \"require('node:fs').rmSync('dist-test', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test dist-test/test/*.test.js"
   },
   "dependencies": {
-    "@sunder/sdk": ">=1.1.0 <1.2.0"
+    "@sunder/sdk": ">=1.0.0 <2.0.0"
   }
 }

@@ -1,95 +1,32 @@
 using Avalonia.Controls;
-using Sunder.Sdk.Abstractions;
+using Sunder.App.Bridge;
 
 namespace Sunder.App.Services;
 
 internal static class AppPackageViewNavigator
 {
-    internal enum NavigationPreparationStatus
-    {
-        Unsupported,
-        Rejected,
-        Ready,
-    }
+    internal enum NavigationPreparationStatus { Unsupported, Rejected, Ready }
+    private static readonly IReadOnlyDictionary<string, string?> Empty = new Dictionary<string, string?>();
 
-    public static async ValueTask WarmupViewAsync(
-        Control view,
-        CancellationToken cancellationToken)
-    {
-        if (view is IPackageViewWarmupTarget viewTarget)
-        {
-            await viewTarget.WarmupAsync(cancellationToken);
-            return;
-        }
+    public static ValueTask WarmupViewAsync(Control view, CancellationToken cancellationToken)
+        => AppViewCallbacksV1.Get(view)?.WarmupAsync(cancellationToken) ?? ValueTask.CompletedTask;
 
-        if (view.DataContext is IPackageViewWarmupTarget dataContextTarget)
-        {
-            await dataContextTarget.WarmupAsync(cancellationToken);
-        }
-    }
-
-    public static async ValueTask NotifyViewNavigatedAsync(
-        Control view,
-        string viewId,
-        IReadOnlyDictionary<string, string?>? parameters,
-        CancellationToken cancellationToken)
-    {
-        var context = new PackageViewNavigationContext(viewId, parameters ?? new Dictionary<string, string?>());
-        if (view is IPackageViewNavigationTarget viewTarget)
-        {
-            await viewTarget.OnNavigatedToAsync(context, cancellationToken);
-            return;
-        }
-
-        if (view.DataContext is IPackageViewNavigationTarget dataContextTarget)
-        {
-            await dataContextTarget.OnNavigatedToAsync(context, cancellationToken);
-        }
-    }
+    public static ValueTask NotifyViewNavigatedAsync(Control view, string viewId,
+        IReadOnlyDictionary<string, string?>? parameters, CancellationToken cancellationToken)
+        => AppViewCallbacksV1.Get(view)?.NavigateAsync(viewId, parameters ?? Empty, cancellationToken) ?? ValueTask.CompletedTask;
 
     public static bool SupportsNavigationPreparation(Control view)
-        => view is IPackageViewNavigationPreparationTarget
-           || view.DataContext is IPackageViewNavigationPreparationTarget;
+        => AppViewCallbacksV1.Get(view)?.SupportsPreparation == true;
 
-    public static async ValueTask<NavigationPreparationStatus> PrepareViewNavigationAsync(
-        Control view,
-        string viewId,
-        IReadOnlyDictionary<string, string?>? parameters,
-        CancellationToken cancellationToken)
+    public static async ValueTask<NavigationPreparationStatus> PrepareViewNavigationAsync(Control view, string viewId,
+        IReadOnlyDictionary<string, string?>? parameters, CancellationToken cancellationToken)
     {
-        var target = ResolvePreparationTarget(view);
-        if (target is null)
-        {
-            return NavigationPreparationStatus.Unsupported;
-        }
-
-        var context = new PackageViewNavigationContext(
-            viewId,
-            parameters ?? new Dictionary<string, string?>());
-        return await target.PrepareNavigationAsync(context, cancellationToken)
-            ? NavigationPreparationStatus.Ready
-            : NavigationPreparationStatus.Rejected;
+        if (AppViewCallbacksV1.Get(view) is not { SupportsPreparation: true } callbacks) return NavigationPreparationStatus.Unsupported;
+        return await callbacks.PrepareAsync(viewId, parameters ?? Empty, cancellationToken)
+            ? NavigationPreparationStatus.Ready : NavigationPreparationStatus.Rejected;
     }
 
-    public static async ValueTask NotifyViewNavigationPresentedAsync(
-        Control view,
-        string viewId,
-        IReadOnlyDictionary<string, string?>? parameters,
-        CancellationToken cancellationToken)
-    {
-        if (ResolvePreparationTarget(view) is not { } target)
-        {
-            return;
-        }
-
-        await target.OnNavigationPresentedAsync(
-            new PackageViewNavigationContext(
-                viewId,
-                parameters ?? new Dictionary<string, string?>()),
-            cancellationToken);
-    }
-
-    private static IPackageViewNavigationPreparationTarget? ResolvePreparationTarget(Control view)
-        => view as IPackageViewNavigationPreparationTarget
-           ?? view.DataContext as IPackageViewNavigationPreparationTarget;
+    public static ValueTask NotifyViewNavigationPresentedAsync(Control view, string viewId,
+        IReadOnlyDictionary<string, string?>? parameters, CancellationToken cancellationToken)
+        => AppViewCallbacksV1.Get(view)?.PresentedAsync(viewId, parameters ?? Empty, cancellationToken) ?? ValueTask.CompletedTask;
 }

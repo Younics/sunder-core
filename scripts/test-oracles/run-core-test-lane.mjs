@@ -1,8 +1,14 @@
-import { loadCoreTestModel } from "./core-test-policy.mjs";
+import { loadCoreTestModel, repositoryRoot } from "./core-test-policy.mjs";
 import { currentOperatingSystem, missingPrerequisites } from "./test-lane-prerequisites.mjs";
 
-const { policy, declarations } = loadCoreTestModel();
 const arguments_ = process.argv.slice(2);
+const scopeIndex = arguments_.indexOf("--scope");
+if (scopeIndex >= 0 && (!arguments_[scopeIndex + 1] || arguments_[scopeIndex + 1].startsWith("--")
+    || arguments_.indexOf("--scope", scopeIndex + 1) >= 0)) {
+  fail("--scope must be specified once with one value.");
+}
+const scope = scopeIndex < 0 ? "all" : arguments_.splice(scopeIndex, 2)[1];
+const { policy, declarations } = loadCoreTestModel(repositoryRoot, undefined, scope);
 const primaryLaneIndex = arguments_.indexOf("--primary-lane");
 const testIndex = arguments_.indexOf("--test");
 const selectorIndexes = [primaryLaneIndex, testIndex].filter((index) => index >= 0);

@@ -4,6 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
+export function ciScenarios(components, profile, root = repositoryRoot) {
+  const scenarios = JSON.parse(readFileSync(resolve(root, "eng/test-oracles/ci-scenarios.json"), "utf8"));
+  return Object.entries(scenarios).filter(([, scenario]) => scenario.profile === profile && components.includes(scenario.component))
+    .map(([name]) => name);
+}
+
 export function selectScenario(name, declarations, operatingSystem, root = repositoryRoot) {
   const scenarios = JSON.parse(readFileSync(resolve(root, "eng/test-oracles/ci-scenarios.json"), "utf8"));
   const scenario = scenarios[name];

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { installFixtureSdk } from "./service-fixtures";
 import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +15,7 @@ import { build } from "esbuild";
 
 async function project(source: string, extension: string) {
   const root = await mkdtemp(join(tmpdir(), "sunder-services-")); await mkdir(join(root, "src"));
+  await installFixtureSdk(root);
   await writeFile(join(root, `src/services.${extension}`), source);
   await writeFile(join(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.services", name: "Services", version: "2.0.0-beta.1+build.7", workerCapabilities: [], services: { module: `src/services.${extension}` } }));
   await writeFile(join(root, "sunder-contracts.lock.json"), JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2) + "\n");

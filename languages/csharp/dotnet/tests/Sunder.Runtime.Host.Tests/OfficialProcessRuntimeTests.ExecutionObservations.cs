@@ -140,7 +140,7 @@ public sealed partial class OfficialProcessRuntimeTests
             Targets = [package.SelectedTarget!, new SunderPackageTargetManifest
             {
                 Role = "app", Rid = package.SelectedTarget!.Rid, Kind = "web", EntryPoint = "index.html",
-                SdkVersion = "1.1.0", RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v1"], Views = [],
+                SdkVersion = "1.0.0", RequiredHostCapabilities = ["web-bridge.v1", "rpc.v1"], Views = [],
             }],
             ContractBundles = [new SunderPackageContractBundleManifest
             {

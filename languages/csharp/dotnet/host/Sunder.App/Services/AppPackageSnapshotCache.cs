@@ -458,6 +458,7 @@ internal sealed class AppPackageSnapshotCache
             target.EntryPoint,
             target.TargetFramework,
             target.SdkVersion,
+            target.AvaloniaVersion,
             string.Join('\0', target.RequiredHostCapabilities),
             string.Join('\0', target.Views.Select(static view => string.Join(
                 '\u001f',
@@ -486,6 +487,7 @@ internal sealed class AppPackageSnapshotCache
             || !string.Equals(target.EntryPoint, descriptor.EntryPoint, StringComparison.Ordinal)
             || !string.Equals(target.TargetFramework, descriptor.TargetFramework, StringComparison.Ordinal)
             || !string.Equals(target.SdkVersion, descriptor.SdkVersion, StringComparison.Ordinal)
+            || !string.Equals(target.AvaloniaVersion, descriptor.AvaloniaVersion, StringComparison.Ordinal)
             || !(target.RequiredHostCapabilities ?? []).Select(static value => value!)
                 .SequenceEqual(descriptor.RequiredHostCapabilities, StringComparer.Ordinal)
             || !(target.Views ?? []).Where(static view => view is not null)
@@ -510,6 +512,7 @@ internal sealed class AppPackageSnapshotCache
            && string.Equals(left.EntryPoint, right.EntryPoint, StringComparison.Ordinal)
            && string.Equals(left.TargetFramework, right.TargetFramework, StringComparison.Ordinal)
            && string.Equals(left.SdkVersion, right.SdkVersion, StringComparison.Ordinal)
+           && string.Equals(left.AvaloniaVersion, right.AvaloniaVersion, StringComparison.Ordinal)
            && left.RequiredHostCapabilities.SequenceEqual(right.RequiredHostCapabilities, StringComparer.Ordinal)
            && left.Views.SequenceEqual(right.Views);
 

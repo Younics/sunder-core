@@ -11,7 +11,7 @@
 > **Decision date:** 2026-09-05
 > **Compatible Installation decision:** Explicitly selected by the user on 2026-09-11.
 >
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, RPC descriptor V1,
+> **Applies to:** Sunder SDK `1.0.0`, package manifest V1, RPC descriptor V1,
 > Worker protocol V1, TypeScript 6.0.3, and ES2023.
 
 **Current ordinary-service authoring:** [Ordinary C# services](ORDINARY-SERVICES.md) and the

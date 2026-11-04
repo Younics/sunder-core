@@ -27,19 +27,20 @@ def platforms(root=ROOT, profile="native"):
                         for row in rows if profile != "packaging" or row.get("packagingSmoke")]}
 
 
-def toolchains(root=ROOT):
+def toolchains(root=ROOT, packaging=False):
     root = Path(root)
     policy = json.loads((root / "eng/toolchains.json").read_text())
     sdk = json.loads((root / "global.json").read_text())["sdk"]["version"]
     if sdk != policy["dotnetSdk"]:
         raise ValueError("global.json differs from eng/toolchains.json")
-    tooling = json.loads((root / "eng/release/tooling.json").read_text())
-    central = ET.parse(root / "languages/csharp/dotnet/Directory.Packages.props")
-    versions = [item.attrib["Version"] for item in central.findall("./ItemGroup/PackageVersion") if item.get("Include") == "Velopack"]
-    if len(versions) != 1 or tooling["schemaVersion"] != 1:
-        raise ValueError("Ambiguous release tooling metadata")
-    result = dict(dotnet=sdk, node=policy["node"], npm=policy["npm"], velopack=versions[0],
-                  velopack_sdk=tooling["velopackSdk"], signing_sdk=tooling["signingSdk"])
+    result = dict(dotnet=sdk, node=policy["node"], npm=policy["npm"])
+    if packaging:
+        tooling = json.loads((root / "eng/release/tooling.json").read_text())
+        central = ET.parse(root / "languages/csharp/dotnet/Directory.Packages.props")
+        versions = [item.attrib["Version"] for item in central.findall("./ItemGroup/PackageVersion") if item.get("Include") == "Velopack"]
+        if len(versions) != 1 or tooling["schemaVersion"] != 1:
+            raise ValueError("Ambiguous release tooling metadata")
+        result.update(velopack=versions[0], velopack_sdk=tooling["velopackSdk"], signing_sdk=tooling["signingSdk"])
     if any(not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", value) for value in result.values()):
         raise ValueError("Toolchain versions must be exact")
     return result
@@ -49,20 +50,31 @@ def emit(values):
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
             for key, value in values.items():
-                text = json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value)
+                text = json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list, bool)) else str(value)
                 if "\n" in text or "\r" in text:
                     raise ValueError("Multiline workflow output")
                 stream.write(f"{key}={text}\n")
     print(json.dumps(values))
 
 
+def matrices(root=ROOT, scope="all"):
+    policy = json.loads((Path(root) / "eng/test-oracles/core-test-policy.json").read_text())
+    if scope not in policy["scopes"]: raise ValueError("Unknown validation scope: " + scope)
+    owners = policy["scopes"][scope]
+    return {**{profile: platforms(root, profile) for profile in ("native", "app", "packaging")},
+            "platform_tests": any(owner in owners for owner in ("sdk", "host", "app")),
+            "official_tests": "host" in owners, "app_packaging": "app" in owners}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("toolchains", "matrices"))
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--packaging", action="store_true")
+    parser.add_argument("--scope", default="all")
     args = parser.parse_args()
-    emit(toolchains(args.root) if args.action == "toolchains" else
-         {profile: platforms(args.root, profile) for profile in ("native", "app", "packaging")})
+    emit(toolchains(args.root, args.packaging) if args.action == "toolchains" else
+         matrices(args.root, args.scope))
 
 
 if __name__ == "__main__":

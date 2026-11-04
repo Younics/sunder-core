@@ -1,8 +1,6 @@
 using Avalonia.Controls;
-using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Views.Controls;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Avalonia;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.App.Services;
@@ -66,14 +64,6 @@ internal sealed class AppPackageViewRegistry
 
     internal Guid? AppGenerationId => _appGenerationId;
 
-    public void RegisterPackageView<TView>(string packageId, PackageViewRegistration registration, IServiceProvider serviceProvider)
-        where TView : Control
-        => RegisterPackageView(packageId, registration, serviceProvider, typeof(TView));
-
-    internal void RegisterPackageView<TView>(string packageId, string viewId, IServiceProvider serviceProvider)
-        where TView : Control
-        => RegisterPackageView<TView>(packageId, new PackageViewRegistration(viewId, viewId), serviceProvider);
-
     internal void RegisterPackageView(
         string packageId,
         PackageViewRegistration registration,
@@ -92,16 +82,6 @@ internal sealed class AppPackageViewRegistry
                 : _retained.FirstOrDefault(pair => pair.Value.GetPackageId(viewId) == pair.Key).Key;
         }
     }
-
-    private void RegisterPackageView(
-        string packageId,
-        PackageViewRegistration registration,
-        IServiceProvider serviceProvider,
-        Type implementationType)
-        => RegisterPackageViewFactory(
-            packageId,
-            registration,
-            () => CreateControl(serviceProvider, implementationType));
 
     private void RegisterPackageViewFactory(
         string packageId,
@@ -155,12 +135,11 @@ internal sealed class AppPackageViewRegistry
         }
     }
 
-    public void RegisterSettingsView<TView>(string packageId, IServiceProvider serviceProvider)
-        where TView : Control
+    internal void RegisterSettingsView(string packageId, Func<Control> factory)
     {
         lock (_syncRoot)
         {
-            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(serviceProvider, typeof(TView), packageId);
+            _registeredSettingsViews[packageId] = new AppRegisteredSettingsView(factory, packageId);
         }
     }
 
@@ -364,7 +343,7 @@ internal sealed class AppPackageViewRegistry
             _appGenerationId);
         try
         {
-            control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
+            control = registration.Factory();
             startupTrace?.Complete();
         }
         catch (Exception ex)
@@ -467,7 +446,7 @@ internal sealed class AppPackageViewRegistry
             _appGenerationId);
         try
         {
-            control = CreateControl(registration.ServiceProvider, registration.ImplementationType);
+            control = registration.Factory();
             startupTrace?.Complete();
         }
         catch (Exception ex)
@@ -772,12 +751,6 @@ internal sealed class AppPackageViewRegistry
         }
     }
 
-    private static Control CreateControl(IServiceProvider serviceProvider, Type implementationType)
-        // Generated composition registers the selected constructor and optional
-        // view-model binding. ActivatorUtilities alone bypasses that factory.
-        => (Control)(serviceProvider.GetService(implementationType)
-            ?? ActivatorUtilities.CreateInstance(serviceProvider, implementationType));
-
     private static string GetSettingsViewId(string packageId) => $"settings:{packageId}";
 
     private static bool DisposeCachedControls(IEnumerable<Control> controls)
@@ -887,7 +860,7 @@ internal sealed class AppPackageViewRegistry
         string PackageId,
         PackageViewRegistration Registration);
 
-    private sealed record AppRegisteredSettingsView(IServiceProvider ServiceProvider, Type ImplementationType, string PackageId);
+    private sealed record AppRegisteredSettingsView(Func<Control> Factory, string PackageId);
 }
 
 internal sealed record AppPackageSettingsViewNavigationTarget(

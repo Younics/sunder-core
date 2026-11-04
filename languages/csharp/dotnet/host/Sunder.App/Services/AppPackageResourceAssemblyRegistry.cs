@@ -1,5 +1,7 @@
 using System.Collections;
+using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.Loader;
 
 namespace Sunder.App.Services;
 
@@ -8,7 +10,6 @@ public sealed class AppPackageResourceAssemblyRegistry
     private readonly Dictionary<string, List<AppPackageResourceAssemblyRegistration>> _registrationsByAssemblyName = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<Assembly, AppPackageAvaloniaResourceCatalog?> _catalogsByAssembly = [];
     private readonly object _syncRoot = new();
-    private long _nextGeneration;
 
     public IReadOnlyList<string> RegisterPackageAssembly(string packageId, Assembly assembly)
     {
@@ -28,7 +29,7 @@ public sealed class AppPackageResourceAssemblyRegistry
                 _registrationsByAssemblyName[assemblyName] = registrations;
             }
 
-            registrations.Add(new AppPackageResourceAssemblyRegistration(packageId, assembly, ++_nextGeneration));
+            registrations.Add(new AppPackageResourceAssemblyRegistration(packageId, assembly));
             changedAssemblyNames.Add(assemblyName);
             PruneUnregisteredCatalogs();
         }
@@ -58,7 +59,7 @@ public sealed class AppPackageResourceAssemblyRegistry
                     _registrationsByAssemblyName[assemblyName] = registrations;
                 }
 
-                registrations.Add(new AppPackageResourceAssemblyRegistration(packageId, assembly, ++_nextGeneration));
+                registrations.Add(new AppPackageResourceAssemblyRegistration(packageId, assembly));
                 changedAssemblyNames.Add(assemblyName);
             }
 
@@ -157,9 +158,24 @@ public sealed class AppPackageResourceAssemblyRegistry
 
     private bool TryResolveRegistration(string assemblyName, out AppPackageResourceAssemblyRegistration registration)
     {
+        // avares names alone cannot identify a package-local SDK. Resolve under the
+        // active package's context, including lazily loaded dependency resources.
+        var context = AssemblyLoadContext.CurrentContextualReflectionContext as AppPackageLoadContext
+            ?? new StackTrace(fNeedFileInfo: false).GetFrames()
+                .Select(frame => frame.GetMethod()?.Module.Assembly)
+                .OfType<Assembly>().Select(AssemblyLoadContext.GetLoadContext)
+                .OfType<AppPackageLoadContext>().FirstOrDefault();
+        if (context is not null)
+        {
+            registration = new(string.Empty, context.ResolveResourceAssembly(assemblyName));
+            return true;
+        }
         if (_registrationsByAssemblyName.TryGetValue(assemblyName, out var registrations) && registrations.Count > 0)
         {
-            registration = registrations.MaxBy(candidate => candidate.Generation)!;
+            registration = registrations[0];
+            var selectedAssembly = registration.Assembly;
+            if (registrations.Any(candidate => !ReferenceEquals(candidate.Assembly, selectedAssembly)))
+                throw new InvalidOperationException($"Resource assembly '{assemblyName}' requires its owning package load context.");
             return true;
         }
 
@@ -230,11 +246,14 @@ public sealed class AppPackageResourceAssemblyRegistry
         }
 
         catalog = AppPackageAvaloniaResourceCatalog.TryCreate(assembly);
-        _catalogsByAssembly[assembly] = catalog;
+        // A still-draining retired view may resolve its own resources. Do not retain
+        // that context in the active registry once its registration has been removed.
+        if (_registrationsByAssemblyName.Values.Any(entries => entries.Any(entry => ReferenceEquals(entry.Assembly, assembly))))
+            _catalogsByAssembly[assembly] = catalog;
         return catalog;
     }
 
-    private sealed record AppPackageResourceAssemblyRegistration(string PackageId, Assembly Assembly, long Generation);
+    private sealed record AppPackageResourceAssemblyRegistration(string PackageId, Assembly Assembly);
 
     private sealed class AppPackageAvaloniaResourceCatalog
     {

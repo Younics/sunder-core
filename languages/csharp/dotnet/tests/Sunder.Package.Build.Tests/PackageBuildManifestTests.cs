@@ -20,8 +20,8 @@ namespace Sunder.Package.Build.Tests;
 public sealed class PackageBuildManifestTests
 {
     [Fact]
-    public void BuildTaskAssembly_UsesStable11BinaryVersion()
-        => Assert.Equal(new Version(1, 1, 0, 0), typeof(GenerateSunderPackageManifestTask).Assembly.GetName().Version);
+    public void BuildTaskAssembly_UsesStableOneBinaryVersion()
+        => Assert.Equal(new Version(1, 0, 0, 0), typeof(GenerateSunderPackageManifestTask).Assembly.GetName().Version);
 
     [Fact]
     public void GenerateManifest_InfersSdkCompatibilityMetadata()
@@ -48,6 +48,7 @@ public sealed class PackageBuildManifestTests
             Assert.Equal($"lib/{Path.GetFileName(Assembly.GetExecutingAssembly().Location)}", target.GetProperty("entryPoint").GetString());
             Assert.Equal("net10.0", target.GetProperty("targetFramework").GetString());
             Assert.False(string.IsNullOrWhiteSpace(target.GetProperty("sdkVersion").GetString()));
+            Assert.Equal("12.1.4", target.GetProperty("avaloniaVersion").GetString()!.Split('+')[0]);
         });
         Assert.Empty(root.GetProperty("contractBundles").EnumerateArray());
         Assert.Empty(root.GetProperty("usesContracts").EnumerateArray());
@@ -68,7 +69,7 @@ public sealed class PackageBuildManifestTests
         var capabilities = ReadCapabilities(root);
         Assert.Equal(new[]
         {
-            SunderSdkCapabilities.Baseline11V1,
+            "app-bridge.v1",
             SunderSdkCapabilities.CoreV1,
             SunderSdkCapabilities.PackagingV1,
             SunderSdkCapabilities.ContributionsV1,

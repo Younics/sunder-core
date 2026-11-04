@@ -1,6 +1,6 @@
 # Troubleshooting
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Start with the first failing boundary: build, archive validation, Runtime activation, App activation, or a leased call. Keep the correlation id from CLI/App errors and inspect Runtime package logs or the App session log without copying secrets into diagnostics.
 
@@ -24,10 +24,10 @@ Start with the first failing boundary: build, archive validation, Runtime activa
 
 ### SDK Compatibility Or Capability Inference Fails
 
-- Keep every Sunder developer package in `[1.1.0,1.2.0)` and restore the intended lock file.
+- Restore the project's intended NuGet/npm dependency lock after updating SDK/tooling references.
 - Remove a stale `SunderSdkPackageVersion` override; it must match the resolved SDK.
 - Read the exact unresolved dynamic-access diagnostic. Add only the required `SunderSdkCapability` and exact `SunderSdkDynamicAccess` acknowledgement.
-- Do not mix 1.0 metadata or contract assemblies with the 1.1 baseline.
+- Check the target's SDK major, role protocol, and required capabilities against the Host's complete implementation profile.
 
 ### Generated Output Path Is Rejected
 

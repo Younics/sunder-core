@@ -1,11 +1,7 @@
 using System.Reflection;
 using Avalonia.Controls;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
+using Sunder.App.Bridge;
 using Sunder.Package.Hosting;
-using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Avalonia;
-using Sunder.Sdk.Stacks;
 
 namespace Sunder.App.Services;
 
@@ -16,16 +12,12 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
         [typeof(Control).Assembly.GetName().Name!] = typeof(Control).Assembly,
         [typeof(Avalonia.AvaloniaObject).Assembly.GetName().Name!] = typeof(Avalonia.AvaloniaObject).Assembly,
         [typeof(Avalonia.Markup.Xaml.AvaloniaXamlLoader).Assembly.GetName().Name!] = typeof(Avalonia.Markup.Xaml.AvaloniaXamlLoader).Assembly,
-        [typeof(IServiceCollection).Assembly.GetName().Name!] = typeof(IServiceCollection).Assembly,
-        [typeof(ILoggerFactory).Assembly.GetName().Name!] = typeof(ILoggerFactory).Assembly,
-        [typeof(ISunderAppPackageModule).Assembly.GetName().Name!] = typeof(ISunderAppPackageModule).Assembly,
-        [typeof(IAvaloniaPackageContributionRegistry).Assembly.GetName().Name!] = typeof(IAvaloniaPackageContributionRegistry).Assembly,
-        [typeof(IPackageStackExporter).Assembly.GetName().Name!] = typeof(IPackageStackExporter).Assembly,
+        [typeof(IAppPackageEntryPointV1).Assembly.GetName().Name!] = typeof(IAppPackageEntryPointV1).Assembly,
     };
 
     private readonly HostSharedAssemblyRegistryCore _core;
 
-    public AppSharedAssemblyRegistry(IEnumerable<string> probeDirectories)
+    public AppSharedAssemblyRegistry()
     {
         _core = new HostSharedAssemblyRegistryCore(_hostSharedAssemblies);
 
@@ -39,18 +31,12 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
         _core.RegisterOptionalHostAssemblyName("Avalonia.Vulkan");
         _core.RegisterOptionalHostAssemblyName("Avalonia.MicroCom");
         _core.RegisterOptionalHostAssemblyName("MicroCom.Runtime");
-
     }
-
-    public void AddProbeDirectories(IEnumerable<string> probeDirectories)
-    {
-    }
-
-    public bool TryRemoveProbeDirectories(IEnumerable<string> probeDirectories)
-        => true;
 
     public Assembly? ResolveSharedAssembly(AssemblyName assemblyName)
         => _core.ResolveSharedAssembly(assemblyName);
+
+    internal Assembly? ResolveResourceAssembly(string name) => _core.ResolveResourceAssembly(name);
 
     internal static bool IsSharedAssemblyReferenceSatisfiedBy(
         AssemblyName requestedAssemblyName,
@@ -58,5 +44,4 @@ internal sealed class AppSharedAssemblyRegistry : IDisposable
         => HostSharedAssemblyRegistryCore.IsReferenceSatisfiedBy(requestedAssemblyName, loadedAssemblyName);
 
     public void Dispose() => _core.Dispose();
-
 }

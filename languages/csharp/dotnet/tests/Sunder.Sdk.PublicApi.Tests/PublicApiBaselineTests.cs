@@ -9,6 +9,7 @@ using Sunder.Package.Build.Tasks;
 using Sunder.Runtime.Contracts;
 using Sunder.Registry.Contracts;
 using Sunder.Package.Format;
+using Sunder.App.Bridge;
 using Xunit;
 
 namespace Sunder.Sdk.PublicApi.Tests;
@@ -19,6 +20,7 @@ public sealed class PublicApiBaselineTests
     {
         typeof(IPackageContext),
         typeof(IAvaloniaPackageContributionRegistry),
+        typeof(IAppPackageEntryPointV1),
         typeof(IPackageStackExporter),
         typeof(SunderWorker),
         typeof(HostHandshakeResponse),
@@ -38,8 +40,8 @@ public sealed class PublicApiBaselineTests
 
     [Theory]
     [MemberData(nameof(SdkContractAssemblies))]
-    public void Sdk11ContractAssembliesUseStableBinaryVersion(Assembly assembly)
-        => Assert.Equal(new Version(1, 1, 0, 0), assembly.GetName().Version);
+    public void SdkOneContractAssembliesUseStableBinaryVersion(Assembly assembly)
+        => Assert.Equal(new Version(1, 0, 0, 0), assembly.GetName().Version);
 
     [Fact]
     public void AvaloniaGeneratedImplementationTypesAreNotSupportedApi()

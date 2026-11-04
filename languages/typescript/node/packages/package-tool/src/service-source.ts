@@ -1,4 +1,5 @@
 import ts from "typescript";
+import type { PackageToolCompatibility } from "./compatibility";
 import { createHash } from "node:crypto";
 import { isPackageId, parseRpcContractDescriptor, type RpcContractDescriptor } from "@sunder/sdk";
 import { authoringBindingModel } from "./generator";
@@ -52,21 +53,26 @@ export function importedProviderMethodNames(descriptor: RpcContractDescriptor): 
 }
 
 /** The only Node service frontend. TS and checked JS share the same semantic graph. */
-export function analyzeServices(program: ts.Program, file: ts.SourceFile, sdkRoot: string, owner: string, packageVersion: string,
+export function analyzeServices(program: ts.Program, file: ts.SourceFile, selectedSdk: PackageToolCompatibility, owner: string, packageVersion: string,
   baseline: OwnedBaseline | undefined, imported: ReadonlyMap<string, LoadedContract>, syntaxNodes = 0,
   generated?: { readonly root: string; readonly contracts: readonly LoadedContract[] }): readonly SourceService[] {
   const checker = program.getTypeChecker();
+  const sdkRoot = selectedSdk.sdkPackageRoot.replaceAll("\\", "/");
   // One nominal table for the complete program, before any role filtering. A
   // structural type comparison can never establish source-model identity.
   const modelSymbols = new Map<ts.Symbol, { name: string; location: ts.Node; type: ts.Type; use: ts.Node }>();
   const modelNames = new Map<string, { symbol: ts.Symbol; location: ts.Node }>();
-  const authoring = program.getSourceFile(`${sdkRoot}/services.d.ts`);
+  const authoring = program.getSourceFile(selectedSdk.declarations["@sunder/sdk"]!);
   const sdk = authoring && checker.getSymbolAtLocation(authoring);
-  const define = sdk && checker.getExportsOfModule(sdk).find(symbol => symbol.name === "defineService");
-  const errorDefinition = sdk && checker.getExportsOfModule(sdk).find(symbol => symbol.name === "defineServiceError");
+  const sdkExport = (name: string): ts.Symbol | undefined => {
+    const symbol = sdk && checker.getExportsOfModule(sdk).find(candidate => candidate.name === name);
+    return symbol && symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+  };
+  const define = sdkExport("defineService");
+  const errorDefinition = sdkExport("defineServiceError");
   const errorTypes = new WeakMap<object, { type: ts.Type; node: ts.Node }>();
   const metadataSymbols = new Set<ts.Symbol>(); const metadataReferences = new Set<ts.Node>();
-  if (!define) throw new Error("rpc-authoring.unsupported-source: The selected SDK must expose defineService; rebuild/restore the coordinated toolset.");
+  if (!define) throw new Error("rpc-authoring.unsupported-source: The project's installed SDK must expose defineService.");
   let visited = syntaxNodes; const constants = new Set<ts.Symbol>(); const resolvedConstants = new Set<ts.Symbol>();
   function fail(node: ts.Node, message: string, code = "unsupported-source"): never {
     const source = node.getSourceFile(); const position = source.getLineAndCharacterOfPosition(node.getStart(source));

@@ -390,6 +390,7 @@ public sealed class RuntimeAvailabilityManagerTests
             tryGetRuntimeHandshakeAsync: (_, _) => Task.FromResult<RuntimeHandshakeResponse?>(
                 replacementStarted ? CreateHandshake() : null),
             isRuntimeHealthyAsync: (_, _) => Task.FromResult(false),
+            shutdownRuntimeAsync: static (_, _) => Task.CompletedTask,
             hostServiceManager: new StartProcessHostServiceManager(_ =>
             {
                 Assert.True(leaseAvailable);

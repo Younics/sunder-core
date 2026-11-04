@@ -14,8 +14,7 @@
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
     <SunderPackageProject>true</SunderPackageProject>
     <SunderPackageAppProject>App\ImplementationFirstRpc.App.csproj</SunderPackageAppProject>
-    <SunderPackageAppTargetFramework>net10.0-windows</SunderPackageAppTargetFramework>
-    <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
+    <SunderPackageAppTargetFramework>net10.0</SunderPackageAppTargetFramework>
     <SunderSdkWorkerProject Condition="'$(SunderSdkWorkerProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj</SunderSdkWorkerProject>
     <SunderPackageBuildProject Condition="'$(SunderPackageBuildProject)' == ''">$(MSBuildThisFileDirectory)..\..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj</SunderPackageBuildProject>
     <SunderPackageBuildTargetsPath Condition="'$(SunderPackageBuildTargetsPath)' == ''">$(MSBuildThisFileDirectory)..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets</SunderPackageBuildTargetsPath>

@@ -79,8 +79,8 @@ public sealed class ThemeManagerTests
             "languages",
             "csharp",
             "dotnet",
-            "packages",
-            "Sunder.Sdk.Avalonia",
+            "libraries",
+            "Sunder.App.Bridge",
             "Themes",
             "SunderPackageStyles.axaml");
         var xaml = File.ReadAllText(path);

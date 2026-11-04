@@ -1,5 +1,5 @@
 <Project>
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk.Avalonia" Version="[1.1.0,1.2.0)" SunderPackageAssetRole="app" />
+    <PackageReference Include="Sunder.Sdk.Avalonia" Version="1.0.0" SunderPackageAssetRole="app" />
   </ItemGroup>
 </Project>

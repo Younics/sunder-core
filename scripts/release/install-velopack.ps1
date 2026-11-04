@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path "$PSScriptRoot/../..").Path
-$versions = python3 -B "$root/scripts/ci/metadata.py" toolchains | ConvertFrom-Json
+$versions = python3 -B "$root/scripts/ci/metadata.py" toolchains --packaging | ConvertFrom-Json
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $temporary = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $sdk = Join-Path $temporary 'sunder-velopack-sdk'

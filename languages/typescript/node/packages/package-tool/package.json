@@ -1,6 +1,6 @@
 {
   "name": "@sunder/package-tool",
-  "version": "1.1.0",
+  "version": "1.0.0",
   "description": "Build tooling for thin runtime-backed Sunder TypeScript Worker V1 packages.",
   "license": "MIT",
   "repository": {
@@ -36,7 +36,7 @@
     "test": "npm run typecheck && npm run build && node -e \"require('node:fs').rmSync('dist-test', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node --test --test-concurrency=2 dist-test/test/*.test.js"
   },
   "dependencies": {
-    "@sunder/sdk": ">=1.1.0 <1.2.0",
+    "@sunder/sdk": ">=1.0.0 <2.0.0",
     "@types/node": "24.13.3",
     "esbuild": "0.28.1",
     "typescript": "6.0.3",

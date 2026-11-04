@@ -143,7 +143,7 @@ public sealed class ExecutionRuntimeLaunchResolverTests
             {
                 Role = "runtime", Rid = rid, Kind = "worker", EntryPoint = entryName,
                 TargetFramework = node ? $"node{runtimeMajor}" : $"net{runtimeMajor}.0", SdkVersion = "1.1.0",
-                RequiredHostCapabilities = ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+                RequiredHostCapabilities = ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"],
                 ExecutionRuntime = new() { Id = identity.RuntimeId, VersionRange = requirement.VersionRange, ModuleAbi = identity.ModuleAbi },
             };
             var manifest = new SunderPackageManifest

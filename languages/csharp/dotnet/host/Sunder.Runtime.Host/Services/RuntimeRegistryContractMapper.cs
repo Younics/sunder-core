@@ -9,8 +9,9 @@ internal static class RuntimeRegistryContractMapper
 {
     public static RegistryClientCompatibilityProfile CompatibilityProfile { get; } = new(
         SunderSdkCompatibilityProfile.SupportedProfiles.Select(profile => new RegistrySupportedPackageProfile(
-            [SunderPackageFormat.CurrentManifestVersion], [SunderPackageFormat.WorkerTargetKind], profile.WorkerProtocol,
-            profile.WorkerCapabilities.Order(StringComparer.Ordinal).ToArray(), profile.SdkBaseline, profile.SdkVersionRange)).ToArray(),
+            profile.Role, profile.Kind, [SunderPackageFormat.CurrentManifestVersion], profile.SdkMajors.Order().ToArray(),
+            profile.HostCapabilities.Order(StringComparer.Ordinal).ToArray(), profile.TargetFrameworks.Order(StringComparer.Ordinal).ToArray(),
+            profile.AvaloniaVersion)).ToArray(),
         PackageTargetSelection.GetCurrentRuntimeIdentifier());
 
     public static IReadOnlyList<RegistryPackageChangeRequest> ToRegistry(
@@ -90,7 +91,7 @@ internal static class RuntimeRegistryContractMapper
                     view.Icon,
                     view.DefaultPlacement,
                     view.ShowInHotbar)).ToArray(),
-                target.ExecutionRuntime is null ? null : ToRuntime(target.ExecutionRuntime))).ToArray(),
+                target.ExecutionRuntime is null ? null : ToRuntime(target.ExecutionRuntime), target.AvaloniaVersion)).ToArray(),
             item.Artifacts.Select(artifact => new RuntimeRegistryPackageProjectionArtifact(
                 artifact.Kind,
                 artifact.Rid,

@@ -40,7 +40,7 @@ internal static class PackageFeatureDescriptions
     };
     private static readonly HashSet<string> Infrastructure = new(StringComparer.Ordinal)
     {
-        "core.v1", "packaging.v1", "contributions.v1", "sdk-baseline-1-1.v1", "rpc.v1", "rpc.call-ownership.v1", "rpc.extended-deadline.v1",
+        "core.v1", "packaging.v1", "contributions.v1", "app-bridge.v1", "web-bridge.v1", "rpc.v1", "rpc.call-ownership.v1", "rpc.extended-deadline.v1",
         "worker-protocol.v1", "execution-runtime.v1", "runtime-generations.v1", "theming.v1", "view-navigation-preparation.v1", "app-state-updates.v1", "storage.key-migration.v1",
     };
 

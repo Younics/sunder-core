@@ -109,7 +109,7 @@ internal sealed partial class AppPackageHostComposition : IDisposable
         ViewFacade.RetainedPackage = packageId => _retained.GetValueOrDefault(packageId)?.ViewFacade;
         ViewFacade.RetainedFacades = () => _retained.Values.Distinct().Select(owner => owner.ViewFacade).ToArray();
 
-        _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry([]);
+        _sharedAssemblyRegistry = sharedAssemblyRegistry ?? new AppSharedAssemblyRegistry();
         var resolvedBackgroundTaskQueue = backgroundTaskQueue ?? new BackgroundTaskQueueService();
         _ownedBackgroundTaskQueue = backgroundTaskQueue is null ? resolvedBackgroundTaskQueue : null;
         var runtimeWorkStopper = _runtimeWorkStopper = new AppPackageRuntimeWorkStopper(resolvedBackgroundTaskQueue, activationOwnerId ?? generationId,
@@ -136,7 +136,6 @@ internal sealed partial class AppPackageHostComposition : IDisposable
             viewRegistry,
             runtimeWorkStopper,
             AssemblyTracker,
-            _sharedAssemblyRegistry,
             _state.RemoveOwnedDisposable,
             _state.RemoveLoadContext);
         _disableCoordinator = new AppPackageDisableCoordinator(
@@ -198,9 +197,6 @@ internal sealed partial class AppPackageHostComposition : IDisposable
             backgroundOperations,
         ];
     }
-
-    public void AddSharedAssemblyProbeDirectories(IEnumerable<string> probeDirectories)
-        => _sharedAssemblyRegistry.AddProbeDirectories(probeDirectories);
 
     public async Task ActivatePackageAsync(
         ActivePackageDescriptor package,

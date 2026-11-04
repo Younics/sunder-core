@@ -121,6 +121,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             EntryAssembly,
             TargetFramework,
             sdkPackageVersion,
+            ResolveAvaloniaVersion(),
             metadata.RequiredSdkCapabilities,
             RuntimeIdentifier,
             OutputType,
@@ -192,5 +193,14 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
             ?.EntryPoint?["lib/".Length..];
         Log.LogMessage(MessageImportance.High, $"Generated Sunder package manifest at {ManifestOutputPath}");
         return !Log.HasLoggedErrors;
+    }
+
+    private string? ResolveAvaloniaVersion()
+    {
+        var reference = ReferencePaths.FirstOrDefault(item =>
+            string.Equals(Path.GetFileName(item.ItemSpec), "Avalonia.Base.dll", StringComparison.OrdinalIgnoreCase));
+        if (reference is null) return null;
+        var version = reference.GetMetadata("NuGetPackageVersion");
+        return string.IsNullOrEmpty(version) ? ResolvedSdkPackageVersion.ReadInformationalVersion(reference.ItemSpec) : version;
     }
 }

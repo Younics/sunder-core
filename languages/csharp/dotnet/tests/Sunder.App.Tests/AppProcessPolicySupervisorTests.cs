@@ -45,7 +45,7 @@ public sealed partial class AppProcessPolicySupervisorTests
             var target = snapshot.Target;
             snapshot = snapshot with { Target = new(target.Role, target.Rid, "avalonia", target.EntryPoint,
                 target.TargetFramework, target.SdkVersion,
-                [SunderSdkCapabilities.Baseline11V1, SunderSdkCapabilities.WorkerExecutionObservationsV1,
+                ["app-bridge.v1", SunderSdkCapabilities.WorkerExecutionObservationsV1,
                     SunderSdkCapabilities.PackageDevelopmentRevisionsV1], target.Views, target.ExecutionRuntime, target.ExecutionRuntimeBinding) };
         }
         await fixture.Supervisor.AcquireLoadAsync(snapshot, Guid.NewGuid(), default);

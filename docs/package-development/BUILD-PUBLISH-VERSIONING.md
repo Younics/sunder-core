@@ -1,6 +1,6 @@
 # Build, Validate, Publish, And Version
 
-> **Source channel:** Applies to current source on the Sunder SDK `1.1.x` line, package manifest V1, .NET 10, and Runtime protocol revision 1. Use the matching `sdk/v*` tag for released build behavior.
+> **Source channel:** Applies to SDK `1.0.0`, package manifest V1, .NET 10, and Runtime protocol revision 1. Use the selected component's release tag for released build behavior.
 
 Use [single-project authoring](SINGLE-PROJECT-AUTHORING.md) and
 [implementation-first RPC](IMPLEMENTATION-FIRST-RPC.md). Manifest and archive
@@ -25,9 +25,9 @@ outputs are generated; service/view declarations are the authored inputs.
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk.Worker" Version="[1.1.0,1.2.0)" />
+    <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.0" />
     <PackageReference Include="Sunder.Package.Build"
-                      Version="[1.1.0,1.2.0)"
+                      Version="1.0.0"
                       PrivateAssets="all" />
   </ItemGroup>
 </Project>
@@ -201,7 +201,7 @@ Package versions are strict SemVer 2.0 values. Use:
 
 Keep RPC provider/service/method ids, view ids, settings keys, callback handler ids, Stack contributor/schema ids, and package ids stable. Evolve RPC descriptors and persisted data additively where possible. If a bad immutable version is published, publish a fixed version and deprecate or yank the bad version; never replace its bytes.
 
-Sunder SDK compatibility is capability-based, with `[1.1.0,1.2.0)` as the current coordinated package line. Do not widen the range across an untested SDK minor. See [Sunder SDK Compatibility](../SUNDER-SDK-COMPATIBILITY.md) before changing SDK references, RPC descriptors, or package-local generated bindings.
+Update SDK and tooling references through ordinary NuGet/npm updates. Supported SDK minor/patch releases preserve older packages; supported majors coexist until explicitly retired. Each target records its resolved SDK version and required protocol/capabilities, independently of package and domain-contract versions. See [Sunder SDK Compatibility](../SUNDER-SDK-COMPATIBILITY.md).
 
 ## Release Checklist
 

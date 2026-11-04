@@ -1,0 +1,66 @@
+# sunder-public-api-v2
+assembly Sunder.App.Bridge, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+type public sealed class Sunder.App.Bridge.AppBackgroundTaskContextV1 : System.IEquatable<Sunder.App.Bridge.AppBackgroundTaskContextV1>
+  method public .ctor(System.Threading.CancellationToken CancellationToken, System.Action<System.String> ReportStatus, System.Action<System.Double, System.String?> ReportProgress, System.Action<System.String> ReportIndeterminate)
+  property System.Action<System.String> ReportIndeterminate { public get; public init; }
+  property System.Action<System.String> ReportStatus { public get; public init; }
+  property System.Action<System.Double, System.String?> ReportProgress { public get; public init; }
+  property System.Threading.CancellationToken CancellationToken { public get; public init; }
+  method public Sunder.App.Bridge.AppBackgroundTaskContextV1 <Clone>$()
+  method public System.Void Deconstruct(out System.Threading.CancellationToken CancellationToken, out System.Action<System.String> ReportStatus, out System.Action<System.Double, System.String?> ReportProgress, out System.Action<System.String> ReportIndeterminate)
+  method public final virtual System.Boolean Equals(Sunder.App.Bridge.AppBackgroundTaskContextV1? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.App.Bridge.AppBackgroundTaskContextV1? left, Sunder.App.Bridge.AppBackgroundTaskContextV1? right)
+  method public static System.Boolean op_Inequality(Sunder.App.Bridge.AppBackgroundTaskContextV1? left, Sunder.App.Bridge.AppBackgroundTaskContextV1? right)
+type public sealed class Sunder.App.Bridge.AppServiceExceptionV1 : System.Exception, System.Runtime.Serialization.ISerializable
+  method public .ctor(System.String domain, System.Text.Json.JsonElement error, System.String message)
+  property System.Boolean HostAuthenticated { public get; }
+  property System.String Domain { public get; }
+  property System.Text.Json.JsonElement Error { public get; }
+type public static class Sunder.App.Bridge.AppViewCallbacksV1
+  method public static Sunder.App.Bridge.IAppViewCallbacksV1? Get(Avalonia.Controls.Control view)
+  method public static System.Void Attach(Avalonia.Controls.Control view, Sunder.App.Bridge.IAppViewCallbacksV1 callbacks)
+type public sealed class Sunder.App.Bridge.AppViewRegistrationV1 : System.IEquatable<Sunder.App.Bridge.AppViewRegistrationV1>
+  method public .ctor(System.String Id, System.String Name, System.String? IconAssetPath, System.Int32 DefaultPlacement, System.Boolean ShowInHotbarByDefault)
+  property System.Boolean ShowInHotbarByDefault { public get; public init; }
+  property System.Int32 DefaultPlacement { public get; public init; }
+  property System.String? IconAssetPath { public get; public init; }
+  property System.String Id { public get; public init; }
+  property System.String Name { public get; public init; }
+  method public Sunder.App.Bridge.AppViewRegistrationV1 <Clone>$()
+  method public System.Void Deconstruct(out System.String Id, out System.String Name, out System.String? IconAssetPath, out System.Int32 DefaultPlacement, out System.Boolean ShowInHotbarByDefault)
+  method public final virtual System.Boolean Equals(Sunder.App.Bridge.AppViewRegistrationV1? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static System.Boolean op_Equality(Sunder.App.Bridge.AppViewRegistrationV1? left, Sunder.App.Bridge.AppViewRegistrationV1? right)
+  method public static System.Boolean op_Inequality(Sunder.App.Bridge.AppViewRegistrationV1? left, Sunder.App.Bridge.AppViewRegistrationV1? right)
+type public interface Sunder.App.Bridge.IAppContributionSinkV1
+  method public abstract virtual System.Void RegisterSettingsView(System.Func<Avalonia.Controls.Control> factory)
+  method public abstract virtual System.Void RegisterView(Sunder.App.Bridge.AppViewRegistrationV1 registration, System.Func<Avalonia.Controls.Control> factory)
+type public interface Sunder.App.Bridge.IAppPackageActivationV1 : System.IAsyncDisposable
+  method public abstract virtual System.Void Start(System.Threading.CancellationToken revocationToken)
+type public interface Sunder.App.Bridge.IAppPackageEntryPointV1
+  method public abstract virtual System.Threading.Tasks.ValueTask<Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(Sunder.App.Bridge.IAppPackageHostV1 host, Sunder.App.Bridge.IAppContributionSinkV1 contributions)
+type public interface Sunder.App.Bridge.IAppPackageHostV1 : Sunder.App.Bridge.IAppServiceChannelV1, System.IAsyncDisposable
+  property System.String ContentRootPath { public abstract virtual get; }
+  property System.String PackageId { public abstract virtual get; }
+  property System.String PackageVersion { public abstract virtual get; }
+  method public abstract virtual System.IDisposable SubscribeBackgroundTasks(System.Action<System.Text.Json.JsonElement> changed)
+  method public abstract virtual System.Text.Json.JsonElement QueueBackgroundTask(System.Text.Json.JsonElement request, System.Func<Sunder.App.Bridge.AppBackgroundTaskContextV1, System.Threading.Tasks.Task> execute)
+  method public abstract virtual System.Threading.Tasks.Task RunStateUpdateAsync(System.String key, System.Func<System.Threading.CancellationToken, System.Threading.CancellationToken, System.Threading.Tasks.Task> update, System.Threading.CancellationToken cancellationToken)
+type public interface Sunder.App.Bridge.IAppServiceChannelV1 : System.IAsyncDisposable
+  method public abstract virtual System.Collections.Generic.IAsyncEnumerable<System.Text.Json.JsonElement> WatchAsync(System.String operation, System.Text.Json.JsonElement arguments, System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Text.Json.JsonElement Get(System.String operation, System.Text.Json.JsonElement arguments)
+  method public abstract virtual System.Threading.Tasks.ValueTask<Sunder.App.Bridge.IAppServiceChannelV1> OpenAsync(System.String operation, System.Text.Json.JsonElement arguments, System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Threading.Tasks.ValueTask<System.IO.Stream?> OpenReadAsync(System.String operation, System.Text.Json.JsonElement arguments, System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> InvokeAsync(System.String operation, System.Text.Json.JsonElement arguments, System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Threading.Tasks.ValueTask<System.Text.Json.JsonElement> WriteAsync(System.String operation, System.Text.Json.JsonElement arguments, System.IO.Stream content, System.Threading.CancellationToken cancellationToken)
+type public interface Sunder.App.Bridge.IAppViewCallbacksV1
+  property System.Boolean SupportsPreparation { public abstract virtual get; }
+  method public abstract virtual System.Threading.Tasks.ValueTask NavigateAsync(System.String viewId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String?> parameters, System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Threading.Tasks.ValueTask PresentedAsync(System.String viewId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String?> parameters, System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Threading.Tasks.ValueTask WarmupAsync(System.Threading.CancellationToken cancellationToken)
+  method public abstract virtual System.Threading.Tasks.ValueTask<System.Boolean> PrepareAsync(System.String viewId, System.Collections.Generic.IReadOnlyDictionary<System.String, System.String?> parameters, System.Threading.CancellationToken cancellationToken)

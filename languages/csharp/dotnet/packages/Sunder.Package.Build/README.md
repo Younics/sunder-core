@@ -28,8 +28,8 @@ Typical package project reference:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk.Worker" Version="[1.1.0,1.2.0)" />
-  <PackageReference Include="Sunder.Package.Build" Version="[1.1.0,1.2.0)" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.0" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
 </ItemGroup>
 ```
 

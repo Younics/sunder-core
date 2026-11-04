@@ -250,7 +250,7 @@ public sealed partial class PackageViewHostServiceTests
         Directory.CreateDirectory(Path.Combine(webFolder, "manifest"));
         var webViews = new[] { new PackageWebViewDescriptor("local.node.main", "Node", "/", null, "middle", true) };
         var webTarget = new PackageTargetDescriptor("app", source.Target.Rid, "web", "index.html", "web", "1.1.0",
-            ["core.v1", "rpc.v1", "sdk-baseline-1-1.v1", "views.v1"], webViews);
+            ["core.v1", "rpc.v1", "views.v1", "web-bridge.v1"], webViews);
         File.WriteAllText(Path.Combine(webFolder, "manifest", "sunder-package.json"), JsonSerializer.Serialize(new
         {
             archiveFormatVersion = 1, manifestVersion = 1, id = "local.node", name = "Node", version = "1.0.0",
@@ -360,27 +360,26 @@ public sealed partial class PackageViewHostServiceTests
         await Publish();
         var originalView = host.GetOrCreateView("agent.chat");
         Assert.NotNull(originalView);
-        var provider = (IServiceProvider)originalView.GetType().GetProperty("ServiceProvider")!.GetValue(originalView)!;
-        var development = provider.GetRequiredService<IPackageDevelopmentService>();
-        var projectionFolder = provider.GetRequiredService<IPackageContext>().ContentRootPath;
+        var loadDevelopment = originalView.GetType().GetMethod("LoadDevelopmentAsync")!
+            .CreateDelegate<Func<string, bool, Task<(IAsyncDisposable Lifetime, Func<Task<string>> Status, Func<bool, Task> SetWatch)>>>(originalView);
+        var projectionFolder = (string)originalView.GetType().GetProperty("ContentRootPath")!.GetValue(originalView)!;
         await host.PreloadViewAsync("agent.chat", host.CurrentGenerationId, default);
         stabilizeBuilder = true;
         var workStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var workCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        provider.GetRequiredService<IBackgroundTaskQueue>().Enqueue(new("Builder work", "retention-test", BackgroundTaskIndicator.Hidden,
-            BackgroundTaskConcurrencyMode.ParallelWithinGroup, true, async context =>
+        originalView.GetType().GetMethod("QueueRetentionWork")!.CreateDelegate<Action<Func<CancellationToken, Task>>>(originalView)(async token =>
             {
                 workStarted.TrySetResult();
-                try { await Task.Delay(Timeout.InfiniteTimeSpan, context.CancellationToken); }
+                try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
                 finally { workCancelled.TrySetResult(); }
-            }));
+            });
         await workStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var session = await development.LoadAsync(projectFolder, false);
+        var session = await loadDevelopment(projectFolder, false);
         await host.WaitForRetirementsAsync();
         Assert.Same(originalView, host.GetOrCreateView("agent.chat"));
         Assert.False(GetIsDisposed(originalView));
         Assert.True(Directory.Exists(projectionFolder));
-        var loaded = await session.GetStatusAsync();
+        var loaded = JsonSerializer.Deserialize<PackageDevelopmentStatus>(await session.Status())!;
         Assert.True(loaded.IsLoaded);
         Assert.Equal(overridesInstalled, loaded.OverridesInstalledPackage);
         Assert.True(loaded.WatchEnabled); // Another owner's watch is effective.
@@ -395,18 +394,18 @@ public sealed partial class PackageViewHostServiceTests
         projectSource = RuntimeContractTestData.Snapshot("project", PackageSourceKind.Dev, projectFolder) with { ActivationFingerprint = new('c', 64) };
         await Publish();
         await host.WaitForRetirementsAsync();
-        await session.SetWatchAsync(true);
+        await session.SetWatch(true);
         Assert.Same(originalView, host.GetOrCreateView("agent.chat"));
-        Assert.True((await session.GetStatusAsync()).RequestedWatch);
+        Assert.True(JsonSerializer.Deserialize<PackageDevelopmentStatus>(await session.Status())!.RequestedWatch);
         Assert.Equal(0, backend.Releases);
 
-        await session.DisposeAsync();
+        await session.Lifetime.DisposeAsync();
         await host.WaitForRetirementsAsync();
         Assert.Equal(1, backend.Releases);
         Assert.Same(originalView, host.GetOrCreateView("agent.chat"));
         Assert.Equal(0, stagedViews);
         Assert.False(workCancelled.Task.IsCompleted);
-        var second = await development.LoadAsync(projectFolder, true);
+        var second = await loadDevelopment(projectFolder, true);
         // A dependency/source fingerprint change actually retires the Builder owner.
         backend.Release = () => Task.CompletedTask;
         builderSource = builderSource with { ActivationFingerprint = new('d', 64) };
@@ -416,7 +415,7 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(2, backend.Releases);
         Assert.Equal(1, stagedViews);
         Assert.True(workCancelled.Task.IsCompleted);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => second.GetStatusAsync());
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => second.Status());
     }
 
     [Theory]

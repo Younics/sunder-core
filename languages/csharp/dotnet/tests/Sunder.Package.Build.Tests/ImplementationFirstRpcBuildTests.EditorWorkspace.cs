@@ -86,6 +86,20 @@ public sealed partial class ImplementationFirstRpcBuildTests
             var validation = await SunderPackageArchiveInspector.ExtractAndValidateAsync(archive, scope.GetPath("extracted"));
             Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
             Assert.Equal(2, validation.Manifest!.Targets!.Count);
+            var appProjection = SunderPackageTargetResolver.CreateProjectionPlan(validation.Manifest, validation.ContentIndex!, new("app", RuntimeInformation.RuntimeIdentifier));
+            var appPayload = scope.CreateDirectory("app-projection");
+            foreach (var file in appProjection.Files)
+            {
+                var destination = file.LogicalPath.ToPlatformPath(appPayload);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(file.PhysicalPath.ToPlatformPath(scope.GetPath("extracted")), destination);
+            }
+            foreach (var name in new[] { "Sunder.Sdk", "Sunder.Sdk.Avalonia", "Microsoft.Extensions.DependencyInjection", "Microsoft.Extensions.DependencyInjection.Abstractions", "Microsoft.Extensions.Logging.Abstractions" })
+                Assert.True(File.Exists(Path.Combine(appPayload, "lib", name + ".dll")), $"App payload is missing package-local {name}.");
+            Assert.False(File.Exists(Path.Combine(appPayload, "lib", "Sunder.App.Bridge.dll")));
+            Assert.True(File.Exists(Path.Combine(packages!, "sunder.sdk.avalonia", packedVersion, "lib/net10.0/Sunder.App.Bridge.dll")));
+            var appTarget = Assert.Single(validation.Manifest.Targets, target => target!.Role == "app")!;
+            await ActivatePackedAppAsync(Path.Combine(appPayload, appTarget.EntryPoint!), appPayload);
             Assert.DoesNotContain(Directory.EnumerateFiles(scope.GetPath("extracted"), "*.dll", SearchOption.AllDirectories),
                 path => Path.GetFileName(path).StartsWith("Sunder.Package.Build", StringComparison.Ordinal));
             var editorRoot = Path.Combine(package, "obj/Debug/net10.0/sunder-design-time");

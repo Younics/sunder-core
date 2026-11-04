@@ -496,6 +496,7 @@ public sealed class PackageRpcManifestTests
               <ItemGroup>
                 <ReferencePath Include="{{typeof(SunderPackageAttribute).Assembly.Location}}" />
                 <ReferencePath Include="{{typeof(IAvaloniaPackageContributionRegistry).Assembly.Location}}" />
+                <ReferencePath Include="{{typeof(Avalonia.AvaloniaObject).Assembly.Location}}" />
                 <ReferencePath Include="{{typeof(IPackageStackExporter).Assembly.Location}}" />
                 <ReferencePath Include="{{typeof(SunderWorkerProviderRegistration).Assembly.Location}}" />
                 <SunderSdkCapability Include="callbacks.v1" />

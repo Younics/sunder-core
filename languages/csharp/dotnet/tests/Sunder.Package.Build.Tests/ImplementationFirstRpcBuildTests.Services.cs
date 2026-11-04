@@ -48,7 +48,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             new XElement("TreatWarningsAsErrors", "true"), new XElement("NuGetAudit", "false"),
             new XElement("SunderPackageBuildTaskAssembly", taskAssembly), new XElement("SunderPackageBuildTaskSourceIsImmutable", "true")));
         document.Root.Add(new XElement("ItemGroup",
-            new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }.Select(name => new XElement("Reference",
+            new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.App.Bridge" }.Select(name => new XElement("Reference",
                 new XAttribute("Include", name), new XAttribute("HintPath", Path.Combine(Path.GetDirectoryName(taskAssembly)!, name + ".dll")), new XAttribute("Private", "true"))),
             new XElement("PackageReference", new XAttribute("Include", "Avalonia"), new XAttribute("Version", "12.1.4")),
             new XElement("PackageReference", new XAttribute("Include", "Microsoft.Extensions.DependencyInjection"), new XAttribute("Version", "10.0.13")),

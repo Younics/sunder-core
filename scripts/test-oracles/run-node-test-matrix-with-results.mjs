@@ -2,29 +2,35 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadCoreTestModel } from "./core-test-policy.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const nodeRoot = resolve(repositoryRoot, "languages/typescript/node");
 const wrapper = resolve(repositoryRoot, "scripts/test-oracles/run-node-tests-with-results.mjs");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const args = process.argv.slice(2);
+if (args.length !== 0 && (args.length !== 4 || args[0] !== "--scope" || args[2] !== "--results-directory")) {
+  throw new Error("Usage: run-node-test-matrix-with-results.mjs [--scope <scope> --results-directory <directory>]");
+}
+const { declarations } = loadCoreTestModel(repositoryRoot, undefined, args[1] ?? "all");
+const tests = declarations.filter(test => test.framework === "node");
+const selectedProjects = new Set(tests.map(test => test.project));
+const outputArgs = args.length === 0 ? [] : ["--results-directory", args[3]];
 
-for (const packageName of ["sdk", "package-tool", "create-sunder-package"]) {
+for (const packageName of ["sdk", "package-tool", "create-sunder-package"].filter(name => selectedProjects.has(name))) {
   const packageRoot = resolve(nodeRoot, "packages", packageName);
   rmSync(resolve(packageRoot, "dist"), { recursive: true, force: true });
   rmSync(resolve(packageRoot, "dist-test"), { recursive: true, force: true });
 }
 
-runNodeReport("node-core-oracles", [
-  ...testFiles(resolve(repositoryRoot, "scripts/compatibility"), ".test.mjs"),
-  ...testFiles(resolve(repositoryRoot, "scripts/test/release"), ".test.mjs"),
-  ...testFiles(resolve(repositoryRoot, "scripts/test-oracles"), ".test.mjs"),
-]);
+const scripts = [...new Set(tests.filter(test => test.source.startsWith("scripts/")).map(test => resolve(repositoryRoot, test.source)))].sort();
+if (scripts.length > 0) runNodeReport("node-core-oracles", scripts);
 
 const workspaces = [
   ["@sunder/sdk", "packages/sdk", "node-sdk"],
   ["@sunder/package-tool", "packages/package-tool", "node-package-tool"],
   ["create-sunder-package", "packages/create-sunder-package", "node-create-sunder-package"],
-];
+].filter(([, project]) => selectedProjects.has(project.split("/").at(-1)));
 // Packed package-tool cases consume the scaffolder as well as the SDK/tool.
 // Build the complete production closure before any workspace artifact tests.
 for (const [workspace] of workspaces) {
@@ -34,7 +40,7 @@ for (const [workspace] of workspaces) {
 for (const [workspace, project, report] of workspaces) {
   runWorkspace(workspace, project, report);
 }
-runRequired(npm, ["run", "templates:typecheck"], nodeRoot, "Node template generation and typecheck");
+if (selectedProjects.has("create-sunder-package")) runRequired(npm, ["run", "templates:typecheck"], nodeRoot, "Node template generation and typecheck");
 
 function runWorkspace(workspace, project, report) {
   runRequired(
@@ -51,7 +57,7 @@ function runWorkspace(workspace, project, report) {
 
 function runNodeReport(report, files, environment = {}) {
   if (files.length === 0) throw new Error(`${report} selected no Node test files.`);
-  runRequired(process.execPath, [wrapper, report, ...files], repositoryRoot, `${report} test report`, environment);
+  runRequired(process.execPath, [wrapper, ...outputArgs, report, ...files], repositoryRoot, `${report} test report`, environment);
 }
 
 function testFiles(directory, suffix) {

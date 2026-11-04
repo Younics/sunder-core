@@ -182,7 +182,8 @@ public sealed record RuntimeRegistryPackageTarget(
     [property: JsonRequired] string? SdkVersion,
     IReadOnlyList<string> RequiredHostCapabilities,
     IReadOnlyList<RuntimeRegistryPackageWebView>? Views = null,
-    RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
+    RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime = null,
+    string? AvaloniaVersion = null)
 {
     private IReadOnlyList<string> _requiredHostCapabilities = RuntimeContractCollections.FreezeBounded(RequiredHostCapabilities, RuntimeExecutionRuntimeManagementLimits.MaximumItems);
     private IReadOnlyList<RuntimeRegistryPackageWebView> _views = RuntimeContractCollections.FreezeBounded(Views ?? [], RuntimeExecutionRuntimeManagementLimits.MaximumItems);

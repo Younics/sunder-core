@@ -14,11 +14,12 @@ export function dotnetTestBudget(project, selected) {
   };
 }
 
-export function dotnetTestArguments({ projectPath, projectName, outputDirectory, logStem, build, filter, budget, extraArguments }) {
+export function dotnetTestArguments({ projectPath, projectName, outputDirectory, logStem, build, filter, budget, extraArguments,
+  diagnostics = process.env.SUNDER_TEST_DIAGNOSTICS === "1" }) {
   return ["test", projectPath, "--nologo", "--no-restore", ...(!build ? ["--no-build"] : []),
     "--blame-hang", "--blame-hang-timeout", budget.hangTimeout, "--blame-hang-dump-type", "none",
-    ...(budget.diagnostics ? ["--diag", `${logStem}.vstest.log`] : []),
-    ...(budget.crashDump ? ["--blame-crash", "--blame-crash-dump-type", "mini"] : []),
+    ...(diagnostics && budget.diagnostics ? ["--diag", `${logStem}.vstest.log`] : []),
+    ...(diagnostics && budget.crashDump ? ["--blame-crash", "--blame-crash-dump-type", "mini"] : []),
     "--logger", `trx;LogFileName=${projectName}.trx`, "--results-directory", outputDirectory,
     ...(filter === undefined ? [] : ["--filter", filter]), ...extraArguments];
 }

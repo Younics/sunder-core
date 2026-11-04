@@ -1047,12 +1047,13 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 var body = request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
                     .GetAwaiter()
                     .GetResult()!;
-                var profile = Assert.Single(body.Compatibility.Profiles);
+                Assert.Equal(3, body.Compatibility.Profiles.Count);
+                var profile = Assert.Single(body.Compatibility.Profiles, value => value.Role == "runtime");
                 Assert.Equal([SunderPackageFormat.CurrentManifestVersion], profile.ManifestVersions);
-                Assert.Equal(["worker"], profile.RuntimeTargetKinds);
-                Assert.Equal("worker-protocol.v1", profile.WorkerProtocol);
-                Assert.Contains("rpc.v1", profile.WorkerCapabilities);
-                Assert.Equal("sdk-baseline-1-1.v1", profile.SdkBaseline);
+                Assert.Equal("worker", profile.Kind);
+                Assert.Contains("worker-protocol.v1", profile.HostCapabilities);
+                Assert.Contains("rpc.v1", profile.HostCapabilities);
+                Assert.Equal([1], profile.SdkMajors);
                 Assert.Equal(PackageTargetSelection.GetCurrentRuntimeIdentifier(), body.Compatibility.Rid);
                 var package = Assert.Single(body.Packages);
                 requests.Add((
@@ -1700,7 +1701,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 runtimeIdentifiers: SunderPackageFormat.SupportedRuntimeIdentifiers,
                 runtimeRequiredHostCapabilities:
                 [
-                    SunderSdkCapabilities.Baseline11V1,
                     SunderSdkCapabilities.CoreV1,
                     SunderSdkCapabilities.DockerEnvironmentV1,
                     SunderSdkCapabilities.RpcV1,
@@ -2329,6 +2329,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void AppAndCliSources_DoNotContainRegistryCredentialHandling()
     {
         var root = LocateRepositoryRoot();
@@ -2360,6 +2361,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void AppAndCliPackageChanges_AreThinClientsOfTheSameRuntimeOrchestration()
     {
         var root = LocateRepositoryRoot();
@@ -2451,7 +2453,8 @@ public sealed partial class RegistryRuntimeArchitectureTests
                         : new RegistryExecutionRuntimeRequirement(
                             target.ExecutionRuntime.Id!,
                             target.ExecutionRuntime.VersionRange!,
-                            target.ExecutionRuntime.ModuleAbi!)))
+                            target.ExecutionRuntime.ModuleAbi!),
+                    target.AvaloniaVersion))
                 .ToArray(),
             []);
     }
@@ -2565,7 +2568,8 @@ public sealed partial class RegistryRuntimeArchitectureTests
                              : new RegistryExecutionRuntimeRequirement(
                                  target.ExecutionRuntime.Id!,
                                  target.ExecutionRuntime.VersionRange!,
-                                 target.ExecutionRuntime.ModuleAbi!)))
+                                 target.ExecutionRuntime.ModuleAbi!),
+                         target.AvaloniaVersion))
                      .ToArray(),
                   artifacts),
               contentByUrl);

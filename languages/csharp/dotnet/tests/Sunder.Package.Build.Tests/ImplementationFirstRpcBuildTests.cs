@@ -18,7 +18,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
     [Trait("Capability", "Filesystem")]
-    public async Task CleanBuild_DifferentAppTfm_GeneratesCompilesProjectsAndPreservesOneAtomicSourceSet()
+    public async Task CleanBuild_SeparateAppProject_GeneratesCompilesProjectsAndPreservesOneAtomicSourceSet()
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-implementation-first-rpc");
         var repositoryRoot = FindRepositoryRoot();
@@ -202,7 +202,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.Equal(exportTimestampBeforeAppBuild, File.GetLastWriteTimeUtc(exportPath));
         Assert.Equal(exportBytesBeforeAppBuild, await File.ReadAllBytesAsync(exportPath));
 
-        var appIntermediate = Path.Combine(fixture, "App", "obj", configuration, "net10.0-windows");
+        var appIntermediate = Path.Combine(fixture, "App", "obj", configuration, "net10.0");
         var appGenerated = Path.Combine(appIntermediate, GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
         var appMarker = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(appGenerated);
         var appAssembly = Path.Combine(
@@ -210,7 +210,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             "App",
             "bin",
             configuration,
-            "net10.0-windows",
+            "net10.0",
             "ImplementationFirstRpc.App.dll");
         var appReceiptPath = Path.Combine(appGenerated, SunderRpcAuthoringDocuments.AuthoringReceiptFileName);
         var appBindingPath = Path.Combine(appGenerated, "bindings", "imports", "example.generated.greeting.g.cs");
@@ -223,7 +223,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             "App",
             "bin",
             configuration,
-            "net10.0-windows",
+            "net10.0",
             "Sunder.Sdk.Worker.dll")));
         Assert.Contains(
             "internal sealed class GreetingClient",
@@ -245,13 +245,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 .Select(static action => action.GetString()!)
                 .ToArray());
         }
-        Assert.False(Directory.Exists(Path.Combine(
-            fixture,
-            "obj",
-            configuration,
-            "net10.0-windows",
-            GenerateSunderRpcBindingsTask.GeneratedDirectoryName)));
-        var appDevOutput = Path.Combine(fixture, "App", "bin", configuration, "net10.0-windows", "sunder-dev");
+        Assert.Equal(projectExportBytes, ReadTreeBytes(projectExportGenerated, projectExportMarker));
+        Assert.Equal(projectExportTimestamps, ReadTreeTimestamps(projectExportGenerated, projectExportMarker));
+        var appDevOutput = Path.Combine(fixture, "App", "bin", configuration, "net10.0", "sunder-dev");
         var appValidation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(appDevOutput);
         Assert.True(appValidation.Success, string.Join(Environment.NewLine, appValidation.Errors));
         Assert.Single(appValidation.Manifest!.ContractBundles!);

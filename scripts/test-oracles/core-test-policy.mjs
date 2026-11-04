@@ -1,31 +1,70 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, extname, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { csharpTestDeclarations } from "./csharp-test-declarations.mjs";
-import { selectScenario } from "./ci-scenarios.mjs";
+import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const policyRelativePath = "eng/test-oracles/core-test-policy.json";
 
-export function loadCoreTestModel(root = repositoryRoot, policyOverride) {
+export function loadCoreTestModel(root = repositoryRoot, policyOverride, scope = "all") {
   const policy = policyOverride ?? JSON.parse(readFileSync(resolve(root, policyRelativePath), "utf8"));
   validatePolicyShape(policy);
   const declarations = discoverTestDeclarations(root, policy);
   validateDeclarationIdentity(declarations);
-  validateProjectLaneOwnership(declarations, policy, listDotnetTestProjects(root));
   validateExpectedSkipPolicy(declarations, policy);
-  return { policy, declarations };
+  const model = scopeModel({ policy, declarations }, scope);
+  const selectedProjects = new Set(model.declarations.map(test => test.project));
+  const projects = listDotnetTestProjects(root).filter(project => scope === "all" || selectedProjects.has(project)
+    || policy.scopes[scope].includes(componentFor({ project }, policy)));
+  validateProjectLaneOwnership(model.declarations, model.policy, projects, scope === "all");
+  return { ...model, allDeclarations: declarations };
+}
+
+export function componentFor(declaration, policy) {
+  return (policy.componentRules ?? []).find(rule => ["project", "source", "attributes"].every(key =>
+    rule[key] === undefined || new RegExp(rule[key], "u").test(declaration[key] ?? "")))?.component ?? policy.defaultComponent ?? "sdk";
+}
+
+export function scopeModel(model, scope = "all") {
+  if (scope === "all") return { ...model, scope };
+  const owners = model.policy.scopes?.[scope];
+  if (!owners) throw new Error(`Unknown validation scope '${scope}'.`);
+  const declarations = model.declarations.filter(test => owners.includes(test.component ?? componentFor(test, model.policy)));
+  const ids = new Set(declarations.map(test => test.id));
+  const sources = new Set(declarations.map(test => test.source));
+  const pairs = new Set(declarations.map(test => `${test.project}\0${test.primaryLane}`));
+  const allPairs = new Set(model.declarations.map(test => `${test.project}\0${test.primaryLane}`));
+  const projectLanes = Object.fromEntries(Object.entries(model.policy.projectLanes)
+    .map(([project, lanes]) => [project, lanes.filter(lane => pairs.has(`${project}\0${lane}`)
+      // A missing owned lane is an error, not an empty selection to prune.
+      || !allPairs.has(`${project}\0${lane}`) && owners.includes(componentFor({ project }, model.policy)))])
+    .filter(([, lanes]) => lanes.length > 0));
+  return { scope, declarations, policy: { ...model.policy, projectLanes,
+    expectedSkips: (model.policy.expectedSkips ?? []).filter(skip =>
+      (skip.declarationId === undefined || ids.has(skip.declarationId)) && (skip.source === undefined || sources.has(skip.source))) } };
+}
+
+export function expectedScriptReports(model) {
+  if (!model.policy.scopes) return [...model.policy.reports.node, model.policy.reports.releaseFixtures];
+  const reports = new Set();
+  for (const test of model.declarations) {
+    if (test.framework === "node") reports.add(test.source.startsWith("scripts/") ? "node-core-oracles.junit.xml"
+      : `node-${test.project}.junit.xml`);
+    else if (["python", "shell"].includes(test.framework)) reports.add(model.policy.reports.releaseFixtures);
+  }
+  return [...reports].sort();
 }
 
 export function validateWorkflowTestSelections(workflows, declarations) {
   const ids = new Set(declarations.map((item) => item.id));
   for (const { source, content } of workflows) {
-    for (const match of content.matchAll(/--require-test(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\]+))/gu)) {
+    for (const match of content.matchAll(/--require-test(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\()]+))/gu)) {
       const id = match[1] ?? match[2] ?? match[3];
       if (!ids.has(id)) throw new Error(`${source}: required workflow test '${id}' is not declared.`);
     }
-    for (const match of content.matchAll(/--(?:require-)?scenario(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\]+))/gu)) {
+    for (const match of content.matchAll(/--(?:require-)?scenario(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\()]+))/gu)) {
       selectScenario(match[1] ?? match[2] ?? match[3], declarations);
     }
   }
@@ -42,10 +81,11 @@ export function discoverTestDeclarations(root, policy) {
     else if (source.endsWith(".py")) declarations.push(...discoverPythonTests(source, content));
     else if (source.endsWith(".fixture.sh")) declarations.push(discoverShellFixture(source));
   }
-  return declarations.sort((left, right) => ordinal(left.id, right.id));
+  return declarations.map(test => ({ ...test, component: test.component ?? componentFor(test, policy) }))
+    .sort((left, right) => ordinal(left.id, right.id));
 }
 
-export function validateProjectLaneOwnership(declarations, policy, dotnetProjects = []) {
+export function validateProjectLaneOwnership(declarations, policy, dotnetProjects = [], requireAllLanes = true) {
   const actual = {};
   for (const declaration of declarations) {
     actual[declaration.project] ??= [];
@@ -68,7 +108,7 @@ export function validateProjectLaneOwnership(declarations, policy, dotnetProject
   if (JSON.stringify(declaredDotnetProjects) !== JSON.stringify(dotnetProjects)) {
     throw new Error(`Every .NET test project must declare at least one test: projects=${dotnetProjects.join(",")} declarations=${declaredDotnetProjects.join(",")}`);
   }
-  for (const lane of policy.primaryLanes) {
+  for (const lane of requireAllLanes ? policy.primaryLanes : []) {
     if (!declarations.some((item) => item.primaryLane === lane)) {
       throw new Error(`Primary lane '${lane}' has zero declared tests.`);
     }
@@ -86,6 +126,15 @@ export function listDotnetTestProjects(root = repositoryRoot) {
 
 function validatePolicyShape(policy) {
   if (policy.schemaVersion !== 1) throw new Error("Core test policy schemaVersion must be 1.");
+  if (policy.scopes !== undefined) {
+    const components = policy.scopes.all;
+    if (!Array.isArray(components) || !components.includes(policy.defaultComponent)
+        || !Array.isArray(policy.componentRules) || policy.componentRules.some(rule => !components.includes(rule.component))
+        || Object.values(policy.scopes).some(owners => !Array.isArray(owners) || owners.length === 0
+          || new Set(owners).size !== owners.length || owners.some(owner => !components.includes(owner)))) {
+      throw new Error("Invalid component scope ownership.");
+    }
+  }
   if (!Array.isArray(policy.primaryLanes) || policy.primaryLanes.length === 0
       || new Set(policy.primaryLanes).size !== policy.primaryLanes.length) {
     throw new Error("Core test policy must declare unique primary lanes.");
@@ -220,7 +269,8 @@ export function discoverDotnetTests(source, content, policy) {
       externalEnvironment: externalArguments[0],
       externalPrerequisites: dotnetPrerequisites(name, source, externalArguments),
     };
-    output.push({ ...declaration, primaryLane: dotnetLaneFor({ ...declaration, attributes: policyAttributes }, policy) });
+    const ownership = { ...declaration, attributes: policyAttributes };
+    output.push({ ...declaration, component: componentFor(ownership, policy), primaryLane: dotnetLaneFor(ownership, policy) });
   }
   return output;
 }
@@ -388,4 +438,16 @@ export function nodeProject(source) {
 
 function ordinal(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  const args = process.argv.slice(2);
+  if (args.length !== 2 || args[0] !== "--scope") throw new Error("Usage: core-test-policy.mjs --scope <scope>");
+  const model = loadCoreTestModel(repositoryRoot, undefined, args[1]);
+  const components = model.policy.scopes[model.scope];
+  console.log(JSON.stringify({ scope: model.scope, components,
+    scenarios: Object.fromEntries(["portable", "candidate", "official"].map(profile => [profile, ciScenarios(components, profile)])),
+    projects: [...new Set(model.declarations.filter(test => test.framework === "dotnet").map(test => test.project))].sort(),
+    lanes: [...new Set(model.declarations.map(test => test.primaryLane))].sort(),
+    reports: expectedScriptReports(model), declarations: model.declarations.length }));
 }

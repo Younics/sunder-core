@@ -1,6 +1,6 @@
 # Callbacks And Auth
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Callbacks let an App-started package flow open a browser and return values to a Runtime handler without giving the package ownership of a network listener. Auth is the standard authorization projection built on the same callback machinery.
 

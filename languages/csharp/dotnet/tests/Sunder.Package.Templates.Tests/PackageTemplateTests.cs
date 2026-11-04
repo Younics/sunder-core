@@ -480,7 +480,7 @@ public sealed partial class PackageTemplateTests
                             Assert.Equal("worker", target.GetProperty("kind").GetString());
                             Assert.Contains("worker-protocol.v1", capabilities);
                             Assert.DoesNotContain("worker-protocol.v3", capabilities);
-                            Assert.Contains("sdk-baseline-1-1.v1", capabilities);
+                            Assert.DoesNotContain(capabilities, value => value!.StartsWith("sdk-baseline-", StringComparison.Ordinal));
                         }
                         AssertExactTemplateCapabilities(shape.Name, target);
                     });
@@ -845,24 +845,23 @@ public sealed partial class PackageTemplateTests
                 "execution-runtime.v1",
                 "packaging.v1",
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
                 "worker-protocol.v1",
             ],
             "app" when shapeName == "AvaloniaNoDefaultView" =>
             [
+                "app-bridge.v1",
                 "contributions.v1",
                 "core.v1",
                 "packaging.v1",
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
             ],
             "app" when shapeName == "Avalonia" =>
             [
+                "app-bridge.v1",
                 "contributions.v1",
                 "core.v1",
                 "packaging.v1",
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
                 "views.v1",
             ],
             _ => throw new InvalidDataException(

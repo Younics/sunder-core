@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Sunder.Package.Format;
+using Sunder.Package.Hosting;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Compatibility;
 using Xunit;
@@ -11,45 +12,40 @@ public sealed class RuntimePackageManifestValidatorTests
     private static readonly SunderPackageTargetKey RuntimeTargetKey = new("runtime", "win-x64");
 
     [Fact]
-    public void MultipleSupportedProfiles_AcceptEachLineWithoutMixingTheirCapabilities()
+    public void MultipleSupportedProfiles_AcceptEachMajorWithoutMixingTheirCapabilities()
     {
-        var current = Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles);
-        const string baseline = "sdk-baseline-1-2.v1";
+        var current = Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles, profile => profile.Role == "runtime");
         var next = current with
         {
-            SdkVersionRange = ">=1.2.0 <1.3.0",
-            SdkBaseline = baseline,
-            HostCapabilities = current.HostCapabilities.Where(capability => capability != current.SdkBaseline)
-                .Concat([baseline, "future.v1"]).ToHashSet(StringComparer.Ordinal),
-            WorkerCapabilities = current.WorkerCapabilities.Where(capability => capability != current.SdkBaseline)
-                .Concat([baseline, "future.v1"]).ToHashSet(StringComparer.Ordinal),
+            SdkMajors = new HashSet<int> { 2 },
+            HostCapabilities = current.HostCapabilities.Append("future.v1").ToHashSet(StringComparer.Ordinal),
         };
-        SunderSdkSupportedProfile[] profiles = [current, next];
+        PackageImplementationProfile[] profiles = [current, next];
 
         Assert.Empty(SunderSdkCompatibilityProfile.Validate("old.package", RuntimeTargetKey, CreateTarget(), profiles));
         Assert.Empty(SunderSdkCompatibilityProfile.Validate("new.package", RuntimeTargetKey,
-            CreateTarget(sdkVersion: "1.2.1", capabilities: [baseline, current.WorkerProtocol, "future.v1"]), profiles));
+            CreateTarget(sdkVersion: "2.3.1", capabilities: ["worker-protocol.v1", "future.v1"]), profiles));
         Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("mixed.package", RuntimeTargetKey,
-            CreateTarget(capabilities: [current.SdkBaseline, current.WorkerProtocol, "future.v1"]), profiles));
-        Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("wrong-baseline.package", RuntimeTargetKey,
-            CreateTarget(sdkVersion: "1.2.1", capabilities: [current.SdkBaseline, current.WorkerProtocol]), profiles));
+            CreateTarget(capabilities: ["worker-protocol.v1", "future.v1"]), profiles));
+        var split = current with { HostCapabilities = new HashSet<string> { "worker-protocol.v1", "future.v1" } };
+        Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("split.package", RuntimeTargetKey,
+            CreateTarget(capabilities: ["worker-protocol.v1", "rpc.v1", "future.v1"]), [current, split]));
         // Retirement is explicit: removing the old profile stops admitting its
         // targets; it does not reinterpret them as the newer SDK line.
         Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("retired.package", RuntimeTargetKey, CreateTarget(), [next]));
         Assert.Empty(SunderSdkCompatibilityProfile.Validate("current.package", RuntimeTargetKey,
-            CreateTarget(sdkVersion: "1.2.1", capabilities: [baseline, current.WorkerProtocol, "future.v1"]), [next]));
+            CreateTarget(sdkVersion: "2.3.1", capabilities: ["worker-protocol.v1", "future.v1"]), [next]));
     }
 
     [Fact]
     public void ConsumerRequirementsCapability_RejectsOnAnOlderProfileBeforeActivation()
     {
-        var current = Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles);
+        var current = Assert.Single(SunderSdkCompatibilityProfile.SupportedProfiles, profile => profile.Role == "runtime");
         var older = current with
         {
             HostCapabilities = current.HostCapabilities.Where(value => value != SunderSdkCapabilities.RpcConsumerRequirementsV1).ToHashSet(StringComparer.Ordinal),
-            WorkerCapabilities = current.WorkerCapabilities.Where(value => value != SunderSdkCapabilities.RpcConsumerRequirementsV1).ToHashSet(StringComparer.Ordinal),
         };
-        var target = CreateTarget(capabilities: [current.SdkBaseline, current.WorkerProtocol, SunderSdkCapabilities.RpcConsumerRequirementsV1]);
+        var target = CreateTarget(capabilities: ["worker-protocol.v1", SunderSdkCapabilities.RpcConsumerRequirementsV1]);
         Assert.Empty(SunderSdkCompatibilityProfile.Validate("consumer.package", RuntimeTargetKey, target, [current]));
         Assert.NotEmpty(SunderSdkCompatibilityProfile.Validate("consumer.package", RuntimeTargetKey, target, [older]));
     }
@@ -64,7 +60,7 @@ public sealed class RuntimePackageManifestValidatorTests
             appStateUpdates ? new("app", "win-x64") : RuntimeTargetKey,
             appStateUpdates
                 ? CreateTarget(role: "app", kind: "avalonia", capabilities:
-                    [SunderSdkCapabilities.Baseline11V1, SunderSdkCapabilities.AppStateUpdatesV1])
+                    ["app-bridge.v1", SunderSdkCapabilities.AppStateUpdatesV1])
                 : CreateTarget());
 
         Assert.Empty(errors);
@@ -78,8 +74,26 @@ public sealed class RuntimePackageManifestValidatorTests
             RuntimeTargetKey,
             CreateTarget(sdkVersion: "2.0.0"));
 
-        Assert.Contains(errors, error => error.Contains("target 'runtime/win-x64'", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("supported SDK majors [1]", StringComparison.Ordinal));
         Assert.Contains(errors, error => error.Contains("2.0.0", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("net10.0", "12.1.0", true)]
+    [InlineData("net10.0", "12.1.4", true)]
+    [InlineData("net10.0", "12.1.5", false)]
+    [InlineData("net10.0", "11.3.0", false)]
+    [InlineData("net10.0", "13.0.0", false)]
+    [InlineData("net11.0", "12.1.4", false)]
+    public void ManagedAppAdmission_RequiresImplementedSharedFrameworks(string framework, string avalonia, bool accepted)
+    {
+        var target = new SunderPackageTargetManifest
+        {
+            Role = "app", Rid = "win-x64", Kind = "avalonia", EntryPoint = "lib/App.dll",
+            SdkVersion = "1.0.0", TargetFramework = framework, AvaloniaVersion = avalonia,
+            RequiredHostCapabilities = ["app-bridge.v1"],
+        };
+        Assert.Equal(accepted, SunderSdkCompatibilityProfile.Validate("test.package", new("app", "win-x64"), target).Count == 0);
     }
 
     [Fact]
@@ -90,7 +104,7 @@ public sealed class RuntimePackageManifestValidatorTests
             RuntimeTargetKey,
             CreateTarget(capabilities:
             [
-                SunderSdkCapabilities.Baseline11V1,
+                "worker-protocol.v1",
                 SunderSdkCapabilities.RpcV1,
             ]));
 
@@ -108,7 +122,7 @@ public sealed class RuntimePackageManifestValidatorTests
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
             RuntimeTargetKey,
-            CreateTarget(capabilities: ["sdk-baseline-1-1.v1", capability]));
+            CreateTarget(capabilities: ["worker-protocol.v1", capability]));
 
         Assert.Contains(errors, error => error.Contains($"Host capability '{capability}'", StringComparison.Ordinal));
     }
@@ -122,7 +136,6 @@ public sealed class RuntimePackageManifestValidatorTests
             CreateTarget(
                 capabilities:
                 [
-                    SunderSdkCapabilities.Baseline11V1,
                     SunderSdkCapabilities.BackgroundServicesV1,
                     SunderSdkCapabilities.ContributionsV1,
                     SunderSdkCapabilities.RuntimeGenerationsV1,
@@ -158,16 +171,13 @@ public sealed class RuntimePackageManifestValidatorTests
                 CreateTarget(
                     capabilities:
                     [
-                        SunderSdkCapabilities.Baseline11V1,
                         SunderWorkerProtocol.V1Capability,
                         capability,
                     ]));
 
             var error = Assert.Single(errors);
             Assert.Contains($"Host capability '{capability}'", error, StringComparison.Ordinal);
-            Assert.True(
-                error.Contains("this Host does not support", StringComparison.Ordinal)
-                || error.Contains("Worker protocol 'worker-protocol.v1' does not implement", StringComparison.Ordinal));
+            Assert.Contains("not implemented by 'runtime/worker'", error, StringComparison.Ordinal);
         }
     }
 
@@ -179,9 +189,9 @@ public sealed class RuntimePackageManifestValidatorTests
             RuntimeTargetKey,
             CreateTarget(
                 kind: "dotnet",
-                capabilities: ["sdk-baseline-1-1.v1", "worker-protocol.v1"]));
+                capabilities: ["worker-protocol.v1"]));
 
-        Assert.Contains(errors, error => error.Contains("valid only for Runtime worker targets", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("no supported SDK/protocol profile", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -456,7 +466,7 @@ public sealed class RuntimePackageManifestValidatorTests
         string role = "runtime",
         string rid = "win-x64",
         string kind = SunderPackageFormat.WorkerTargetKind,
-        string sdkVersion = "1.1.0",
+        string sdkVersion = "1.0.0",
         IReadOnlyList<string?>? capabilities = null)
         => new()
         {
@@ -466,9 +476,10 @@ public sealed class RuntimePackageManifestValidatorTests
             EntryPoint = "lib/Test.Package.dll",
             TargetFramework = "net10.0",
             SdkVersion = sdkVersion,
+            AvaloniaVersion = kind == "avalonia" ? "12.1.4" : null,
             RequiredHostCapabilities = capabilities ?? (role == SunderPackageFormat.RuntimeHostRole
-                ? ["sdk-baseline-1-1.v1", "core.v1", "rpc.v1", "worker-protocol.v1"]
-                : ["sdk-baseline-1-1.v1", "core.v1"]),
+                ? ["core.v1", "rpc.v1", "worker-protocol.v1"]
+                : ["app-bridge.v1", "core.v1"]),
         };
 
     private static string GetAlternateRid(string currentRid)

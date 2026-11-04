@@ -17,7 +17,7 @@
       "packageType": "",
       "includeBuildOutput": true,
       "maximumBytes": 2097152,
-      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Avalonia.dll", "lib/net10.0/Sunder.Sdk.Avalonia.xml"]
+      "requiredEntries": ["lib/net10.0/Sunder.Sdk.Avalonia.dll", "lib/net10.0/Sunder.Sdk.Avalonia.xml", "lib/net10.0/Sunder.App.Bridge.dll"]
     },
     {
       "packageId": "Sunder.Sdk.Stacks",

@@ -2,8 +2,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
-    <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj"
-                      OutputItemType="_PolicyAppTargetPath" PrivateAssets="all" />
+    <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
     <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Runtime.Host.InteropWorker\Sunder.Runtime.Host.InteropWorker.csproj"
@@ -18,8 +17,6 @@
     <None Update="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="SyntheticExecutionRuntimeLauncher.cs" />
     <None Include="SyntheticExecutionRuntimeLauncher.cs" />
-    <Compile Remove="AppPolicyStartupHook.cs" />
-    <None Include="AppPolicyStartupHook.cs" />
     <None Include="..\..\..\..\..\specs\worker\v1\conformance\corpus.json"
           Link="WorkerV1Conformance\corpus.json"
           CopyToOutputDirectory="PreserveNewest" />
@@ -31,20 +28,6 @@
     <TestWorkerAppHostName>Sunder.Runtime.Host.Tests.TestWorkerAppHost</TestWorkerAppHostName>
     <TestWorkerAssemblyPath>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\Sunder.Runtime.Host.TestWorker\bin\$(Configuration)\$(TargetFramework)\$(NETCoreSdkRuntimeIdentifier)\Sunder.Runtime.Host.TestWorker.dll'))</TestWorkerAssemblyPath>
   </PropertyGroup>
-
-  <Target Name="BuildAppPolicyStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
-          Inputs="$(MSBuildProjectDirectory)\AppPolicyStartupHook.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
-          Outputs="$(TargetDir)app-policy-hook\Sunder.App.Tests.dll;$(TargetDir)sunder-policy-app-target-path.txt">
-    <Error Condition="'@(_PolicyAppTargetPath->Count())' != '1'" Text="The native App policy tests require one exact App build output." />
-    <MakeDir Directories="$(TargetDir)app-policy-hook" />
-    <Csc Sources="$(MSBuildProjectDirectory)\AppPolicyStartupHook.cs"
-         References="@(ReferencePathWithRefAssemblies)"
-         OutputAssembly="$(TargetDir)app-policy-hook\Sunder.App.Tests.dll"
-         TargetType="Library" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
-         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
-         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
-    <WriteLinesToFile File="$(TargetDir)sunder-policy-app-target-path.txt" Lines="@(_PolicyAppTargetPath->'%(FullPath)')" Overwrite="true" />
-  </Target>
 
   <Target Name="BuildSyntheticExecutionRuntimeLauncher"
           AfterTargets="Build"

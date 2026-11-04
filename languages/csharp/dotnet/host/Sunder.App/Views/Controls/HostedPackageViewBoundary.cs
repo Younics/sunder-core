@@ -5,6 +5,7 @@ using Avalonia.Media;
 using Avalonia.VisualTree;
 using System.Runtime.CompilerServices;
 using Sunder.App.Services;
+using Sunder.App.Bridge;
 using Sunder.Sdk.Abstractions;
 
 namespace Sunder.App.Views.Controls;
@@ -12,6 +13,7 @@ namespace Sunder.App.Views.Controls;
 internal sealed class HostedPackageViewBoundary : Panel,
     IPackageViewNavigationTarget,
     IPackageViewNavigationPreparationTarget,
+    IAppViewCallbacksV1,
     IDisposable
 {
     private static readonly ConditionalWeakTable<Control, VisualDetachmentFailure>
@@ -62,7 +64,18 @@ internal sealed class HostedPackageViewBoundary : Panel,
         _releasedCallback = releasedCallback;
         HorizontalAlignment = HorizontalAlignment.Stretch;
         VerticalAlignment = VerticalAlignment.Stretch;
+        AppViewCallbacksV1.Attach(this, this);
     }
+
+    bool IAppViewCallbacksV1.SupportsPreparation => true;
+    ValueTask IAppViewCallbacksV1.WarmupAsync(CancellationToken token)
+        => _hostedView is { } view ? AppPackageViewNavigator.WarmupViewAsync(view, token) : ValueTask.CompletedTask;
+    ValueTask IAppViewCallbacksV1.NavigateAsync(string id, IReadOnlyDictionary<string, string?> parameters, CancellationToken token)
+        => OnNavigatedToAsync(new(id, parameters), token);
+    ValueTask<bool> IAppViewCallbacksV1.PrepareAsync(string id, IReadOnlyDictionary<string, string?> parameters, CancellationToken token)
+        => PrepareNavigationAsync(new(id, parameters), token);
+    ValueTask IAppViewCallbacksV1.PresentedAsync(string id, IReadOnlyDictionary<string, string?> parameters, CancellationToken token)
+        => OnNavigationPresentedAsync(new(id, parameters), token);
 
     public Control? HostedView => _hostedView;
 

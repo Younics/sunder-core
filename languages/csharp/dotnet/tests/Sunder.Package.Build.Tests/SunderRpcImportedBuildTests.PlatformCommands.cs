@@ -10,6 +10,9 @@ public sealed partial class SunderRpcImportedBuildTests
     public async Task PlatformCommands_LocalCatalogSelectsAndUpdatesWithoutRegistry()
     {
         var fixture = PlatformFixture();
+        var catalog = ReadJson(fixture.Path);
+        catalog["releaseVersion"] = "7.8.9";
+        File.WriteAllBytes(fixture.Path, Compact(catalog));
         File.Copy(Fixture("authoring/conformance/valid/minimal-contract-lock.json"), LockPath, overwrite: true);
         File.Delete(Path.Combine(_root, "Consumer.cs"));
         var ownedPath = Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName);
@@ -17,12 +20,15 @@ public sealed partial class SunderRpcImportedBuildTests
         using var handler = new RestoreHandler(_ => throw new InvalidOperationException("Local catalog selection attempted HTTP."));
         using var http = new HttpClient(handler);
         var commands = new SunderRpcPackageApiCommands(new(http));
-        var request = new SunderRpcPackageApiRequest("PlatformImplement", ContractId: "sunder.stack.contributor", PlatformCatalog: fixture.Path);
+        var request = new SunderRpcPackageApiRequest("PlatformImplement", ContractId: "sunder.stack.contributor", PlatformCatalog: fixture.Path,
+            VersionRange: ">=7.0.0 <8.0.0");
         var added = await commands.ExecuteAsync(LockPath, _cache, request,
             (before, _, stage) => CreatePackageApiTask(request.Operation).ValidateSource(before, stage, _cache, request));
         Assert.True(added.Changed);
         Assert.False(File.Exists(ownedPath));
         Assert.Null(Assert.Single(added.ContractLock.PlatformImports).Value.RegistryOrigin);
+        Assert.Equal("7.8.9", added.ContractLock.PlatformImports["stackContributor"].SelectedAuthorityRelease);
+        Assert.Equal(">=7.0.0 <8.0.0", added.ContractLock.PlatformImports["stackContributor"].AuthorityReleaseRange);
         Assert.DoesNotContain("registryOrigin", File.ReadAllText(LockPath), StringComparison.Ordinal);
         var pinned = File.ReadAllBytes(LockPath);
         Assert.False((await commands.ExecuteAsync(LockPath, _cache, request)).Changed);
@@ -51,7 +57,7 @@ public sealed partial class SunderRpcImportedBuildTests
         using var handler = new RestoreHandler(request =>
         {
             if (request.RequestUri!.AbsolutePath.EndsWith("/resolve", StringComparison.Ordinal))
-                Assert.Equal("?versionRange=" + Uri.EscapeDataString(">=1.1.0 <1.2.0"), request.RequestUri.Query);
+                Assert.Equal("?versionRange=" + Uri.EscapeDataString(">=1.0.0"), request.RequestUri.Query);
             return PlatformResponse(request, fixture);
         });
         using var http = new HttpClient(handler);
@@ -60,7 +66,7 @@ public sealed partial class SunderRpcImportedBuildTests
             (before, _, stage) => CreatePackageApiTask(request.Operation).ValidateSource(before, stage, _cache, request));
         var added = await Run(new("PlatformImplement", ContractId: "sunder.stack.contributor", RegistryOrigin: "https://registry.example/"));
         Assert.True(added.Changed); var imported = Assert.Single(added.ContractLock.PlatformImports).Value;
-        Assert.Equal("stackContributor", imported.Key); Assert.Equal(">=1.1.0 <1.2.0", imported.AuthorityReleaseRange);
+        Assert.Equal("stackContributor", imported.Key); Assert.Equal(">=1.0.0", imported.AuthorityReleaseRange);
         Assert.Empty(added.ContractLock.PackageArtifacts); Assert.Empty(added.ContractLock.PackageImports);
         var before = File.ReadAllBytes(LockPath); var time = File.GetLastWriteTimeUtc(LockPath); var requests = handler.Requests;
         Assert.False((await Run(new("PlatformImplement", ContractId: imported.ContractId))).Changed);
@@ -92,7 +98,7 @@ public sealed partial class SunderRpcImportedBuildTests
         using var handler = new RestoreHandler(_ => throw new InvalidOperationException("Unexpected HTTP.")); using var http = new HttpClient(handler);
         var request = invalid switch
         {
-            "range" => new SunderRpcPackageApiRequest("PlatformImplement", ContractId: "sunder.stack.contributor", VersionRange: ">=1.0.0"),
+            "range" => new SunderRpcPackageApiRequest("PlatformImplement", ContractId: "sunder.stack.contributor", VersionRange: "^1.0.0"),
             "prerelease" => new("PlatformImplement", ContractId: "sunder.stack.contributor", IncludePrerelease: false),
             "candidate" => new("PlatformImplement", ContractId: "sunder.stack.contributor", Candidate: "candidate.sunderpkg"),
             "presence" => new("PlatformImplement", ContractId: "sunder.stack.contributor", Presence: "optional"),

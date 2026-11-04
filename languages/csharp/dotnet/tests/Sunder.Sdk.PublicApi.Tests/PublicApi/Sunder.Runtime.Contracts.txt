@@ -1043,11 +1043,12 @@ type public sealed class Sunder.Runtime.Contracts.PackageStoreStageResult : Syst
   method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.PackageStoreStageResult? left, Sunder.Runtime.Contracts.PackageStoreStageResult? right)
   method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.PackageStoreStageResult? left, Sunder.Runtime.Contracts.PackageStoreStageResult? right)
 type public sealed class Sunder.Runtime.Contracts.PackageTargetDescriptor : System.IEquatable<Sunder.Runtime.Contracts.PackageTargetDescriptor>
-  method public .ctor(System.String Role, System.String Rid, System.String Kind, System.String EntryPoint, System.String? TargetFramework, System.String? SdkVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageWebViewDescriptor>? Views = null, Sunder.Runtime.Contracts.RuntimeExecutionRuntimeRequirement? ExecutionRuntime = null, Sunder.Runtime.Contracts.PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding = null)
+  method public .ctor(System.String Role, System.String Rid, System.String Kind, System.String EntryPoint, System.String? TargetFramework, System.String? SdkVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageWebViewDescriptor>? Views = null, Sunder.Runtime.Contracts.RuntimeExecutionRuntimeRequirement? ExecutionRuntime = null, Sunder.Runtime.Contracts.PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding = null, System.String? AvaloniaVersion = null)
   property Sunder.Runtime.Contracts.PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding { public get; public init; }
   property Sunder.Runtime.Contracts.RuntimeExecutionRuntimeRequirement? ExecutionRuntime { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageWebViewDescriptor> Views { public get; }
   property System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities { public get; }
+  property System.String? AvaloniaVersion { public get; public init; }
   property System.String EntryPoint { public get; public init; }
   property System.String Kind { public get; public init; }
   property System.String Rid { public get; public init; }
@@ -1055,7 +1056,7 @@ type public sealed class Sunder.Runtime.Contracts.PackageTargetDescriptor : Syst
   property System.String? SdkVersion { public get; public init; }
   property System.String? TargetFramework { public get; public init; }
   method public Sunder.Runtime.Contracts.PackageTargetDescriptor <Clone>$()
-  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Kind, out System.String EntryPoint, out System.String? TargetFramework, out System.String? SdkVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageWebViewDescriptor>? Views, out Sunder.Runtime.Contracts.RuntimeExecutionRuntimeRequirement? ExecutionRuntime, out Sunder.Runtime.Contracts.PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding)
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Kind, out System.String EntryPoint, out System.String? TargetFramework, out System.String? SdkVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageWebViewDescriptor>? Views, out Sunder.Runtime.Contracts.RuntimeExecutionRuntimeRequirement? ExecutionRuntime, out Sunder.Runtime.Contracts.PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding, out System.String? AvaloniaVersion)
   method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.PackageTargetDescriptor? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()
@@ -2775,10 +2776,11 @@ type public sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest 
   method public static System.Boolean op_Equality(Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest? left, Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest? right)
   method public static System.Boolean op_Inequality(Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest? left, Sunder.Runtime.Contracts.RuntimeRegistryPackageRequest? right)
 type public sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageTarget : System.IEquatable<Sunder.Runtime.Contracts.RuntimeRegistryPackageTarget>
-  method public .ctor(System.String Role, System.String Rid, System.String Kind, System.String EntryPoint, System.String? TargetFramework, System.String? SdkVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageWebView>? Views = null, Sunder.Runtime.Contracts.RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime = null)
+  method public .ctor(System.String Role, System.String Rid, System.String Kind, System.String EntryPoint, System.String? TargetFramework, System.String? SdkVersion, System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageWebView>? Views = null, Sunder.Runtime.Contracts.RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime = null, System.String? AvaloniaVersion = null)
   property Sunder.Runtime.Contracts.RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageWebView> Views { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities { public get; public init; }
+  property System.String? AvaloniaVersion { public get; public init; }
   property System.String EntryPoint { public get; public init; }
   property System.String Kind { public get; public init; }
   property System.String Rid { public get; public init; }
@@ -2786,7 +2788,7 @@ type public sealed class Sunder.Runtime.Contracts.RuntimeRegistryPackageTarget :
   property System.String? SdkVersion { public get; public init; }
   property System.String? TargetFramework { public get; public init; }
   method public Sunder.Runtime.Contracts.RuntimeRegistryPackageTarget <Clone>$()
-  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Kind, out System.String EntryPoint, out System.String? TargetFramework, out System.String? SdkVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageWebView>? Views, out Sunder.Runtime.Contracts.RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime)
+  method public System.Void Deconstruct(out System.String Role, out System.String Rid, out System.String Kind, out System.String EntryPoint, out System.String? TargetFramework, out System.String? SdkVersion, out System.Collections.Generic.IReadOnlyList<System.String> RequiredHostCapabilities, out System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.RuntimeRegistryPackageWebView>? Views, out Sunder.Runtime.Contracts.RuntimeRegistryExecutionRuntimeRequirement? ExecutionRuntime, out System.String? AvaloniaVersion)
   method public final virtual System.Boolean Equals(Sunder.Runtime.Contracts.RuntimeRegistryPackageTarget? other)
   method public override System.Boolean Equals(System.Object? obj)
   method public override System.Int32 GetHashCode()

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -48,8 +49,12 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("map(select(.RelativeFileName != $portable", packager, StringComparison.Ordinal);
         Assert.Contains(".Type == \"Full\" or .Type == \"Delta\"", packager, StringComparison.Ordinal);
         Assert.DoesNotContain("portable_entry=", packager, StringComparison.Ordinal);
-        Assert.Contains("runtime: osx-x64", workflow, StringComparison.Ordinal);
-        Assert.Contains("runtime: osx-arm64", workflow, StringComparison.Ordinal);
+        Assert.Contains("scripts/ci/metadata.py matrices", workflow, StringComparison.Ordinal);
+        Assert.Contains("fromJSON(needs.prepare.outputs.matrix)", workflow, StringComparison.Ordinal);
+        using var platforms = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "eng", "ci", "platforms.json")));
+        var rids = platforms.RootElement.GetProperty("platforms").EnumerateArray().Select(row => row.GetProperty("rid").GetString()).ToArray();
+        Assert.Contains("osx-x64", rids);
+        Assert.Contains("osx-arm64", rids);
         Assert.Contains("Sunder-app-$RUNTIME-$RELEASE_CHANNEL.dmg", workflow, StringComparison.Ordinal);
         Assert.Contains("github_release.py stage", workflow, StringComparison.Ordinal);
         Assert.Contains("github_release.py finalize", workflow, StringComparison.Ordinal);
@@ -59,7 +64,7 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("set(files) - EVIDENCE == expected", publisher, StringComparison.Ordinal);
         Assert.DoesNotContain("-Setup.pkg", publisher, StringComparison.Ordinal);
         Assert.DoesNotContain("-Portable.zip", publisher, StringComparison.Ordinal);
-        Assert.Contains("vpk upload local", workflow, StringComparison.Ordinal);
+        Assert.Contains("scripts/release/generate-app-feeds.py release-assets", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("vpk upload github", workflow, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-x64-stable.dmg", installer, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-arm64-stable.dmg", installer, StringComparison.Ordinal);

@@ -803,7 +803,7 @@ public sealed class ExecutionRuntimeStoreTests
             EntryPoint = "worker.dll",
             TargetFramework = "net10.0",
             SdkVersion = "1.1.0",
-            RequiredHostCapabilities = ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+            RequiredHostCapabilities = ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"],
             ExecutionRuntime = new SunderPackageExecutionRuntimeManifest
             {
                 Id = SunderPackageFormat.DotNetExecutionRuntimeId,

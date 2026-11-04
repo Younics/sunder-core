@@ -7,7 +7,6 @@ internal sealed class AppPackageUnloadCoordinator(
     AppPackageViewRegistry viewRegistry,
     AppPackageRuntimeWorkStopper runtimeWorkStopper,
     AppPackageAssemblyTracker assemblyTracker,
-    AppSharedAssemblyRegistry sharedAssemblyRegistry,
     Action<object> removeOwnedDisposable,
     Action<AppPackageLoadContext> removeLoadContext,
     Action<string>? removePackageResourceAssemblies = null)
@@ -51,7 +50,6 @@ internal sealed class AppPackageUnloadCoordinator(
             CleanupRetiredPackageAsync(
                 packageId,
                 packageInfo?.Folder,
-                packageInfo?.LibraryFolder,
                 serviceProvider,
                 loadContext,
                 targetLifetime,
@@ -98,7 +96,6 @@ internal sealed class AppPackageUnloadCoordinator(
         var cleanup = CleanupRetiredPackageAsync(
             packageId,
             handle.Folder,
-            Path.Combine(handle.Folder, "lib"),
             handle.ServiceProvider,
             handle.LoadContext,
             handle.TargetLifetime,
@@ -159,7 +156,6 @@ internal sealed class AppPackageUnloadCoordinator(
     private async Task<bool> CleanupRetiredPackageAsync(
         string packageId,
         string? packageFolder,
-        string? libraryFolder,
         object? serviceProvider,
         AppPackageLoadContext? loadContext,
         IAsyncDisposable? targetLifetime,
@@ -178,14 +174,6 @@ internal sealed class AppPackageUnloadCoordinator(
         {
             assemblyTracker.RemoveLoadContext(loadContext);
         }
-        var canDeletePackageFolder = projectionLease is null
-            && (libraryFolder is null
-                || sharedAssemblyRegistry.TryRemoveProbeDirectories([libraryFolder]));
-        if (projectionLease is not null && libraryFolder is not null)
-        {
-            _ = sharedAssemblyRegistry.TryRemoveProbeDirectories([libraryFolder]);
-        }
-
         if (serviceProvider is not null)
         {
             var disposed = await Task.Run(
@@ -260,7 +248,7 @@ internal sealed class AppPackageUnloadCoordinator(
                     $"retaining immutable package projection after unproven cleanup for '{packageId}'");
             }
         }
-        if (cleanupProven && packageFolder is not null && canDeletePackageFolder)
+        if (cleanupProven && packageFolder is not null && projectionLease is null)
         {
             AppPackageSourcePreparer.TryDeleteDirectory(packageFolder);
         }

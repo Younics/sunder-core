@@ -1,5 +1,22 @@
 {
   "schemaVersion": 1,
+  "scopes": {
+    "all": ["sdk", "host", "cli", "app", "ci"],
+    "sdk": ["sdk", "host", "cli"],
+    "app": ["app"],
+    "host": ["host"],
+    "cli": ["cli"],
+    "repository": ["app", "ci"]
+  },
+  "componentRules": [
+    { "component": "app", "attributes": "Trait\\(\\s*\"Component\"\\s*,\\s*\"App\"" },
+    { "component": "app", "project": "^Sunder\\.App(?:\\.Integration)?\\.Tests$" },
+    { "component": "host", "project": "^Sunder\\.(?:Runtime|Host)\\..*\\.Tests$" },
+    { "component": "cli", "project": "^Sunder\\.Cli\\.Tests$" },
+    { "component": "app", "source": "/test_(?:macos_dmg|app_release)\\.py$" },
+    { "component": "ci", "source": "^scripts/test-oracles/(?:owned-test-process|test-evidence-tools|test-result-summary)\\.test\\.mjs$|/release-workflows\\.test\\.mjs$|/test_(?:ci|artifacts)\\.py$|/current-candidate\\.test\\.mjs$" }
+  ],
+  "defaultComponent": "sdk",
   "primaryLanes": [
     "app-packaging",
     "dotnet-linux",
@@ -43,6 +60,7 @@
     }
   ],
   "projectLanes": {
+    "Sunder.App.Integration.Tests": ["dotnet-linux", "host-platform"],
     "Sunder.App.Tests": ["app-packaging", "dotnet-linux", "host-platform", "release-artifact"],
     "Sunder.Cli.Tests": ["dotnet-linux"],
     "Sunder.Core.TestSupport.Tests": ["dotnet-linux", "host-platform"],
@@ -99,16 +117,6 @@
       "owner": "node",
       "reason": "Linux process-identity metadata is unavailable on this runner.",
       "runnerReasonPattern": "^(?:true|Requires Linux\\.)$"
-    },
-    {
-      "id": "node-process-suspension",
-      "framework": "node",
-      "source": "languages/typescript/node/packages/package-tool/test/rpc-bindings.test.ts",
-      "name": "a suspended CLI publisher reads the new source after acquiring the output lease",
-      "skipOn": ["Windows"],
-      "owner": "node",
-      "reason": "Windows has no SIGSTOP/SIGCONT process suspension.",
-      "runnerReasonPattern": "^SIGSTOP/SIGCONT unavailable on Windows$"
     },
     {
       "id": "node-sdk-output-symlink-capability",

@@ -117,6 +117,7 @@ internal static class PackageManifestFixture
             {
                 typeof(SunderPackageAttribute).Assembly.Location,
                 includeAvalonia ? typeof(IAvaloniaPackageContributionRegistry).Assembly.Location : null,
+                includeAvalonia ? typeof(Avalonia.AvaloniaObject).Assembly.Location : null,
                 includeStacks ? typeof(IPackageStackExporter).Assembly.Location : null,
                 typeof(SunderWorkerProviderRegistration).Assembly.Location,
             }
@@ -127,6 +128,7 @@ internal static class PackageManifestFixture
     internal static MSBuildTaskItem[] TestAssemblyDynamicAccessAcknowledgements()
         =>
         [
+            new("Sunder.Package.Build.Tests.ImplementationFirstRpcBuildTests.ActivatePackedAppAsync"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_GeneratesRealSixMethodProviderAndPreservesSemanticContentBehavior"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_TemplateUsesSelectedImportAndGeneratedRegistrationWithoutPrivateBootstrap"),

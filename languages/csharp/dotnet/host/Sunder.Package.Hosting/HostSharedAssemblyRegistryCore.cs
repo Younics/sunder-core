@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.Loader;
 
 namespace Sunder.Package.Hosting;
 
@@ -15,6 +16,11 @@ internal sealed class HostSharedAssemblyRegistryCore : IDisposable
 
     public void RegisterOptionalHostAssemblyName(string assemblyName)
         => _optionalHostAssemblies.Add(assemblyName);
+
+    // Asset URIs carry a simple name, not a CLR reference identity. This lookup is
+    // confined to the deliberate shared set; CLR references still use validation below.
+    public Assembly? ResolveResourceAssembly(string name)
+        => _hostAssemblies.TryGetValue(name, out var assembly) || TryLoadOptionalHostAssembly(name, out assembly) ? assembly : null;
 
     public Assembly? ResolveSharedAssembly(AssemblyName requested)
     {
@@ -55,7 +61,10 @@ internal sealed class HostSharedAssemblyRegistryCore : IDisposable
         }
         try
         {
-            assembly = Assembly.Load(new AssemblyName(assemblyName));
+            // View factories enter their package's contextual reflection scope.
+            // Host-owned assemblies must bypass it to avoid reentering that
+            // package's shared-assembly resolver recursively.
+            assembly = AssemblyLoadContext.Default.LoadFromAssemblyName(new AssemblyName(assemblyName));
             _hostAssemblies[assemblyName] = assembly;
             return true;
         }

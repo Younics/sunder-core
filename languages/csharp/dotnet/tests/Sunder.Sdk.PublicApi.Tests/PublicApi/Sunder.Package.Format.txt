@@ -292,6 +292,7 @@ type public sealed class Sunder.Package.Format.SunderPackageManifest
   property System.String? Version { public get; public init; }
 type public static class Sunder.Package.Format.SunderPackageManifestValidator
   method public static System.Collections.Generic.IReadOnlyList<System.String> Validate(Sunder.Package.Format.SunderPackageManifest? manifest, System.String rootPath)
+  method public static System.Collections.Generic.IReadOnlyList<System.String> ValidateTargetMetadata(Sunder.Package.Format.SunderPackageTargetManifest target)
   method public static System.Void Validate(Sunder.Package.Format.SunderPackageManifest? manifest, System.String rootPath, System.Collections.Generic.ICollection<System.String> errors)
 type public enum Sunder.Package.Format.SunderPackagePayloadLayer : System.Int32, System.IComparable, System.IConvertible, System.IFormattable, System.ISpanFormattable
   field public const Sunder.Package.Format.SunderPackagePayloadLayer RoleShared = 1
@@ -501,6 +502,7 @@ type public sealed class Sunder.Package.Format.SunderPackageTargetManifest
   property Sunder.Package.Format.SunderPackageExecutionRuntimeManifest? ExecutionRuntime { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Package.Format.SunderPackageWebViewManifest?>? Views { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<System.String?>? RequiredHostCapabilities { public get; public init; }
+  property System.String? AvaloniaVersion { public get; public init; }
   property System.String? EntryPoint { public get; public init; }
   property System.String? Kind { public get; public init; }
   property System.String? Rid { public get; public init; }

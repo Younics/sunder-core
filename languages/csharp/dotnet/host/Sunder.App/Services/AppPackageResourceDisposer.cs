@@ -1,9 +1,17 @@
+using Microsoft.Extensions.DependencyInjection;
+
 namespace Sunder.App.Services;
 
 internal static class AppPackageResourceDisposer
 {
     public static async Task DisposeOwnedInstanceAsync(object ownedInstance)
     {
+        if (ownedInstance is ServiceProvider provider && provider.GetService<AppPackageBridgeLifetime>() is { } bridge)
+        {
+            try { await bridge.DisposeAsync(); }
+            finally { await provider.DisposeAsync(); }
+            return;
+        }
         if (ownedInstance is IAsyncDisposable asyncDisposable)
         {
             await asyncDisposable.DisposeAsync();

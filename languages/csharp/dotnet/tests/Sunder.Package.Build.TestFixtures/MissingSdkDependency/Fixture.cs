@@ -8,8 +8,12 @@ using Sunder.Sdk.Stacks;
 
 namespace Sunder.Package.Build.Tests.Fixtures.MissingSdkDependency;
 
-public sealed class FixturePackageModule : ISunderAppPackageModule
+public sealed class FixturePackageModule : ISunderAppPackageModule, Sunder.App.Bridge.IAppPackageEntryPointV1
 {
+    public ValueTask<Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(
+        Sunder.App.Bridge.IAppPackageHostV1 host, Sunder.App.Bridge.IAppContributionSinkV1 contributions)
+        => throw new NotSupportedException("Metadata-only fixture.");
+
     public void ConfigureAppServices(IServiceCollection services, IPackageContext context)
     {
     }

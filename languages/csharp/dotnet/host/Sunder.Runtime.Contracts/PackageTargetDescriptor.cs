@@ -10,7 +10,8 @@ public sealed record PackageTargetDescriptor(
     IReadOnlyList<string> RequiredHostCapabilities,
     IReadOnlyList<PackageWebViewDescriptor>? Views = null,
     RuntimeExecutionRuntimeRequirement? ExecutionRuntime = null,
-    PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding = null)
+    PackageTargetExecutionRuntimeBinding? ExecutionRuntimeBinding = null,
+    string? AvaloniaVersion = null)
 {
     public IReadOnlyList<string> RequiredHostCapabilities { get; }
         = RuntimeContractCollections.Freeze(RequiredHostCapabilities);

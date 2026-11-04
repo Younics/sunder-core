@@ -13,7 +13,7 @@ import { bundleProduction, prepareProject } from "../src/package";
 import { withOutputLocks } from "../src/output";
 import { contractsCommand } from "../src/rpc-contracts";
 import { numericSource, echoSource } from "./owned-service-sources";
-import { emptyLock, fixtureSource, generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
+import { emptyLock, fixtureSource, generatedProviders, installFixtureSdk, invocation, writeSourceFile as writeFile } from "./service-fixtures";
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
 import { exercisePackedOwned } from "./packed-owned";
 import { workerResolutionOptions } from "../src/rpc-runtime-inputs";
@@ -22,6 +22,7 @@ import { MODEL_PROJECTION_PATH } from "../src/rpc-model-projection";
 const exec = promisify(execFile); const cli = resolve(__dirname, "../../dist/cli.js");
 async function project(source = numericSource, extension = "ts", id = "example.owned") {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-")); await mkdir(resolve(root, "src"));
+  await installFixtureSdk(root);
   await writeFile(resolve(root, `src/services.${extension}`), source);
   await writeFile(resolve(root, "sunder-contracts.lock.json"), emptyLock);
   await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({schemaVersion:3,id,name:"Owned",version:"7.6.5",workerCapabilities:[],services:{module:`src/services.${extension}`}}));
@@ -186,7 +187,7 @@ test("runtime replay executes captured helper bytes even with validation deliber
     await run(root,"build");const loaded=await loadProject(root);
     await writeFile(resolve(root,"src/helper.js"),'export function value(){return true;}');
     await assert.rejects(loaded.ownedRpc!.revalidate(),/input changed/);
-    const capture=await esbuild({absWorkingDir:root,entryPoints:[resolve(root,loaded.config.entry)],bundle:true,platform:"node",format:"cjs",target:"node24",...workerResolutionOptions,tsconfigRaw:{},write:false,plugins:[loaded.ownedRpc!.runtime.plugin(async()=>{})]});
+    const capture=await esbuild({absWorkingDir:root,entryPoints:[resolve(root,loaded.config.entry)],bundle:true,platform:"node",format:"cjs",target:"node24",...workerResolutionOptions(loaded.sdk),tsconfigRaw:{},write:false,plugins:[loaded.ownedRpc!.runtime.plugin(async()=>{})]});
     const module=resolve(root,"captured.cjs");await writeFile(module,capture.outputFiles[0]!.contents);
     await exerciseOwnedWorker(root,false,"7.6.5",undefined,module);
   }finally{await rm(root,{recursive:true,force:true});}

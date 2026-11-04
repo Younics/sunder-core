@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { installFixtureSdk } from "./service-fixtures";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -18,6 +19,7 @@ const outer = (value: unknown) => Buffer.from(JSON.stringify(value, null, 2) + "
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "sunder-development-registry-")); const cache = join(root, "cache"); const path = join(root, "sunder-contracts.lock.json");
+  await installFixtureSdk(root);
   const raw=JSON.parse(await readFile(join(fixtures,"package-api-contract-lock.json"),"utf8"));const before=parseContractLock(outer(raw));
   const requirement=[...before.requirements.values()][0]!;
   const descriptor = Buffer.from(canonicalRpcDescriptorBytes(parseRpcContractDescriptor(await readFile(join(ROOT, "conformance/valid/minimal.rpc.json")))));

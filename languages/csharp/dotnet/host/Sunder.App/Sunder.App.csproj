@@ -26,6 +26,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj" />
     <ProjectReference Include="..\Sunder.Package.Hosting\Sunder.Package.Hosting.csproj" />
     <ProjectReference Include="..\Sunder.Package.Projections\Sunder.Package.Projections.csproj" />
     <ProjectReference Include="..\Sunder.Host.Client\Sunder.Host.Client.csproj" />

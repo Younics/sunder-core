@@ -10,7 +10,6 @@
     <UseAppHost>false</UseAppHost>
     <PublishSingleFile>false</PublishSingleFile>
     <PublishTrimmed>false</PublishTrimmed>
-    <SunderSdkPackageVersion>1.1.0</SunderSdkPackageVersion>
     <SunderGeneratedPackageManifest>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\obj\$(Configuration)\$(TargetFramework)\$(RuntimeIdentifier)\sunder-package.json'))</SunderGeneratedPackageManifest>
   </PropertyGroup>
 

@@ -5,6 +5,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj" />
     <ProjectReference Include="..\..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
   </ItemGroup>
 </Project>

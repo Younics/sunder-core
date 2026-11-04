@@ -1,6 +1,6 @@
 # Activation, DI, And Disposal
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Activation is generation-based. Sunder prepares a complete candidate package graph, publishes it atomically, and retires replaced activations only after in-flight leased work drains. App can retain an unchanged managed package activation across graph changes when Host-issued source/dependency fingerprints and current process policy agree; see [App activation retention](APP-DEVELOPMENT-SESSIONS.md#activation-retention-across-development-changes).
 
@@ -16,7 +16,14 @@ does not load an `ISunderRuntimePackageModule` or build package-owned Runtime DI
 
 Runtime does not inherit the Host environment into a worker. It constructs a closed OS-specific baseline containing activation-owned `TMPDIR`, `TMP`, and `TEMP` values on every platform, `SystemRoot`/`WINDIR` on Windows, and `__CF_USER_TEXT_ENCODING` on macOS; Linux inherits no OS values. Runtime then adds only the documented `SUNDER_*` activation values. `PATH`, home, locale, .NET/Node selectors, tokens, cloud credentials, profiler/startup-hook variables, arbitrary parent variables, and Host bootstrap `SUNDER_*` values are absent. The absolute execution-runtime launcher and closed argument recipe come from the verified installed runtime receipt; package code cannot select or override either one.
 
-A worker that intentionally relies on a parent Docker CLI connection declares `<SunderSdkCapability Include="docker-environment.v1" />`. Install/update is the consent boundary for that manifest requirement. Only `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, and `DOCKER_TLS_VERIFY` may then flow; Docker auth JSON, passphrases, and other Docker variables remain excluded. Local Docker and MCP child processes otherwise use the standard baseline.
+A worker that intentionally relies on a parent Docker CLI connection scopes its declaration to the generated Worker build:
+
+```xml
+<SunderSdkCapability Include="docker-environment.v1"
+    Condition="'$(SunderPackageCompilationRole)' == 'worker'" />
+```
+
+This requirement belongs to the Worker target; declaring it on an App target fails App admission. Install/update is the consent boundary for that manifest requirement. Only `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, and `DOCKER_TLS_VERIFY` may then flow; Docker auth JSON, passphrases, and other Docker variables remain excluded. Local Docker and MCP child processes otherwise use the standard baseline.
 
 The Host first invokes non-destructive candidate preparation, then commits the exact Host-assigned generation, prepares and runs storage migrations, and awaits activation before publication. `SunderWorkerOptions` exposes those barriers as `OnCandidateStarted`, `OnGenerationCommitted`, `OnBeforeStorageMigrations`, `OnActivated`, and `OnShutdown`. Worker V1 never falls back to Worker V3 after launch.
 

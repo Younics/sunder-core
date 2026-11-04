@@ -213,7 +213,7 @@ public sealed class WorkerExecutionObservationErrorBoundaryTests
             owner = new(NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService(), rpcCatalog: Catalog);
             permissions = new(Policy.Paths);
             target = new() { Role = "app", Rid = PackageTargetSelection.GetCurrentRuntimeIdentifier(), Kind = "web", EntryPoint = "index.html",
-                SdkVersion = "1.1.0", RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v1"], Views = [] };
+                SdkVersion = "1.0.0", RequiredHostCapabilities = ["web-bridge.v1", "rpc.v1"], Views = [] };
             source = new(package.PackageId, PackageSourceKind.Installed, Policy.Paths.RootPath, HostRoles: PackageHostRoles.App,
                 ContentIdentity: package.PackageContentIdentity,
                 Manifest: new() { ArchiveFormatVersion = SunderPackageFormat.CurrentArchiveFormatVersion,

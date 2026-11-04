@@ -4,13 +4,14 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep, posix, win32 } from "node:path";
 import { build as esbuild, type BuildOptions, type Loader, type OnLoadResult, type OnResolveArgs, type OnResolveResult, type Plugin } from "esbuild";
 import { NODE_TARGET } from "./toolchains.generated";
+import { projectSdkCompatibility, type PackageToolCompatibility } from "./compatibility";
 
 // Explicit conditions suppress esbuild's implicit `module` condition. Standard
 // import/require/default conditions still follow the syntax at each import site.
-export const workerResolutionOptions = {
+export const workerResolutionOptions = (sdk: PackageToolCompatibility) => ({
   conditions: ["node"], mainFields: ["main"],
-  alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/core": require.resolve("@sunder/sdk/core"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") },
-} satisfies BuildOptions;
+  alias: { ...sdk.modules },
+} satisfies BuildOptions);
 
 export interface OwnedRuntimeInputs {
   readonly fingerprint: string;
@@ -174,7 +175,7 @@ export async function captureOwnedRuntimeInputs(
   }
   const scan = async (mode: "capture" | "verify"): Promise<void> => {
     await esbuild({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: "node", format: "cjs", target: NODE_TARGET,
-      ...workerResolutionOptions, tsconfigRaw: {}, write: false, metafile: true, logLevel: "silent", plugins: [plugin(mode)] });
+      ...workerResolutionOptions(projectSdkCompatibility(root)), tsconfigRaw: {}, write: false, metafile: true, logLevel: "silent", plugins: [plugin(mode)] });
   };
   await scan("capture");
   const revalidate = async (): Promise<void> => {

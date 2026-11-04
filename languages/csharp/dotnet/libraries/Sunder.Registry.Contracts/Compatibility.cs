@@ -17,14 +17,11 @@ public sealed record RegistryClientCompatibilityProfile
         Rid = rid ?? string.Empty;
     }
 
-    public RegistryClientCompatibilityProfile(IReadOnlyList<int> manifestVersions, IReadOnlyList<string> runtimeTargetKinds,
-        string workerProtocol, IReadOnlyList<string> workerCapabilities, string sdkBaseline, string rid, string sdkVersionRange)
-        : this([new(manifestVersions, runtimeTargetKinds, workerProtocol, workerCapabilities, sdkBaseline, sdkVersionRange)], rid) { }
-
     public const int MaximumProfiles = 8;
     public const int MaximumManifestVersions = 8;
-    public const int MaximumRuntimeTargetKinds = 8;
-    public const int MaximumWorkerCapabilities = 64;
+    public const int MaximumSdkMajors = 8;
+    public const int MaximumTargetFrameworks = 8;
+    public const int MaximumHostCapabilities = 64;
     public const int MaximumIdentifierLength = 128;
     public const int MaximumProfileQueryLength = 16_384;
     public const string ProfilesQueryParameter = "profiles";
@@ -34,35 +31,23 @@ public sealed record RegistryClientCompatibilityProfile
     public string Rid { get; }
 }
 
-/// <summary>One coherent SDK baseline, Worker protocol and capability set.</summary>
-/// <param name="WorkerProtocol">The exact worker protocol capability identifier.</param>
-/// <param name="WorkerCapabilities">The complete supported worker capability set, including the protocol and SDK baseline.</param>
-/// <param name="SdkBaseline">The exact SDK baseline capability identifier.</param>
-/// <param name="SdkVersionRange">The SDK versions this profile actually implements.</param>
+/// <summary>One complete role/kind implementation, with independent SDK-major, protocol, and shared-framework support.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RegistrySupportedPackageProfile(
+    string Role,
+    string Kind,
     IReadOnlyList<int> ManifestVersions,
-    IReadOnlyList<string> RuntimeTargetKinds,
-    string WorkerProtocol,
-    IReadOnlyList<string> WorkerCapabilities,
-    string SdkBaseline,
-    string SdkVersionRange)
+    IReadOnlyList<int> SdkMajors,
+    IReadOnlyList<string> HostCapabilities,
+    IReadOnlyList<string> TargetFrameworks,
+    string? AvaloniaVersion = null)
 {
+    public string Role { get; } = Role ?? string.Empty;
+    public string Kind { get; } = Kind ?? string.Empty;
     public IReadOnlyList<int> ManifestVersions { get; }
         = Array.AsReadOnly((ManifestVersions ?? []).ToArray());
 
-    public IReadOnlyList<string> RuntimeTargetKinds { get; }
-        = Array.AsReadOnly((RuntimeTargetKinds ?? []).ToArray());
-
-    public string WorkerProtocol { get; }
-        = WorkerProtocol ?? string.Empty;
-
-    public IReadOnlyList<string> WorkerCapabilities { get; }
-        = Array.AsReadOnly((WorkerCapabilities ?? []).ToArray());
-
-    public string SdkBaseline { get; }
-        = SdkBaseline ?? string.Empty;
-
-    public string SdkVersionRange { get; }
-        = SdkVersionRange ?? string.Empty;
+    public IReadOnlyList<int> SdkMajors { get; } = Array.AsReadOnly((SdkMajors ?? []).ToArray());
+    public IReadOnlyList<string> HostCapabilities { get; } = Array.AsReadOnly((HostCapabilities ?? []).ToArray());
+    public IReadOnlyList<string> TargetFrameworks { get; } = Array.AsReadOnly((TargetFrameworks ?? []).ToArray());
 }

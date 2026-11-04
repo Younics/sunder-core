@@ -1,23 +1,22 @@
 using Avalonia.Controls;
-using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Bridge;
 using Sunder.Sdk.Abstractions;
-using Sunder.Sdk.Avalonia;
 
 namespace Sunder.App.Services;
 
 internal sealed class AppPackageContributionRegistry(
-    IServiceProvider serviceProvider,
     AppPackageViewRegistry viewRegistry,
-    string packageId) : IAvaloniaPackageContributionRegistry
+    string packageId) : IAppContributionSinkV1
 {
-    public void RegisterPackageView<TView>(PackageViewRegistration registration) where TView : Control
+    public void RegisterView(AppViewRegistrationV1 registration, Func<Control> factory)
     {
-        viewRegistry.RegisterPackageView<TView>(packageId, registration, serviceProvider);
+        viewRegistry.RegisterPackageView(packageId, new PackageViewRegistration(registration.Id, registration.Name,
+            registration.IconAssetPath, (PackageViewPlacement)registration.DefaultPlacement, registration.ShowInHotbarByDefault), factory);
     }
 
-    public void RegisterSettingsView<TView>() where TView : Control
+    public void RegisterSettingsView(Func<Control> factory)
     {
-        viewRegistry.RegisterSettingsView<TView>(packageId, serviceProvider);
+        viewRegistry.RegisterSettingsView(packageId, factory);
     }
 
 }

@@ -61,8 +61,8 @@ Worker entry, App module, provider registration and RPC lifetime are generated.
 Source folders do not define role boundaries, and authors maintain no App/Protocol
 project, manual descriptor, client scope or default bootstrap.
 
-Stable templates reference the coordinated SDK minor range. Prerelease templates
-pin their exact coordinated SDK release. The package's own version is `1.0.0` in
+Templates declare their SDK/tooling dependencies independently through ordinary
+NuGet references. Update those references normally. The package's own version is `1.0.0` in
 its project file. The starter service is private, so its descriptor version follows
 the complete package version. Explicitly public APIs have reviewed contract versions.
 

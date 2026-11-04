@@ -1,30 +1,36 @@
 {
   "generated-templates": {
+    "component": "sdk", "profile": "candidate",
     "selectors": ["Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests."],
     "environment": { "SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE": "1", "SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE": "1" }
   },
   "interop": {
+    "component": "sdk", "profile": "portable",
     "selectors": [
       "Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.",
       "Sunder.Package.Format.Tests.NodePackageArchiveCompatibilityTests.NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector",
-      "Sunder.Package.Build.Tests.PackageOutputLockTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable",
-      "Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_"
+      "Sunder.Package.Build.Tests.PackageOutputLockTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable"
     ],
     "environment": {
       "SUNDER_REQUIRE_NODE_MODULE_PACKAGE": "1", "SUNDER_REQUIRE_NODE_MODULE_INTEROP": "1",
-      "SUNDER_REQUIRE_NODE24_HOST_INTEGRATION": "1", "SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP": "1",
-      "SUNDER_REQUIRE_APP_WEB_BRIDGE_VM": "1"
+      "SUNDER_REQUIRE_NODE24_HOST_INTEGRATION": "1", "SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP": "1"
     }
+  },
+  "app-interop": {
+    "component": "app", "profile": "portable",
+    "selectors": ["Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_"],
+    "environment": { "SUNDER_REQUIRE_APP_WEB_BRIDGE_VM": "1" }
   },
   "output-lock": {
     "selectors": ["Sunder.Package.Build.Tests.PackageOutputLockTests.SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable"],
     "environment": { "SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP": "1" }
   },
   "official": {
+    "component": "host", "profile": "official",
     "selectors": [
       "Sunder.Runtime.Host.Tests.CurrentRidDotNetRuntimeHostIntegrationTests.",
       "Sunder.Runtime.Host.Tests.CurrentRidNodeRuntimeHostIntegrationTests.",
-      "Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerSdkPackagedExecutable_"
+      "Sunder.Runtime.Host.Tests.ProcessRuntimeWorkerTests.WorkerSdkPackagedExecutable_ExactArchiveInstallsThroughRuntimeHostAndRecordsReleaseEvidence"
     ],
     "environment": { "SUNDER_REQUIRE_NODE24_HOST_INTEGRATION": "1", "SUNDER_REQUIRE_DOTNET_WORKER_ARTIFACT": "1" }
   },

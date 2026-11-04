@@ -13,6 +13,44 @@ public sealed class AppPackageAvaloniaAssetLoaderTests
     private static readonly object LocatorSync = new();
 
     [Fact]
+    public void SameNamedResourcesResolveInTheirOwningContextAndSharedThemesStayShared()
+    {
+        WithInstalledLoader((fallback, resources) =>
+        {
+            using var shared = new AppSharedAssemblyRegistry();
+            var contexts = new[] { "one", "two" }.Select(id => new AppPackageLoadContext(id, typeof(App).Assembly.Location,
+                AppPackageTargetEnvironment.CurrentRid, shared, (owner, assembly) => resources.RegisterPackageAssembly(owner, assembly))).ToArray();
+            try
+            {
+                var assemblies = contexts.Select(context => context.LoadPackageEntryAssembly()).ToArray();
+                Assert.NotSame(assemblies[0], assemblies[1]);
+                Assert.Throws<InvalidOperationException>(() => AssetLoader.Open(PackageResourceUri));
+                foreach (var index in new[] { 1, 0, 1 })
+                {
+                    using var resolution = contexts[index].EnterContextualReflection();
+                    var (stream, assembly) = AssetLoader.OpenAndGetAssembly(PackageResourceUri);
+                    using (stream) Assert.True(stream.ReadByte() >= 0);
+                    Assert.Same(assemblies[index], assembly);
+                    Assert.Same(assemblies[index], AssetLoader.GetAssembly(PackageResourceUri));
+                    var themeUri = new Uri("avares://Sunder.App.Bridge/Themes/SunderThemeResources.axaml");
+                    Assert.Same(typeof(Sunder.App.Bridge.IAppPackageEntryPointV1).Assembly, AssetLoader.GetAssembly(themeUri));
+                    Assert.IsType<Avalonia.Controls.ResourceDictionary>(Avalonia.Markup.Xaml.AvaloniaXamlLoader.Load(themeUri));
+                }
+                Assert.False(fallback.WasOpened);
+                resources.RemovePackage("two");
+                using (contexts[1].EnterContextualReflection())
+                    Assert.Same(assemblies[1], AssetLoader.GetAssembly(PackageResourceUri));
+                Assert.Same(assemblies[0], AssetLoader.GetAssembly(PackageResourceUri));
+            }
+            finally
+            {
+                resources.ReplacePackageAssemblies([]);
+                foreach (var context in contexts) context.Unload();
+            }
+        });
+    }
+
+    [Fact]
     public void OpenAndGetAssembly_WhenPackageAssemblyRegistered_UsesRegisteredAssemblyBeforeFallback()
     {
         WithInstalledLoader((fallback, packageResources) =>

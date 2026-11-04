@@ -151,8 +151,8 @@ recipes retain their original package bytes while selecting the new App slot.
 
 The App ZIP is a complete **framework-dependent, untrimmed .NET 10 App output**,
 rooted at `Sunder.App.dll`, `Sunder.App.runtimeconfig.json` and all dependencies.
-`Sunder.Sdk.dll` and `Sunder.Sdk.Avalonia.dll` must byte-match the selected candidate
-NuGets. The retained package must implement the checked-in
+The shell's `Sunder.Sdk.dll` and `Sunder.Sdk.Avalonia.dll` must byte-match the selected
+candidate NuGets. The retained package carries its own SDK implementations and must implement the checked-in
 `compatibility.app.probe` fixture profile: its App module registers
 `Compatibility.App.ProbeView`, a DI-created `ContentControl` with the documented
 content, challenge echo, SDK assembly properties and disposal marker.
@@ -170,7 +170,8 @@ policy or startup flag is added or disabled.
 The package archive is validated, projected with unchanged payload bytes and
 activated into its real isolated App ALC. Assertions cover module/DI activation,
 view creation/content, nonce-driven retained view behavior, reference-version
-admission, exact **provided SDK assembly object identity**, and view disposal.
+admission, exact package-local SDK bytes, shared **provided App bridge object
+identity**, and view disposal.
 The parent verifies package identity, child challenge/result and unchanged provided
 App/input hashes. It never compiles the retained package or calls the current
 test process's App implementation as a substitute for the selected App.

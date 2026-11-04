@@ -522,6 +522,7 @@ internal static class RuntimeRpcPackageMetadata
            && string.Equals(left.EntryPoint, right.EntryPoint, StringComparison.Ordinal)
            && string.Equals(left.TargetFramework, right.TargetFramework, StringComparison.Ordinal)
            && string.Equals(left.SdkVersion, right.SdkVersion, StringComparison.Ordinal)
+           && string.Equals(left.AvaloniaVersion, right.AvaloniaVersion, StringComparison.Ordinal)
            && left.RequiredHostCapabilities.SequenceEqual(right.RequiredHostCapabilities, StringComparer.Ordinal)
            && left.Views.Count == right.Views.Count
            && left.Views.Zip(right.Views).All(static pair => pair.First == pair.Second);

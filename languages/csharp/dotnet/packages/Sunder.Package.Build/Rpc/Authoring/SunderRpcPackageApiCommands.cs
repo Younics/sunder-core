@@ -52,10 +52,11 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 var key = request.LocalName ?? existing?.Key ?? SunderRpcPlatformCatalogCache.DefaultKey(request.ContractId!);
                 if (existing is not null)
                 {
-                    if (existing.Key != key || request.RegistryOrigin is not null && existing.RegistryOrigin != request.RegistryOrigin)
+                    if (existing.Key != key || request.RegistryOrigin is not null && existing.RegistryOrigin != request.RegistryOrigin
+                        || request.VersionRange is not null && request.VersionRange != existing.AuthorityReleaseRange)
                         throw Error("platform-api.local-name-collision", "Existing platform intent differs; use the current key and locked origin.");
                     if (request.PlatformCatalog is not null && !JsonNode.DeepEquals(platforms[existing.Key],
-                        await restore.SelectPlatformAsync(existing.ContractId, existing.RegistryOrigin, token, request.PlatformCatalog)))
+                        await restore.SelectPlatformAsync(existing.ContractId, existing.RegistryOrigin, token, request.PlatformCatalog, existing.AuthorityReleaseRange)))
                         throw Error("platform-api.catalog-invalid", "The local catalog differs from the existing selection; use targeted update.");
                     return new(false, before, false);
                 }
@@ -63,7 +64,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                     throw Error("platform-api.local-input-required", "Select an explicit local catalog or a canonical Registry origin.");
                 if (providers.Concat(platforms).Any(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase)))
                     throw Error("platform-api.local-name-collision", "The local provider key is already in use.");
-                platforms[key] = await restore.SelectPlatformAsync(request.ContractId!, request.RegistryOrigin, token, request.PlatformCatalog);
+                platforms[key] = await restore.SelectPlatformAsync(request.ContractId!, request.RegistryOrigin, token, request.PlatformCatalog, request.VersionRange);
                 hydrate = true;
                 break;
             }
@@ -75,7 +76,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 {
                     if (entry.RegistryOrigin is not null && request.RegistryOrigin is not null)
                         throw Error("package-api.registry-origin-invalid", "Update retains an existing Registry origin and rejects an override.");
-                    platforms[entry.Key] = await restore.SelectPlatformAsync(entry.ContractId, entry.RegistryOrigin ?? request.RegistryOrigin, token, request.PlatformCatalog);
+                    platforms[entry.Key] = await restore.SelectPlatformAsync(entry.ContractId, entry.RegistryOrigin ?? request.RegistryOrigin, token, request.PlatformCatalog, request.VersionRange ?? entry.AuthorityReleaseRange);
                 }
                 hydrate = true;
                 break;
@@ -169,7 +170,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 }
                 if (packageId is null)
                     foreach (var entry in before.PlatformImports.Values)
-                        platforms[entry.Key] = await restore.SelectPlatformAsync(entry.ContractId, entry.RegistryOrigin, token, request.PlatformCatalog);
+                        platforms[entry.Key] = await restore.SelectPlatformAsync(entry.ContractId, entry.RegistryOrigin, token, request.PlatformCatalog, entry.AuthorityReleaseRange);
                 hydrate = true;
                 break;
             }
@@ -302,10 +303,10 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
         if (request.Operation.StartsWith("Platform", StringComparison.Ordinal))
         {
             if (request.Operation is not ("PlatformImplement" or "PlatformUpdate" or "PlatformUnimplement" or "PlatformList")
-                || request.PackageId is not null || request.VersionRange is not null || request.IncludePrerelease is not null
+                || request.PackageId is not null || request.IncludePrerelease is not null
                 || request.Presence is not null || request.ProviderKey is not null || request.Candidate is not null)
-                throw Error("platform-api.import-not-found", "Platform commands do not accept package, range, prerelease, presence or candidate overrides.");
-            foreach (var value in new[] { request.ContractId, request.RegistryOrigin, request.LocalName, request.PlatformCatalog })
+                throw Error("platform-api.import-not-found", "Platform commands do not accept package, prerelease, presence or candidate overrides.");
+            foreach (var value in new[] { request.ContractId, request.RegistryOrigin, request.LocalName, request.PlatformCatalog, request.VersionRange })
                 if (value is not null && string.IsNullOrWhiteSpace(value)) throw Error("platform-api.import-not-found", "Platform arguments must be nonempty.");
             if (request.Operation == "PlatformUpdate" && request.ContractId is null && request.RegistryOrigin is not null)
                 throw Error("package-api.registry-origin-invalid", "Binding a local selection to a Registry requires a specific platform contract.");
@@ -313,7 +314,7 @@ internal sealed class SunderRpcPackageApiCommands(SunderRpcContractRestore resto
                 || request.Operation is "PlatformImplement" or "PlatformUnimplement" && request.ContractId is null
                 || request.Operation == "PlatformList" && request.ContractId is not null
                 || request.Operation != "PlatformImplement" && request.LocalName is not null
-                || request.Operation is not ("PlatformImplement" or "PlatformUpdate") && (request.RegistryOrigin is not null || request.PlatformCatalog is not null))
+                || request.Operation is not ("PlatformImplement" or "PlatformUpdate") && (request.RegistryOrigin is not null || request.PlatformCatalog is not null || request.VersionRange is not null))
                 throw Error("platform-api.import-not-found", "Platform command target or options do not apply; update uses locked origins.");
             return;
         }

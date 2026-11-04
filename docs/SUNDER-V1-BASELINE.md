@@ -31,9 +31,9 @@ Additive API evolution is compared structurally; current hashes alone do not
 establish compatibility. See the [SDK compatibility policy](SUNDER-SDK-COMPATIBILITY.md)
 for the bounded schema, formatter, update rules and required consumer corpus.
 
-V1 does not reset the coordinated SDK `1.1.x` line, App/Host product versions or
-package-owned domain contract versions to `1.0.0`. Once V1 ships, newer compatible
-Hosts retain its supported baseline. Host-bound features require capabilities
+SDK `1.0.0` is the first supported SDK release. App/Host product versions and
+package-owned domain contract versions remain independent. Once V1 ships, newer
+compatible Hosts retain supported SDK majors. Host-bound features require capabilities
 that older Hosts reject before code runs. Protected release history and the
 old-package/new-Host, old-source/new-SDK and new-feature/older-Host corpus become
 continuing obligations, not snapshots that can be replaced by a newer SDK minor.

@@ -63,7 +63,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         foreach (var (name, contents) in new[] { ("app.data", "embedded-app"), ("worker.data", "embedded-worker"), ("app.json", "app-copy"), ("worker.json", "worker-copy") })
             await File.WriteAllTextAsync(Path.Combine(root, name), contents);
         var taskAssembly = typeof(GenerateSunderRpcBindingsTask).Assembly.Location;
-        var references = new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" };
+        var references = new[] { "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.App.Bridge" };
         var project = Path.Combine(root, "ResourceRoles.csproj");
         await File.WriteAllTextAsync(project, $$"""
             <Project Sdk="Microsoft.NET.Sdk">

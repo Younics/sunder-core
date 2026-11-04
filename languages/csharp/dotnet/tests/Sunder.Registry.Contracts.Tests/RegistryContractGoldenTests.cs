@@ -22,8 +22,8 @@ public sealed class RegistryContractGoldenTests
                 new RegistryPackageCanonicalArtifact("canonical-sha", 420, "https://registry.example/api/v1/packages/sunder.package.sample/versions/1.2.3/canonical"),
                 [
                     Target(),
-                    new RegistryPackageTarget("app", "win-x64", "web", "web/index.html", null, "1.1.0",
-                        ["core.v1", "sdk-baseline-1-1.v1", "views.v1"],
+                    new RegistryPackageTarget("app", "win-x64", "web", "web/index.html", null, "1.0.0",
+                        ["core.v1", "views.v1", "web-bridge.v1"],
                         [new RegistryPackageWebView("sunder.package.sample.workspace", "Workspace", "/workspace", "assets/workspace.png", "rightTop", true)]),
                 ],
                 [Projection("shared", null, "/api/v1/packages/sunder.package.sample/versions/1.2.3/projections/shared/download")],
@@ -151,16 +151,17 @@ public sealed class RegistryContractGoldenTests
     [Fact]
     public void CompatibilityProfile_IsImmutableAndPublishesBounds()
     {
-        var capabilities = new List<string> { "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1" };
-        var profiles = new List<RegistrySupportedPackageProfile> { new([1], ["worker"], "worker-protocol.v1", capabilities, "sdk-baseline-1-1.v1", ">=1.1.0 <1.2.0") };
+        var capabilities = new List<string> { "rpc.v1", "worker-protocol.v1" };
+        var profiles = new List<RegistrySupportedPackageProfile> { new("runtime", "worker", [1], [1], capabilities, []) };
         var profile = new RegistryClientCompatibilityProfile(profiles, "win-x64");
         capabilities.Clear();
         profiles.Clear();
-        Assert.Equal(["rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], Assert.Single(profile.Profiles).WorkerCapabilities);
+        Assert.Equal(["rpc.v1", "worker-protocol.v1"], Assert.Single(profile.Profiles).HostCapabilities);
         Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumProfiles);
         Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumManifestVersions);
-        Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumRuntimeTargetKinds);
-        Assert.Equal(64, RegistryClientCompatibilityProfile.MaximumWorkerCapabilities);
+        Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumSdkMajors);
+        Assert.Equal(8, RegistryClientCompatibilityProfile.MaximumTargetFrameworks);
+        Assert.Equal(64, RegistryClientCompatibilityProfile.MaximumHostCapabilities);
         Assert.Equal(128, RegistryClientCompatibilityProfile.MaximumIdentifierLength);
     }
 
@@ -260,15 +261,15 @@ public sealed class RegistryContractGoldenTests
         => new(kind, rid, "projection-sha", 42, downloadUrl, "canonical-sha", "manifest-sha", "projection-content-id", 1);
 
     private static RegistryClientCompatibilityProfile Compatibility()
-        => new([1], ["worker"], "worker-protocol.v1",
-            ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], "sdk-baseline-1-1.v1", "win-x64", ">=1.1.0 <1.2.0");
+        => new([new("runtime", "worker", [1], [1],
+            ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"], [])], "win-x64");
 
     private static RegistryExecutionRuntimeRequirement Requirement()
         => new("sunder.runtime.dotnet", ">=10.0.0 <11.0.0", "sunder.dotnet-worker-module.v1");
 
     private static RegistryPackageTarget Target()
-        => new("runtime", "win-x64", "worker", "bin/sample-worker.dll", "net10.0", "1.1.0",
-            ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"], ExecutionRuntime: Requirement());
+        => new("runtime", "win-x64", "worker", "bin/sample-worker.dll", "net10.0", "1.0.0",
+            ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"], ExecutionRuntime: Requirement());
 
     private static RegistryResolveInstallPlanResponse Plan()
         => new(true,

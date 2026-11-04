@@ -71,7 +71,7 @@ public sealed class AppPackageUiFaultContainmentTests
         registry.RegisterPackageView(
             "agent",
             new PackageViewRegistration("agent.chat", "Chat"),
-            () => faultingView);
+            () => Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime.AttachViewCallbacks(faultingView));
         registry.RegisterPackageView(
             "agent",
             new PackageViewRegistration("agent.workspaces", "Workspaces"),

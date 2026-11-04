@@ -290,6 +290,7 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "LiveMarkdown.Avalonia": "[2.5.1, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
+          "Sunder.App.Bridge": "[1.0.0, )",
           "Sunder.Host.Client": "[1.0.0, )",
           "Sunder.Package.Format": "[1.0.0, )",
           "Sunder.Package.Hosting": "[1.0.0, )",
@@ -298,10 +299,16 @@
           "Sunder.Runtime.Client": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
           "Sunder.Runtime.LocalState": "[1.0.0, )",
-          "Sunder.Sdk": "[1.1.0, )",
-          "Sunder.Sdk.Avalonia": "[1.1.0, )",
-          "Sunder.Sdk.Stacks": "[1.1.0, )",
+          "Sunder.Sdk": "[1.0.0, )",
+          "Sunder.Sdk.Avalonia": "[1.0.0, )",
+          "Sunder.Sdk.Stacks": "[1.0.0, )",
           "Velopack": "[1.2.161, )"
+        }
+      },
+      "sunder.app.bridge": {
+        "type": "Project",
+        "dependencies": {
+          "Avalonia": "[12.1.4, )"
         }
       },
       "sunder.core.testsupport": {
@@ -320,14 +327,15 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.package.hosting": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.13, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Package.Format": "[1.0.0, )",
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.package.projections": {
@@ -368,13 +376,14 @@
         "type": "Project",
         "dependencies": {
           "Avalonia": "[12.1.4, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "Avalonia": {

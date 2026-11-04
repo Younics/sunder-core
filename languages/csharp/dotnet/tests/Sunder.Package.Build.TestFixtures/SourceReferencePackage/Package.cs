@@ -41,4 +41,9 @@ public static class PackageMarker
         => Type.GetType("Sunder.Sdk.Abstractions.UnresolvedSdkContract, Sunder.Sdk");
 }
 
-public sealed class FixturePackageModule : ISunderAppPackageModule;
+public sealed class FixturePackageModule : Sunder.App.Bridge.IAppPackageEntryPointV1
+{
+    public ValueTask<Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(
+        Sunder.App.Bridge.IAppPackageHostV1 host, Sunder.App.Bridge.IAppContributionSinkV1 contributions)
+        => throw new NotSupportedException("Metadata-only fixture.");
+}

@@ -1,5 +1,5 @@
 # sunder-public-api-v2
-assembly Sunder.Sdk.Stacks, Version=1.1.0.0, Culture=neutral, PublicKeyToken=null
+assembly Sunder.Sdk.Stacks, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.rpc.v1")
 attribute Sunder.Sdk.Compatibility.SunderSdkCapabilityAttribute("stacks.v1")
 type public interface Sunder.Sdk.Stacks.IPackageStackContributor

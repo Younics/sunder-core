@@ -151,9 +151,8 @@ public sealed class RuntimeAppWebRpcClientTests
         })).BuildServiceProvider();
         _ = services.GetRequiredService<CleanupOwner>();
         await using var runtimeWork = new BackgroundTaskQueueService();
-        using var assemblies = new AppSharedAssemblyRegistry([]);
         var unload = new AppPackageUnloadCoordinator(new AppPackageViewRegistry(new InlineUiDispatcher()), new AppPackageRuntimeWorkStopper(runtimeWork),
-            new AppPackageAssemblyTracker(), assemblies, _ => { }, _ => { });
+            new AppPackageAssemblyTracker(), _ => { }, _ => { });
 
         publication.Revoke();
         var retirement = unload.RollBackActivationAsync("test.package", null, services, null, rpc, stopRuntimeWork: false);

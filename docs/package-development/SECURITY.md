@@ -1,6 +1,6 @@
 # Package Trust And Security
 
-> **Applies to:** Sunder SDK `1.1.x`, package archive V1, package manifest V1, Stack format V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, package archive V1, package manifest V1, Stack format V1, .NET 10, and Runtime protocol revision 1.
 
 Installing a Sunder package is a code-trust decision. V1 validates package integrity and structure, but it does not sandbox package code or cryptographically attest a package publisher.
 
@@ -34,7 +34,7 @@ The [Sunder Package Standard](../SUNDER-PACKAGE-STANDARD.md) is the normative so
 
 ## Dependency And Supply-Chain Practice
 
-- Keep normal Sunder SDK/build references in the coordinated `[1.1.0,1.2.0)` range. `Sunder.Sdk.Worker` intentionally requires the exact matching `Sunder.Sdk` patch version.
+- Update Sunder SDK/build references through NuGet and retain the resolved dependency lock. NuGet enforces each component's declared SDK dependencies.
 - Bound other NuGet dependencies intentionally and commit `packages.lock.json` for reproducible CI restore.
 - Review transitive and native assets included under package `lib`/`runtimes`.
 - Derive language-neutral contracts and package-local bindings from ordinary source; never expose implementation or Host types.

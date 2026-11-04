@@ -85,6 +85,9 @@ public sealed class SunderPackageTargetManifest
     [JsonPropertyName("sdkVersion")]
     public string? SdkVersion { get; init; }
 
+    [JsonPropertyName("avaloniaVersion")]
+    public string? AvaloniaVersion { get; init; }
+
     [JsonPropertyName("requiredHostCapabilities")]
     public IReadOnlyList<string?>? RequiredHostCapabilities { get; init; }
 

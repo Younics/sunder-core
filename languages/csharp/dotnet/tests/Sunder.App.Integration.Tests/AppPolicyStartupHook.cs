@@ -13,7 +13,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Rpc;
 
-// Test-only startup hook compiled outside every package and product payload. It
+// App-owned startup hook compiled outside every package and product payload. It
 // exercises the production shell controller in the actual App image before Main,
 // so native process identity is real and the test does not need a desktop window.
 internal static class StartupHook

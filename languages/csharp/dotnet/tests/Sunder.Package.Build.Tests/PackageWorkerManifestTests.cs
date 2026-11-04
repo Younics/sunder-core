@@ -145,7 +145,6 @@ public sealed class PackageWorkerManifestTests
                 SunderSdkCapabilities.PackagingV1,
                 SunderSdkCapabilities.RpcV1,
                 SunderSdkCapabilities.RuntimeGenerationsV1,
-                SunderSdkCapabilities.Baseline11V1,
                 SunderSdkCapabilities.SecretsV1,
                 SunderSdkCapabilities.SettingsSchemaV1,
                 SunderSdkCapabilities.SettingsV1,

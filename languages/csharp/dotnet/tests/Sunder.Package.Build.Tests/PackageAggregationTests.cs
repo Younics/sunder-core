@@ -719,7 +719,6 @@ public sealed class PackageAggregationTests
             requiredHostCapabilities:
             [
                 "rpc.v1",
-                "sdk-baseline-1-1.v1",
                 "worker-protocol.v1",
                 "worker-protocol.v3",
             ]);
@@ -835,9 +834,9 @@ public sealed class PackageAggregationTests
                     Kind = kind,
                     EntryPoint = "lib/worker.cjs",
                     TargetFramework = "node24",
-                    SdkVersion = "1.1.0",
+                    SdkVersion = "1.0.0",
                     RequiredHostCapabilities = requiredHostCapabilities
-                        ?? ["execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"],
+                        ?? ["execution-runtime.v1", "rpc.v1", "worker-protocol.v1"],
                     ExecutionRuntime = kind == SunderPackageFormat.WorkerTargetKind
                         ? new SunderPackageExecutionRuntimeManifest
                         {

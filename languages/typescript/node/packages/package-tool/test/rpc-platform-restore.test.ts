@@ -20,7 +20,7 @@ import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { bundleProduction } from "../src/package";
 import { packageApiCommand, type PackageApiRequest } from "../src/rpc-package-commands";
 import { collectContractCache } from "../src/rpc-contract-cache-gc";
-import { generatedProviders, invocation } from "./service-fixtures";
+import { generatedProviders, installFixtureSdk, invocation } from "./service-fixtures";
 import { publishFixtureModelProjections } from "./model-projection-fixtures";
 import { preparePackageImports } from "../src/rpc-package-imports";
 
@@ -28,6 +28,7 @@ const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1/authoring/con
 const compact = (value: unknown) => Buffer.from(JSON.stringify(value));
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "sunder-platform-restore-")); const cache = join(root, "cache");
+  await installFixtureSdk(root);
   const value = JSON.parse(await readFile(join(ROOT, "mixed-contract-lock.json"), "utf8")); value.packageArtifacts = {}; value.packageImports = {};
   const bytes = Buffer.from(JSON.stringify(value, null, 2) + "\n"); const locked = parseContractLock(bytes);
   const envelopeValue = JSON.parse(await readFile(join(ROOT, "platform-catalog.json"), "utf8")); const envelope = compact(envelopeValue);
@@ -45,7 +46,7 @@ for (const extension of ["ts", "js"]) test(`fresh complete ${extension} multi-pr
     const descriptor = parseRpcContractDescriptor(JSON.stringify(value)); const bytes = Buffer.from(canonicalRpcDescriptorBytes(descriptor));
     const extra = { contractId: descriptor.contractId, contractVersion: descriptor.version, descriptorBytes: bytes.length,
       descriptorSha256: createHash("sha256").update(bytes).digest("hex"), abiSha256: await computeRpcAbiSha256(descriptor), canonicalDescriptor: bytes.toString() };
-    await writeFile(c.path, compact({ ...c.envelopeValue, contractCount: 2, contracts: [extra, ...c.envelopeValue.contracts] }));
+    await writeFile(c.path, compact({ ...c.envelopeValue, releaseVersion: "7.8.9", contractCount: 2, contracts: [extra, ...c.envelopeValue.contracts] }));
     await writeFile(c.lockPath, await readFile(join(ROOT, "minimal-contract-lock.json"))); await mkdir(join(c.root, "src"));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Multi Provider", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
@@ -58,7 +59,10 @@ for (const extension of ["ts", "js"]) test(`fresh complete ${extension} multi-pr
       fetchImplementation: async () => { requests++; assert.fail("Initial local configuration attempted HTTP"); } });
     const run = (...args: string[]) => promisify(execFile)(process.execPath, [resolve(__dirname, "../src/cli.js"), "contracts", ...args, "--project", c.root],
       { env: { ...process.env, SUNDER_CONTRACT_CACHE: c.cache } });
-    assert.equal((await command({ operation: "platform-implement", contractId: "sunder.stack.contributor" })).changed, true);
+    const selected = await command({ operation: "platform-implement", contractId: "sunder.stack.contributor", versionRange: ">=7.0.0 <8.0.0" });
+    assert.equal(selected.changed, true);
+    assert.equal(selected.lock.platformImports.get("stackContributor")!.selectedAuthorityRelease, "7.8.9");
+    assert.equal(selected.lock.platformImports.get("stackContributor")!.authorityReleaseRange, ">=7.0.0 <8.0.0");
     await assert.rejects(run("accept"), /rpc-authoring\./u);
     const first = await readFile(c.lockPath);
     await assert.rejects(command({ operation: "platform-implement", contractId: "sunder.extension", localName: "stackContributor" }), /local-name-collision/u);
@@ -302,14 +306,14 @@ for (const local of [false, true]) test(`platform commands select from ${local ?
     const fetchImplementation: typeof fetch = async input => {
       if (local) throw new Error("Local catalog authoring attempted HTTP.");
       requests++; const url = String(input);
-      if (new URL(url).pathname.endsWith("/resolve")) assert.equal(new URL(url).searchParams.get("versionRange"), ">=1.1.0 <1.2.0");
+      if (new URL(url).pathname.endsWith("/resolve")) assert.equal(new URL(url).searchParams.get("versionRange"), ">=1.0.0");
       return url.endsWith("/catalog") ? response(url, c.envelope, { etag: `"${c.requirement.contentIdentity}"` })
         : response(url, compact({ ...metadata(c, url), lifecycleState: revoked ? "Revoked" : "Supported" }));
     };
     const command = (value: PackageApiRequest) => packageApiCommand(c.root, { ...value, cacheRoot: c.cache, fetchImplementation });
     const inputs = local ? { platformCatalog: c.path } : { registryOrigin: "https://registry.example/" };
     const added = await command({ operation: "platform-implement", contractId: "sunder.stack.contributor", ...inputs });
-    assert.equal(added.changed, true); assert.equal(added.lock.platformImports.get("stackContributor")!.authorityReleaseRange, ">=1.1.0 <1.2.0");
+    assert.equal(added.changed, true); assert.equal(added.lock.platformImports.get("stackContributor")!.authorityReleaseRange, ">=1.0.0");
     assert.equal(added.lock.platformImports.get("stackContributor")!.registryOrigin, local ? undefined : "https://registry.example/");
     assert.equal(added.lock.packageArtifacts.size, 0); const before = await readFile(c.lockPath); const time = (await stat(c.lockPath)).mtimeMs; const calls = requests;
     assert.equal((await command({ operation: "platform-implement", contractId: "sunder.stack.contributor" })).changed, false);

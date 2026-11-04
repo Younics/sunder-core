@@ -19,8 +19,10 @@ internal static class SunderPackageCompositionEmitter
             using global::Microsoft.Extensions.DependencyInjection.Extensions;
             using global::Sunder.Sdk.Avalonia;
             namespace Sunder.Generated.Package;
-            public sealed class AppModule : global::Sunder.Sdk.Abstractions.ISunderAppPackageModule
+            public sealed class AppModule : global::Sunder.Sdk.Abstractions.ISunderAppPackageModule, global::Sunder.App.Bridge.IAppPackageEntryPointV1
             {
+                public global::System.Threading.Tasks.ValueTask<global::Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(global::Sunder.App.Bridge.IAppPackageHostV1 host, global::Sunder.App.Bridge.IAppContributionSinkV1 contributions)
+                    => global::Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime.CreateAsync(this, host, contributions);
                 public void ConfigureAppServices(IServiceCollection services, global::Sunder.Sdk.Abstractions.IPackageContext context)
                 {
             """);

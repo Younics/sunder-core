@@ -14,4 +14,8 @@ internal sealed class AppPackageLoadContext(
         entryAssemblyPath,
         runtimeIdentifier,
         sharedAssemblyRegistry.ResolveSharedAssembly,
-        assembly => registerPackageAssembly(packageId, assembly));
+        assembly => registerPackageAssembly(packageId, assembly))
+{
+    internal Assembly ResolveResourceAssembly(string name)
+        => sharedAssemblyRegistry.ResolveResourceAssembly(name) ?? LoadFromAssemblyName(new AssemblyName(name));
+}

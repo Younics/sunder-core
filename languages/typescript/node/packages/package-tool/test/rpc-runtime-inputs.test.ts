@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, posix, win32 } from "node:path";
 import test from "node:test";
+import { installFixtureSdk } from "./service-fixtures";
 import { build } from "esbuild";
 import { captureOwnedRuntimeInputs, runtimePathIdentity } from "../src/rpc-runtime-inputs";
 
@@ -32,6 +33,7 @@ test("runtime path identities alias only the captured project root and preserve 
 test("cold and materialized runtime replay share filesystem identities without admitting uncaptured resolutions", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-runtime-inputs-"));
   try {
+    await installFixtureSdk(root);
     await mkdir(resolve(root, "src"));
     const modulePath = resolve(root, "src/service.ts");
     await writeFile(modulePath, "export const value = 42;");

@@ -1,11 +1,11 @@
 using System.Reflection;
 using System.Security.Cryptography;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.App.Bridge;
 using Sunder.Package.Format;
 using Sunder.Package.Hosting;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
-using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Rpc;
 
 namespace Sunder.App.Services;
@@ -51,6 +51,10 @@ internal sealed class AppPackageActivator(
             throw new InvalidOperationException(
                 $"Package '{package.PackageId}' snapshot target metadata does not match its strict manifest target '{targetKey}'.");
         }
+
+        var compatibility = PackageHostCompatibility.Validate(package.PackageId, targetKey, target);
+        if (compatibility.Count > 0)
+            throw new InvalidOperationException($"Package '{package.PackageId}' cannot be loaded by this App: {string.Join(" ", compatibility)}");
 
         activation.LoadAdmission = await (packagePolicy ?? UnavailableAppPackagePolicy.Instance)
             .AcquireLoadAsync(source, appGenerationId, cancellationToken).ConfigureAwait(false);
@@ -123,7 +127,7 @@ internal sealed class AppPackageActivator(
         ServiceProvider serviceProvider;
         try
         {
-            serviceProvider = serviceProviderFactory.Create(package, packageContext, module, rpcClient);
+            serviceProvider = serviceProviderFactory.Create(package, packageContext, rpcClient);
         }
         catch
         {
@@ -137,15 +141,10 @@ internal sealed class AppPackageActivator(
             package.PackageId,
             package.DisplayName,
             $"Configure {package.DisplayName}."));
-        if (module is not null)
-        {
-            var registry = new AppPackageContributionRegistry(
-                serviceProvider,
-                viewRegistry,
-                package.PackageId);
-            module.RegisterAppContributions(registry, serviceProvider);
-            serviceProviderFactory.Publication.Buffer(() => module.StartAppServices(serviceProvider, serviceProviderFactory.Publication.RevocationToken));
-        }
+        var lifetime = serviceProvider.GetRequiredService<AppPackageBridgeLifetime>();
+        lifetime.Host = new AppPackageBridgeHost(serviceProvider, packageContext, rpcClient);
+        lifetime.Activation = await module.CreateAsync(lifetime.Host, new AppPackageContributionRegistry(viewRegistry, package.PackageId));
+        serviceProviderFactory.Publication.Buffer(() => lifetime.Activation.Start(serviceProviderFactory.Publication.RevocationToken));
     }
 
     private async Task<ISunderRpcClient> CreateManagedRpcClientAsync(
@@ -185,7 +184,7 @@ internal sealed class AppPackageActivator(
         }
     }
 
-    private static ISunderAppPackageModule? CreatePackageModule(Assembly entryAssembly)
+    private static IAppPackageEntryPointV1 CreatePackageModule(Assembly entryAssembly)
     {
         var moduleResolution = PackageModuleShapeReader.Read(entryAssembly.Location)
             .Resolve(PackageHostRoleMetadataValue.App);
@@ -193,16 +192,16 @@ internal sealed class AppPackageActivator(
         {
             throw new InvalidOperationException(moduleResolution.Error);
         }
-        if (moduleResolution.TypeName is null) return null;
+        if (moduleResolution.TypeName is null) throw new InvalidOperationException("The managed App entry assembly has no App bridge V1 entry point.");
 
         var moduleType = entryAssembly.GetType(moduleResolution.TypeName, throwOnError: true)!;
 
-        if (Activator.CreateInstance(moduleType) is ISunderAppPackageModule module)
+        if (Activator.CreateInstance(moduleType) is IAppPackageEntryPointV1 module)
         {
             return module;
         }
 
-        throw new InvalidOperationException($"Package module '{moduleType.FullName}' does not implement ISunderAppPackageModule.");
+        throw new InvalidOperationException($"Package module '{moduleType.FullName}' does not implement IAppPackageEntryPointV1.");
     }
 
     private static bool TargetMatches(
@@ -214,6 +213,7 @@ internal sealed class AppPackageActivator(
            && string.Equals(manifestTarget.EntryPoint, descriptor.EntryPoint, StringComparison.Ordinal)
            && string.Equals(manifestTarget.TargetFramework, descriptor.TargetFramework, StringComparison.Ordinal)
            && string.Equals(manifestTarget.SdkVersion, descriptor.SdkVersion, StringComparison.Ordinal)
+           && string.Equals(manifestTarget.AvaloniaVersion, descriptor.AvaloniaVersion, StringComparison.Ordinal)
            && (manifestTarget.RequiredHostCapabilities ?? [])
                 .Select(static capability => capability!)
                 .SequenceEqual(descriptor.RequiredHostCapabilities, StringComparer.Ordinal)

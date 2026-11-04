@@ -43,7 +43,7 @@ public sealed class ServiceApiEditorGenerator : IIncrementalGenerator
         // Resolve the SDK by symbol identity, including source-project compilation
         // references. No SDK assembly is loaded into the editor analyzer process.
         if (marker == null || methodMarker == null || marker.ContainingAssembly.Identity.Name != "Sunder.Sdk"
-            || marker.ContainingAssembly.Identity.Version != new Version(1, 1, 0, 0)
+            || marker.ContainingAssembly.Identity.Version != new Version(1, 0, 0, 0)
             || !SymbolEqualityComparer.Default.Equals(marker.ContainingAssembly, methodMarker.ContainingAssembly)) return;
         var packageMarker = marker.ContainingAssembly.GetTypeByMetadataName("Sunder.Sdk.Packaging.SunderPackageAttribute");
         if (services.Length == 0 || packageMarker == null) return;

@@ -3,6 +3,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "$root"
 work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/sunder-package-smoke.XXXXXX")"
+trap 'rm -rf "$work"' EXIT
 case "$(uname -s)" in
   Linux)
     version="$(dotnet msbuild languages/csharp/dotnet/host/Sunder.App/Sunder.App.csproj -getProperty:Version)"

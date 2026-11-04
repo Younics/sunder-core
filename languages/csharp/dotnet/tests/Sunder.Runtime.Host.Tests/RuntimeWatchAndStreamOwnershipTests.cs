@@ -758,6 +758,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void AppProductionCode_DoesNotWatchOrDiscoverPackageRoots()
     {
         var appRoot = Path.Combine(RepositoryRoot, "languages", "csharp", "dotnet", "host", "Sunder.App");

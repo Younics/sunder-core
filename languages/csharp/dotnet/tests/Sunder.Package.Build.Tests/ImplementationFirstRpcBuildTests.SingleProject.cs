@@ -125,7 +125,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var taskAssembly = typeof(GenerateSunderRpcBindingsTask).Assembly.Location;
         var references = new[]
         {
-            "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Avalonia.Base", "Avalonia.Controls",
+            "Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.App.Bridge", "Avalonia.Base", "Avalonia.Controls",
             "Microsoft.Extensions.DependencyInjection", "Microsoft.Extensions.DependencyInjection.Abstractions", "Microsoft.Extensions.Logging.Abstractions",
         };
         var project = Path.Combine(root, "SingleProject.csproj");

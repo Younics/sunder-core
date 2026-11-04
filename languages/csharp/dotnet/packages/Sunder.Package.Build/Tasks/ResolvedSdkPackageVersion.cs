@@ -67,10 +67,10 @@ internal static class ResolvedSdkPackageVersion
             return null;
         }
 
-        return normalizedConfiguredVersion;
+        return resolvedVersion;
     }
 
-    private static string? ReadInformationalVersion(string path)
+    internal static string? ReadInformationalVersion(string path)
     {
         using var stream = File.OpenRead(path);
         using var peReader = new PEReader(stream);

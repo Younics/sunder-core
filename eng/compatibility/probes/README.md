@@ -8,7 +8,7 @@ required behavior and artifact layout.
 
 Copy the selected fixture to a disposable authoring directory outside the Core
 workspace so it cannot inherit source/project references or workspace build props.
-Use the actual selected package archives; do not satisfy `1.1.0` from a stale global
+Use the actual selected package archives; do not satisfy `1.0.0` from a stale global
 NuGet/npm cache merely because its version string matches.
 
 ## .NET Worker and App
@@ -67,8 +67,8 @@ descriptor and ABI identities from the generated manifest and review them into
 the retained `probe` layout object. Do not invent hashes or source commits.
 
 The App fixture is deliberately independent of Runtime RPC so the provided App
-component environment can test activation, isolated load context, shared SDK
-identity, DI/view behavior and disposal using the existing headless harness.
+component environment can test activation, isolated load context, package-local
+SDK/DI, shared App bridge identity, view behavior and disposal using the existing headless harness.
 Its fixed package/view id is `compatibility.app.probe`.
 
 Original source/SDK version evidence, retention identities and native execution

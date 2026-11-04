@@ -56,11 +56,13 @@ public sealed class ReleasedSdkAppCorpusTests
             Assert.Equal(Path.Combine(app, "Sunder.App.dll"), Text(report.RootElement, "app"));
             Assert.Equal(Path.Combine(app, "Sunder.Sdk.dll"), Text(report.RootElement, "sdk"));
             Assert.Equal(Path.Combine(app, "Sunder.Sdk.Avalonia.dll"), Text(report.RootElement, "avaloniaSdk"));
+            Assert.Equal(Path.Combine(app, "Sunder.App.Bridge.dll"), Text(report.RootElement, "bridge"));
             Assert.Equal(input.PackageId, Text(report.RootElement, "packageId"));
             Assert.Equal(input.PackageVersion, Text(report.RootElement, "packageVersion"));
             Assert.Equal(Text(input.Context, "actualRid"), Text(report.RootElement, "rid"));
             Assert.True(report.RootElement.GetProperty("disposed").GetBoolean());
             Assert.True(report.RootElement.GetProperty("isolatedPackage").GetBoolean());
+            Assert.True(report.RootElement.GetProperty("packageLocalSdk").GetBoolean());
             Assert.Equal(hashes.Keys.Order(), Directory.GetFiles(app, "*", SearchOption.AllDirectories).Order());
             foreach (var (path, hash) in hashes) Assert.Equal(hash, Hash(path));
         }

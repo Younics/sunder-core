@@ -12,17 +12,20 @@ using Sunder.Package.Projections;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.Host.Tests;
 using Sunder.Runtime.LocalState;
 using Xunit;
 
-namespace Sunder.Runtime.Host.Tests;
+namespace Sunder.App.Integration.Tests;
 
-[Collection(RuntimeProcessIntegrationCollection.Name)]
+[Collection("App/Runtime integration")]
 public sealed class GeneratedAppProcessPolicyTests(GeneratedOwnedRpcPackageFixture packageFixture) : IClassFixture<GeneratedOwnedRpcPackageFixture>
 {
     [Theory]
+    [Trait("Capability", "Process")]
     [InlineData("policy")]
     [InlineData("forced")]
     [InlineData("host-loss")]

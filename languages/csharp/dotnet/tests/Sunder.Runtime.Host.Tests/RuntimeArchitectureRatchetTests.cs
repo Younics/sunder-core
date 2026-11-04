@@ -31,13 +31,14 @@ public sealed class RuntimeArchitectureRatchetTests
             var worker = SunderSdkCompatibilityProfile.WorkerV1CapabilityClassification[capability];
             var key = new SunderPackageTargetKey(worker ? "runtime" : "app", "win-x64");
             string[] capabilities = worker
-                ? [SunderSdkCapabilities.Baseline11V1, SunderWorkerProtocol.V1Capability, capability]
-                : [SunderSdkCapabilities.Baseline11V1, capability];
+                ? [SunderWorkerProtocol.V1Capability, capability]
+                : ["app-bridge.v1", capability];
             var target = new SunderPackageTargetManifest
             {
                 Role = key.Role, Rid = key.Rid,
                 Kind = worker ? SunderPackageFormat.WorkerTargetKind : SunderPackageFormat.AvaloniaTargetKind,
-                EntryPoint = "lib/test.dll", TargetFramework = "net10.0", SdkVersion = "1.1.0",
+                EntryPoint = "lib/test.dll", TargetFramework = "net10.0", SdkVersion = "1.0.0",
+                AvaloniaVersion = worker ? null : "12.1.4",
                 RequiredHostCapabilities = capabilities.Distinct(StringComparer.Ordinal).Cast<string?>().ToArray(),
             };
             Assert.Empty(SunderSdkCompatibilityProfile.Validate("test.package", key, target));
@@ -63,29 +64,29 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Theory]
-    [InlineData("1.0.0")]
-    [InlineData("1.1.0-beta.1")]
-    [InlineData("1.2.0")]
-    public void RuntimeCompatibilityProfile_RejectsPackagesOutsideCoordinated11Baseline(string sdkVersion)
+    [InlineData("0.9.0")]
+    [InlineData("2.0.0")]
+    [InlineData("99999999999999999999.0.0")]
+    public void RuntimeCompatibilityProfile_RejectsUnsupportedSdkMajors(string sdkVersion)
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
             new SunderPackageTargetKey("runtime", "win-x64"),
-            CreateTarget(sdkVersion, [SunderSdkCapabilities.Baseline11V1]));
+            CreateTarget(sdkVersion, [SunderWorkerProtocol.V1Capability]));
 
-        Assert.Contains(errors, error => error.Contains("requires >=1.1.0 <1.2.0", StringComparison.Ordinal));
+        Assert.Contains(errors, error => error.Contains("supported SDK majors [1]", StringComparison.Ordinal));
     }
 
     [Theory]
-    [InlineData("1.1.0")]
+    [InlineData("1.0.0")]
     [InlineData("1.1.7")]
-    [InlineData("1.1.7+build.42")]
-    public void RuntimeCompatibilityProfile_AcceptsCompatible11PackageVersions(string sdkVersion)
+    [InlineData("1.99.7+build.42")]
+    public void RuntimeCompatibilityProfile_AcceptsSupportedSdkMinorAndPatchVersions(string sdkVersion)
     {
         var errors = SunderSdkCompatibilityProfile.Validate(
             "test.package",
             new SunderPackageTargetKey("runtime", "win-x64"),
-            CreateTarget(sdkVersion, [SunderSdkCapabilities.Baseline11V1]));
+            CreateTarget(sdkVersion, [SunderWorkerProtocol.V1Capability]));
 
         Assert.Empty(errors);
     }
@@ -379,10 +380,15 @@ public sealed class RuntimeArchitectureRatchetTests
             "RuntimeResourcePolicyLaunch.ReadAndClearEnvironment",
             StringComparison.Ordinal);
         var builderIndex = program.IndexOf("WebApplication.CreateBuilder", StringComparison.Ordinal);
-        var appServices = Path.Combine(root, "languages", "csharp", "dotnet", "host", "Sunder.App", "Services");
-
         Assert.True(handshakeIndex >= 0 && handshakeIndex < versionedGroupIndex);
         Assert.True(resourcePolicyIndex >= 0 && resourcePolicyIndex < builderIndex);
+    }
+
+    [Fact]
+    [Trait("Component", "App")]
+    public void App_UsesProtocolCompatibilityRatherThanProductSemVer()
+    {
+        var appServices = Path.Combine(LocateRepositoryRoot(), "languages", "csharp", "dotnet", "host", "Sunder.App", "Services");
         Assert.False(File.Exists(Path.Combine(appServices, "RuntimeHostVersionComparer.cs")));
         Assert.Contains(
             "RuntimeProtocolCompatibility.IsCompatible",
@@ -391,6 +397,7 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void ReleasePublishes_UseOneCanonicalInformationalVersionAcrossBundledProcesses()
     {
         var root = LocateRepositoryRoot();
@@ -404,12 +411,15 @@ public sealed class RuntimeArchitectureRatchetTests
             root, "scripts", "release", "package-sunder.sh"));
         var hostWorkflow = File.ReadAllText(Path.Combine(
             root, ".github", "workflows", "sunder-host-release.yml"));
+        var componentPackager = File.ReadAllText(Path.Combine(
+            root, "scripts", "release", "package-component.ps1"));
 
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", appProject, StringComparison.Ordinal);
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", supervisorProject, StringComparison.Ordinal);
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", windowsPackager, StringComparison.Ordinal);
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", unixPackager, StringComparison.Ordinal);
-        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", hostWorkflow, StringComparison.Ordinal);
+        Assert.Contains("./scripts/release/package-component.ps1 -Component host", hostWorkflow, StringComparison.Ordinal);
+        Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", componentPackager, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -453,7 +463,7 @@ public sealed class RuntimeArchitectureRatchetTests
     }
 
     [Fact]
-    public void RuntimeHost_IsWorkerOnlyWhileAppRetainsAppModuleLoading()
+    public void RuntimeHost_IsWorkerOnly()
     {
         var root = LocateRepositoryRoot();
         var hostRoot = Path.Combine(
@@ -468,13 +478,15 @@ public sealed class RuntimeArchitectureRatchetTests
             .Where(path => !IsBuildOutput(path))
             .Select(File.ReadAllText));
 
-        Assert.DoesNotContain("Sunder.Package.Hosting", hostProject, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sunder.App.Bridge", hostProject, StringComparison.Ordinal);
         Assert.DoesNotContain(
             typeof(PackageSessionState).Assembly.GetReferencedAssemblies(),
-            reference => string.Equals(reference.Name, "Sunder.Package.Hosting", StringComparison.Ordinal));
+            reference => reference.Name is "Sunder.App.Bridge" or "Sunder.Sdk.Avalonia");
         foreach (var removed in new[]
                  {
-                     "AssemblyLoadContext",
+                      "AssemblyLoadContext",
+                      "HostSharedAssemblyRegistryCore",
+                      "PackageLoadContextCore",
                      "ISunderRuntimePackageModule",
                      "ISunderRuntimeContributionRegistry",
                      "RuntimePackageLoadContext",
@@ -495,9 +507,14 @@ public sealed class RuntimeArchitectureRatchetTests
             Assert.DoesNotContain(removed, hostSource, StringComparison.Ordinal);
         }
         Assert.Contains(nameof(ProcessRuntimeWorker), hostSource, StringComparison.Ordinal);
+    }
 
+    [Fact]
+    [Trait("Component", "App")]
+    public void App_RetainsAppModuleLoading()
+    {
         var appServices = Path.Combine(
-            root,
+            LocateRepositoryRoot(),
             "languages",
             "csharp",
             "dotnet",
@@ -505,16 +522,17 @@ public sealed class RuntimeArchitectureRatchetTests
             "Sunder.App",
             "Services");
         Assert.Contains(
-            nameof(Sunder.Sdk.Abstractions.ISunderAppPackageModule),
+            "IAppPackageEntryPointV1",
             File.ReadAllText(Path.Combine(appServices, "AppPackageActivator.cs")),
             StringComparison.Ordinal);
         Assert.Contains(
-            nameof(Sunder.Sdk.Abstractions.ISunderAppPackageModule),
+            "IAppPackageEntryPointV1",
             File.ReadAllText(Path.Combine(appServices, "AppSharedAssemblyRegistry.cs")),
             StringComparison.Ordinal);
     }
 
     [Fact]
+    [Trait("Component", "App")]
     public void V1Sources_DoNotReintroduceRemovedCompatibilityNames()
     {
         var root = LocateRepositoryRoot();

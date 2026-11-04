@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_PolicyAppTargetPath" />
+    <!-- Reuse the Runtime's test fixtures without introducing an App dependency there. -->
+    <ProjectReference Include="..\Sunder.Runtime.Host.Tests\Sunder.Runtime.Host.Tests.csproj" PrivateAssets="all" />
+    <Compile Remove="AppPolicyStartupHook.cs" />
+    <None Include="AppPolicyStartupHook.cs" />
+  </ItemGroup>
+  <Target Name="BuildAppPolicyStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectDirectory)/AppPolicyStartupHook.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)app-policy-hook/Sunder.App.Tests.dll;$(TargetDir)sunder-policy-app-target-path.txt">
+    <Error Condition="'@(_PolicyAppTargetPath->Count())' != '1'" Text="The native App policy tests require one exact App build output." />
+    <MakeDir Directories="$(TargetDir)app-policy-hook" />
+    <Csc Sources="$(MSBuildProjectDirectory)/AppPolicyStartupHook.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)app-policy-hook/Sunder.App.Tests.dll" TargetType="Library"
+         TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+    <WriteLinesToFile File="$(TargetDir)sunder-policy-app-target-path.txt" Lines="@(_PolicyAppTargetPath->'%(FullPath)')" Overwrite="true" />
+  </Target>
+</Project>

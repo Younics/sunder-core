@@ -2,7 +2,6 @@ using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
-using Sunder.Sdk.Abstractions;
 
 namespace Sunder.Package.Format;
 
@@ -65,7 +64,7 @@ internal sealed class PackageModuleShape
 
     private void AddRoleErrors(PackageHostRoleMetadataValue role, ICollection<string> errors)
     {
-        const string roleName = nameof(ISunderAppPackageModule);
+        const string roleName = "IAppPackageEntryPointV1";
         var implementations = _implementations
             .Where(candidate => (candidate.Roles & role) != 0)
             .ToArray();
@@ -97,9 +96,9 @@ internal sealed class PackageModuleShape
 
 internal static class PackageModuleShapeReader
 {
-    private const string ModuleNamespace = "Sunder.Sdk.Abstractions";
-    private const string AppModuleName = nameof(ISunderAppPackageModule);
-    private static readonly AssemblyName SdkAssemblyName = typeof(ISunderAppPackageModule).Assembly.GetName();
+    private const string ModuleNamespace = "Sunder.App.Bridge";
+    private const string AppModuleName = "IAppPackageEntryPointV1";
+    private static readonly AssemblyName SdkAssemblyName = new("Sunder.App.Bridge, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null");
 
     public static PackageModuleShape Read(string assemblyPath)
     {

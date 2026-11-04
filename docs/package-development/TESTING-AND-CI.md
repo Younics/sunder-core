@@ -1,6 +1,6 @@
 # Testing And CI
 
-> **Applies to:** Sunder SDK `1.1.x`, package manifest V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, package manifest V1, .NET 10, and Runtime protocol revision 1.
 
 Package tests should cover package-owned behavior at the narrowest boundary, then prove that Release output can be activated and packaged. Do not reference App or Runtime implementation projects just to make a unit test easier.
 

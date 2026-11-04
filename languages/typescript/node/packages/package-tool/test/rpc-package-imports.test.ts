@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { installFixtureSdk } from "./service-fixtures";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -26,6 +27,7 @@ const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
 async function fixture(extension = "ts") {
   const root = await mkdtemp(join(tmpdir(), "sunder-package-imports-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
+  await installFixtureSdk(root);
   const lockPath = join(root, "sunder-contracts.lock.json"); const original = await readFile(join(ROOT, "authoring/conformance/valid/package-api-contract-lock.json"));
   const locked = parseContractLock(original); const requirement = [...locked.requirements.values()][0]!;
   const projection=await readFile(join(ROOT,"authoring/conformance/valid/rpc-model-projection-nonempty.json"));

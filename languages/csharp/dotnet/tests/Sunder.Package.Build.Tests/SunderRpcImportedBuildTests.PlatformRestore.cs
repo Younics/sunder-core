@@ -25,7 +25,7 @@ public sealed partial class SunderRpcImportedBuildTests
         foreach (var import in locked["platformImports"]!.AsObject())
         {
             import.Value!.AsObject().Remove("registryOrigin");
-            import.Value["authorityReleaseRange"] = SunderRpcPlatformCatalogCache.ToolRange;
+            import.Value["authorityReleaseRange"] = ">=1.0.0";
         }
         WriteJson(LockPath, locked);
         var before = File.ReadAllBytes(LockPath);

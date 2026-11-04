@@ -46,9 +46,10 @@ dotnet msbuild Package.csproj -t:ImplementSunderPlatformApi `
 sunder-package platform implement sunder.stack.contributor --registry https://hub.sunderapp.io/ --project .
 ```
 
-The stable authority range comes from the installed SDK/tooling minor line. Version,
-prerelease, package presence and package-candidate selection overrides are
-rejected. The default key for `sunder.stack.contributor` is `stackContributor`;
+Catalog releases are independent of SDK/tooling versions. New selections default to
+stable `>=1.0.0`; set `SunderPackageVersionRange` / `--version` for an explicit range.
+Prerelease, package presence and package-candidate selection overrides are rejected.
+The default key for `sunder.stack.contributor` is `stackContributor`;
 `SunderPackageApiLocalName` / `--local-name` resolves an explicit key collision.
 
 C# generates `Sunder.Generated.Rpc.IStackContributorService`. Node exposes the
@@ -73,7 +74,7 @@ explicitly. Retained public receipt/export evidence cannot replace a deleted pub
 baseline. The same public/private lifecycle distinction applies to the .NET targets.
 
 `UpdateSunderPlatformApi` / `platform update [contract]` uses locked origins and the
-current coordinated range. Global `UpdateSunderPackageApi` / `api update` also updates
+reviewed range unless explicitly overridden. Global `UpdateSunderPackageApi` / `api update` also updates
 platform intents in the same whole-lock transaction. A last-member or staged source
 failure preserves the committed lock and previous generated output. Exact repeated
 implement is a no-op.

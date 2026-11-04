@@ -6,6 +6,7 @@ import { chmod, copyFile, mkdir, open, readFile, readlink, readdir, realpath, re
 import { homedir, hostname, tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
+import { installFixtureSdk } from "./service-fixtures";
 import { inflateRawSync } from "node:zlib";
 import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@sunder/sdk";
 import { currentRid, SUPPORTED_RIDS, SUPPORTED_WORKER_CAPABILITIES } from "../src/model";
@@ -53,7 +54,7 @@ test("dev output uses the canonical runtime-backed Node module shape without lau
     });
     const sdkPackage = JSON.parse(await readFile(resolve(__dirname, "..", "..", "..", "sdk", "package.json"), "utf8")) as { readonly version: string };
     assert.equal(target.sdkVersion, sdkPackage.version);
-    assert.ok(target.requiredHostCapabilities.includes("sdk-baseline-1-1.v1"));
+    assert.ok(target.requiredHostCapabilities.every(capability => !capability.startsWith("sdk-baseline-")));
     assert.ok(target.requiredHostCapabilities.includes("core.v1"));
     assert.ok(target.requiredHostCapabilities.includes("execution-runtime.v1"));
     assert.ok(target.requiredHostCapabilities.includes("rpc.v1"));
@@ -69,7 +70,7 @@ test("dev output uses the canonical runtime-backed Node module shape without lau
       resolve(devRoot, "payload", "runtime", "shared", "THIRD-PARTY-NOTICES", "Bundled-Worker-Dependencies.txt"),
       "utf8",
     );
-    assert.match(workerNotice, /@sunder\/sdk@1\.1\.0/u);
+    assert.ok(workerNotice.includes(`@sunder/sdk@${sdkPackage.version}`));
     assert.match(workerNotice, /fixture-worker-dependency@4\.5\.6/u);
     assert.match(workerNotice, /nested worker fixture notice/u);
     assert.doesNotMatch(workerNotice, /worker-build-only-dependency/u);
@@ -148,7 +149,6 @@ test("worker capabilities are explicit, closed, canonical, and stamped on every 
       "rpc.call-ownership.v1",
       "rpc.extended-deadline.v1",
       "rpc.v1",
-      "sdk-baseline-1-1.v1",
       "secrets.v1",
       "settings.schema.v1",
       "settings.v1",
@@ -235,12 +235,10 @@ test("aggregation accepts only Manifest V1 runtime-backed Worker leaves with exa
         expected: /requiredHostCapabilities must exactly match/u,
       })),
       {
-        name: "SDK baseline mismatch",
+        name: "removed SDK baseline capability",
         update: (manifest) => {
           const target = assertSingle(manifest.targets) as unknown as { requiredHostCapabilities: string[] };
-          target.requiredHostCapabilities = target.requiredHostCapabilities.map((capability) => (
-            capability === "sdk-baseline-1-1.v1" ? "sdk-baseline-1-0.v1" : capability
-          ));
+          target.requiredHostCapabilities = [...target.requiredHostCapabilities, "sdk-baseline-1-1.v1"].sort();
         },
         expected: /requiredHostCapabilities must exactly match/u,
       },
@@ -273,7 +271,6 @@ test("aggregation accepts only Manifest V1 runtime-backed Worker leaves with exa
       "execution-runtime.v1",
       "logging.v1",
       "rpc.v1",
-      "sdk-baseline-1-1.v1",
       "worker-protocol.v1",
     ]);
   } finally {
@@ -303,7 +300,6 @@ test("target leaves are AggregateSunderPackageTask-compatible thin runtime-backe
       "core.v1",
       "execution-runtime.v1",
       "rpc.v1",
-      "sdk-baseline-1-1.v1",
       "worker-protocol.v1",
     ]);
     assert.equal(target.entryPoint, "bin/worker.cjs");
@@ -398,7 +394,7 @@ test("Vite web leaf aggregates with a Node Runtime leaf and preserves declarativ
     const appTarget = assertSingle(appManifest.targets);
     assert.equal(appTarget.kind, "web");
     assert.equal(appTarget.views?.[0]?.viewId, "test.node.package.main");
-    assert.deepEqual(appTarget.requiredHostCapabilities, ["core.v1", "rpc.v1", "sdk-baseline-1-1.v1", "views.v1"]);
+    assert.deepEqual(appTarget.requiredHostCapabilities, ["core.v1", "rpc.v1", "views.v1", "web-bridge.v1"]);
     assert.equal(appTarget.executionRuntime, undefined);
     assert.deepEqual(appManifest.contractBundles, runtimeManifest.contractBundles);
     assert.deepEqual(appManifest.provides, []);
@@ -601,12 +597,12 @@ test("public package tooling contains no embedded Node or SEA production surface
     assert.equal(await exists(resolve(packageRoot, "dist", `${moduleName}.js.map`)), false);
   }
   const createPackage = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", "package.json"), "utf8")) as PackageJson;
-  assert.equal(toolPackage.dependencies?.["@sunder/sdk"], ">=1.1.0 <1.2.0");
-  assert.equal(createPackage.dependencies?.["@sunder/sdk"], ">=1.1.0 <1.2.0");
+  assert.equal(toolPackage.dependencies?.["@sunder/sdk"], ">=1.0.0 <2.0.0");
+  assert.equal(createPackage.dependencies?.["@sunder/sdk"], ">=1.0.0 <2.0.0");
   for (const template of ["template", "template-react-node"]) {
     const value = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", template, "package.json"), "utf8")) as PackageJson;
-    assert.equal(value.dependencies?.["@sunder/sdk"], ">=1.1.0 <1.2.0");
-    assert.equal(value.devDependencies?.["@sunder/package-tool"], ">=1.1.0 <1.2.0");
+    assert.equal(value.dependencies?.["@sunder/sdk"], ">=1.0.0 <2.0.0");
+    assert.equal(value.devDependencies?.["@sunder/package-tool"], ">=1.0.0 <2.0.0");
     const config = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", template, "sunder.package.json"), "utf8")) as {
       readonly workerCapabilities: readonly string[];
     };
@@ -2507,10 +2503,11 @@ function fatMachSharedLibraryFixture(): Buffer {
 
 async function createFixture(): Promise<string> {
   const root = resolve(tmpdir(), "sunder-node-tool-tests", randomUUID());
+  await installFixtureSdk(root);
   await mkdir(resolve(root, "src"), { recursive: true });
   await mkdir(resolve(root, "contracts"), { recursive: true });
   await writeFile(resolve(root, "src", "worker.ts"), packageServiceSource(), "utf8");
-  await writeFile(workerNoticePath(root), "Sunder Bundled Worker Dependency Notices\n\n@sunder/sdk@1.1.0\n", "utf8");
+  await writeFile(workerNoticePath(root), "Sunder Bundled Worker Dependency Notices\n\n@sunder/sdk@1.0.0\n", "utf8");
   await writeFile(resolve(root, "contracts", "example.rpc.json"), `${JSON.stringify(descriptor, null, 2)}\n`, "utf8");
   await writeFile(resolve(root, "sunder.package.json"), `${JSON.stringify({
     schemaVersion: 3,

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { PackageArtifact, ArtifactContract } from "../src/rpc-contract-lock";
-import {liveCatalogWatch} from "./service-fixtures";
+import {installFixtureSdk, liveCatalogWatch} from "./service-fixtures";
 
 // The retained Registry two-contract fixture: both contracts have messages.send,
 // an empty Request, and the same Response. Names and wire shapes are not repaired
@@ -37,6 +37,7 @@ export async function serviceApiFixture(toolRoot: string, extension: "ts" | "js"
   const bindings: typeof import("../src/rpc-bindings") = fromTool("./rpc-bindings.js");
   const root = await mkdtemp(join(tmpdir(), "sunder-service-scopes-")); const cache = join(root, "cache");
   try {
+    await installFixtureSdk(root, fromTool("./compatibility.js").packageToolCompatibility().sdkPackageRoot);
     const descriptors = new Map<string, Buffer>(); const records = new Map<string, ArtifactContract>();
     for (const id of [...ids].sort()) {
       const descriptor = sdk.parseRpcContractDescriptor(JSON.stringify(retainedDescriptor(id)));

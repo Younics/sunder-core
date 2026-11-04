@@ -16,7 +16,7 @@ import {MODEL_PROJECTION_PATH} from "../src/rpc-model-projection";
 import {readRoleUses,roleUsesBytes,validateRoleUseEvidence} from "../src/rpc-owned-uses";
 import {parseOuter} from "../src/rpc-baseline-json";
 import {canonicalCandidateFixture,installFixtureInspector} from "./model-projection-fixtures";
-import {emptyLock,fixtureSource} from "./service-fixtures";
+import {emptyLock,fixtureSource,installFixtureSdk} from "./service-fixtures";
 
 const producerSource=`import {defineService} from "@sunder/sdk";
 /*ts import type {ServiceReference} from "@sunder/sdk";*/
@@ -41,6 +41,7 @@ export const provider=defineService({holderHandle(request){return true;}},{imple
 
 async function setup(language:"ts"|"js"){
   const root=await mkdtemp(join(tmpdir(),"sunder-typed-runtime-"));const producer=join(root,"producer"),consumer=join(root,"consumer"),cache=join(root,"cache");
+  await installFixtureSdk(root);
   for(const path of [producer,consumer])await mkdir(join(path,"src"),{recursive:true});
   await mkdir(join(consumer,"app"));await writeFile(join(consumer,"app/index.html"),"<!doctype html><title>Unrelated App</title>");
   for(const [path,id,source] of [[producer,"example.typed",fixtureSource(producerSource,language)],[consumer,"example.consumer",consumerSource("")]] as const){

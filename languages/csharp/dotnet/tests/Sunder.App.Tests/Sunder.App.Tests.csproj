@@ -11,6 +11,7 @@
     <Compile Remove="PolicyHeartbeatProcessProbe.cs" />
     <None Include="PolicyHeartbeatProcessProbe.cs" />
     <Compile Remove="MacOsWindowDelegateProcessProbe.cs" />
+    <Compile Remove="Fixtures/AppBridge/*.cs" />
     <None Include="MacOsWindowDelegateProcessProbe.cs" />
   </ItemGroup>
 
@@ -62,5 +63,27 @@
     </ItemGroup>
     <Copy SourceFiles="@(_WindowDelegateProbeNative)" DestinationFolder="$(TargetDir)window-delegate-probe" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_WindowDelegateProbeNative)" DestinationFolder="$(TargetDir)policy-heartbeat-probe" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="BuildIncompatibleAppSdkFixtures" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="Fixtures/AppBridge/Sdk.cs;Fixtures/AppBridge/Package.cs;@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)bridge-fixtures/one/Package.dll;$(TargetDir)bridge-fixtures/two/Package.dll">
+    <ItemGroup>
+      <_BridgeFixtureReference Include="@(ReferencePathWithRefAssemblies)"
+          Condition="'%(Filename)' != 'Sunder.Sdk' and '%(Filename)' != 'Sunder.Sdk.Avalonia' and '%(Filename)' != 'Sunder.Sdk.Stacks'" />
+    </ItemGroup>
+    <MakeDir Directories="$(TargetDir)bridge-fixtures/one;$(TargetDir)bridge-fixtures/two" />
+    <Csc Sources="Fixtures/AppBridge/Sdk.cs" References="@(_BridgeFixtureReference)"
+         OutputAssembly="$(TargetDir)bridge-fixtures/one/Sunder.Sdk.dll" TargetType="Library" Nullable="enable"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true" />
+    <Csc Sources="Fixtures/AppBridge/Sdk.cs" References="@(_BridgeFixtureReference)" DefineConstants="SDK_TWO"
+         OutputAssembly="$(TargetDir)bridge-fixtures/two/Sunder.Sdk.dll" TargetType="Library" Nullable="enable"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true" />
+    <Csc Sources="Fixtures/AppBridge/Package.cs" References="@(_BridgeFixtureReference);$(TargetDir)bridge-fixtures/one/Sunder.Sdk.dll"
+         OutputAssembly="$(TargetDir)bridge-fixtures/one/Package.dll" TargetType="Library" Nullable="enable"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true" />
+    <Csc Sources="Fixtures/AppBridge/Package.cs" References="@(_BridgeFixtureReference);$(TargetDir)bridge-fixtures/two/Sunder.Sdk.dll" DefineConstants="SDK_TWO"
+         OutputAssembly="$(TargetDir)bridge-fixtures/two/Package.dll" TargetType="Library" Nullable="enable"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true" />
   </Target>
 </Project>

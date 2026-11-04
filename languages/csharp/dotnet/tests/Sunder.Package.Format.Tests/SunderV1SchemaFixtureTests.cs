@@ -49,7 +49,7 @@ public sealed class SunderV1SchemaFixtureTests
     }
 
     [Fact]
-    public void PackageManifestSchema_TracksWorkerOnlyRuntimeRequirementAndOptionalAppBuildMetadata()
+    public void PackageManifestSchema_TracksWorkerRuntimeRequirementAndRequiredManagedAppMetadata()
     {
         using var schema = ReadSchema(
             "PackageV1Conformance",
@@ -65,9 +65,10 @@ public sealed class SunderV1SchemaFixtureTests
         var app = targets.Single(static target => target["role"]!.GetValue<string>() == "app");
         app.Remove("targetFramework");
         app.Remove("sdkVersion");
-        using (var optionalAppMetadata = JsonDocument.Parse(fixture.ToJsonString()))
+        app.Remove("avaloniaVersion");
+        using (var missingAppMetadata = JsonDocument.Parse(fixture.ToJsonString()))
         {
-            var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(optionalAppMetadata.RootElement, StrictJson)!;
+            var manifest = JsonSerializer.Deserialize<SunderPackageManifest>(missingAppMetadata.RootElement, StrictJson)!;
             var errors = new List<string>();
             PackageTargetValidator.Validate(
                 manifest,
@@ -76,8 +77,14 @@ public sealed class SunderV1SchemaFixtureTests
                     ArchiveRelativePath.Parse("payload/shared/lib/Example.Worker.dll"),
                 ],
                 errors);
-            Assert.Empty(errors);
+            Assert.Equal(3, errors.Count);
+            Assert.Contains(errors, error => error.Contains("must declare sdkVersion", StringComparison.Ordinal));
+            Assert.Contains(errors, error => error.Contains("targetFramework", StringComparison.Ordinal));
+            Assert.Contains(errors, error => error.Contains("must declare avaloniaVersion", StringComparison.Ordinal));
         }
+        app["targetFramework"] = "net10.0";
+        app["sdkVersion"] = "1.0.0";
+        app["avaloniaVersion"] = "12.1.4";
 
         var worker = targets.Single(static target => target["role"]!.GetValue<string>() == "runtime");
         using (var invalidRequirement = JsonDocument.Parse(worker["executionRuntime"]!.DeepClone().ToJsonString().Replace(

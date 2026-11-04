@@ -584,11 +584,16 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         var appSource = Path.Combine(appDirectory, "App.cs");
         File.WriteAllText(appSource, """
             using System;
+            using System.Threading.Tasks;
             using Microsoft.Extensions.DependencyInjection;
             using Sunder.Sdk.Abstractions;
             [assembly: Sunder.Sdk.Packaging.SunderPackage(Id = "example.generated", Name = "Implementation-First RPC Fixture")]
-            public sealed class AppModule : ISunderAppPackageModule
+            public sealed class AppModule : ISunderAppPackageModule, Sunder.App.Bridge.IAppPackageEntryPointV1
             {
+                public ValueTask<Sunder.App.Bridge.IAppPackageActivationV1> CreateAsync(
+                    Sunder.App.Bridge.IAppPackageHostV1 host, Sunder.App.Bridge.IAppContributionSinkV1 contributions)
+                    => Sunder.Sdk.Avalonia.Hosting.AppPackageRuntime.CreateAsync(this, host, contributions);
+
                 public void ConfigureAppServices(IServiceCollection services, IPackageContext context) { }
                 public void RegisterAppContributions(ISunderAppContributionRegistry registry, IServiceProvider services) { }
                 public Type OwnedClientType => typeof(Sunder.Generated.Packages.Example_Generated_Services.CExample_Generated_Greeting.IGreetingService);
@@ -686,7 +691,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
                 new XElement("SelfContained", "false"), new XElement("Version", "1.0.0"), new XElement("NuGetAudit", "false"),
                 new XElement("SunderPackageBuildTaskAssembly", typeof(GenerateSunderRpcBindingsTask).Assembly.Location),
                 new XElement("SunderPackageBuildTaskSourceIsImmutable", "true"), new XElement("SunderPackageBuildProject", Path.Combine(_root, "no-task-source.csproj")),
-                new XElement("SunderContractCacheRoot", cacheRoot), new XElement("SunderSdkPackageVersion", "1.1.0")),
+                new XElement("SunderContractCacheRoot", cacheRoot)),
             new XElement("ItemGroup", references.Select(path => new XElement("Reference", new XAttribute("Include", Path.GetFileNameWithoutExtension(path)), new XAttribute("HintPath", path))),
                 new XElement("SunderPackageTarget", new XAttribute("Include", "runtime/$(RuntimeIdentifier)"), new XAttribute("Role", "runtime"),
                     new XAttribute("Rid", "$(RuntimeIdentifier)"), new XAttribute("Kind", "worker"))),
@@ -772,7 +777,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         {
             BuildEngine = new BuildEngine(), TargetAssemblyPath = assembly, EntryAssembly = Path.GetFileName(assembly),
             ManifestOutputPath = Path.Combine(generation.IntermediateOutputPath, "sunder-package.json"), ProjectDirectory = generation.ProjectDirectory,
-            PackageVersion = "1.0.0", TargetFramework = "net10.0", SdkPackageVersion = "1.1.0", ReferencePaths = generation.ReferencePaths,
+            PackageVersion = "1.0.0", TargetFramework = "net10.0", ReferencePaths = generation.ReferencePaths,
             AuthoredAssemblyPaths = [new TaskItem(assembly)], PackageTargets = [target], OutputType = role == "runtime" ? "Exe" : "Library",
             RuntimeIdentifier = role == "runtime" ? rid : null,
             ContractBundles = generation.ContractBundles, BindingSnapshots = generation.BindingSnapshots, UsesContracts = generation.RpcUses,

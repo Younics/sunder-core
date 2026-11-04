@@ -5,7 +5,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadCoreTestModel } from "./core-test-policy.mjs";
+import { expectedScriptReports, loadCoreTestModel, repositoryRoot } from "./core-test-policy.mjs";
+import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
 import {
   auditCoreTestReports,
   buildCoreTestEvidence,
@@ -79,6 +80,69 @@ test("TRX and JUnit parsers retain expanded discovery, execution, and skip reaso
   assert.equal(junit.discovered, 1);
   assert.equal(junit.results[0].outcome, "Skipped");
   assert.equal(junit.results[0].skipReason, "fixture unavailable");
+});
+
+test("scoped audits reject missing sources, required integration skips and foreign component reports", () => {
+  for (const scope of ["sdk", "repository", "cli"]) {
+    const model = loadCoreTestModel(repositoryRoot, undefined, scope);
+    const required = ["portable", "official"].flatMap(profile => ciScenarios(model.policy.scopes[scope], profile))
+      .flatMap(name => selectScenario(name, model.declarations).tests.map(test => test.id));
+    const selected = model.declarations.filter(test => test.externalEnvironment === undefined || required.includes(test.id));
+    const groups = Map.groupBy(selected, test => test.framework === "dotnet" ? `${test.project}.trx`
+      : test.framework === "node" ? test.source.startsWith("scripts/") ? "node-core-oracles.junit.xml" : `node-${test.project}.junit.xml`
+        : "release-fixtures.junit.xml");
+    const reports = [...groups].map(([source, tests]) => ({ source, discovered: tests.length,
+      results: tests.map(test => ({ report: source, framework: test.framework, project: test.project,
+        declarationId: test.id, name: test.name, source: test.source, outcome: "Passed" })) }));
+    assert.equal(auditCoreTestReports(reports, model).passed, selected.length);
+    for (const source of expectedScriptReports(model)) {
+      assert.throws(() => auditCoreTestReports(reports.filter(report => report.source !== source), model), /exactly one/u);
+    }
+    if (scope === "sdk") {
+      const withoutScript = structuredClone(reports);
+      const scripts = withoutScript.find(report => report.source === "node-core-oracles.junit.xml");
+      const removed = scripts.results[0].source;
+      scripts.results = scripts.results.filter(result => result.source !== removed);
+      assert.throws(() => auditCoreTestReports(withoutScript, model), /Node results omitted/u);
+      for (const change of ["missing", "skipped"]) {
+        const changed = structuredClone(reports);
+        const report = changed.find(report => report.results.some(result => result.declarationId === required[0]));
+        if (change === "missing") report.results = report.results.filter(result => result.declarationId !== required[0]);
+        else report.results.find(result => result.declarationId === required[0]).outcome = "Skipped";
+        assert.throws(() => auditCoreTestReports(changed, model), /produced no result|was reported as skipped|omitted.*declaration/u);
+      }
+      const app = model.allDeclarations.find(test => test.project === "Sunder.App.Integration.Tests");
+      assert.throws(() => auditCoreTestReports([...reports, { source: "app.trx", discovered: 1,
+        results: [{ framework: "dotnet", declarationId: app.id, name: app.id, outcome: "Passed" }] }], model), /unowned .NET test/u);
+    }
+  }
+});
+
+test("JUnit audits resolve declared sources across checkout roots without admitting foreign components", () => {
+  const node = (source, name, project, component = "sdk") => ({
+    id: name, framework: "node", source, name, project, component,
+    primaryLane: "node", operatingSystems: ["Linux", "MacOS", "Windows"],
+  });
+  const declarations = [node("scripts/compatibility/known.test.mjs", "script", "scripts/test/release"),
+    node("languages/typescript/node/packages/sdk/test/known.test.ts", "node", "sdk")];
+  const foreign = node("scripts/test-oracles/reporter.test.mjs", "reporter", "scripts/test-oracles", "ci");
+  const model = { scope: "sdk", declarations, allDeclarations: [...declarations, foreign], policy: {
+    scopes: { sdk: ["sdk"] }, defaultComponent: "sdk", primaryLanes: ["node"],
+    componentRules: [{ component: "ci", source: "^scripts/test-oracles/" }],
+    projectLanes: { "scripts/test/release": ["node"], sdk: ["node"] },
+  } };
+  const options = { allowPartial: true, requiredPrimaryLanes: ["node"], operatingSystem: "Linux" };
+  for (const root of ["/home/runner/work/core", "/private/snapshot/core", "D:\\work\\core", "/home/scripts/work/core"]) {
+    const report = parseJunitReport(declarations.map(item => {
+      const source = item.source.replace("/test/", "/dist-test/test/").replace(/\.ts$/u, ".js");
+      return `<testcase name="${item.name}" file="${root}/${source}"/>`;
+    }).join(""), "node.junit.xml");
+    assert.equal(buildCoreTestEvidence([report], model, options).counts.passed, 2);
+    const external = parseJunitReport(`<testcase name="${foreign.name}" file="${root}/${foreign.source}"/>`, "foreign.junit.xml");
+    assert.throws(() => buildCoreTestEvidence([report, external], model, options), /outside validation scope/u);
+    const missing = parseJunitReport('<testcase name="script" file="/unowned/known.test.mjs"/>', "missing.junit.xml");
+    assert.throws(() => buildCoreTestEvidence([missing], model, options), /coverage drift|Node results omitted/u);
+  }
 });
 
 test("JUnit quoted greater-than characters do not swallow adjacent testcases or hide failures", () => {
@@ -202,19 +266,16 @@ test("expected skip evidence requires an explicit reason and owning lane", () =>
   }, model.policy, "MacOS"), /Unexpected skipped test/u);
 });
 
-test("suspension evidence permits only its Windows reason and never substitutes a skip or omission for required execution", () => {
+test("IPC publisher evidence rejects obsolete Windows skips and omissions", () => {
   const model = loadCoreTestModel();
-  const expected = model.policy.expectedSkips.find((item) => item.id === "node-process-suspension");
-  assert.ok(expected);
   const declaration = model.declarations.find((item) => item.framework === "node"
-    && item.source === expected.source && item.name === expected.name);
+    && item.name === "a suspended CLI publisher reads the new source after acquiring the output lease");
   assert.ok(declaration);
-  const report = parseJunitReport(`<testsuites><testcase name="${expected.name}" classname="test" file="${expected.source}">
+  const report = parseJunitReport(`<testsuites><testcase name="${declaration.name}" classname="test" file="${declaration.source}">
     <skipped message="SIGSTOP/SIGCONT unavailable on Windows"/></testcase></testsuites>`, "node-package-tool.junit.xml");
   const result = { ...report.results[0], declaration, primaryLane: declaration.primaryLane, project: declaration.project };
-  assert.equal(materializeExpectedSkip(result, model.policy, "Windows").owner, "node");
+  assert.throws(() => materializeExpectedSkip(result, model.policy, "Windows"), /Unexpected skipped test/u);
   assert.throws(() => materializeExpectedSkip(result, model.policy, "MacOS"), /Unexpected skipped test/u);
-  assert.throws(() => materializeExpectedSkip({ ...result, skipReason: "some other failure" }, model.policy, "Windows"), /unapproved reason/u);
   const selection = { allowPartial: true, requiredTests: [declaration.id], operatingSystem: "Windows" };
   assert.throws(() => buildCoreTestEvidence([report], model, selection), /prerequisite gate was READY/u);
   const missing = structuredClone(report);

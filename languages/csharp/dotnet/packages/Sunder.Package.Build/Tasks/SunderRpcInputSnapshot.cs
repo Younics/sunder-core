@@ -34,27 +34,40 @@ internal sealed class SunderRpcInputSnapshot
     {
         var pending = new Stack<(string Path, int Depth)>(roots.Select(path => (path, 0)));
         var visited = new HashSet<string>(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        var sources = new List<string>();
         var count = 0;
         while (pending.TryPop(out var directory))
         {
             if (!visited.Add(directory.Path)) continue;
             if (directory.Depth > 32) throw Changed("source discovery depth exceeds 32");
-            GeneratedOutputPathSafety.EnsureRegularDirectory(directory.Path, "RPC source membership");
-            foreach (var path in Directory.EnumerateFileSystemEntries(directory.Path))
+            try
             {
-                if (++count > 32768) throw Changed("source discovery membership exceeds 32,768 entries");
-                var name = Path.GetFileName(path);
-                if (name is "obj" or "bin" or ".git" or "node_modules" or ".sunder" || excluded.Any(root =>
-                    path == root || GeneratedOutputPathSafety.IsDescendantOf(path, root))) continue;
-                var attributes = File.GetAttributes(path);
-                if ((attributes & FileAttributes.Directory) != 0)
+                GeneratedOutputPathSafety.EnsureRegularDirectory(directory.Path, "RPC source membership");
+                foreach (var path in Directory.EnumerateFileSystemEntries(directory.Path))
                 {
-                    if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
-                    pending.Push((path, directory.Depth + 1));
+                    if (++count > 32768) throw Changed("source discovery membership exceeds 32,768 entries");
+                    var name = Path.GetFileName(path);
+                    if (name is "obj" or "bin" or ".git" or "node_modules" or ".sunder" || excluded.Any(root =>
+                        path == root || GeneratedOutputPathSafety.IsDescendantOf(path, root))) continue;
+                    FileAttributes attributes;
+                    try { attributes = File.GetAttributes(path); }
+                    catch (IOException) when (!GeneratedOutputPathSafety.PathExists(path)) { continue; }
+                    if ((attributes & FileAttributes.Directory) != 0)
+                    {
+                        if ((attributes & FileAttributes.ReparsePoint) != 0) continue;
+                        pending.Push((path, directory.Depth + 1));
+                    }
+                    else if (Path.GetExtension(path) is ".cs" or ".csproj" or ".props" or ".targets") sources.Add(path);
                 }
-                else if (Path.GetExtension(path) is ".cs" or ".csproj" or ".props" or ".targets") yield return path;
+            }
+            catch (IOException) when (count <= 32768 && !GeneratedOutputPathSafety.PathExists(directory.Path))
+            {
+                // Lock-transition directories can disappear after discovery. Removed
+                // source members still fail the captured membership/byte checks.
+                continue;
             }
         }
+        return sources;
     }
 
     public byte[] Read(string path, int maximumBytes, string label)

@@ -415,6 +415,7 @@ internal sealed class RegistryPackageArtifactDownloader(
            && string.Equals(planned.EntryPoint, source.EntryPoint, StringComparison.Ordinal)
            && string.Equals(planned.TargetFramework, source.TargetFramework, StringComparison.Ordinal)
            && string.Equals(planned.SdkVersion, source.SdkVersion, StringComparison.Ordinal)
+           && string.Equals(planned.AvaloniaVersion, source.AvaloniaVersion, StringComparison.Ordinal)
            && ExecutionRuntimeMatches(planned.ExecutionRuntime, source.ExecutionRuntime)
            && (planned.RequiredHostCapabilities ?? []).SequenceEqual(
                (source.RequiredHostCapabilities ?? []).Select(static capability => capability!),

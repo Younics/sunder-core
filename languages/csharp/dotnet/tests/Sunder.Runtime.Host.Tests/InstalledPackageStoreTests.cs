@@ -267,7 +267,6 @@ public sealed class InstalledPackageStoreTests
             roles: [SunderPackageFormat.RuntimeHostRole],
             runtimeRequiredHostCapabilities:
             [
-                "sdk-baseline-1-1.v1",
                 "core.v1",
                 "execution-runtime.v1",
                 "rpc.v1",

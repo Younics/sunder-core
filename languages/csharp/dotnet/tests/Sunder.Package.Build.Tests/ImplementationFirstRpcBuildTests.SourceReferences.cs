@@ -63,7 +63,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             Assert.DoesNotContain(Directory.GetFiles(neutralIntermediate), path =>
                 Path.GetFileName(path).StartsWith("Sunder.Sdk.", StringComparison.Ordinal));
             var workerOutput = Path.Combine(fixture, "bin", configuration, "net10.0", RuntimeInformation.RuntimeIdentifier, "sunder-dev");
-            var appOutput = Path.Combine(fixture, "App", "bin", configuration, "net10.0-windows", "sunder-dev");
+            var appOutput = Path.Combine(fixture, "App", "bin", configuration, "net10.0", "sunder-dev");
             var worker = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(workerOutput);
             var app = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(appOutput);
             Assert.True(worker.Success, string.Join(" | ", worker.Errors));
@@ -85,7 +85,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
 
         var generated = Path.Combine(fixture, "obj", configuration, "net10.0", RuntimeInformation.RuntimeIdentifier, GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
         var marker = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(generated);
-        var appGenerated = Path.Combine(fixture, "App", "obj", configuration, "net10.0-windows", GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
+        var appGenerated = Path.Combine(fixture, "App", "obj", configuration, "net10.0", GenerateSunderRpcBindingsTask.GeneratedDirectoryName);
         var appMarker = GenerateSunderRpcBindingsTask.GetOwnershipMarkerPath(appGenerated);
         var timestamps = ReadTreeTimestamps(generated, marker);
         var appTimestamps = ReadTreeTimestamps(appGenerated, appMarker);

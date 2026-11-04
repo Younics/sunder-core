@@ -1,8 +1,15 @@
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging.Abstractions;
 using Sunder.Core.Tests;
 using Sunder.Core.TestSupport;
+using Sunder.Package.Format;
+using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.LocalState;
+using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -12,14 +19,58 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class AgentCurrentInputsTests
 {
     [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_CURRENT_INPUTS", "SUNDER_AGENT_CURRENT_BASELINE_ROOT", "SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")]
-    public void QualifiedCurrentRidArchivesMatchIndependentRecords()
+    public async Task QualifiedCurrentRidArchivesMatchIndependentRecords()
     {
         var baseline = AgentCurrentBaseline.Load();
-        var archives = Directory.GetFiles(Environment.GetEnvironmentVariable("SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")!, "*.sunderpkg");
+        var archives = Directory.GetFiles(Environment.GetEnvironmentVariable("SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")!, "*.sunderpkg")
+            .Order(StringComparer.Ordinal).ToArray();
         Assert.Equal(baseline.Packages.Select(package => package.PackageId).Order(StringComparer.Ordinal),
             archives.Select(path => baseline.VerifyCurrentRidArchive(path, RuntimeInformation.RuntimeIdentifier)).Order(StringComparer.Ordinal));
         // A current-RID observation cannot qualify the unchanged universal-release gate.
         Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => baseline.VerifyArchive(archives[0]));
+
+        // Direct role-composition probes bypass Runtime admission. Exercise the
+        // same UI-snapshot service used at App startup with these exact artifacts.
+        using var temporary = TemporaryDirectoryScope.Create("sunder-agent-current-ui-admission");
+        var paths = new RuntimePackagePaths(temporary.GetPath("runtime"));
+        RuntimeLocalState.EnsureInitialized(paths.RootPath);
+        var sources = new List<RuntimePackageSource>();
+        foreach (var archive in archives)
+        {
+            var root = temporary.GetPath("packages", Path.GetFileNameWithoutExtension(archive));
+            ZipFile.ExtractToDirectory(archive, root);
+            var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(root);
+            Assert.True(validation.Success, string.Join(" | ", validation.Errors));
+            var worker = CanonicalPackageTestBuilder.CreateTargetSource(root, PackageSourceKind.Dev, SunderPackageFormat.RuntimeHostRole);
+            Assert.Empty(SunderSdkCompatibilityProfile.Validate(worker.Source.PackageId, worker.TargetKey, worker.Target));
+            if (worker.Source.PackageId == "younics.ai.agent.execution.docker")
+                Assert.Contains(SunderSdkCapabilities.DockerEnvironmentV1, worker.Target.RequiredHostCapabilities!);
+            sources.Add(worker.Source with
+            {
+                HostRoles = PackageHostRoles.Runtime | (baseline.AppPackageIds.Contains(worker.Source.PackageId) ? PackageHostRoles.App : PackageHostRoles.None),
+                Dependencies = validation.Manifest!.DependsOn!.Select(dependency => new PackageDependencyDescriptor(dependency!.PackageId!, dependency.VersionRange!)).ToArray(),
+            });
+        }
+        var descriptors = sources.ToDictionary(source => source.PackageId, source => new SessionPackageDescriptor(
+            source.PackageId, source.Manifest!.Name!, source.Manifest.Version!, source.HostRoles, null, true,
+            PackageReadinessState.Ready, [], null, null, null, 0));
+        var session = new ActivePackageSession(null, new Dictionary<string, ActiveLoadedPackage>(), descriptors, readySources: sources);
+        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService());
+        using var snapshots = new PackageUiSnapshotStore(paths);
+        try
+        {
+            await owner.PublishAsync(session, owner.Sources.Snapshot(), [], [], owner.Generation);
+            var ui = new RuntimePackageUiService(owner, snapshots, new InstalledPackageStore(paths));
+            var admitted = ui.GetActiveSnapshots(RuntimeInformation.RuntimeIdentifier);
+            Assert.Equal(baseline.AppPackageIds, admitted.Select(snapshot => snapshot.PackageId).Order(StringComparer.Ordinal));
+            foreach (var snapshot in admitted)
+            {
+                using var lease = ui.AcquireCurrent(snapshot.SnapshotId);
+                Assert.NotNull(lease);
+                Assert.True(lease.Length > 0);
+            }
+        }
+        finally { await owner.State.ClearActiveSessionAsync(); }
     }
 
     [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_CURRENT_INPUTS", "SUNDER_AGENT_CURRENT_BASELINE_ROOT")]

@@ -101,7 +101,7 @@ public sealed partial class SunderPackageProjectionArchiveTests
                 Kind = SunderPackageFormat.WebTargetKind,
                 EntryPoint = "web/index.html",
                 SdkVersion = "1.0.0",
-                RequiredHostCapabilities = ["core.v1"],
+                RequiredHostCapabilities = ["core.v1", "web-bridge.v1"],
                 Views =
                 [
                     new SunderPackageWebViewManifest
@@ -1019,10 +1019,11 @@ public sealed partial class SunderPackageProjectionArchiveTests
             Kind = kind,
             EntryPoint = entryPoint,
             TargetFramework = kind == SunderPackageFormat.WorkerTargetKind ? "node24" : "net10.0",
-            SdkVersion = role == SunderPackageFormat.RuntimeHostRole ? "1.1.0" : "1.0.0",
+            SdkVersion = "1.0.0",
+            AvaloniaVersion = kind == "avalonia" ? "12.1.4" : null,
             RequiredHostCapabilities = role == SunderPackageFormat.RuntimeHostRole
-                ? ["core.v1", "execution-runtime.v1", "rpc.v1", "sdk-baseline-1-1.v1", "worker-protocol.v1"]
-                : ["core.v1"],
+                ? ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1"]
+                : [kind == "web" ? "web-bridge.v1" : "app-bridge.v1", "core.v1"],
             ExecutionRuntime = role == SunderPackageFormat.RuntimeHostRole
                 ? new SunderPackageExecutionRuntimeManifest
                 {

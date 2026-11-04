@@ -11,13 +11,14 @@ import { contractsCommand } from "../src/rpc-contracts";
 import { aggregateAndPack } from "../src/package";
 import { parseBaseline } from "../src/rpc-baseline";
 import { constructorSource, sharedSource } from "./owned-rpc-review-fixtures";
-import { fixtureSource, generatedProviders, invocation, writeSourceFile as writeFile } from "./service-fixtures";
+import { fixtureSource, generatedProviders, installFixtureSdk, invocation, writeSourceFile as writeFile } from "./service-fixtures";
 
 const exec = promisify(execFile);
 const cli = resolve(__dirname, "../src/cli.js");
 const emptyLock = `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`;
 async function project(extension: string, source: string): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-review-")); await mkdir(resolve(root, "src"));
+  await installFixtureSdk(root);
   await writeFile(resolve(root, `src/rpc.${extension}`), source);
   await writeFile(resolve(root, "sunder-contracts.lock.json"), emptyLock);
   await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.review", name: "Review", version: "7.6.5", workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));

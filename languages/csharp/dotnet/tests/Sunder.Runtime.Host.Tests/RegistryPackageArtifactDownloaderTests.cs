@@ -570,7 +570,8 @@ public sealed partial class RegistryPackageArtifactDownloaderTests
                  view.DefaultPlacement!,
                  view.ShowInHotbar!.Value)).ToArray(),
               ExecutionRuntime: target.ExecutionRuntime is { } requirement
-                  ? new(requirement.Id!, requirement.VersionRange!, requirement.ModuleAbi!) : null);
+                  ? new(requirement.Id!, requirement.VersionRange!, requirement.ModuleAbi!) : null,
+              AvaloniaVersion: target.AvaloniaVersion);
 
     private static string AlternateRid()
         => SunderPackageFormat.SupportedRuntimeIdentifiers.First(rid =>

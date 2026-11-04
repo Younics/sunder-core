@@ -6,6 +6,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
+    <ProjectReference Include="..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj" />
   </ItemGroup>
 
   <ItemGroup>

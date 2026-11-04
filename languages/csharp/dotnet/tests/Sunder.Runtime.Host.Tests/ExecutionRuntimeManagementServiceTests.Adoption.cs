@@ -100,7 +100,7 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
         }
     }
 
-    private static async Task<WebApplication> StartOfficialAdoptionHttpAsync(ManagementFixture fixture)
+    internal static async Task<WebApplication> StartOfficialAdoptionHttpAsync(ManagementFixture fixture)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");

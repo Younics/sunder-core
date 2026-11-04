@@ -305,7 +305,7 @@ public sealed class PackageCapabilityInferenceTests
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         Assert.All(
             document.RootElement.GetProperty("targets").EnumerateArray(),
-            target => Assert.Equal(packageVersion, target.GetProperty("sdkVersion").GetString()));
+            target => Assert.Equal(informationalVersion, target.GetProperty("sdkVersion").GetString()));
     }
 
     [Fact]
@@ -314,7 +314,7 @@ public sealed class PackageCapabilityInferenceTests
         var manifestPath = Path.Combine(CreateTempDirectory(), "sunder-package.json");
         var buildEngine = new TestBuildEngine();
         var task = CreateTask(manifestPath, buildEngine);
-        task.SdkPackageVersion = "1.1.0-preview.1";
+        task.SdkPackageVersion = "1.0.0-preview.1";
 
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error => error.Contains("does not match resolved", StringComparison.Ordinal));
@@ -358,7 +358,7 @@ public sealed class PackageCapabilityInferenceTests
         Assert.True(File.Exists(sdkAssemblyPath));
         Assert.True(File.Exists(Path.Combine(sdkOutput, "Sunder.Sdk.pdb")));
         Assert.True(File.Exists(Path.Combine(sdkOutput, "Sunder.Sdk.xml")));
-        Assert.StartsWith("1.1.0+source.fixture", FileVersionInfo.GetVersionInfo(sdkAssemblyPath).ProductVersion, StringComparison.Ordinal);
+        Assert.StartsWith("1.0.0+source.fixture", FileVersionInfo.GetVersionInfo(sdkAssemblyPath).ProductVersion, StringComparison.Ordinal);
 
         var manifestPath = Path.Combine(
             root,
@@ -376,17 +376,18 @@ public sealed class PackageCapabilityInferenceTests
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         Assert.All(
             document.RootElement.GetProperty("targets").EnumerateArray(),
-            target => Assert.Equal("1.1.0", target.GetProperty("sdkVersion").GetString()));
+            target => Assert.Equal(FileVersionInfo.GetVersionInfo(sdkAssemblyPath).ProductVersion, target.GetProperty("sdkVersion").GetString()));
         Assert.Equal(
             new[]
             {
+                "app-bridge.v1",
                 SunderSdkCapabilities.ContributionsV1,
                 SunderSdkCapabilities.CoreV1,
                 SunderSdkCapabilities.PackagingV1,
-                SunderSdkCapabilities.Baseline11V1,
                 SunderSdkCapabilities.ShellViewV1,
                 SunderSdkCapabilities.StorageKeyMigrationV1,
                 SunderSdkCapabilities.StorageV1,
+                SunderSdkCapabilities.ThemingV1,
                 SunderSdkCapabilities.ViewNavigationPreparationV1,
             }.Order(StringComparer.Ordinal),
             ReadCapabilities(document.RootElement).Order(StringComparer.Ordinal));

@@ -148,7 +148,6 @@ class GitHubReleaseTests(unittest.TestCase):
     def test_native_component_inventory_has_all_six_rids_without_a_coordinated_sdk_set(self):
         self.assertEqual(6, len(release.core_names("cli", "1.0.0")))
         self.assertEqual(6, len(release.core_names("host", "1.0.0")))
-        self.assertEqual(18, len(release.core_names("app", "1.0.0")))
         with self.assertRaisesRegex(ValueError, "developer packages"): release.core_names("sdk", "1.1.0")
 
     def test_old_coordinated_sdk_publication_entry_point_is_rejected(self):

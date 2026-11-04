@@ -234,10 +234,10 @@ public sealed class SettingsWindowLayoutTests
         {
             RequestedThemeVariant = ThemeVariant.Dark;
             Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.Sdk.Avalonia/Themes/SunderThemeResources.axaml") });
+                { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderThemeResources.axaml") });
             Styles.Add(new FluentTheme());
             Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.Sdk.Avalonia/Themes/SunderPackageStyles.axaml") });
+                { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderPackageStyles.axaml") });
             Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
                 { Source = new Uri("avares://Sunder.App/Styles/SunderShellStyles.axaml") });
             new ThemeManager(this).Initialize();

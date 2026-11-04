@@ -8,18 +8,22 @@ namespace Sunder.Package.Build.Rpc.Authoring;
 
 internal sealed partial class SunderRpcContractRestore
 {
-    internal async Task<JsonObject> SelectPlatformAsync(string contractId, string? registryOrigin, CancellationToken token, string? localCatalog = null)
+    internal async Task<JsonObject> SelectPlatformAsync(string contractId, string? registryOrigin, CancellationToken token, string? localCatalog = null,
+        string? versionRange = null)
     {
         if (!PackageId.TryParse(contractId, out _)) throw Error("platform-api.import-not-found", "A canonical platform contract ID is required.");
         if (registryOrigin is not null) SunderRpcAuthoringDocuments.RequireCanonicalRegistryOrigin(registryOrigin, "platform selection", AllowDevelopmentRegistryOrigin);
+        versionRange ??= ">=1.0.0";
+        if (!PackageVersionRange.TryParse(versionRange, out _))
+            throw Error("platform-api.catalog-version-unsupported", "A canonical catalog release range is required.");
         SunderVerifiedPlatformContractCatalog catalog;
         if (localCatalog is not null)
         {
             token.ThrowIfCancellationRequested();
             catalog = SunderPlatformContractCatalog.Verify(SunderRpcDescriptorFileReader.ReadStableBytes(
                 localCatalog, SunderRpcPlatformCatalogCache.MaximumBytes, "local platform catalog"));
-            if (!PackageVersionRange.IsSatisfiedBy(catalog.ReleaseVersion, SunderRpcPlatformCatalogCache.ToolRange))
-                throw Error("platform-api.catalog-version-unsupported", "The local catalog must be within the coordinated SDK/tooling line.");
+            if (!PackageVersionRange.IsSatisfiedBy(catalog.ReleaseVersion, versionRange))
+                throw Error("platform-api.catalog-version-unsupported", "The local catalog is outside the requested release range.");
         }
         else
         {
@@ -27,20 +31,20 @@ internal sealed partial class SunderRpcContractRestore
                 throw Error("platform-api.local-input-required", "A local platform selection requires an explicit catalog; no Registry is inferred.");
             var origin = new Uri(registryOrigin);
             using var metadata = SunderRpcAuthoringJson.ParseRegistryMetadata(await ReadAsync(new(origin,
-                "api/v1/platform-contracts/sunder.core/resolve?versionRange=" + Segment(SunderRpcPlatformCatalogCache.ToolRange)), null, 1_048_576, token,
+                "api/v1/platform-contracts/sunder.core/resolve?versionRange=" + Segment(versionRange)), null, 1_048_576, token,
                 notFoundCode: "platform-api.import-not-found"), 1_048_576);
             var release = Text(metadata.RootElement, "releaseVersion");
             if (!SemanticVersion.TryParse(release, out var version) || version.Prerelease is not null
-                || !PackageVersionRange.IsSatisfiedBy(release!, SunderRpcPlatformCatalogCache.ToolRange)
+                || !PackageVersionRange.IsSatisfiedBy(release!, versionRange)
                 || Text(metadata.RootElement, "lifecycleState") != "Supported")
-                throw Error("platform-api.catalog-invalid", "Resolution must select a supported stable catalog within the coordinated SDK/tooling line.");
+                throw Error("platform-api.catalog-invalid", "Resolution must select a supported stable catalog within the requested release range.");
             catalog = await ReadPlatformMetadataCatalogAsync(metadata.RootElement, origin, release!, [], token);
         }
         var descriptor = catalog.Contracts.SingleOrDefault(contract => contract.ContractId == contractId)
             ?? throw Error("platform-api.import-not-found", "The selected catalog does not contain the requested contract.");
         var selected = new JsonObject
         {
-            ["authorityKind"] = "platform", ["authorityId"] = "sunder.core", ["authorityReleaseRange"] = SunderRpcPlatformCatalogCache.ToolRange,
+            ["authorityKind"] = "platform", ["authorityId"] = "sunder.core", ["authorityReleaseRange"] = versionRange,
             ["includePrerelease"] = false, ["selectedAuthorityRelease"] = catalog.ReleaseVersion, ["selectedAuthorityContentIdentity"] = catalog.ContentIdentity,
             ["contractId"] = descriptor.ContractId, ["resolvedContractVersion"] = descriptor.Version, ["registryOrigin"] = registryOrigin,
             ["descriptorBytes"] = descriptor.GetCanonicalUtf8().Length, ["descriptorSha256"] = descriptor.Sha256, ["abiSha256"] = descriptor.AbiSha256, ["etag"] = "\"" + descriptor.Sha256 + "\"",

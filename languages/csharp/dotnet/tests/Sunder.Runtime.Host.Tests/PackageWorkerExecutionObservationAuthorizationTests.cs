@@ -137,7 +137,7 @@ public sealed class PackageWorkerExecutionObservationAuthorizationTests
             var target = new SunderPackageTargetManifest
             {
                 Role = "app", Rid = RuntimeInformation.RuntimeIdentifier, Kind = "web", EntryPoint = "index.html",
-                SdkVersion = "1.1.0", RequiredHostCapabilities = ["sdk-baseline-1-1.v1", "rpc.v1"], Views = [],
+                SdkVersion = "1.0.0", RequiredHostCapabilities = ["web-bridge.v1", "rpc.v1"], Views = [],
             };
             var manifest = new SunderPackageManifest
             {

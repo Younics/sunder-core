@@ -67,7 +67,7 @@ public sealed class SunderRpcOwnedContractCommandIntegrationTests
                 new XElement("RuntimeIdentifier", new XAttribute("Condition", "'$(RuntimeIdentifier)' == ''"), "$(NETCoreSdkRuntimeIdentifier)"),
                 new XElement("RuntimeIdentifiers", string.Join(';', SunderPackageFormat.SupportedRuntimeIdentifiers)),
                 new XElement("SunderPackageProject", "true"), new XElement("SunderPackagePrimaryProject", "true"),
-                new XElement("SunderSdkPackageVersion", "1.1.0"), new XElement("SunderContractCacheRoot", cache),
+                new XElement("SunderContractCacheRoot", cache),
                 new XElement("NuGetAudit", "false"), new XElement("RestoreSources", emptyFeed),
                 new XElement("SunderPackageBuildTaskAssembly", typeof(GenerateSunderRpcBindingsTask).Assembly.Location),
                 new XElement("SunderPackageBuildTaskSourceIsImmutable", "true"),

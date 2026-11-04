@@ -219,8 +219,6 @@ internal sealed class AppPackageGenerationBuilder(
                 .Select(package => package.Package.PackageId).ToHashSet(StringComparer.OrdinalIgnoreCase);
             await candidate.PrepareDataHandoffsAsync(currentGeneration.ActivationGroups.Concat(getActivationOwners?.Invoke() ?? []),
                 replacements, cancellationToken).ConfigureAwait(false);
-            candidate.Composition.AddSharedAssemblyProbeDirectories(
-                preparedPackages.Select(package => package.LibraryFolder));
             var preparedByPackageId = preparedPackages.ToDictionary(
                 static package => package.Package.PackageId,
                 StringComparer.OrdinalIgnoreCase);
@@ -348,7 +346,7 @@ internal sealed class AppPackageGenerationBuilder(
 
     private static bool SameTarget(PackageTargetDescriptor left, PackageTargetDescriptor right)
         => left.Role == right.Role && left.Rid == right.Rid && left.Kind == right.Kind && left.EntryPoint == right.EntryPoint
-            && left.TargetFramework == right.TargetFramework && left.SdkVersion == right.SdkVersion
+            && left.TargetFramework == right.TargetFramework && left.SdkVersion == right.SdkVersion && left.AvaloniaVersion == right.AvaloniaVersion
             && left.RequiredHostCapabilities.SequenceEqual(right.RequiredHostCapabilities, StringComparer.Ordinal)
             && left.Views.SequenceEqual(right.Views);
 

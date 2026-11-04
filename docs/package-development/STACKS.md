@@ -1,6 +1,6 @@
 # Stacks
 
-> **Applies to:** Sunder SDK `1.1.x`, `Sunder.Sdk.Stacks` `1.1.x`, Stack format V1, .NET 10, and Runtime protocol revision 1.
+> **Applies to:** Sunder SDK `1.0.0`, `Sunder.Sdk.Stacks` `1.0.0`, Stack format V1, .NET 10, and Runtime protocol revision 1.
 
 Stacks export selected setup from active packages into a portable archive and import it through a reviewable, contributor-owned plan. `Sunder.Sdk.Stacks` contains package-author contracts; Sunder Runtime owns archive validation, plan identity, and orchestration.
 

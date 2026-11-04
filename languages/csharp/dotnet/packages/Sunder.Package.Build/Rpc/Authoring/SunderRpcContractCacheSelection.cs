@@ -12,7 +12,6 @@ internal static class SunderRpcContractCacheSelection
         IReadOnlyDictionary<string, SunderVerifiedPlatformContractCatalog> PlatformCatalogs) Resolve(
         SunderRpcContractLock contractLock, string cacheRoot)
     {
-        SunderRpcPlatformCatalogCache.ValidateToolRange(contractLock);
         try
         {
             var catalogs = SunderRpcPlatformCatalogCache.Resolve(contractLock, cacheRoot);
