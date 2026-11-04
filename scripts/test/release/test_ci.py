@@ -56,6 +56,9 @@ class CiMetadataTests(unittest.TestCase):
                     patch.object(core_ci, "source", side_effect=record("source")), patch.object(core_ci, "module_inputs", side_effect=record("module")), \
                     patch.object(core_ci, "dotnet_tests", side_effect=record("tests")):
                 core_ci.validate("portable", scope=scope)
+                fixtures = [i for i, row in enumerate(calls) if row[1][0:1] == ("run-release-fixtures-with-results",)]
+                self.assertEqual(1, len(fixtures))
+                self.assertLess(fixtures[0], next(i for i, row in enumerate(calls) if row[1][0:1] == ("run-node-test-matrix-with-results",)))
                 self.assertLess(next(i for i, row in enumerate(calls) if row[1][0:1] == ("run-node-test-matrix-with-results",)),
                                 next(i for i, row in enumerate(calls) if row[0] == "source"))
                 self.assertEqual([("primary-lane", "dotnet-linux"), *[("scenario", name) for name in scenarios]],

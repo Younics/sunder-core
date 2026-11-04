@@ -25,6 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="PackedAppActivationProbe.cs" />
+    <None Include="PackedAppActivationProbe.cs" />
     <EmbeddedResource Include="..\Sunder.Sdk.Worker.Tests\TestSupport\WorkerHarness.cs" LogicalName="WorkerHarnessSources.WorkerHarness.cs" />
     <EmbeddedResource Include="..\Sunder.Sdk.Worker.Tests\TestSupport\AsyncByteStream.cs" LogicalName="WorkerHarnessSources.AsyncByteStream.cs" />
     <None Include="..\..\..\..\..\specs\generated-output\v1\conformance\documents.json"
@@ -44,5 +46,16 @@
     <Copy SourceFiles="@(_EditorToolOwner->'%(RootDir)%(Directory)Sunder.Package.Build.Editor.dll')"
           DestinationFiles="$(TargetDir)Sunder.Package.Build.Editor.dll" SkipUnchangedFiles="true" />
     <ItemGroup><FileWrites Include="$(TargetDir)Sunder.Package.Build.Editor.dll" /></ItemGroup>
+  </Target>
+  <Target Name="BuildPackedAppActivationProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="PackedAppActivationProbe.cs;@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)packed-app-probe/PackedAppActivationProbe.dll">
+    <MakeDir Directories="$(TargetDir)packed-app-probe" />
+    <Csc Sources="PackedAppActivationProbe.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)packed-app-probe/PackedAppActivationProbe.dll"
+         TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+    <ItemGroup><FileWrites Include="$(TargetDir)packed-app-probe/PackedAppActivationProbe.dll" /></ItemGroup>
   </Target>
 </Project>

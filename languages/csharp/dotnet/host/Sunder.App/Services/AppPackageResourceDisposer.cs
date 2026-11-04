@@ -42,6 +42,8 @@ internal static class AppPackageResourceDisposer
     {
         try
         {
+            // This initiates cooperative unloading. File reclamation separately
+            // observes collection before releasing the projection lease.
             loadContext.Unload();
             return true;
         }

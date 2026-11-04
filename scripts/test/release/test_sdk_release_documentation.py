@@ -178,30 +178,35 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
             self.assertEqual(self.files[other], (self.root / other).read_bytes())
 
     def test_local_and_non_sdk_ci_pack_keep_existing_development_behavior(self):
-        for ref in ("", "refs/heads/main", "refs/tags/cli/v1.2.3"):
-            with self.subTest(ref=ref), patch.dict(os.environ, GITHUB_REF=ref), patch.object(d, "Source") as source, \
+        for env in ({},
+                    dict(GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
+                         GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-ci.yml@refs/heads/main"),
+                    dict(GITHUB_REF="refs/tags/cli/v1.2.3", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
+                         GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-cli-release.yml@refs/tags/cli/v1.2.3")):
+            with self.subTest(env=env), patch.dict(os.environ, env, clear=True), patch.object(d, "Source") as source, \
                  patch.object(d.subprocess, "run") as run:
                 d.pack(self.root, COMMIT, ["existing-pack-command"])
                 source.assert_not_called()
                 run.assert_called_once_with(["existing-pack-command"], cwd=self.root, check=True)
         self.assert_restored()
 
-    def test_tag_pack_uses_exact_source_then_restores_inputs_when_command_fails(self):
+    def test_release_pack_uses_exact_source_then_restores_inputs_when_command_fails(self):
         env = dict(GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
                    GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/heads/main")
         def failed_command(*args, **kwargs):
             self.assertNotIn(b"/main/", (self.root / NODE / "sdk/README.md").read_bytes())
             raise subprocess.CalledProcessError(2, args[0])
-        with patch.dict(os.environ, env), patch.object(d.subprocess, "run", side_effect=failed_command):
+        with patch.dict(os.environ, env, clear=True), patch.object(d.subprocess, "run", side_effect=failed_command):
             with self.assertRaises(subprocess.CalledProcessError):
                 d.pack(self.root, COMMIT, ["existing-pack-command"])
         self.assert_restored()
-        with patch.dict(os.environ, dict(env, GITHUB_EVENT_NAME="workflow_dispatch")), patch.object(d.subprocess, "run") as run:
+        with patch.dict(os.environ, dict(env, GITHUB_EVENT_NAME="workflow_dispatch"), clear=True), patch.object(d.subprocess, "run") as run:
             d.pack(self.root, COMMIT, ["existing-pack-command"])
             run.assert_called_once()
         self.assert_restored()
-        for changed in (dict(GITHUB_SHA="b" * 40), dict(GITHUB_REF="refs/tags/sdk/v9.9.9"), dict(GITHUB_EVENT_NAME="pull_request")):
-            with self.subTest(changed=changed), patch.dict(os.environ, dict(env, **changed)), patch.object(d.subprocess, "run") as run:
+        for changed in (dict(GITHUB_SHA="b" * 40), dict(GITHUB_REF="refs/tags/sdk/v9.9.9"), dict(GITHUB_EVENT_NAME="pull_request"),
+                        dict(GITHUB_REPOSITORY="Other/sunder-core")):
+            with self.subTest(changed=changed), patch.dict(os.environ, dict(env, **changed), clear=True), patch.object(d.subprocess, "run") as run:
                 with self.assertRaises(ValueError):
                     d.pack(self.root, COMMIT, ["existing-pack-command"])
                 run.assert_not_called()

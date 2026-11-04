@@ -52,11 +52,16 @@ internal sealed partial class AppProcessPolicySessions(RuntimePackagePaths paths
             foreach (var file in files)
             {
                 PackageStorePathGuard.EnsureSafe(file, paths.RootPath);
-                await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-                if (stream.Length is <= 0 or > 1024 * 1024) throw Required();
-                var bytes = new byte[(int)stream.Length]; await stream.ReadExactlyAsync(bytes, token);
-                if (stream.ReadByte() != -1) throw Required();
-                var record = JsonSerializer.Deserialize<AppPolicySessionFile>(bytes, Json) ?? throw Required();
+                AppPolicySessionFile record;
+                await using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+                {
+                    if (stream.Length is <= 0 or > 1024 * 1024) throw Required();
+                    var bytes = new byte[(int)stream.Length]; await stream.ReadExactlyAsync(bytes, token);
+                    if (stream.ReadByte() != -1) throw Required();
+                    record = JsonSerializer.Deserialize<AppPolicySessionFile>(bytes, Json) ?? throw Required();
+                }
+                // Recovery can replace or delete this document. Windows replacement
+                // requires its read handle to be closed, even with FileShare.Delete.
                 ValidateRecord(record);
                 if (file != PathFor(record.SessionId)) throw Required();
                 IAppPolicyProcessHandle? process = null;

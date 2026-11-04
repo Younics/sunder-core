@@ -9,7 +9,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class AppBridgeIsolationTests
+public sealed partial class AppBridgeIsolationTests
 {
     [Fact]
     public void OptionalHostAssembliesBypassPackageContextualReflection()

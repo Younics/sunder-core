@@ -227,6 +227,8 @@ def validate(profile, *, rid=None, scope="all"):
             if "ci" in components:
                 oracle("check-core-test-policy")
                 run(sys.executable, "-B", ROOT / "scripts/test/check-markdown-links.py", ROOT)
+            if "release-fixtures.junit.xml" in selected["reports"]:
+                oracle("run-release-fixtures-with-results", "--scope", scope, "--results-directory", output / "scripts")
             if "node" in selected["lanes"]:
                 if "sdk" in components: run("npm", "ci", "--prefix", NODE)
                 oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "node")
@@ -236,8 +238,6 @@ def validate(profile, *, rid=None, scope="all"):
             source(scope, work)
             oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "dotnet-linux")
             dotnet_tests("primary-lane", "dotnet-linux", scope=scope, directory="dotnet")
-            if "release-fixtures.junit.xml" in selected["reports"]:
-                oracle("run-release-fixtures-with-results", "--scope", scope, "--results-directory", output / "scripts")
             if "interop" in selected["scenarios"]["portable"]: module_inputs()
             for scenario in selected["scenarios"]["portable"]: dotnet_tests("scenario", scenario, scope=scope)
         elif profile == "candidate":

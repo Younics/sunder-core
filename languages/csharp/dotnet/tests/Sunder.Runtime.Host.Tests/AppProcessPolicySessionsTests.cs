@@ -56,8 +56,12 @@ public sealed partial class AppProcessPolicySessionsTests
         fixture.Policy.Clock.Advance(TimeSpan.FromSeconds(5)); await fixture.Sessions.EnforceAsync(default); Assert.Equal(1, fixture.Process.Terminations);
     }
 
-    [Fact]
-    public async Task PermitIsRecordedDurablyBeforeReturningAndSurvivesHostRestart()
+    [Theory]
+    [Trait("Capability", "Process")]
+    [InlineData("alive")]
+    [InlineData("unproven")]
+    [InlineData("exited")]
+    public async Task PermitIsRecordedDurablyBeforeReturningAndSurvivesHostRestart(string processState)
     {
         using var fixture = new Fixture();
         await fixture.Policy.RefreshAsync();
@@ -66,11 +70,35 @@ public sealed partial class AppProcessPolicySessionsTests
         Assert.True(permit.Allowed);
         var status = await fixture.Sessions.HeartbeatAsync(fixture.Session(session), fixture.Peer, default);
         Assert.Single(status.LoadedPackages);
-        using var restarted = fixture.CreateSessions(new RuntimeProtocolDescriptor());
+        var directory = Path.Combine(fixture.Policy.Paths.RootPath, RuntimeV1StateDescriptor.AppPolicySessionsDirectory);
+        var path = Assert.Single(Directory.EnumerateFiles(directory, "*.json"));
+        fixture.Process.State = processState switch
+        {
+            "alive" => AppPolicyProcessState.Alive,
+            "unproven" => AppPolicyProcessState.Unproven,
+            _ => AppPolicyProcessState.ExitProven,
+        };
+        var protocol = new RuntimeProtocolDescriptor();
+        using var restarted = fixture.CreateSessions(protocol);
         await restarted.InitializeAsync(default);
+        if (processState == "exited")
+        {
+            Assert.Empty(restarted.CapturePolicySubjects());
+            Assert.Empty(Directory.EnumerateFiles(directory));
+            fixture.Process.State = AppPolicyProcessState.Alive;
+            var replacement = await restarted.OpenAsync(new(fixture.Identity with { RuntimeInstanceId = protocol.RuntimeInstanceId }), fixture.Peer, default);
+            Assert.NotEqual(session.SessionId, replacement.SessionId);
+            Assert.Equal(0, fixture.Process.Terminations);
+            return;
+        }
+        using var persisted = JsonDocument.Parse(await File.ReadAllBytesAsync(path));
+        Assert.Equal(RuntimeAppPolicySessionStates.ShutdownRequested, persisted.RootElement.GetProperty("state").GetString());
+        Assert.Single(restarted.CapturePolicySubjects());
+        Assert.True((await restarted.GetStatusAsync(session.SessionId, fixture.Peer, default)).ShutdownRequired);
         fixture.Policy.Clock.Advance(TimeSpan.FromSeconds(5));
         await restarted.EnforceAsync(default);
         Assert.Equal(1, fixture.Process.Terminations);
+        Assert.True(File.Exists(path));
     }
 
     [Theory]

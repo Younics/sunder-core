@@ -57,7 +57,7 @@ class SdkCompatibilityExecutionTests(unittest.TestCase):
             prefix, architecture = rid.split("-")
             system = {"win": "Windows", "linux": "Linux", "osx": "Darwin"}[prefix]
             runner = {"win": "Windows", "linux": "Linux", "osx": "macOS"}[prefix]
-            with self.subTest(rid=rid), patch.dict(os.environ, dict(environment, RUNNER_OS=runner, RUNNER_ARCH=architecture.upper())), \
+            with self.subTest(rid=rid), patch.dict(os.environ, dict(environment, RUNNER_OS=runner, RUNNER_ARCH=architecture.upper()), clear=True), \
                  patch.object(e.platform, "system", return_value=system), patch.object(e.platform, "machine", return_value="x86_64" if architecture == "x64" else "arm64"):
                 self.assertEqual(rid, e.lane_context(rid, "1.1.0")["actualRid"])
                 with self.assertRaisesRegex(ValueError, "actual OS/RID"):

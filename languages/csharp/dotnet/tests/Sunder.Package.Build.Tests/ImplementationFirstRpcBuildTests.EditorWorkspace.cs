@@ -13,9 +13,11 @@ public sealed partial class ImplementationFirstRpcBuildTests
     [InlineData("packed")]
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
-    public async Task SingleProject_ActualWorkspaceLoadsUnbuiltReferencesAndRefreshesBothGenerators(string sdkMode)
+    public Task SingleProject_ActualWorkspaceLoadsUnbuiltReferencesAndRefreshesBothGenerators(string sdkMode)
+        => TemporaryDirectoryScope.RunAsync("sunder-live-editor-workspace", scope => RunEditorWorkspaceAsync(scope, sdkMode));
+
+    private static async Task RunEditorWorkspaceAsync(TemporaryDirectoryScope scope, string sdkMode)
     {
-        await using var scope = TemporaryDirectoryScope.Create("sunder-live-editor-workspace");
         var root = ResolvePhysicalTemporaryPath(scope.CreateDirectory("fixture"));
         var sourceSdk = sdkMode == "source";
         var packedVersion = sdkMode == "packed" ? "1.1.0-editor-workspace.g" + Guid.NewGuid().ToString("N") : null;
@@ -100,6 +102,8 @@ public sealed partial class ImplementationFirstRpcBuildTests
             Assert.True(File.Exists(Path.Combine(packages!, "sunder.sdk.avalonia", packedVersion, "lib/net10.0/Sunder.App.Bridge.dll")));
             var appTarget = Assert.Single(validation.Manifest.Targets, target => target!.Role == "app")!;
             await ActivatePackedAppAsync(Path.Combine(appPayload, appTarget.EntryPoint!), appPayload);
+            Directory.Delete(appPayload, recursive: true);
+            Assert.False(Directory.Exists(appPayload));
             Assert.DoesNotContain(Directory.EnumerateFiles(scope.GetPath("extracted"), "*.dll", SearchOption.AllDirectories),
                 path => Path.GetFileName(path).StartsWith("Sunder.Package.Build", StringComparison.Ordinal));
             var editorRoot = Path.Combine(package, "obj/Debug/net10.0/sunder-design-time");

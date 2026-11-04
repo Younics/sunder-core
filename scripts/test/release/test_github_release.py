@@ -84,7 +84,7 @@ class GitHubReleaseTests(unittest.TestCase):
         return patch.dict(os.environ, dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
             GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/cli/v1.0.0", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2",
             GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-cli-release.yml@refs/tags/cli/v1.0.0",
-            GITHUB_OUTPUT="", **changes))
+            GITHUB_OUTPUT="", **changes), clear=True)
 
     def test_creation_lost_response_reuses_the_same_numeric_draft(self):
         store = MemoryRelease(); store.exists = False
@@ -156,7 +156,7 @@ class GitHubReleaseTests(unittest.TestCase):
                 store = MemoryRelease(); store.tag = "sdk/v1.1.0"
                 with patch.dict(os.environ, dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
                      GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/sdk/v1.1.0",
-                     GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/tags/sdk/v1.1.0")), \
+                     GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/tags/sdk/v1.1.0"), clear=True), \
                      patch.object(release.subprocess, "run"):
                     with self.assertRaisesRegex(ValueError, "individually"):
                         release.core_stage(store, Path(directory), "sdk", "stable", finalize=finalize)

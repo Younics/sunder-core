@@ -228,7 +228,8 @@ internal sealed class AppPackageUnloadCoordinator(
             {
                 try
                 {
-                    await projectionLease.DisposeAsync().ConfigureAwait(false);
+                    if (loadContext is null) await projectionLease.DisposeAsync().ConfigureAwait(false);
+                    else AppPackageFileReclamation.Defer(loadContext, projectionLease, folder: null);
                 }
                 catch (Exception exception) when (AppPackageUiFaultPolicy.IsRecoverable(exception))
                 {
@@ -250,7 +251,8 @@ internal sealed class AppPackageUnloadCoordinator(
         }
         if (cleanupProven && packageFolder is not null && projectionLease is null)
         {
-            AppPackageSourcePreparer.TryDeleteDirectory(packageFolder);
+            if (loadContext is null) AppPackageSourcePreparer.TryDeleteDirectory(packageFolder);
+            else AppPackageFileReclamation.Defer(loadContext, projection: null, packageFolder);
         }
         // Closing a transport is not activation retirement. Only a proven local
         // drain may acknowledge active use; loaded security remains process-owned.

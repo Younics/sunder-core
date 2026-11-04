@@ -180,13 +180,14 @@ internal sealed class AppPackageGeneration(
 }
 
 // Presentation directories can contain several independent package activations.
-// Keep their bytes until the last activation born there is actually retired.
+// Keep their bytes until the last activation born there retires and its loaded
+// contexts release the child folders.
 internal sealed class AppPackageGenerationDirectory(string folder)
 {
     private int _references = 1;
     internal AppPackageGenerationDirectory Retain() { Interlocked.Increment(ref _references); return this; }
     internal void Release()
     {
-        if (Interlocked.Decrement(ref _references) == 0) AppPackageSourcePreparer.TryDeleteDirectory(folder);
+        if (Interlocked.Decrement(ref _references) == 0) AppPackageFileReclamation.ReleaseDirectory(folder);
     }
 }

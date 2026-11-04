@@ -128,7 +128,6 @@ internal static class PackageManifestFixture
     internal static MSBuildTaskItem[] TestAssemblyDynamicAccessAcknowledgements()
         =>
         [
-            new("Sunder.Package.Build.Tests.ImplementationFirstRpcBuildTests.ActivatePackedAppAsync"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_GeneratesRealSixMethodProviderAndPreservesSemanticContentBehavior"),
             new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_TemplateUsesSelectedImportAndGeneratedRegistrationWithoutPrivateBootstrap"),
