@@ -52,6 +52,9 @@
     }
   ],
   "defaultDotnetLane": "dotnet-linux",
+  "nativePartitions": [
+    { "name": "package-build", "component": "sdk", "project": "Sunder.Package.Build.Tests", "shards": 3 }
+  ],
   "inertDotnetSources": [
     {
       "source": "languages/csharp/dotnet/tests/Sunder.Sdk.PublicApi.Tests/StackContributorRpcMigrationBaselineTests.cs",

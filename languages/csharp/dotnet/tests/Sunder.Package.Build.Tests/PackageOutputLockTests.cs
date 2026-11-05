@@ -142,8 +142,7 @@ public sealed class PackageOutputLockTests
         var heartbeatPath = Path.Combine(output + ".sunder-output.lock", "owner.json");
         File.SetLastWriteTimeUtc(heartbeatPath, DateTime.UtcNow.AddMinutes(-10));
         using var waiter = OutputLockContenderBarrier<IDisposable>.Start(
-            output,
-            () => AcquireGeneratedOutputLock(output),
+            attempting => GeneratedOutputLock.Acquire([output], waitingForOutput: _ => attempting()),
             () => $"lock={output + GeneratedOutputLock.LockSuffix}; owner={File.ReadAllText(heartbeatPath)}");
         await waiter.WaitForAttemptAsync(TimeSpan.FromSeconds(5));
         await waiter.AssertContendedAsync();
@@ -166,9 +165,10 @@ public sealed class PackageOutputLockTests
         var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
         var release = new[] { new ManualResetEventSlim(), new ManualResetEventSlim() };
         var reclaimers = Enumerable.Range(0, 2).Select(index =>
-            OutputLockContenderBarrier<object?>.Start(output, () =>
+            OutputLockContenderBarrier<object?>.Start(attempting =>
             {
-                using var outputLock = AcquireGeneratedOutputLock(output);
+                using var outputLock = GeneratedOutputLock.Acquire([output], waitingForOutput: _ => attempting());
+                attempting(); // The winner can acquire without having to wait.
                 order.Enqueue(index);
                 acquired[index].TrySetResult();
                 release[index].Wait(TimeSpan.FromSeconds(10));
@@ -258,8 +258,7 @@ public sealed class PackageOutputLockTests
                 ownerDocument.RootElement.GetProperty("processMarkerPath").GetString()
                 ?? throw new InvalidDataException("Node lock owner omitted its process marker path."));
             reclaimer = OutputLockContenderBarrier<IDisposable>.Start(
-                output,
-                () => GeneratedOutputLock.Acquire([output], TimeSpan.FromSeconds(5)),
+                attempting => GeneratedOutputLock.Acquire([output], TimeSpan.FromSeconds(5), waitingForOutput: _ => attempting()),
                 () => $"nodePid={crashedNode.Id}; lock={output + GeneratedOutputLock.LockSuffix}; {crashedNode.Diagnostics}");
             await reclaimer.WaitForAttemptAsync(TimeSpan.FromSeconds(5));
             await reclaimer.AssertContendedAsync();
@@ -386,17 +385,16 @@ public sealed class PackageOutputLockTests
             documents.GetProperty("transaction")));
     }
 
-    [Fact]
+    [MacOsFact]
     public void SharedOutputLock_MacOsCaseAliasesFailInsteadOfSelfContending()
     {
-        if (!OperatingSystem.IsMacOS()) return;
         var root = CreateTempDirectory();
         try
         {
             var output = Path.Combine(root, "CaseSensitiveProbe");
             var alias = Path.Combine(root, "casesensitiveprobe");
             Directory.CreateDirectory(output);
-            if (!Directory.Exists(alias)) return;
+            Assert.True(Directory.Exists(alias), "The macOS case-alias fixture requires a case-insensitive temporary filesystem.");
 
             var exception = Assert.Throws<InvalidDataException>(() =>
                 GeneratedOutputLock.Acquire([output], [alias], TimeSpan.FromMilliseconds(250)));
@@ -408,10 +406,9 @@ public sealed class PackageOutputLockTests
         }
     }
 
-    [Fact]
+    [MacOsFact]
     public void SharedOutputLock_MacOsSystemAliasAndPhysicalPathDeduplicate()
     {
-        if (!OperatingSystem.IsMacOS()) return;
         var root = CreateTempDirectory();
         try
         {
@@ -429,7 +426,7 @@ public sealed class PackageOutputLockTests
             }
             else
             {
-                return;
+                throw new InvalidOperationException($"The macOS system-alias fixture requires a /var temporary directory: {root}");
             }
 
             using var outputLock = GeneratedOutputLock.Acquire(

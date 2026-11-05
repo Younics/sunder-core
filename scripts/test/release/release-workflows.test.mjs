@@ -164,7 +164,12 @@ test("release reuses ordinary native validation and source-derived catalog expor
 test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
   const source = await workflow("host-validation");
   const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  official-runtimes:"));
-  assert.match(platform, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.native\) \}\}/u);
+  assert.match(platform, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.platform\) \}\}/u);
+  assert.match(platform, /max-parallel: 6/u);
+  assert.match(platform, /--partition "\$NATIVE_PARTITION"/u);
+  for (const artifact of ["sunder-process-preflight", "sunder-platform"]) {
+    assert.ok(platform.includes(`${artifact}-${'${{ inputs.scope }}'}-${'${{ matrix.rid }}'}${'${{ matrix.artifact_suffix }}'}`));
+  }
   const preflight = workflowStep(platform, "Verify owned test process cleanup on the native OS");
   assert.match(preflight, /id: process_preflight/u);
   assert.match(preflight, /run-node-tests-with-results\.mjs --results-directory artifacts\/process-preflight\s+node-process-preflight scripts\/test-oracles\/owned-test-process\.test\.mjs/u);

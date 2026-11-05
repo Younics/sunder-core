@@ -7,6 +7,7 @@ The setup action and `install-node.sh` consume these owners.
 python3 -B scripts/ci/core_ci.py portable --scope sdk --list
 python3 -B scripts/ci/core_ci.py portable --scope sdk
 python3 -B scripts/ci/core_ci.py platform --scope sdk
+python3 -B scripts/ci/core_ci.py platform --scope sdk --partition package-build-1
 python3 -B scripts/ci/core_ci.py official --scope sdk
 python3 -B scripts/ci/core_ci.py portable --scope repository
 python3 -B scripts/ci/core_ci.py rehearse --work artifacts/rehearsal
@@ -26,6 +27,15 @@ preparation. Repository script checks use Node's built-ins; SDK validation insta
 the npm development dependencies. `platform` runs the current OS's selected process tests and, for App
 scopes, bundled-output checks. `official` requires a Host consumer scope and
 packs and launches the current RID's Worker against actual vendor runtimes.
+Hosted native validation uses `main` plus the policy-owned Package.Build method
+shards on every RID, with independent checkouts and at most six concurrent jobs.
+`main` owns the other projects and App/Windows side scenarios. Partition reports
+have distinct paths and artifact suffixes; the aggregate requires all of them and
+rechecks their actual TRX selections. Omitting `--partition` runs the full local lane.
+
+Interop preparation publishes `SUNDER_NODE_MODULE_WORKSPACE_PATH` together with the
+archive and current-RID leaf. Node caller compilation resolves its SDK, fixture and
+generated RPC inputs from that producer workspace throughout consumer execution.
 
 `rehearse` uses the SDK scope, builds all authored developer-package versions, invokes the production
 NuGet/npm pack and archive verifiers, assembles a feed, builds generated templates
@@ -47,7 +57,8 @@ on macOS so named-pipe socket paths fit the platform's length limit.
 CI commands write reports under `artifacts/test-results/<scope>/<lane-or-scenario>`;
 ordinary reports replace their owning selection's previous output. Hosted reports expire
 after 14 days; release handoffs retain their release-specific policies. Large VSTest
-logs and crash dumps require `SUNDER_TEST_DIAGNOSTICS=1`; process receipts, stdout,
+logs and crash dumps require `SUNDER_TEST_DIAGNOSTICS=1` (enabled for hosted
+Package.Build shards); process receipts, stdout,
 stderr, TRX and hang watchdogs remain enabled.
 Restore/build binlogs and incomplete-to-final profile sidecars preserve failures before
 test discovery. Aggregate reporting runs after failed or cancelled producers and retains

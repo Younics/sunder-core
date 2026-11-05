@@ -14,7 +14,8 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
     [ExternalArtifactFact(
         "SUNDER_REQUIRE_NODE_MODULE_INTEROP",
         "SUNDER_NODE_MODULE_PACKAGE_PATH",
-        "SUNDER_NODE_MODULE_LEAF_PATH")]
+        "SUNDER_NODE_MODULE_LEAF_PATH",
+        "SUNDER_NODE_MODULE_WORKSPACE_PATH")]
     [Trait("Category", "ExternalArtifact")]
     public async Task DotNetToNode_RealRuntimeHostRunsRuntimeBackedModuleUnaryStreamDataFaultAndShutdown()
     {
@@ -112,13 +113,14 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
     [ExternalArtifactFact(
         "SUNDER_REQUIRE_NODE_MODULE_INTEROP",
         "SUNDER_NODE_MODULE_PACKAGE_PATH",
-        "SUNDER_NODE_MODULE_LEAF_PATH")]
+        "SUNDER_NODE_MODULE_LEAF_PATH",
+        "SUNDER_NODE_MODULE_WORKSPACE_PATH")]
     [Trait("Category", "ExternalArtifact")]
     public async Task NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker()
     {
         var configured = GetNodeModuleInputs();
         Assert.NotNull(configured);
-        var (_, leafPath) = configured.Value;
+        var (_, nodePackage) = configured.Value;
         var node = Node24Availability.Current;
         Assert.True(node.IsAvailable, node.UnavailableReason);
         var nodeReceipt = await executionRuntimes.EnsureNodeAsync("24.21.0");
@@ -142,9 +144,15 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         try
         {
             await host.InitializeAsync();
+            // A warm checkout must never substitute for a missing producer input.
+            var missingProducer = nodePackage with { WorkspaceRoot = Path.Combine(root, "unprepared-node") };
+            var missingInput = await Record.ExceptionAsync(() => CurrentRidRuntimeHostTestSupport.CreateNodeCallerAsync(
+                node, missingProducer, Path.Combine(root, "invalid-node-caller")));
+            Assert.NotNull(missingInput);
+            Assert.Contains(missingProducer.WorkspaceRoot, missingInput.Message, StringComparison.Ordinal);
             var nodeCaller = await CurrentRidRuntimeHostTestSupport.CreateNodeCallerAsync(
                 node,
-                leafPath,
+                nodePackage,
                 Path.Combine(root, "node-caller"));
             var dotnetProvider = GetInteropWorkerDevPackage();
             await host.GrantRuntimeRpcPermissionsAsync(nodeCaller);
@@ -192,18 +200,22 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         }
     }
 
-    private static (string ArchivePath, string LeafPath)? GetNodeModuleInputs()
+    private static (string ArchivePath, CurrentRidRuntimeHostTestSupport.NodePackageInputs Package)? GetNodeModuleInputs()
     {
         var archivePath = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_PACKAGE_PATH");
         var leafPath = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_LEAF_PATH");
-        if (string.IsNullOrWhiteSpace(archivePath) && string.IsNullOrWhiteSpace(leafPath)) return null;
+        var nodeRoot = Environment.GetEnvironmentVariable("SUNDER_NODE_MODULE_WORKSPACE_PATH");
+        if (string.IsNullOrWhiteSpace(archivePath) && string.IsNullOrWhiteSpace(leafPath) && string.IsNullOrWhiteSpace(nodeRoot)) return null;
         Assert.False(string.IsNullOrWhiteSpace(archivePath));
         Assert.False(string.IsNullOrWhiteSpace(leafPath));
+        Assert.False(string.IsNullOrWhiteSpace(nodeRoot));
         archivePath = Path.GetFullPath(archivePath!);
         leafPath = Path.GetFullPath(leafPath!);
+        nodeRoot = Path.GetFullPath(nodeRoot!);
         Assert.True(File.Exists(archivePath), $"Node module archive does not exist: {archivePath}");
         Assert.True(Directory.Exists(leafPath), $"Node module leaf does not exist: {leafPath}");
-        return (archivePath, leafPath);
+        Assert.True(Directory.Exists(nodeRoot), $"Node producer workspace does not exist: {nodeRoot}");
+        return (archivePath, new(nodeRoot, leafPath));
     }
 
     private static JsonDocument ReadCorpus()

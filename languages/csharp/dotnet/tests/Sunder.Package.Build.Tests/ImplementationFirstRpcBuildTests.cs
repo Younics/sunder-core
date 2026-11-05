@@ -483,25 +483,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
         startInfo.Environment["AVALONIA_TELEMETRY_OPTOUT"] = "1";
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);
 
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start dotnet.");
-        var standardOutput = process.StandardOutput.ReadToEndAsync();
-        var standardError = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(15));
-        try
-        {
-            await process.WaitForExitAsync(timeout.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-                await process.WaitForExitAsync();
-            }
-            return new(-1, await standardOutput, await standardError + "dotnet timed out.");
-        }
-        return new(process.ExitCode, await standardOutput, await standardError);
+        await using var process = CapturedProcess.Start(startInfo);
+        var result = await process.WaitForExitAsync(TimeSpan.FromMinutes(15));
+        return new(result.ExitCode, result.StandardOutput, result.StandardError);
     }
 
     private static async Task WaitForFileAsync(string path, Task<ProcessResult> process)

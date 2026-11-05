@@ -66,6 +66,7 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
     public string IntermediateOutputPath { get; set; } = "obj";
 
     internal Action? BeforeArchivePublication { get; set; }
+    internal Action<string>? WaitingForBaselineLease { get; set; }
     internal Action<SunderPackageManifest>? QualifiedPrebuiltValidation { get; set; }
     internal CancellationToken CancellationToken { get; set; }
 
@@ -165,7 +166,8 @@ public sealed class PackSunderPackageTask : Microsoft.Build.Utilities.Task
                 {
                     return false;
                 }
-                using var baselineLock = contractPlan.BaselinePath is null ? null : GeneratedOutputLock.Acquire([contractPlan.BaselinePath]);
+                using var baselineLock = contractPlan.BaselinePath is null ? null : GeneratedOutputLock.Acquire(
+                    [contractPlan.BaselinePath], waitingForOutput: WaitingForBaselineLease);
                 contractPlan.Inputs.Verify();
                 if (contractPlan.BaselinePath is not null)
                     GenerateSunderRpcBindingsTask.VerifyExpectedBaseline(ProjectDirectory, contractPlan.BaselinePath, contractPlan.BaselineBytes);

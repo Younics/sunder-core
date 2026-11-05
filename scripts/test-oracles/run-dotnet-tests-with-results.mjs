@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
 import { selectScenario } from "./ci-scenarios.mjs";
+import { selectNativePartition } from "./native-test-partitions.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
 import { dotnetTestArguments, dotnetTestBudget } from "./dotnet-test-command.mjs";
 import { maximumProcessTimeoutMilliseconds, runOwnedTestProcess } from "./run-owned-test-process.mjs";
@@ -10,9 +11,11 @@ import { maximumProcessTimeoutMilliseconds, runOwnedTestProcess } from "./run-ow
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const requestedArguments = process.argv.slice(2);
 const scope = takeOption("--scope") ?? "all";
-const { policy, declarations, allDeclarations } = loadCoreTestModel(repositoryRoot, undefined, scope);
+const model = loadCoreTestModel(repositoryRoot, undefined, scope);
+const { policy, declarations, allDeclarations } = model;
 const primaryLane = takeOption("--primary-lane");
 const scenarioName = takeOption("--scenario");
+const partitionName = takeOption("--native-partition");
 const project = takeOption("--project");
 const timeoutOverride = takeOption("--timeout-ms");
 const timeoutMilliseconds = timeoutOverride === undefined ? undefined : Number(timeoutOverride);
@@ -22,7 +25,8 @@ if (timeoutMilliseconds !== undefined && (!Number.isSafeInteger(timeoutMilliseco
 const list = takeFlag("--list");
 const resultRoot = scope === "all" ? "artifacts/test-results" : `artifacts/test-results/${scope}`;
 const requestedOutputDirectory = takeOption("--results-directory")
-  ?? (scenarioName !== undefined ? `${resultRoot}/scenarios/${scenarioName}`
+  ?? (partitionName !== undefined ? `${resultRoot}/platform/${partitionName}`
+    : scenarioName !== undefined ? `${resultRoot}/scenarios/${scenarioName}`
     : project === undefined ? `${resultRoot}/dotnet` : `${resultRoot}/local/${project}/${primaryLane ?? "full"}`);
 const build = takeFlag("--build");
 if (requestedArguments.some((argument) => ["--filter", "--logger", "-l", "--results-directory", "-m", "--maxcpucount"].includes(argument))) {
@@ -32,6 +36,9 @@ const allDotnetTests = declarations.filter((test) => test.framework === "dotnet"
 const operatingSystem = currentOperatingSystem();
 if (scenarioName !== undefined && (primaryLane !== undefined || project !== undefined)) {
   throw new Error("Select a scenario or a project/lane, not both.");
+}
+if (partitionName !== undefined && (primaryLane !== undefined || project !== undefined || scenarioName !== undefined)) {
+  throw new Error("Select a native partition or a project/lane/scenario, not both.");
 }
 const scenario = scenarioName === undefined ? undefined : selectScenario(scenarioName, declarations, operatingSystem);
 if (project !== undefined && !allDotnetTests.some((test) => test.project === project)) {
@@ -43,20 +50,24 @@ if (primaryLane !== undefined && !policy.primaryLanes.includes(primaryLane)) {
 const laneTests = primaryLane === undefined
   ? allDotnetTests
   : allDotnetTests.filter((test) => test.primaryLane === primaryLane && test.operatingSystems.includes(operatingSystem));
-const selectedTests = scenario?.tests ?? (project === undefined ? laneTests : laneTests.filter((test) => test.project === project));
+const selectedTests = partitionName === undefined
+  ? scenario?.tests ?? (project === undefined ? laneTests : laneTests.filter((test) => test.project === project))
+  : selectNativePartition(model, partitionName, operatingSystem);
 if (selectedTests.length === 0) {
   throw new Error(`Selection project='${project ?? "all"}', lane='${primaryLane ?? "all"}' has no runnable .NET tests on ${operatingSystem}.`);
 }
 if (list) {
-  const output = `${JSON.stringify({ scope, project: project ?? "all", primaryLane: primaryLane ?? "all", scenario: scenarioName, operatingSystem,
+  const output = `${JSON.stringify({ scope, project: project ?? "all", primaryLane: primaryLane ?? "all", scenario: scenarioName,
+    nativePartition: partitionName, operatingSystem,
     declarations: selectedTests.map((test) => test.id),
     projects: [...new Set(selectedTests.map((test) => test.project))].sort().map((name) => ({ project: name,
+      filter: selectedProjectFilter(name),
       ...dotnetTestBudget(name, selectedTests), ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }) })) }, null, 2)}\n`;
   await new Promise((resolve, reject) => process.stdout.write(output, (error) => error ? reject(error) : resolve()));
   process.exit(0);
 }
 const outputDirectory = resolve(repositoryRoot, requestedOutputDirectory);
-const cleanDirectory = project === undefined && primaryLane === undefined && scenarioName === undefined && requestedOutputDirectory === `${resultRoot}/dotnet`
+const cleanDirectory = project === undefined && primaryLane === undefined && scenarioName === undefined && partitionName === undefined && requestedOutputDirectory === `${resultRoot}/dotnet`
   ? dirname(outputDirectory)
   : outputDirectory;
 rmSync(cleanDirectory, { recursive: true, force: true });
@@ -70,8 +81,7 @@ Object.assign(process.env, scenario?.environment);
 if (process.platform === "linux") process.env.MALLOC_ARENA_MAX ??= "2";
 for (const projectPath of projectPaths) {
   const projectName = projectPath.split("/").at(-1).replace(/\.csproj$/u, "");
-  const filter = primaryLane === undefined && scenarioName === undefined && scope === "all" ? undefined
-    : projectFilter(projectName, selectedTests, allDeclarations.filter(test => test.framework === "dotnet"));
+  const filter = selectedProjectFilter(projectName);
   const budget = dotnetTestBudget(projectName, selectedTests);
   const logStem = resolve(outputDirectory, "diagnostics", projectName);
   process.env.SUNDER_TEST_COMMAND_LOG_DIRECTORY = `${logStem}.commands`;
@@ -89,6 +99,11 @@ for (const projectPath of projectPaths) {
 }
 if (failed.length > 0) {
   throw new Error(`Core .NET test projects failed: ${failed.join(", ")}`);
+}
+
+function selectedProjectFilter(project) {
+  if (primaryLane === undefined && scenarioName === undefined && partitionName === undefined && scope === "all") return undefined;
+  return projectFilter(project, selectedTests, allDeclarations.filter(test => test.framework === "dotnet"));
 }
 
 function projectFilter(project, selected, all) {

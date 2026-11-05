@@ -201,6 +201,7 @@ def module_inputs(work=None):
     if not leaf.is_dir(): raise ValueError("Missing current-RID Node module leaf: " + str(leaf))
     run("dotnet", target("Sunder.Cli"), "dev", "package", "validate", archive)
     return publish_environment({"SUNDER_NODE_MODULE_PACKAGE_PATH": archive,
+        "SUNDER_NODE_MODULE_WORKSPACE_PATH": node,
         "SUNDER_NODE_MODULE_EXPECTED_RIDS": ",".join(rids),
         "SUNDER_NODE_MODULE_LEAF_PATH": leaf})
 
@@ -239,8 +240,11 @@ def local_environment():
         os.environ.update(previous)
 
 
-def validate(profile, *, rid=None, scope="all"):
+def validate(profile, *, rid=None, scope="all", partition=None):
+    if partition is not None and profile != "platform": raise ValueError("Native partitions require the platform profile")
     selected = selection(scope)
+    if partition is not None and partition not in selected["nativePartitions"]:
+        raise ValueError("Unknown native partition: " + partition)
     components = selected["components"]
     output = ROOT / "artifacts/test-results" / scope
     with execution_evidence(output, profile), local_environment(), tempfile.TemporaryDirectory(prefix="sunder-ci-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
@@ -277,8 +281,13 @@ def validate(profile, *, rid=None, scope="all"):
             if profile == "platform":
                 os.environ["SUNDER_REQUIRE_NODE24_HOST_INTEGRATION"] = "1"
                 os.environ["SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS"] = "1" if sys.platform == "darwin" else "0"
-                dotnet_tests("primary-lane", "host-platform", scope=scope, build=True, directory="platform")
-                if os.name == "nt" and "sdk" in components: dotnet_tests("scenario", "output-lock", scope=scope, directory="lock-interop")
+                if partition is None:
+                    dotnet_tests("primary-lane", "host-platform", scope=scope, build=True, directory="platform")
+                else:
+                    if partition != "main": os.environ["SUNDER_TEST_DIAGNOSTICS"] = "1"
+                    dotnet_tests("native-partition", partition, scope=scope, build=True, directory="platform/" + partition)
+                if partition not in (None, "main"): return
+                if os.name == "nt" and "sdk" in components: dotnet_tests("scenario", "output-lock", scope=scope, build=True, directory="lock-interop")
                 if "app" in components:
                     dotnet_tests("primary-lane", "app-packaging", scope=scope, build=True)
                     if os.name == "nt": run("pwsh", "-File", ROOT / "scripts/ci/check-powershell.ps1")
@@ -318,12 +327,13 @@ def main():
     parser.add_argument("--work", type=Path)
     parser.add_argument("--rid", choices=[row["rid"] for row in platforms()["include"]])
     parser.add_argument("--scope", choices=tuple(json.loads((ROOT / "eng/test-oracles/core-test-policy.json").read_text())["scopes"]), default="all")
+    parser.add_argument("--partition", help="Native method partition (main or a policy-owned project shard)")
     parser.add_argument("--list", action="store_true", help="Print scope ownership and build roots without changing outputs")
     args = parser.parse_args()
     if args.list:
         print(json.dumps(selection(args.scope), indent=2))
     elif args.action in ("portable", "platform", "official", "candidate"):
-        validate(args.action, rid=args.rid, scope=args.scope)
+        validate(args.action, rid=args.rid, scope=args.scope, partition=args.partition)
     elif args.action == "rehearse":
         if args.work is None: parser.error("rehearse requires a new --work output directory")
         rehearse(args.work)

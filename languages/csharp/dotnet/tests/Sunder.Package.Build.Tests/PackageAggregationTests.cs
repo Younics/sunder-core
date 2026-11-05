@@ -476,8 +476,11 @@ public sealed class PackageAggregationTests
             []);
         Directory.Move(leaf, backup);
         using var aggregateContender = OutputLockContenderBarrier<bool>.Start(
-            GeneratedOutputLock.TargetLeafDiscoveryKey(discoveryRoot, leaf),
-            aggregate.Execute,
+            attempting =>
+            {
+                aggregate.WaitingForOutput = _ => attempting();
+                return aggregate.Execute();
+            },
             () => $"discoveryRoot={discoveryRoot}; leafPresent={Directory.Exists(leaf)}; backupPresent={Directory.Exists(backup)}");
         var aggregateTask = aggregateContender.Completion;
         try

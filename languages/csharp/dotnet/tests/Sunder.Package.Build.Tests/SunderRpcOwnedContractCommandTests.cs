@@ -547,8 +547,9 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         try
         {
             Assert.True(staged.Wait(TimeSpan.FromSeconds(30)));
-            contender = OutputLockContenderBarrier<Exception?>.Start(BaselinePath,
-                () => Record.Exception(() => GenerateSunderRpcBindingsTask.CommitOwnedBaseline(_root, BaselinePath, baseline.ExactBytes, second, candidate.Inputs)),
+            contender = OutputLockContenderBarrier<Exception?>.Start(
+                attempting => Record.Exception(() => GenerateSunderRpcBindingsTask.CommitOwnedBaseline(_root, BaselinePath, baseline.ExactBytes, second, candidate.Inputs,
+                    waitingForOutput: _ => attempting())),
                 () => BaselinePath);
             await contender.WaitForAttemptAsync(TimeSpan.FromSeconds(30));
             await contender.AssertContendedAsync();
@@ -605,7 +606,11 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         var timestamp = File.GetLastWriteTimeUtc(BaselinePath);
         var output = Snapshot(Generated);
         using var lease = GeneratedOutputLock.Acquire([BaselinePath]);
-        using var contender = OutputLockContenderBarrier<bool>.Start(BaselinePath, command.Execute, () => operation + ": " + path);
+        using var contender = OutputLockContenderBarrier<bool>.Start(attempting =>
+        {
+            command.WaitingForBaselineLease = _ => attempting();
+            return command.Execute();
+        }, () => operation + ": " + path);
         try
         {
             await contender.WaitForAttemptAsync(TimeSpan.FromSeconds(30));
@@ -684,7 +689,11 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         else
         {
             using var lease = GeneratedOutputLock.Acquire([BaselinePath]);
-            using var contender = OutputLockContenderBarrier<bool>.Start(BaselinePath, pack.Execute, () => path);
+            using var contender = OutputLockContenderBarrier<bool>.Start(attempting =>
+            {
+                pack.WaitingForBaselineLease = _ => attempting();
+                return pack.Execute();
+            }, () => path);
             try
             {
                 await contender.WaitForAttemptAsync(TimeSpan.FromSeconds(30));

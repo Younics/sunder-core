@@ -4,6 +4,7 @@ import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { csharpTestDeclarations } from "./csharp-test-declarations.mjs";
 import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
+import { nativePartitionNames, selectNativePartition } from "./native-test-partitions.mjs";
 
 export const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const policyRelativePath = "eng/test-oracles/core-test-policy.json";
@@ -19,7 +20,22 @@ export function loadCoreTestModel(root = repositoryRoot, policyOverride, scope =
   const projects = listDotnetTestProjects(root).filter(project => scope === "all" || selectedProjects.has(project)
     || policy.scopes[scope].includes(componentFor({ project }, policy)));
   validateProjectLaneOwnership(model.declarations, model.policy, projects, scope === "all");
+  validateLaneReachability(model.declarations);
+  for (const partition of nativePartitionNames(model).filter(name => name !== "main")) {
+    for (const os of ["Windows", "Linux", "MacOS"]) {
+      if (selectNativePartition(model, partition, os).length === 0) throw new Error(`Native partition '${partition}' is empty on ${os}.`);
+    }
+  }
   return { ...model, allDeclarations: declarations };
+}
+
+export function validateLaneReachability(declarations) {
+  for (const test of declarations) {
+    const runners = test.primaryLane === "dotnet-linux" ? ["Linux"] : ["Windows", "Linux", "MacOS"];
+    if (!test.operatingSystems.some(os => runners.includes(os))) {
+      throw new Error(`Test '${test.id}' is unreachable: lane '${test.primaryLane}' has no runner for ${test.operatingSystems.join(", ")}.`);
+    }
+  }
 }
 
 export function componentFor(declaration, policy) {
@@ -156,6 +172,14 @@ function validatePolicyShape(policy) {
     throw new Error("Core test policy must declare Node and release-fixture reports.");
   }
   if (!Array.isArray(policy.inertDotnetSources ?? [])) throw new Error("Inert .NET sources must be an explicit array.");
+  const partitions = policy.nativePartitions ?? [];
+  if (!Array.isArray(partitions) || new Set(partitions.map(rule => rule.name)).size !== partitions.length
+      || new Set(partitions.map(rule => rule.project)).size !== partitions.length
+      || partitions.some(rule => !/^[a-z]+(?:-[a-z]+)*$/u.test(rule.name) || rule.name === "main"
+        || !policy.scopes?.all.includes(rule.component) || !policy.projectLanes[rule.project]?.includes("host-platform")
+        || !Number.isSafeInteger(rule.shards) || rule.shards < 2 || rule.shards > 16)) {
+    throw new Error("Native partitions require unique names/projects, a component owner and 2–16 shards.");
+  }
   const inertSources = new Set();
   for (const item of policy.inertDotnetSources ?? []) {
     if (item === null || typeof item !== "object" || Object.keys(item).sort().join(",") !== "reason,sha256Lf,source"
@@ -257,7 +281,7 @@ export function discoverDotnetTests(source, content, policy) {
     const project = source.split("/")[4];
     const externalArguments = [...(externalAttribute ?? "").matchAll(/"([^"]+)"/gu)]
       .map((argument) => argument[1]);
-    const operatingSystems = operatingSystemsFor(attributeNames.join(" "), name, source);
+    const operatingSystems = operatingSystemsFor(attributeNames.join(" "));
     const declaration = {
       id,
       framework: "dotnet",
@@ -372,8 +396,8 @@ function dotnetPrerequisites(name, source, externalArguments) {
   return [...new Map(prerequisites.map((item) => [`${item.kind}:${item.name}:${item.pathKind ?? ""}`, item])).values()];
 }
 
-function operatingSystemsFor(attributes, name, source) {
-  if (/MacOs[A-Za-z0-9_]*(?:Fact|Theory)|MacOS/iu.test(`${attributes} ${name} ${source}`)) return ["MacOS"];
+function operatingSystemsFor(attributes) {
+  if (/\bMacOs[A-Za-z0-9_]*(?:Fact|Theory)\b/u.test(attributes)) return ["MacOS"];
   if (/Windows[A-Za-z0-9_]*(?:Fact|Theory)/u.test(attributes)) return ["Windows"];
   if (/Linux[A-Za-z0-9_]*(?:Fact|Theory)/u.test(attributes)) return ["Linux"];
   if (/Unix[A-Za-z0-9_]*(?:Fact|Theory)/u.test(attributes)) return ["Linux", "MacOS"];
@@ -390,6 +414,7 @@ function externalInputPrerequisite(name) {
     SUNDER_MAKER_PLATFORM_CATALOG: "file",
     SUNDER_NODE_MODULE_PACKAGE_PATH: "file",
     SUNDER_NODE_MODULE_LEAF_PATH: "directory",
+    SUNDER_NODE_MODULE_WORKSPACE_PATH: "directory",
     SUNDER_NODE_TEMPLATE_DEV_PATH: "directory",
     SUNDER_DOTNET_WORKER_ARCHIVE_PATH: "file",
     SUNDER_DOTNET_TEMPLATE_DEV_PATH: "directory",
@@ -446,6 +471,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const model = loadCoreTestModel(repositoryRoot, undefined, args[1]);
   const components = model.policy.scopes[model.scope];
   console.log(JSON.stringify({ scope: model.scope, components,
+    nativePartitions: nativePartitionNames(model),
     scenarios: Object.fromEntries(["portable", "candidate", "official"].map(profile => [profile, ciScenarios(components, profile)])),
     projects: [...new Set(model.declarations.filter(test => test.framework === "dotnet").map(test => test.project))].sort(),
     lanes: [...new Set(model.declarations.map(test => test.primaryLane))].sort(),

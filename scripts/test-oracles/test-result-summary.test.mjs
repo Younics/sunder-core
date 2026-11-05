@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectedScriptReports, loadCoreTestModel, repositoryRoot } from "./core-test-policy.mjs";
 import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
+import { nativePartitionNames, selectNativePartition } from "./native-test-partitions.mjs";
 import {
   auditCoreTestReports,
   auditNativeEvidence,
@@ -356,32 +357,68 @@ test("evidence cannot accept a passing TRX left by a timed-out or unclean runner
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("native aggregate requires every selected RID even when other platforms cover the same tests", async () => {
+test("native aggregate requires every RID and complete disjoint partition reports", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-native-evidence-"));
   const model = loadCoreTestModel(repositoryRoot, undefined, "sdk");
   const platforms = JSON.parse(await readFile(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms;
+  const reports = [];
   try {
     for (const family of ["sunder-platform", "official-runtime"]) {
       for (const { rid } of platforms) {
-        const directory = resolve(root, family === "sunder-platform" ? "platform" : "official", `${family}-sdk-${rid}`);
-        await mkdir(directory, { recursive: true });
-        await writeFile(resolve(directory, "core-test-evidence.json"), JSON.stringify({ schemaVersion: 1, scope: "sdk",
-          operatingSystem: { win: "Windows", linux: "Linux", osx: "MacOS" }[rid.split("-")[0]],
-          counts: { executed: 1, failed: 0 }, lanes: [{ lane: family === "sunder-platform" ? "host-platform" : "official-runtime", executed: 1, failed: 0 }] }));
+        const operatingSystem = { win: "Windows", linux: "Linux", osx: "MacOS" }[rid.split("-")[0]];
+        for (const partition of family === "sunder-platform" ? nativePartitionNames(model) : [undefined]) {
+          const name = `${family}-sdk-${rid}` + (partition === undefined || partition === "main" ? "" : "-" + partition);
+          const prefix = `${family === "sunder-platform" ? "platform" : "official"}/${name}`;
+          const directory = resolve(root, prefix);
+          await mkdir(directory, { recursive: true });
+          let evidence = { schemaVersion: 1, scope: "sdk", operatingSystem,
+            counts: { executed: 1, failed: 0 }, lanes: [{ lane: "official-runtime", executed: 1, failed: 0 }] };
+          if (partition !== undefined) {
+            const groups = Map.groupBy(selectNativePartition(model, partition, operatingSystem), test => test.project);
+            const owned = [...groups].map(([project, tests]) => {
+              const source = `${prefix}/${project}.trx`;
+              return { source, discovered: tests.length, results: tests.map(test => ({ report: source,
+                framework: "dotnet", declarationId: test.id, name: test.id, outcome: "Passed" })) };
+            });
+            evidence = buildCoreTestEvidence(owned, model, { allowPartial: true, requiredNativePartition: partition, operatingSystem });
+            reports.push(...owned);
+          }
+          await writeFile(resolve(directory, "core-test-evidence.json"), JSON.stringify(evidence));
+        }
       }
     }
     const issues = [];
-    assert.equal(auditNativeEvidence(root, model, platforms, issues).length, 12);
+    assert.equal(auditNativeEvidence(root, model, platforms, issues, reports).length, 12);
     assert.deepEqual(issues, []);
+    const selected = reports.find(report => report.source.includes("osx-arm64-package-build-1/"));
+    const other = reports.find(report => report.source.includes("osx-arm64-package-build-2/"));
+    const overlap = structuredClone(reports);
+    overlap.find(report => report.source === selected.source).results.push(other.results[0]);
+    const overlapIssues = [];
+    assert.equal(auditNativeEvidence(root, model, platforms, overlapIssues, overlap).filter(row => !row.complete).length, 1);
+    assert.match(overlapIssues.join("\n"), /out-of-partition test/u);
+    const omitted = structuredClone(reports);
+    omitted.find(report => report.source === selected.source).results.pop();
+    const omittedIssues = [];
+    assert.equal(auditNativeEvidence(root, model, platforms, omittedIssues, omitted).filter(row => !row.complete).length, 1);
+    assert.match(omittedIssues.join("\n"), /omitted 1 selected/u);
+    // A whole missing shard cannot be satisfied by another shard or RID.
+    const shard = resolve(root, "platform/sunder-platform-sdk-osx-x64-package-build-3/core-test-evidence.json");
+    const saved = await readFile(shard, "utf8");
+    await rm(shard);
+    const shardIssues = [];
+    assert.equal(auditNativeEvidence(root, model, platforms, shardIssues, reports).filter(row => !row.complete).length, 1);
+    assert.match(shardIssues.join("\n"), /Missing required native evidence: sunder-platform-sdk-osx-x64-package-build-3/u);
+    await writeFile(shard, saved);
     await rm(resolve(root, "platform/sunder-platform-sdk-osx-arm64"), { recursive: true });
-    const rows = auditNativeEvidence(root, model, platforms, issues);
+    const rows = auditNativeEvidence(root, model, platforms, issues, reports);
     assert.equal(rows.filter(row => !row.complete).length, 1);
     assert.match(issues.join("\n"), /Missing required native evidence: sunder-platform-sdk-osx-arm64/u);
     const invalid = resolve(root, "official/official-runtime-sdk-win-arm64/core-test-evidence.json");
     const document = JSON.parse(await readFile(invalid, "utf8"));
     delete document.counts.executed;
     await writeFile(invalid, JSON.stringify(document));
-    assert.equal(auditNativeEvidence(root, model, platforms, issues).filter(row => !row.complete).length, 2);
+    assert.equal(auditNativeEvidence(root, model, platforms, issues, reports).filter(row => !row.complete).length, 2);
     assert.match(issues.join("\n"), /official-runtime-sdk-win-arm64: invalid owning-job evidence/u);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

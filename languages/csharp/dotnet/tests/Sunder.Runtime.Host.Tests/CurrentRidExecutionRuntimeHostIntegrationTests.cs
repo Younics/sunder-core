@@ -263,7 +263,7 @@ public sealed class CurrentRidNodeRuntimeHostIntegrationTests(
         {
             var nodePackage = await CurrentRidRuntimeHostTestSupport.BuildNodeDevPackageAsync(node);
             var nodeProvider = CurrentRidRuntimeHostTestSupport.CreatePackageVariant(
-                nodePackage,
+                nodePackage.PackageRoot,
                 Path.Combine(root, "node-provider"),
                 "sunder.node.runtimebacked");
             var nodeCaller = await CurrentRidRuntimeHostTestSupport.CreateNodeCallerAsync(
@@ -414,7 +414,9 @@ internal static class CurrentRidRuntimeHostTestSupport
         return path;
     }
 
-    public static async Task<string> BuildNodeDevPackageAsync(Node24Probe node)
+    public sealed record NodePackageInputs(string WorkspaceRoot, string PackageRoot);
+
+    public static async Task<NodePackageInputs> BuildNodeDevPackageAsync(Node24Probe node)
     {
         var nodeRoot = Path.Combine(
             WorkerReleaseMetrics.FindRepositoryRoot(),
@@ -437,7 +439,7 @@ internal static class CurrentRidRuntimeHostTestSupport
             TimeSpan.FromMinutes(2));
         var output = Path.Combine(projectRoot, "dist", "sunder-dev");
         Assert.True(Directory.Exists(output), $"Thin Node Worker V1 package was not generated: {output}");
-        return output;
+        return new(nodeRoot, output);
     }
 
     public static string CreatePackageVariant(
@@ -500,12 +502,16 @@ internal static class CurrentRidRuntimeHostTestSupport
         return destinationRoot;
     }
 
-    public static async Task<string> CreateNodeCallerAsync(Node24Probe node, string sourceRoot, string destinationRoot)
+    public static async Task<string> CreateNodeCallerAsync(Node24Probe node, NodePackageInputs inputs, string destinationRoot)
     {
-        CreatePackageVariant(sourceRoot, destinationRoot, "sunder.interop.node.caller", includeProviders: false, consumePublicContracts: true);
-        var nodeRoot = Path.Combine(WorkerReleaseMetrics.FindRepositoryRoot(), "languages", "typescript", "node");
+        // The caller consumes the same producer workspace as its package leaf,
+        // including generated RPC sources and workspace-local SDK/tool dependencies.
+        var nodeRoot = inputs.WorkspaceRoot;
         var sdk = Path.Combine(nodeRoot, "packages", "sdk", "dist", "index.js");
         var configure = Path.Combine(nodeRoot, "fixtures", "runtime-backed-worker", "src", "worker.ts");
+        Assert.True(File.Exists(sdk), $"Node producer SDK was not built: {sdk}");
+        Assert.True(File.Exists(configure), $"Node producer fixture source does not exist: {configure}");
+        CreatePackageVariant(inputs.PackageRoot, destinationRoot, "sunder.interop.node.caller", includeProviders: false, consumePublicContracts: true);
         var entry = Path.Combine(Path.GetDirectoryName(destinationRoot)!, "node-caller-entry.mjs");
         var errorLog = Path.Combine(Path.GetDirectoryName(destinationRoot)!, "node-caller-error.log");
         // A composed dev package factors the module into shared; an exact-RID leaf

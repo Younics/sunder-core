@@ -610,22 +610,14 @@ public sealed class LocalStateV1Tests
         Assert.Empty(Directory.EnumerateFileSystemEntries(targetAncestor));
     }
 
-    [Fact]
+    [MacOsFact]
     public async Task Reset_allows_trusted_macos_var_alias()
     {
-        if (!OperatingSystem.IsMacOS())
-        {
-            return;
-        }
-
         var tempPath = Path.GetFullPath(Path.GetTempPath());
         var varTempPath = tempPath.StartsWith("/private/var/", StringComparison.Ordinal)
             ? "/var/" + tempPath[13..]
             : tempPath;
-        if (!varTempPath.StartsWith("/var/", StringComparison.Ordinal))
-        {
-            return;
-        }
+        Assert.StartsWith("/var/", varTempPath, StringComparison.Ordinal);
 
         var runtimeRoot = Path.Combine(varTempPath, "SunderLocalStateV1AliasTests", Guid.NewGuid().ToString("N"));
         try

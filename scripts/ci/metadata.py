@@ -61,7 +61,12 @@ def matrices(root=ROOT, scope="all"):
     policy = json.loads((Path(root) / "eng/test-oracles/core-test-policy.json").read_text())
     if scope not in policy["scopes"]: raise ValueError("Unknown validation scope: " + scope)
     owners = policy["scopes"][scope]
+    partitions = ["main", *[f"{rule['name']}-{index + 1}" for rule in policy.get("nativePartitions", [])
+                            if rule["component"] in owners for index in range(rule["shards"])]]
     return {**{profile: platforms(root, profile) for profile in ("native", "app", "packaging")},
+            "platform": {"include": [{**row, "partition": partition,
+                                      "artifact_suffix": "" if partition == "main" else "-" + partition}
+                                     for partition in partitions for row in platforms(root)["include"]]},
             "platform_tests": any(owner in owners for owner in ("sdk", "host", "app")),
             "official_tests": "host" in owners, "app_packaging": "app" in owners}
 

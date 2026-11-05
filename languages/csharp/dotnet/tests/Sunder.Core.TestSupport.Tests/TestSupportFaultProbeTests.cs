@@ -211,21 +211,29 @@ public sealed class TestSupportFaultProbeTests
     public async Task OutputLockBarrier_FailsWhenSeededContenderDoesNotBlock()
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-output-lock-probe");
+        using var release = new ManualResetEventSlim();
         using var barrier = OutputLockContenderBarrier<object>.Start(
-            scope.GetPath("generated"),
-            () =>
+            _ =>
             {
-                Thread.Sleep(200);
+                if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException("The seeded contender was not released.");
                 File.WriteAllText(scope.GetPath("unlocked-output.txt"), "seeded mutation");
                 return new object();
             },
             static () => "seeded contender performed delayed I/O without acquiring the lock");
 
-        var failure = await Assert.ThrowsAsync<TimeoutException>(
-            () => barrier.WaitForAttemptAsync(TimeSpan.FromMilliseconds(100)));
-
-        Assert.Contains("without acquiring", failure.Message, StringComparison.Ordinal);
-        await barrier.Completion;
+        try
+        {
+            // Another owner's transition must not impersonate this contender's wait.
+            Directory.CreateDirectory(scope.GetPath("generated.sunder-output.lock.transition.candidate-other-owner"));
+            var failure = await Assert.ThrowsAsync<TimeoutException>(
+                () => barrier.WaitForAttemptAsync(TimeSpan.FromSeconds(2)));
+            Assert.Contains("without acquiring", failure.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            release.Set();
+            await barrier.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     private static ProcessStartInfo DotnetStartInfo(string argument)

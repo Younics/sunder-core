@@ -11,6 +11,7 @@ import {
   discoverDotnetTests,
   loadCoreTestModel,
   scopeModel,
+  validateLaneReachability,
   validateProjectLaneOwnership,
   validateWorkflowTestSelections,
 } from "./core-test-policy.mjs";
@@ -18,10 +19,63 @@ import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 import { dotnetTestArguments } from "./dotnet-test-command.mjs";
 import { selectScenario } from "./ci-scenarios.mjs";
 import { createNodeTestWorkspace } from "./node-test-workspace.mjs";
+import { nativePartitionNames, selectNativePartition } from "./native-test-partitions.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const fixtureSource = "languages/csharp/dotnet/tests/Inventory.Tests/Declarations.cs";
 const policy = JSON.parse(await readFile(resolve(repositoryRoot, "eng/test-oracles/core-test-policy.json"), "utf8"));
+
+test("OS eligibility follows conditional attributes and every lane has a compatible runner", () => {
+  const tests = discoverDotnetTests(fixtureSource.replace("Declarations", "MacOsDeclarations"), `
+    namespace Example.Tests;
+    public class MacOsCases {
+      [Fact] public void MacOsFake() { }
+      [Theory, InlineData(1)] public void MacOsContent(int value) { }
+      [MacOsFact] public void NativeFilesystem() { }
+    }
+  `, policy);
+  assert.ok(tests.slice(0, 2).every(test => test.primaryLane === "dotnet-linux" && test.operatingSystems.includes("Linux")));
+  assert.equal(tests[2].primaryLane, "host-platform");
+  assert.deepEqual(tests[2].operatingSystems, ["MacOS"]);
+  validateLaneReachability(tests);
+  assert.throws(() => validateLaneReachability([{ ...tests[2], primaryLane: "dotnet-linux" }]), /unreachable/u);
+  const model = loadCoreTestModel();
+  for (const scope of Object.keys(policy.scopes)) validateLaneReachability(scopeModel(model, scope).declarations);
+});
+
+test("native method partitions cover each scoped OS exactly once and distribute partial classes", () => {
+  const all = loadCoreTestModel();
+  for (const scope of ["all", "sdk", "repository", "host"]) {
+    const model = scopeModel(all, scope);
+    const names = nativePartitionNames(model);
+    assert.equal(names.length, ["all", "sdk"].includes(scope) ? 4 : 1);
+    for (const os of ["Windows", "Linux", "MacOS"]) {
+      const expected = model.declarations.filter(test => test.framework === "dotnet"
+        && test.primaryLane === "host-platform" && test.operatingSystems.includes(os)).map(test => test.id).sort();
+      const partitions = names.map(name => selectNativePartition(model, name, os));
+      const actual = partitions.flat().map(test => test.id);
+      assert.equal(new Set(actual).size, actual.length, `${scope}/${os}: overlapping partitions`);
+      assert.deepEqual(actual.sort(), expected, `${scope}/${os}: omitted declarations`);
+      for (const name of names.slice(1)) {
+        assert.ok(selectNativePartition(model, name, os).some(test => test.id.includes("ImplementationFirstRpcBuildTests.")));
+        assert.deepEqual(selectNativePartition({ ...model, declarations: [...model.declarations].reverse() }, name, os).map(test => test.id).sort(),
+          selectNativePartition(model, name, os).map(test => test.id).sort());
+      }
+    }
+    assert.throws(() => selectNativePartition(model, "missing", "Linux"), /Unknown native partition/u);
+  }
+  const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
+  const preview = spawnSync(process.execPath, [runner, "--scope", "sdk", "--native-partition", "package-build-1", "--list"], { encoding: "utf8" });
+  assert.equal(preview.status, 0, preview.stderr);
+  const selection = JSON.parse(preview.stdout);
+  assert.equal(selection.nativePartition, "package-build-1");
+  assert.deepEqual(selection.declarations, selectNativePartition(scopeModel(all, "sdk"), "package-build-1", selection.operatingSystem).map(test => test.id));
+  assert.deepEqual(selection.projects[0].filter.split("|").map(value => value.replace(/^FullyQualifiedName=/u, "")).sort(),
+    [...selection.declarations].sort());
+  const mixed = spawnSync(process.execPath, [runner, "--native-partition", "main", "--primary-lane", "host-platform", "--list"], { encoding: "utf8" });
+  assert.notEqual(mixed.status, 0);
+  assert.match(mixed.stderr, /Select a native partition/u);
+});
 
 test("CI scenarios discover added cases and reject missing owners without workflow test lists", () => {
   const { declarations } = loadCoreTestModel();
@@ -257,6 +311,7 @@ test(".NET reporter scopes integration budgets and crash diagnostics without rel
     assert.equal(args[args.indexOf("--blame-hang-timeout") + 1], hang);
     assert.equal(args.includes("--blame-crash"), project === "Sunder.Package.Build.Tests");
     assert.equal(args.includes("--diag"), budget.diagnostics);
+    assert.equal(args.includes("console;verbosity=detailed"), budget.diagnostics);
     assert.ok(args.includes("--no-build"));
   }
   const override = spawnSync(process.execPath, [runner, "--list", "--project", "Sunder.Package.Build.Tests",
@@ -422,6 +477,7 @@ test("audited inert C# history is excluded only while its bytes and unconditiona
     ...structuredClone(policy),
     primaryLanes: ["dotnet-linux"],
     dotnetLaneRules: [],
+    nativePartitions: [],
     projectLanes: { [project]: ["dotnet-linux"] },
     expectedSkips: [],
     inertDotnetSources: [{ source, sha256Lf: createHash("sha256").update(history).digest("hex"),

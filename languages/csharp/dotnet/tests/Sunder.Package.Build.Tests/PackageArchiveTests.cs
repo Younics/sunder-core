@@ -66,7 +66,11 @@ public sealed class PackageArchiveTests
             ContractBundles = [ContractBundle(descriptor)], UsesContracts = [ContractUse("runtime")], RpcProviders = [RpcProvider("runtime")],
         };
         using var lease = GeneratedOutputLock.Acquire([baseline]);
-        using var contender = OutputLockContenderBarrier<bool>.Start(baseline, task.Execute, () => descriptor);
+        using var contender = OutputLockContenderBarrier<bool>.Start(attempting =>
+        {
+            task.WaitingForBaselineLease = _ => attempting();
+            return task.Execute();
+        }, () => descriptor);
         try
         {
             await contender.WaitForAttemptAsync(TimeSpan.FromSeconds(30));

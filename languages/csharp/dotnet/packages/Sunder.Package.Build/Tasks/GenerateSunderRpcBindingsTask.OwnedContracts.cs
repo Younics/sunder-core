@@ -21,6 +21,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
 
     public string ContractReviewOutputPath { get; set; } = string.Empty;
 
+    internal Action<string>? WaitingForBaselineLease { get; set; }
+
     private bool ExecuteOwnedContractOperation()
     {
         try
@@ -103,7 +105,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
             if (baseline is null)
                 foreach (var evidence in BootstrapEvidencePaths(generatedDirectory)) candidate.Inputs.ExpectAbsent(evidence);
             var changed = CommitOwnedBaseline(projectDirectory, path, baseline?.ExactBytes, proposal, candidate.Inputs,
-                beforeCommit: baseline is null ? () => VerifyNoLostPublicBaseline(projectDirectory, generatedDirectory) : null);
+                beforeCommit: baseline is null ? () => VerifyNoLostPublicBaseline(projectDirectory, generatedDirectory) : null,
+                waitingForOutput: WaitingForBaselineLease);
             Log.LogMessage(MessageImportance.High, changed
                 ? $"{ContractOperation}SunderContracts updated '{path}'. Run Build to regenerate RPC outputs."
                 : "Owned Sunder contracts are unchanged; no files changed.");
@@ -195,7 +198,8 @@ public sealed partial class GenerateSunderRpcBindingsTask
     }
 
     internal static bool CommitOwnedBaseline(
-        string projectDirectory, string path, byte[]? expected, byte[] proposal, SunderRpcInputSnapshot inputs, Action? beforeCommit = null)
+        string projectDirectory, string path, byte[]? expected, byte[] proposal, SunderRpcInputSnapshot inputs, Action? beforeCommit = null,
+        Action<string>? waitingForOutput = null)
     {
         if (expected is not null)
         {
@@ -207,7 +211,7 @@ public sealed partial class GenerateSunderRpcBindingsTask
         return CommitOwnedBaselineCore(projectDirectory, path, expected, proposal,
             bytes => SunderRpcAuthoringDocuments.ParseOwnedPackageBaseline(bytes).ExactBytes,
             baselinePath => SunderRpcAuthoringDocuments.ReadOwnedPackageBaseline(baselinePath).ExactBytes,
-            inputs.Verify, _ => beforeCommit?.Invoke());
+            inputs.Verify, _ => beforeCommit?.Invoke(), waitingForOutput: waitingForOutput);
     }
 
     internal static bool CommitOwnedPlatformBaseline(
@@ -228,12 +232,12 @@ public sealed partial class GenerateSunderRpcBindingsTask
     private static bool CommitOwnedBaselineCore(
         string projectDirectory, string path, byte[]? expected, byte[] proposal,
         Func<byte[], byte[]> parse, Func<string, byte[]> read, Action verifyInputs, Action<string>? beforeCommit,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, Action<string>? waitingForOutput = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         path = ResolveOwnedBaselinePath(projectDirectory, path);
         _ = parse(proposal);
-        using var baselineLock = GeneratedOutputLock.Acquire([path], cancellationToken: cancellationToken);
+        using var baselineLock = GeneratedOutputLock.Acquire([path], cancellationToken: cancellationToken, waitingForOutput: waitingForOutput);
         verifyInputs();
         VerifyExpected();
         cancellationToken.ThrowIfCancellationRequested();

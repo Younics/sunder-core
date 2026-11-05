@@ -2,6 +2,14 @@ using Xunit;
 
 namespace Sunder.Package.Build.Tests;
 
+internal sealed class MacOsFactAttribute : FactAttribute
+{
+    public MacOsFactAttribute()
+    {
+        if (!OperatingSystem.IsMacOS()) Skip = "Requires macOS.";
+    }
+}
+
 internal sealed class UnixTheoryAttribute : TheoryAttribute
 {
     public UnixTheoryAttribute()

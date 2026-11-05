@@ -4,6 +4,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { componentFor, expectedScriptReports, loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
 import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
+import { nativePartitionNames, selectNativePartition } from "./native-test-partitions.mjs";
 
 export function parseTrxReport(xml, source) {
   const summary = /<ResultSummary\b([^>]*?)>/u.exec(xml);
@@ -143,6 +144,7 @@ export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), opti
     ...(model.scope === undefined ? {} : { scope: model.scope }),
     authority: "TRX definitions/results and JUnit testcases",
     operatingSystem,
+    ...(options.requiredNativePartition === undefined ? {} : { nativePartition: options.requiredNativePartition }),
     counts: counts(results),
     reports: reportCounts,
     projects,
@@ -175,7 +177,7 @@ export function auditCoreTestReports(reports, model = loadCoreTestModel(), requi
   return counts(results);
 }
 
-export function auditNativeEvidence(directory, model, platforms, issues) {
+export function auditNativeEvidence(directory, model, platforms, issues, reports = []) {
   const components = model.policy.scopes[model.scope];
   const families = [
     ...(components.some(owner => ["sdk", "host", "app"].includes(owner)) ? ["sunder-platform"] : []),
@@ -183,26 +185,46 @@ export function auditNativeEvidence(directory, model, platforms, issues) {
   ];
   return families.flatMap(family => platforms.map(({ rid }) => {
     const artifact = `${family}-${model.scope}-${rid}`;
-    const root = resolve(directory, family === "sunder-platform" ? "platform" : "official", artifact);
-    const evidence = existsSync(root) ? listFiles(root).filter(path => basename(path) === "core-test-evidence.json") : [];
-    const expectedLanes = family === "official-runtime" ? ["official-runtime"]
-      : ["host-platform", ...(components.includes("app") ? ["app-packaging"] : [])];
-    const lanes = new Set();
-    for (const path of evidence) {
-      try {
-        const document = JSON.parse(readFileSync(path, "utf8"));
-        if (document.schemaVersion !== 1 || document.scope !== model.scope
-            || document.operatingSystem !== ({ win: "Windows", linux: "Linux", osx: "MacOS" })[rid.split("-")[0]]
-            || !Number.isSafeInteger(document.counts?.executed) || document.counts.executed <= 0
-            || document.counts.failed !== 0 || !Array.isArray(document.lanes)) throw new Error("invalid owning-job evidence");
-        for (const row of document.lanes) {
-          if (Number.isSafeInteger(row.executed) && row.executed > 0 && row.failed === 0) lanes.add(row.lane);
-        }
-      } catch (error) { issues.push(`${artifact}: ${error.message}`); }
+    const start = issues.length;
+    const partitions = family === "sunder-platform" ? nativePartitionNames(model) : [undefined];
+    for (const partition of partitions) {
+      const name = artifact + (partition === undefined || partition === "main" ? "" : "-" + partition);
+      const root = resolve(directory, family === "sunder-platform" ? "platform" : "official", name);
+      const evidence = existsSync(root) ? listFiles(root).filter(path => basename(path) === "core-test-evidence.json") : [];
+      const expectedLanes = family === "official-runtime" ? ["official-runtime"]
+        : ["host-platform", ...(partition === "main" && components.includes("app") ? ["app-packaging"] : [])];
+      const lanes = new Set();
+      let partitionEvidence = 0;
+      for (const path of evidence) {
+        try {
+          const document = JSON.parse(readFileSync(path, "utf8"));
+          if (document.schemaVersion !== 1 || document.scope !== model.scope
+              || document.operatingSystem !== ({ win: "Windows", linux: "Linux", osx: "MacOS" })[rid.split("-")[0]]
+              || !Number.isSafeInteger(document.counts?.executed) || document.counts.executed <= 0
+              || document.counts.failed !== 0 || !Array.isArray(document.lanes)) throw new Error("invalid owning-job evidence");
+          if (partition !== undefined && document.lanes.some(row => row.lane === "host-platform")) {
+            if (document.nativePartition !== partition) throw new Error(`expected native partition '${partition}'`);
+            // Reconcile the actual reports for this RID/partition. A positive lane
+            // count or another RID's complete report cannot substitute for a shard.
+            const prefix = relative(directory, dirname(path)).replaceAll("\\", "/") + "/";
+            const rebuilt = buildCoreTestEvidence(reports.filter(report => report.source.startsWith(prefix)), model, {
+              allowPartial: true, requiredNativePartition: partition, operatingSystem: document.operatingSystem,
+            });
+            if (Object.keys(rebuilt.counts).some(key => rebuilt.counts[key] !== document.counts[key])) {
+              throw new Error("native partition counts differ from its reports");
+            }
+            partitionEvidence++;
+          }
+          for (const row of document.lanes) {
+            if (Number.isSafeInteger(row.executed) && row.executed > 0 && row.failed === 0) lanes.add(row.lane);
+          }
+        } catch (error) { issues.push(`${name}: ${error.message}`); }
+      }
+      if (partition !== undefined && partitionEvidence !== 1) issues.push(`${name}: requires exactly one accepted '${partition}' partition report set.`);
+      const missing = expectedLanes.filter(lane => !lanes.has(lane));
+      if (missing.length > 0) issues.push(`Missing required native evidence: ${name} (${missing.join(", ")}).`);
     }
-    const missing = expectedLanes.filter(lane => !lanes.has(lane));
-    if (missing.length > 0) issues.push(`Missing required native evidence: ${artifact} (${missing.join(", ")}).`);
-    return { artifact, rid, complete: missing.length === 0 };
+    return { artifact, rid, complete: issues.length === start };
   }));
 }
 
@@ -248,7 +270,21 @@ export function validateResultCoverage(reports, results, model, options = {}) {
   const allowPartial = options.allowPartial === true;
   const requiredTests = options.requiredTests ?? [];
   const requiredPrimaryLanes = options.requiredPrimaryLanes ?? [];
-  if (allowPartial && requiredTests.length === 0 && requiredPrimaryLanes.length === 0) {
+  const partition = options.requiredNativePartition;
+  if (partition !== undefined) {
+    if (!allowPartial || requiredTests.length > 0 || requiredPrimaryLanes.length > 0) throw new Error("Native partition evidence requires an exclusive partial selection.");
+    const selected = selectNativePartition(model, partition, options.operatingSystem);
+    if (selected.length === 0) throw new Error(`Native partition '${partition}' has zero runnable declarations.`);
+    const ids = new Set(selected.map(test => test.id));
+    const foreign = results.find(result => !ids.has(result.declaration?.id));
+    if (foreign) throw new Error(`Native partition '${partition}' included out-of-partition test '${foreign.name}'.`);
+    const expected = [...new Set(selected.map(test => `${test.project}.trx`))].sort(ordinal);
+    if (JSON.stringify(reports.map(report => basename(report.source)).sort(ordinal)) !== JSON.stringify(expected)) {
+      throw new Error(`Native partition '${partition}' requires exactly one TRX per selected project.`);
+    }
+    requireDotnetDeclarations(selected, results);
+  }
+  if (allowPartial && partition === undefined && requiredTests.length === 0 && requiredPrimaryLanes.length === 0) {
     throw new Error("Partial result coverage requires at least one --require-test or --require-primary-lane selection.");
   }
 
@@ -353,22 +389,26 @@ function main() {
   if (allowPartial) arguments_.splice(allowPartialIndex, 1);
   const requiredTests = [];
   const requiredPrimaryLanes = [];
+  let requiredNativePartition;
   for (let index = 0; index < arguments_.length;) {
-    if (!["--require-test", "--require-primary-lane", "--require-scenario"].includes(arguments_[index])) {
+    if (!["--require-test", "--require-primary-lane", "--require-scenario", "--require-native-partition"].includes(arguments_[index])) {
       index++;
       continue;
     }
-    if (arguments_[index + 1] === undefined) throw new Error(`${arguments_[index]} requires a value.`);
-    if (arguments_[index] === "--require-scenario") {
+    if (arguments_[index + 1] === undefined || arguments_[index + 1].startsWith("--")) throw new Error(`${arguments_[index]} requires a value.`);
+    if (arguments_[index] === "--require-native-partition") {
+      if (requiredNativePartition !== undefined) throw new Error("--require-native-partition must be specified once.");
+      requiredNativePartition = arguments_[index + 1];
+    } else if (arguments_[index] === "--require-scenario") {
       requiredTests.push(...selectScenario(arguments_[index + 1], model.declarations, aggregate ? undefined : currentOperatingSystem()).tests.map(test => test.id));
     } else (arguments_[index] === "--require-test" ? requiredTests : requiredPrimaryLanes).push(arguments_[index + 1]);
     arguments_.splice(index, 2);
   }
-  if (arguments_.length > 1 || aggregate && (allowPartial || requiredPrimaryLanes.length > 0)) {
+  if (arguments_.length > 1 || aggregate && (allowPartial || requiredPrimaryLanes.length > 0 || requiredNativePartition !== undefined)) {
     throw new Error("Usage: summarize-core-test-results.mjs [directory] [--aggregate | --allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
   }
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
-  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes });
+  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes, requiredNativePartition });
 }
 
 export function summarizeResults(directory, model, options = {}) {
@@ -413,7 +453,7 @@ export function summarizeResults(directory, model, options = {}) {
     else evidence = buildCoreTestEvidence(reports, model, options);
   } catch (error) { issues.push(error.message); }
   const native = options.aggregate ? auditNativeEvidence(directory, model,
-    JSON.parse(readFileSync(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms, issues) : [];
+    JSON.parse(readFileSync(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms, issues, reports) : [];
   const failures = results.filter(result => result.outcome === "Failed").map(({ report, name }) => ({ report, name }));
   const summary = { schemaVersion: 1, scope: model.scope, accepted: issues.length === 0 && failures.length === 0,
     counts: outcomes, failures, issues, jobs, native };

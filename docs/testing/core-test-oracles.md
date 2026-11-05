@@ -15,7 +15,9 @@ tests. Frozen history bytes remain untouched and are not recompiled. Source
 inspection supplies declaration-level filtering, platform support, and external
 prerequisites at runtime; parameterized and generated cases come only from the
 test adapters. `check-core-test-policy.mjs` rejects an empty test project, an
-empty lane, ownership drift, or stale expected-skip identities. It also checks every
+empty lane, unreachable lane/OS assignment, ownership drift, or stale expected-skip identities. OS
+eligibility comes from conditional test attributes; platform words in test names or
+file paths do not restrict portable fake/content tests. It also checks every
 literal workflow `--require-test` and named `--scenario`/`--require-scenario`
 selection against current declarations before expensive CI work starts. Required
 scenario owners live in `eng/test-oracles/ci-scenarios.json`; a removed owner fails
@@ -100,7 +102,8 @@ changes. When source has not changed since compilation, omit `--build` to reuse 
 test binaries. Project-scoped reports go under `artifacts/test-results/local/` by
 default and do not remove other lanes' reports. Projects have a bounded 60-minute
 watchdog, except Package.Build selections containing `host-platform`, which get
-90 minutes (a measured Windows invocation completed 87/87 cases in 66.5 minutes).
+90 minutes. Hosted Package.Build runs use the method partitions described below;
+the project budget applies independently to each shard.
 `--timeout-ms` explicitly overrides the project budget. VSTest's per-case hang
 watchdog is five minutes for ordinary/fast selections, fifteen for process-capable
 ExecutionRuntime.Build selections, and twenty for Templates and Package.Build
@@ -124,7 +127,7 @@ separate from the .NET lane evidence; successful fixtures are removed.
 The sidecar starts incomplete before launch, so a killed reporter cannot leave
 apparently passing evidence. Log-write failures also go through process cleanup.
 
-Set `SUNDER_TEST_DIAGNOSTICS=1` to retain VSTest diagnostics for
+Hosted Package.Build shards enable `SUNDER_TEST_DIAGNOSTICS=1`. Set it locally to retain VSTest diagnostics and detailed test progress for
 Build/transport/template selections and mini crash dumps for unexpected Package.Build
 testhost failures. Normal runs retain compact command/process reports and hang
 watchdogs. On Linux, process sidecars include before/after memory and cgroup OOM
@@ -167,7 +170,11 @@ properties are removed when resolving their project references.
 Only parallelize independent checks. The Node matrix and `core_ci.py module` build
 private source/dependency trees with workspace links redirected into each copy.
 Matrix runs remove successful copies and retain failed ones for diagnosis; the
-interop producer remains available for its consumers. For direct commands using
+interop producer remains available for its consumers. `SUNDER_NODE_MODULE_WORKSPACE_PATH`
+identifies the producer workspace alongside its archive and current-RID leaf. The
+Node caller bundles the SDK, fixture source and generated RPC imports from that
+workspace; official-runtime preparation returns the same explicit workspace/package
+input pair. For direct commands using
 checkout outputs, finish npm artifact cleanup before compiling the Node helpers:
 from `languages/typescript/node`, run `npm run build` and
 `npm exec -- tsc -p packages/package-tool/tsconfig.test.json` using the repository's
@@ -229,7 +236,10 @@ so different checkout roots retain component ownership. Native
 jobs enforce their own per-architecture required execution and platform-specific
 skip rules; the aggregate does not reinterpret Windows/macOS skips as Linux results.
 The aggregate additionally requires accepted lane evidence under every selected native
-RID artifact. Passing results from another architecture cannot cover a missing runner.
+RID artifact. It reconciles each native partition's actual TRX reports against its
+OS-specific selection, rejecting missing declarations, foreign/overlapping partition
+results, duplicate project reports and counts that disagree with the reports.
+Passing results from another architecture cannot cover a missing runner or shard.
 Upstream job results also reject failures outside test execution, such as packaging
 or artifact upload failures. Its summary is retained when a producer fails or is cancelled.
 Externally gated live Registry, Agent and retained-release tests retain their
@@ -239,7 +249,21 @@ by the App-owned `app-interop` scenario; SDK/Host interop has its own scenario.
 
 Native/process and App packaging checks use the reusable
 `sunder-host-validation.yml`. All selected partitions produce the same compact
-evidence. Project tests run sequentially, with ordinary
+evidence. The policy's `nativePartitions` assigns Package.Build's native methods to
+three shards. Sorted declaration identities are distributed round-robin before OS
+filtering, including methods in partial classes; each theory stays intact. `main`
+owns the remaining native projects and App/Windows side scenarios. Every partition
+runs in a separate checkout with its own result/artifact suffix; the matrix admits
+at most six concurrent jobs. Official-runtime validation waits for the complete matrix.
+
+```sh
+node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scope sdk --native-partition package-build-1 --list
+python3 -B scripts/ci/core_ci.py platform --scope sdk --partition package-build-1
+node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/sdk/platform/package-build-1 --scope sdk --allow-partial --require-native-partition package-build-1
+```
+
+The unpartitioned local `--primary-lane host-platform` selection still runs the whole
+owning lane. Project tests run sequentially, with ordinary
 parallel MSBuild inside each build; race-sensitive test collections retain their
 own serialization. Package.Build caps compiler-heavy collection concurrency at two
 to fit alongside build processes on CI workers. Linux .NET test commands default
@@ -409,10 +433,11 @@ or the complete fifteen-family release matrix.
 observable gates and files, loopback streaming HTTP, captured child-process
 diagnostics with tree cleanup, temporary-directory cleanup diagnostics,
 package archive builders, and output-lock contender barriers. Lock barriers
-observe actual `.sunder-output.lock.transition` filesystem publication rather
-than an arbitrary callback boundary. Their delayed no-lock fault probes, plus
-the other timing, cleanup, archive, and HTTP mutations, detect silently weakened
-harnesses.
+receive contender-local notification from the lock's post-attempt waiting
+callback (or confirmed acquisition for a winning reclaimer). Filesystem events
+from another owner's acquisition/release cannot impersonate that checkpoint.
+The delayed no-lock fault probe injects an unrelated transition. It and the other
+timing, cleanup, archive, and HTTP mutations detect silently weakened harnesses.
 
 ## Delay audit
 

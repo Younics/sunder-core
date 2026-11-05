@@ -51,6 +51,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
     internal bool InputsAlreadyLeased { get; set; }
     internal bool EmitDevelopmentImports { get; set; } = true;
     internal CancellationToken CancellationToken { get; set; }
+    internal Action<string>? WaitingForOutput { get; set; }
 
     public override bool Execute()
     {
@@ -96,8 +97,8 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
                 .Select(input => GeneratedOutputLock.TargetLeafDiscoveryKey(input.DiscoveryRoot, input.LeafRoot))
                 .Append(GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output));
             using var outputLock = InputsAlreadyLeased
-                ? GeneratedOutputLock.Acquire([GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output)], [output], cancellationToken: CancellationToken)
-                : GeneratedOutputLock.Acquire(discoveryKeys, leafRoots.Append(output), cancellationToken: CancellationToken);
+                ? GeneratedOutputLock.Acquire([GeneratedOutputLock.TargetLeafDiscoveryKey(OutputDiscoveryRoot, output)], [output], cancellationToken: CancellationToken, waitingForOutput: WaitingForOutput)
+                : GeneratedOutputLock.Acquire(discoveryKeys, leafRoots.Append(output), cancellationToken: CancellationToken, waitingForOutput: WaitingForOutput);
             GeneratedOutputTransaction.RecoverAndCleanup(output, markerPath);
             foreach (var leafRoot in InputsAlreadyLeased ? [] : leafRoots)
             {

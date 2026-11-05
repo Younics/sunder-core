@@ -159,7 +159,13 @@ public sealed partial class MainWindowViewModelShellViewTests
         var apply = harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(snapshot, [source], cancellationToken: cancellation.Token);
         try
         {
-            await WaitForConditionAsync(() => File.Exists(gatePath + ".started"));
+            // The first lifecycle load materializes the snapshot and loads its
+            // assemblies before navigation can reach the gate.
+            await WaitForConditionAsync(
+                () => File.Exists(gatePath + ".started") || apply.IsCompleted,
+                timeout: TimeSpan.FromSeconds(30));
+            if (apply.IsCompleted) await apply;
+            Assert.True(File.Exists(gatePath + ".started"), "Lifecycle completed without preparing the replacement view.");
             Assert.False(apply.IsCompleted);
             Assert.Equal("dev-output.middle", state.SelectedMiddleViewId);
             Assert.Equal("dev-output.bottom", state.SelectedLeftBottomViewId);

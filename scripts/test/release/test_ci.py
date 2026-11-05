@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 import subprocess
 from unittest.mock import patch
@@ -137,6 +138,37 @@ class CiMetadataTests(unittest.TestCase):
             self.assertNotEqual(runners[f"{os}-x64"], runners[f"{os}-arm64"])
         # App signing uses the x64 client for both Windows packages.
         self.assertEqual({runners["win-x64"]}, {row["os"] for row in app if row["rid"].startswith("win-")})
+        for scope, expected in (("sdk", {"main", "package-build-1", "package-build-2", "package-build-3"}), ("repository", {"main"})):
+            rows = metadata.matrices(scope=scope)["platform"]["include"]
+            self.assertEqual(len(native) * len(expected), len(rows))
+            self.assertEqual(len(rows), len({(row["rid"], row["artifact_suffix"]) for row in rows}))
+            for row in native:
+                self.assertEqual(expected, {item["partition"] for item in rows if item["rid"] == row["rid"]})
+                self.assertTrue(all(item["os"] == row["os"] for item in rows if item["rid"] == row["rid"]))
+
+    def test_native_partition_preparation_routes_side_scenarios_to_main_and_cleans_environment(self):
+        selected = {"components": ["sdk", "host"], "nativePartitions": ["main", "package-build-1"]}
+        for partition in selected["nativePartitions"]:
+            calls = []
+            with self.subTest(partition=partition), patch.object(core_ci, "selection", return_value=selected), \
+                    patch.object(core_ci, "os", SimpleNamespace(name="nt", environ=os.environ)), \
+                    patch.object(core_ci, "execution_evidence", side_effect=lambda *args: nullcontext()), \
+                    patch.object(core_ci, "node_inputs"), patch.object(core_ci, "build_input", return_value="fixture.slnx"), \
+                    patch.object(core_ci, "run") as run, patch.dict(os.environ, {}, clear=True), \
+                    patch.object(core_ci, "dotnet_tests", side_effect=lambda *args, **kwargs: calls.append((args, kwargs, dict(os.environ)))):
+                core_ci.validate("platform", scope="sdk", partition=partition)
+                self.assertEqual(("native-partition", partition), calls[0][0])
+                self.assertEqual("platform/" + partition, calls[0][1]["directory"])
+                self.assertTrue(calls[0][1]["build"])
+                self.assertEqual(partition != "main", calls[0][2].get("SUNDER_TEST_DIAGNOSTICS") == "1")
+                self.assertNotIn("SUNDER_TEST_DIAGNOSTICS", os.environ)
+                if partition == "main":
+                    self.assertEqual(("scenario", "output-lock"), calls[1][0])
+                    self.assertTrue(calls[1][1]["build"])
+                else: self.assertEqual(1, len(calls))
+                with self.assertRaisesRegex(ValueError, "Unknown native partition"):
+                    core_ci.validate("platform", scope="sdk", partition="../unowned")
+                self.assertEqual(1, run.call_count)
 
     def test_fixture_version_changes_select_current_host_leaf_and_preserve_all_rids(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,6 +187,8 @@ class CiMetadataTests(unittest.TestCase):
                     self.assertEqual(fixture / "dist/example.worker.3.7.2.sunderpkg", values["SUNDER_NODE_MODULE_PACKAGE_PATH"])
                     self.assertEqual(rids, values["SUNDER_NODE_MODULE_EXPECTED_RIDS"].split(","))
                     self.assertEqual(fixture / "dist/targets" / rid, values["SUNDER_NODE_MODULE_LEAF_PATH"])
+                    self.assertEqual(root, values["SUNDER_NODE_MODULE_WORKSPACE_PATH"])
+                    self.assertEqual(str(root), os.environ["SUNDER_NODE_MODULE_WORKSPACE_PATH"])
                     self.assertIn(values["SUNDER_NODE_MODULE_PACKAGE_PATH"], run.call_args.args)
                     self.assertEqual(("node", core_ci.ROOT / "scripts/test-oracles/node-test-workspace.mjs"), run.call_args_list[0].args[:2])
                     self.assertEqual(("npm", "--prefix", root, "run", "build"), run.call_args_list[1].args)

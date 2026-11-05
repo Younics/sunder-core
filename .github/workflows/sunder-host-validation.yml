@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       native: ${{ steps.platforms.outputs.native }}
+      platform: ${{ steps.platforms.outputs.platform }}
       packaging: ${{ steps.platforms.outputs.packaging }}
       platform_tests: ${{ steps.platforms.outputs.platform_tests }}
       official_tests: ${{ steps.platforms.outputs.official_tests }}
@@ -30,14 +31,15 @@ jobs:
         run: python3 -B scripts/ci/metadata.py matrices --scope "$CI_SCOPE"
 
   platform:
-    name: Platform/process behavior (${{ matrix.rid }})
+    name: Platform/process behavior (${{ matrix.rid }}, ${{ matrix.partition }})
     needs: prepare
     if: needs.prepare.outputs.platform_tests == 'true'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.native) }}
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.prepare.outputs.platform) }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -56,7 +58,7 @@ jobs:
         if: always() && steps.process_preflight.outcome != 'skipped' && steps.process_preflight.outcome != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-process-preflight-${{ inputs.scope }}-${{ matrix.rid }}
+          name: sunder-process-preflight-${{ inputs.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
           path: artifacts/process-preflight
           if-no-files-found: error
           retention-days: 14
@@ -65,13 +67,15 @@ jobs:
           global-json-file: global.json
       - name: Build and test native platform
         id: platform_tests
+        env:
+          NATIVE_PARTITION: ${{ matrix.partition }}
         shell: bash
-        run: python3 -B scripts/ci/core_ci.py platform --scope "$CI_SCOPE"
+        run: python3 -B scripts/ci/core_ci.py platform --scope "$CI_SCOPE" --partition "$NATIVE_PARTITION"
       - name: Retain platform test results
         if: always() && steps.platform_tests.outcome != 'skipped' && steps.platform_tests.outcome != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-platform-${{ inputs.scope }}-${{ matrix.rid }}
+          name: sunder-platform-${{ inputs.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
           path: artifacts/test-results/${{ inputs.scope }}
           if-no-files-found: error
           retention-days: 14
