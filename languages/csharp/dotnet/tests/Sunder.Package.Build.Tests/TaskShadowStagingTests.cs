@@ -821,7 +821,8 @@ public sealed partial class TaskShadowStagingTests
                 <MSBuild Projects="{{owner}}" Targets="Rebuild"
                          Properties="Configuration=Debug;GeneratePackageOnBuild=false;BuildProjectReferences=true;SunderPackageBuildSourceLockTargetsPath={{sourceLockTargets}}" />
                 <Error Condition="!Exists('{{reference}}')" Text="The owner did not produce its shared reference." />
-                <MSBuild Projects="{{dependency}}" Targets="Rebuild" Properties="Configuration=Debug" />
+                <MSBuild Projects="{{dependency}}" Targets="Rebuild"
+                         Properties="Configuration=Debug;GeneratePackageOnBuild=false;BuildProjectReferences=true" />
                 <Error Condition="!Exists('{{reference}}')" Text="A late Clean deleted the shared reference after its Build result was cached." />
               </Target>
             </Project>
@@ -870,7 +871,7 @@ public sealed partial class TaskShadowStagingTests
             """));
         document.Save(dependency);
         AssertSuccess(await RunDotnetAsync(fixture, "restore", owner, "--nologo"));
-        AssertSuccess(await RunMsbuildAsync(owner, fixture, "Build", "-m:2", "-p:BuildProjectReferences=false",
+        AssertSuccess(await RunMsbuildAsync(owner, fixture, "Build", "-m:2", "-p:BuildProjectReferences=true",
             "-p:GeneratePackageOnBuild=false", $"-p:SunderPackageBuildSourceLockTargetsPath={sourceLock}"));
     }
 
@@ -992,11 +993,13 @@ public sealed partial class TaskShadowStagingTests
         Assert.Equal(dependencyReferenceHash, SHA256.HashData(await File.ReadAllBytesAsync(dependencyReferenceAssembly)));
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("Category", "Artifact")]
     [Trait("Capability", "Process")]
     [Trait("Capability", "Filesystem")]
-    public async Task DirectOwnerBuild_DoesNotPropagateOperationPropertiesToReferences()
+    public async Task DirectOwnerBuild_PreservesCallerGlobalsAndDoesNotPropagateLeaseProperties(bool callerDisablesPacking)
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-task-shadow-owner-reference-properties");
         var repositoryRoot = FindRepositoryRoot();
@@ -1028,14 +1031,14 @@ public sealed partial class TaskShadowStagingTests
             taskProject,
             fixture,
             "Build",
-            $"-p:SunderPackageBuildSourceLockTargetsPath={sourceLockTargets}",
-            "-p:GeneratePackageOnBuild=false",
-            $"-p:TaskShadowDependencyPropertyRecordFile={propertyRecord}"));
+            [$"-p:SunderPackageBuildSourceLockTargetsPath={sourceLockTargets}",
+            .. (callerDisablesPacking ? new[] { "-p:GeneratePackageOnBuild=false" } : []),
+            $"-p:TaskShadowDependencyPropertyRecordFile={propertyRecord}"]));
 
         Assert.Equal(
             [
                 "BuildProjectReferences=dependency-local",
-                "GeneratePackageOnBuild=dependency-local",
+                callerDisablesPacking ? "GeneratePackageOnBuild=false" : "GeneratePackageOnBuild=dependency-local",
                 "SunderPackageBuildTaskSourceLockAlreadyHeld=dependency-local",
                 "SunderPackageBuildTaskSourceLockPath=dependency-local",
                 "SunderPackageBuildSourceLockTargetsPath=dependency-local",

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Sunder.Core.TestSupport;
+using Sunder.Runtime.Contracts;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -18,6 +19,7 @@ public sealed class AppPolicyHeartbeatProcessTests
         using var report = JsonDocument.Parse(result.StandardOutput.Trim());
         Assert.True(report.RootElement.GetProperty("nativeDesktopExited").GetBoolean());
         Assert.Equal(1, report.RootElement.GetProperty("shutdowns").GetInt32());
+        Assert.Equal(1, report.RootElement.GetProperty("canceledExitReplies").GetInt32());
         Assert.Equal(mode == "quit", report.RootElement.GetProperty("cleanupCompleted").GetBoolean());
     }
 
@@ -44,7 +46,10 @@ public sealed class AppPolicyHeartbeatProcessTests
         using var report = JsonDocument.Parse(result.StandardOutput.Trim());
         Assert.Equal(mode, report.RootElement.GetProperty("mode").GetString());
         Assert.Equal(1, report.RootElement.GetProperty("failures").GetArrayLength());
-        Assert.True(report.RootElement.GetProperty("heartbeatsAfter").GetInt32() >= report.RootElement.GetProperty("heartbeatsBefore").GetInt32() + 5);
+        var healthySeconds = report.RootElement.GetProperty("healthySeconds").GetInt32();
+        Assert.True(healthySeconds > RuntimePolicyTiming.AppHeartbeatGraceSeconds);
+        Assert.True(report.RootElement.GetProperty("heartbeatsAfter").GetInt32() >= report.RootElement.GetProperty("heartbeatsBefore").GetInt32()
+            + healthySeconds / RuntimePolicyTiming.AppHeartbeatGraceSeconds);
     }
 
     private static async Task<Sunder.Core.TestSupport.CapturedProcessResult> RunProbeAsync(string mode)

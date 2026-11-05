@@ -174,8 +174,11 @@ test("native validation requires both actual vendor-runtime tests on all six arc
   }
   assert.match(platform, /core_ci.py platform --scope/u);
   const official = source.slice(source.indexOf("\n  official-runtimes:"), source.indexOf("\n  packaging:"));
+  requiresJobs(official, ["prepare", "platform"]);
   assert.match(official, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.native\) \}\}/u);
   assert.match(official, /core_ci.py official --scope[^\n]+--rid/u);
+  assert.match(workflowStep(official, "Retain official runtime test results"), /path: artifacts\/test-results\/\$\{\{ inputs.scope \}\}\s*\n/u);
+  requiresJobs(source.slice(source.indexOf("\n  packaging:")), ["prepare", "platform"]);
   const smoke = await owned("scripts/test/release/smoke-app-packaging.sh");
   const dmg = await owned("scripts/release/macos/verify-sunder-dmg.sh");
   assert.match(source, /smoke-app-packaging.sh/u);
@@ -219,12 +222,12 @@ test("component releases select their own validation and App also requires its R
   requiresJobs(app.slice(app.indexOf("\n  package:")), ["validation", "runtime-validation"]);
   const validation = await workflow("host-validation");
   for (const flag of ["platform_tests", "official_tests", "app_packaging"]) {
-    assert.ok(validation.includes(`if: needs.prepare.outputs.${flag} == 'true'`));
+    assert.ok(validation.includes(`needs.prepare.outputs.${flag} == 'true'`));
   }
   assert.match(validation, /metadata.py matrices --scope/u);
 });
 
-test("CI audits successful owning jobs without repeating builds or suites", async () => {
+test("CI finalizes failed and missing owning jobs without repeating builds or suites", async () => {
   const source = await workflow("ci");
   const audit = source.slice(source.indexOf("\n  test-results:"));
   requiresJobs(audit, ["build-test-pack", "native"]);
@@ -234,7 +237,11 @@ test("CI audits successful owning jobs without repeating builds or suites", asyn
   }
   assert.match(audit, /--scope "\$CI_SCOPE" --aggregate/u);
   assert.match(audit, /--require-scenario generated-templates/u);
-  assert.doesNotMatch(audit, /dotnet (?:build|test)|npm (?:ci|run)|run-.*tests|if: always\(\)/u);
+  assert.doesNotMatch(audit, /dotnet (?:build|test)|npm (?:ci|run)|run-.*tests/u);
+  assert.match(audit, /test-results:\n\s+if: always\(\)/u);
+  assert.doesNotMatch(audit, /needs\.(?:build-test-pack|native)\.result == 'success'/u);
+  assert.match(audit, /core-test-summary\.json/u);
+  assert.match(audit, /SUNDER_CI_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/u);
   assert.match(source, /group: sunder-core-ci-[^\n]+inputs.scope[^\n]+github.run_id/u);
   assert.match(source, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
   assert.match(source, /core_ci.py portable/u);

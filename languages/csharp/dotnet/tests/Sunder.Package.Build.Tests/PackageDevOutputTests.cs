@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Security.Cryptography;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
@@ -21,8 +20,8 @@ public sealed class PackageDevOutputTests
         var targetDirectory = Path.Combine(root, "target");
         var devPackage = Path.Combine(root, "sunder-dev");
         Directory.CreateDirectory(targetDirectory);
-        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
-        File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(ManifestAssemblyPath));
+        File.Copy(ManifestAssemblyPath, assemblyPath);
         var winNative = Path.Combine(targetDirectory, "runtimes", "win-x64", "native", "fixture.bin");
         var linuxNative = Path.Combine(targetDirectory, "runtimes", "linux-x64", "native", "fixture.bin");
         Directory.CreateDirectory(Path.GetDirectoryName(winNative)!);
@@ -173,8 +172,8 @@ public sealed class PackageDevOutputTests
             var assets = Path.Combine(root, generation, "assets");
             Directory.CreateDirectory(target);
             Directory.CreateDirectory(assets);
-            var assemblyPath = Path.Combine(target, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
-            File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+            var assemblyPath = Path.Combine(target, Path.GetFileName(ManifestAssemblyPath));
+            File.Copy(ManifestAssemblyPath, assemblyPath);
             var assetPath = Path.Combine(assets, "generation.txt");
             File.WriteAllText(assetPath, generation);
             var projectFile = Path.Combine(root, generation, "Emit.proj");

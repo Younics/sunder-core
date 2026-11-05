@@ -3,9 +3,9 @@ import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
+import { createNodeTestWorkspace } from "./node-test-workspace.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const nodeRoot = resolve(repositoryRoot, "languages/typescript/node");
 const wrapper = resolve(repositoryRoot, "scripts/test-oracles/run-node-tests-with-results.mjs");
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const args = process.argv.slice(2);
@@ -17,12 +17,6 @@ const tests = declarations.filter(test => test.framework === "node");
 const selectedProjects = new Set(tests.map(test => test.project));
 const outputArgs = args.length === 0 ? [] : ["--results-directory", args[3]];
 
-for (const packageName of ["sdk", "package-tool", "create-sunder-package"].filter(name => selectedProjects.has(name))) {
-  const packageRoot = resolve(nodeRoot, "packages", packageName);
-  rmSync(resolve(packageRoot, "dist"), { recursive: true, force: true });
-  rmSync(resolve(packageRoot, "dist-test"), { recursive: true, force: true });
-}
-
 const scripts = [...new Set(tests.filter(test => test.source.startsWith("scripts/")).map(test => resolve(repositoryRoot, test.source)))].sort();
 if (scripts.length > 0) runNodeReport("node-core-oracles", scripts);
 
@@ -31,16 +25,25 @@ const workspaces = [
   ["@sunder/package-tool", "packages/package-tool", "node-package-tool"],
   ["create-sunder-package", "packages/create-sunder-package", "node-create-sunder-package"],
 ].filter(([, project]) => selectedProjects.has(project.split("/").at(-1)));
-// Packed package-tool cases consume the scaffolder as well as the SDK/tool.
-// Build the complete production closure before any workspace artifact tests.
-for (const [workspace] of workspaces) {
-  runRequired(npm, ["run", "typecheck", "--workspace", workspace], nodeRoot, `${workspace} typecheck`);
-  runRequired(npm, ["run", "build", "--workspace", workspace], nodeRoot, `${workspace} build`);
+const workspace = workspaces.length > 0 ? createNodeTestWorkspace(repositoryRoot) : undefined;
+const nodeRoot = workspace?.nodeRoot;
+let completed = false;
+try {
+  // Packed package-tool cases consume the scaffolder as well as the SDK/tool.
+  // Build the complete production closure before any workspace artifact tests.
+  for (const [workspace] of workspaces) {
+    runRequired(npm, ["run", "typecheck", "--workspace", workspace], nodeRoot, `${workspace} typecheck`);
+    runRequired(npm, ["run", "build", "--workspace", workspace], nodeRoot, `${workspace} build`);
+  }
+  for (const [workspace, project, report] of workspaces) {
+    runWorkspace(workspace, project, report);
+  }
+  if (selectedProjects.has("create-sunder-package")) runRequired(npm, ["run", "templates:typecheck"], nodeRoot, "Node template generation and typecheck");
+  completed = true;
+} finally {
+  if (workspace && completed) rmSync(workspace.root, { recursive: true, force: true });
+  else if (workspace) process.stderr.write(`Failed Node producer workspace retained at ${workspace.root}\n`);
 }
-for (const [workspace, project, report] of workspaces) {
-  runWorkspace(workspace, project, report);
-}
-if (selectedProjects.has("create-sunder-package")) runRequired(npm, ["run", "templates:typecheck"], nodeRoot, "Node template generation and typecheck");
 
 function runWorkspace(workspace, project, report) {
   runRequired(

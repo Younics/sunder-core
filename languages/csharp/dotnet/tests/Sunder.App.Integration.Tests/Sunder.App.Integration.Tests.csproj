@@ -1,11 +1,21 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_PolicyAppTargetPath" />
-    <!-- Reuse the Runtime's test fixtures without introducing an App dependency there. -->
-    <ProjectReference Include="..\Sunder.Runtime.Host.Tests\Sunder.Runtime.Host.Tests.csproj" PrivateAssets="all" />
+    <ProjectReference Include="..\Sunder.Runtime.Host.TestSupport\Sunder.Runtime.Host.TestSupport.csproj" />
+    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\GeneratedOwnedRpc\GeneratedOwnedRpc.csproj"
+                      ReferenceOutputAssembly="false" OutputItemType="_PolicyPackageTargetPath" />
     <Compile Remove="AppPolicyStartupHook.cs" />
     <None Include="AppPolicyStartupHook.cs" />
   </ItemGroup>
+  <Target Name="RecordGeneratedPolicyPackage" AfterTargets="Build" DependsOnTargets="ResolveReferences">
+    <Error Condition="'@(_PolicyPackageTargetPath->Count())' != '1'" Text="The policy tests require one source-built generated RPC package." />
+    <PropertyGroup>
+      <_PolicyPackageTargetDirectory>@(_PolicyPackageTargetPath->'%(RootDir)%(Directory)')</_PolicyPackageTargetDirectory>
+      <_PolicyPackagePath>$([System.IO.Path]::GetFullPath('$(_PolicyPackageTargetDirectory)../sunder-dev'))</_PolicyPackagePath>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_PolicyPackagePath)/manifest/sunder-package.json')" Text="The owning build did not compose the generated RPC package at '$(_PolicyPackagePath)'." />
+    <WriteLinesToFile File="$(TargetDir)sunder-policy-package-path.txt" Lines="$(_PolicyPackagePath)" Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
   <Target Name="BuildAppPolicyStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
           Inputs="$(MSBuildProjectDirectory)/AppPolicyStartupHook.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
           Outputs="$(TargetDir)app-policy-hook/Sunder.App.Tests.dll;$(TargetDir)sunder-policy-app-target-path.txt">

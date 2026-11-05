@@ -2459,7 +2459,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             []);
     }
 
-    internal static async Task<RegistryArtifactFixture> CreateRegistryArtifactAsync(
+    internal static Task<RegistryArtifactFixture> CreateRegistryArtifactAsync(
         string root,
         string name,
         string origin,
@@ -2469,111 +2469,8 @@ public sealed partial class RegistryRuntimeArchitectureTests
         IReadOnlyList<string>? runtimeIdentifiers = null,
         IReadOnlyList<string>? runtimeRequiredHostCapabilities = null,
         IReadOnlyList<string>? roles = null)
-    {
-        RuntimeLocalState.EnsureInitialized(root);
-        var artifactRoot = Path.Combine(root, "registry-artifacts", name);
-        var sourceRoot = Path.Combine(artifactRoot, "source");
-        CanonicalPackageTestBuilder.WriteExplodedPackage(
-            sourceRoot,
-            packageId,
-            version,
-            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
-            runtimeIdentifiers: runtimeIdentifiers,
-            runtimeRequiredHostCapabilities: runtimeRequiredHostCapabilities,
-            roles: roles);
-        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(sourceRoot);
-        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
-        var sourceArchiveSha256 = Convert.ToHexString(SHA256.HashData(
-                Encoding.UTF8.GetBytes($"{packageId}:{version}:{name}")))
-            .ToLowerInvariant();
-        var packageContentIdentity = PackageSessionPreparer.ComputeContentIdentity(sourceRoot);
-        var rid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-        var manifestRoles = (validation.Manifest!.Targets ?? [])
-            .Where(static target => target?.Role is not null)
-            .Select(static target => target!.Role!)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var keys = new List<SunderPackageProjectionKey>
-        {
-            SunderPackageProjectionKey.Shared,
-        };
-        if (manifestRoles.Contains(SunderPackageFormat.RuntimeHostRole, StringComparer.Ordinal))
-        {
-            keys.Add(SunderPackageProjectionKey.Runtime(rid));
-        }
-        if (manifestRoles.Contains(SunderPackageFormat.AppHostRole, StringComparer.Ordinal))
-        {
-            keys.Add(SunderPackageProjectionKey.App(rid));
-        }
-        var artifacts = new List<RegistryPackageProjectionArtifact>(keys.Count);
-        var contentByUrl = new Dictionary<string, byte[]>(StringComparer.Ordinal);
-        foreach (var key in keys)
-        {
-            var path = Path.Combine(artifactRoot, $"{key.Kind}-{key.Rid ?? "none"}.sunderprojection");
-            var descriptor = await SunderPackageProjectionArchiveWriter.WriteAsync(
-                sourceRoot,
-                validation.Manifest!,
-                validation.ContentIndex!,
-                sourceArchiveSha256,
-                key,
-                path);
-            var content = await File.ReadAllBytesAsync(path);
-            var downloadUrl = new Uri(
-                RegistryOrigin.Normalize(origin),
-                $"artifacts/{Uri.EscapeDataString(name)}-{key.Kind}-{key.Rid ?? "none"}.sunderprojection")
-                .AbsoluteUri;
-            contentByUrl.Add(downloadUrl, content);
-            artifacts.Add(new RegistryPackageProjectionArtifact(
-                key.Kind,
-                key.Rid,
-                Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant(),
-                content.LongLength,
-                downloadUrl,
-                descriptor.SourceArchiveSha256!,
-                descriptor.ManifestSha256!,
-                descriptor.ProjectionSha256!,
-                descriptor.ProjectionFormatVersion));
-        }
-
-        return new RegistryArtifactFixture(
-            new RegistryPackageInstallPlanItem(
-                packageId,
-                currentVersion,
-                version,
-                packageContentIdentity,
-                currentVersion is null
-                    ? RegistryPackageActionKinds.PackageInstall
-                    : RegistryPackageActionKinds.PackageUpdate,
-                null,
-                [],
-                 validation.Manifest!.Targets!
-                    .Where(static target => target is not null)
-                    .Select(static target => new RegistryPackageTarget(
-                        target!.Role!,
-                        target.Rid!,
-                        target.Kind!,
-                        target.EntryPoint!,
-                        target.TargetFramework,
-                        target.SdkVersion,
-                        (target.RequiredHostCapabilities ?? []).Select(static capability => capability!).ToArray(),
-                        (target.Views ?? []).Where(static view => view is not null).Select(static view => new RegistryPackageWebView(
-                            view!.ViewId!,
-                            view.DisplayName!,
-                            view.Route!,
-                            view.Icon,
-                            view.DefaultPlacement!,
-                            view.ShowInHotbar!.Value)).ToArray(),
-                         target.ExecutionRuntime is null
-                             ? null
-                             : new RegistryExecutionRuntimeRequirement(
-                                 target.ExecutionRuntime.Id!,
-                                 target.ExecutionRuntime.VersionRange!,
-                                 target.ExecutionRuntime.ModuleAbi!),
-                         target.AvaloniaVersion))
-                     .ToArray(),
-                  artifacts),
-              contentByUrl);
-    }
+        => RegistryArtifactFixture.CreateAsync(root, name, origin, packageId, currentVersion, version,
+            typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, runtimeIdentifiers, runtimeRequiredHostCapabilities, roles);
 
     private static HttpResponseMessage PlanResponse(
         RegistryPackageInstallPlanItem item,
@@ -2689,31 +2586,6 @@ public sealed partial class RegistryRuntimeArchitectureTests
         private readonly ActivePolicyRegistryFixture _policy = new();
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => _policy.SendAsync(request, () => send(request, cancellationToken), cancellationToken);
-    }
-
-    internal sealed record RegistryArtifactFixture(
-        RegistryPackageInstallPlanItem PlanItem,
-        IReadOnlyDictionary<string, byte[]> ContentByUrl)
-    {
-        public HttpResponseMessage CreateResponse(Uri uri)
-            => TryCreateResponse(uri, out var response)
-                ? response
-                : throw new InvalidOperationException($"No test Registry artifact exists at '{uri}'.");
-
-        public bool TryCreateResponse(Uri uri, out HttpResponseMessage response)
-        {
-            if (!ContentByUrl.TryGetValue(uri.AbsoluteUri, out var content))
-            {
-                response = null!;
-                return false;
-            }
-            response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new ByteArrayContent(content),
-                RequestMessage = new HttpRequestMessage(HttpMethod.Get, uri),
-            };
-            return true;
-        }
     }
 
     private sealed class TrackingReadStream(byte[] content) : Stream

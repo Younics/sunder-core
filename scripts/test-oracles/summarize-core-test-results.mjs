@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { componentFor, expectedScriptReports, loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
@@ -151,24 +151,59 @@ export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), opti
   };
 }
 
-export function auditCoreTestReports(reports, model = loadCoreTestModel(), requiredTests = []) {
+export function auditCoreTestReports(reports, model = loadCoreTestModel(), requiredTests = [], issues) {
   const results = ownedResults(reports, model);
+  const check = action => {
+    try { action(); }
+    catch (error) { if (issues === undefined) throw error; issues.push(error.message); }
+  };
   for (const name of expectedScriptReports(model)) {
-    if (reports.filter((report) => basename(report.source) === name).length !== 1) {
+    check(() => { if (reports.filter((report) => basename(report.source) === name).length !== 1) {
       throw new Error(`Core aggregate requires exactly one '${name}' report from its owning job.`);
-    }
+    } });
   }
   // Owning jobs validate platform-specific skips and required external-input
   // selections. This cross-platform audit checks their combined discovery;
   // unselected live/release artifacts are not ordinary CI prerequisites.
-  requireDotnetDeclarations(model.declarations.filter((item) =>
-    item.framework === "dotnet" && item.externalEnvironment === undefined), results);
-  requireFixtureDeclarations(model.declarations.filter((item) => ["python", "shell"].includes(item.framework)), results);
-  requireNodeSources(model.declarations, results);
+  check(() => requireDotnetDeclarations(model.declarations.filter((item) =>
+    item.framework === "dotnet" && item.externalEnvironment === undefined), results));
+  check(() => requireFixtureDeclarations(model.declarations.filter((item) => ["python", "shell"].includes(item.framework)), results));
+  check(() => requireNodeSources(model.declarations, results));
   const components = model.policy.scopes?.[model.scope ?? "all"];
   const scenarios = components === undefined ? [] : ["portable", "official"].flatMap(profile => ciScenarios(components, profile));
-  requireSelectedTests([...requiredTests, ...scenarios.flatMap(name => selectScenario(name, model.declarations).tests.map(test => test.id))], model, results);
+  check(() => requireSelectedTests([...requiredTests, ...scenarios.flatMap(name => selectScenario(name, model.declarations).tests.map(test => test.id))], model, results));
   return counts(results);
+}
+
+export function auditNativeEvidence(directory, model, platforms, issues) {
+  const components = model.policy.scopes[model.scope];
+  const families = [
+    ...(components.some(owner => ["sdk", "host", "app"].includes(owner)) ? ["sunder-platform"] : []),
+    ...(components.includes("host") ? ["official-runtime"] : []),
+  ];
+  return families.flatMap(family => platforms.map(({ rid }) => {
+    const artifact = `${family}-${model.scope}-${rid}`;
+    const root = resolve(directory, family === "sunder-platform" ? "platform" : "official", artifact);
+    const evidence = existsSync(root) ? listFiles(root).filter(path => basename(path) === "core-test-evidence.json") : [];
+    const expectedLanes = family === "official-runtime" ? ["official-runtime"]
+      : ["host-platform", ...(components.includes("app") ? ["app-packaging"] : [])];
+    const lanes = new Set();
+    for (const path of evidence) {
+      try {
+        const document = JSON.parse(readFileSync(path, "utf8"));
+        if (document.schemaVersion !== 1 || document.scope !== model.scope
+            || document.operatingSystem !== ({ win: "Windows", linux: "Linux", osx: "MacOS" })[rid.split("-")[0]]
+            || !Number.isSafeInteger(document.counts?.executed) || document.counts.executed <= 0
+            || document.counts.failed !== 0 || !Array.isArray(document.lanes)) throw new Error("invalid owning-job evidence");
+        for (const row of document.lanes) {
+          if (Number.isSafeInteger(row.executed) && row.executed > 0 && row.failed === 0) lanes.add(row.lane);
+        }
+      } catch (error) { issues.push(`${artifact}: ${error.message}`); }
+    }
+    const missing = expectedLanes.filter(lane => !lanes.has(lane));
+    if (missing.length > 0) issues.push(`Missing required native evidence: ${artifact} (${missing.join(", ")}).`);
+    return { artifact, rid, complete: missing.length === 0 };
+  }));
 }
 
 function ownedResults(reports, model) {
@@ -333,38 +368,71 @@ function main() {
     throw new Error("Usage: summarize-core-test-results.mjs [directory] [--aggregate | --allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
   }
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
-  if (!existsSync(directory)) throw new Error(`Test result directory '${directory}' does not exist.`);
-  const files = listFiles(directory).filter((path) => extname(path) === ".trx" || path.endsWith(".junit.xml"));
-  for (const path of listFiles(directory).filter((path) => path.endsWith(".process.json"))) {
-    const execution = JSON.parse(readFileSync(path, "utf8"));
-    if (execution.status !== 0 || execution.signal !== null || execution.error !== null || execution.cleanupComplete !== true) {
-      const { status, signal, error, cleanupComplete } = execution;
-      throw new Error(`Test command failed: '${relative(directory, path)}': ${JSON.stringify({ status, signal, error, cleanupComplete })}`);
-    }
+  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes });
+}
+
+export function summarizeResults(directory, model, options = {}) {
+  if (!options.aggregate) rmSync(resolve(directory, "core-test-evidence.json"), { force: true });
+  const issues = [];
+  const jobs = [];
+  if (options.aggregate && process.env.SUNDER_CI_JOB_RESULTS !== undefined) {
+    try {
+      const results = JSON.parse(process.env.SUNDER_CI_JOB_RESULTS);
+      const nativeRequired = model.policy.scopes[model.scope].some(owner => ["sdk", "host", "app"].includes(owner));
+      for (const name of ["build-test-pack", "native"]) {
+        const result = results[name]?.result ?? "missing";
+        jobs.push({ job: name, result });
+        if (result !== "success" && !(name === "native" && !nativeRequired && result === "skipped")) {
+          issues.push(`Owning job '${name}' ended with '${result}'.`);
+        }
+      }
+    } catch (error) { issues.push(`Invalid owning-job results: ${error.message}`); }
   }
-  if (files.length === 0) throw new Error(`No TRX or JUnit files were found under '${directory}'.`);
-  const reports = files.map((path) => {
-    const xml = readFileSync(path, "utf8");
-    const source = relative(directory, path).replaceAll("\\", "/");
-    return path.endsWith(".trx") ? parseTrxReport(xml, source) : parseJunitReport(xml, source);
-  }).sort((left, right) => ordinal(left.source, right.source));
-  if (aggregate) {
-    const outcomes = auditCoreTestReports(reports, model, requiredTests);
-    process.stdout.write(`Audited ${reports.length} owning-job reports: discovered=${outcomes.discovered}; passed=${outcomes.passed}; failed=${outcomes.failed}; skipped=${outcomes.skipped}\n`);
-    if (outcomes.failed > 0) process.exitCode = 1;
-    return;
+  const files = existsSync(directory) ? listFiles(directory) : [];
+  const reports = [];
+  for (const path of files) {
+    try {
+      if (path.endsWith(".process.json")) {
+        const { status, signal, error, cleanupComplete } = JSON.parse(readFileSync(path, "utf8"));
+        if (status !== 0 || signal !== null || error !== null || cleanupComplete !== true) {
+          throw new Error(`Test command failed: '${relative(directory, path)}': ${JSON.stringify({ status, signal, error, cleanupComplete })}`);
+        }
+      } else if (extname(path) === ".trx" || path.endsWith(".junit.xml")) {
+        const xml = readFileSync(path, "utf8");
+        const source = relative(directory, path).replaceAll("\\", "/");
+        reports.push(path.endsWith(".trx") ? parseTrxReport(xml, source) : parseJunitReport(xml, source));
+      }
+    } catch (error) { issues.push(`${relative(directory, path)}: ${error.message}`); }
   }
-  const evidence = buildCoreTestEvidence(reports, model, {
-    allowPartial,
-    requiredTests,
-    requiredPrimaryLanes,
-  });
+  reports.sort((left, right) => ordinal(left.source, right.source));
+  const results = reports.flatMap(report => report.results);
+  const outcomes = counts(results);
+  let evidence;
+  try {
+    if (options.aggregate) auditCoreTestReports(reports, model, options.requiredTests, issues);
+    else evidence = buildCoreTestEvidence(reports, model, options);
+  } catch (error) { issues.push(error.message); }
+  const native = options.aggregate ? auditNativeEvidence(directory, model,
+    JSON.parse(readFileSync(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms, issues) : [];
+  const failures = results.filter(result => result.outcome === "Failed").map(({ report, name }) => ({ report, name }));
+  const summary = { schemaVersion: 1, scope: model.scope, accepted: issues.length === 0 && failures.length === 0,
+    counts: outcomes, failures, issues, jobs, native };
   mkdirSync(directory, { recursive: true });
-  const output = resolve(directory, "core-test-evidence.json");
-  writeFileSync(output, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-  process.stdout.write(`Wrote compact evidence for ${evidence.counts.discovered} discovered and ${evidence.counts.executed} executed tests to ${relative(repositoryRoot, output)}.\n`);
-  process.stdout.write(`Outcomes: passed=${evidence.counts.passed}; failed=${evidence.counts.failed}; skipped=${evidence.counts.skipped}\n`);
-  if (evidence.counts.failed > 0) process.exitCode = 1;
+  writeFileSync(resolve(directory, "core-test-summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+  // Failed command metadata is never promoted to accepted owning-job evidence.
+  if (evidence !== undefined && summary.accepted) {
+    writeFileSync(resolve(directory, "core-test-evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  }
+  const text = `Core ${model.scope ?? "test"} summary: passed=${outcomes.passed}; failed=${outcomes.failed}; skipped=${outcomes.skipped}; issues=${issues.length}\n`
+    + [...failures.map(value => `FAILED ${value.report}: ${value.name}`), ...issues].join("\n") + "\n";
+  process.stdout.write(text);
+  if (issues.length > 0) process.stderr.write(issues.join("\n") + "\n");
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const escaped = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `<h3>Core test results</h3><pre>${escaped}</pre>\n`);
+  }
+  if (!summary.accepted) process.exitCode = 1;
+  return summary;
 }
 
 function requireDotnetDeclarations(declarations, results) {

@@ -5,9 +5,10 @@ using System.Diagnostics;
 using Sunder.Package.Projections;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
+using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Packaging;
 
-namespace Sunder.Runtime.Host.Services;
+namespace Sunder.Runtime.Host.TestSupport;
 
 internal sealed class TestExecutionRuntimeLaunchResolver :
     IExecutionRuntimeLaunchResolver,

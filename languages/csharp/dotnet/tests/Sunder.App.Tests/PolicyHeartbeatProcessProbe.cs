@@ -149,6 +149,7 @@ internal static class PolicyHeartbeatProcessProbe
         ThreadPool.GetAvailableThreads(out var available, out _);
         var started = Stopwatch.GetTimestamp();
         Exception? failure = null;
+        double elapsed;
         try
         {
             // The transport owns the budget even without a caller timer. Pool
@@ -159,10 +160,10 @@ internal static class PolicyHeartbeatProcessProbe
         catch (Exception error) { failure = error; }
         finally
         {
+            elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             Require(ThreadPool.SetMaxThreads(maximum, maximumIo) && ThreadPool.SetMinThreads(minimum, minimumIo), "Could not restore child-only pool.");
             release.Set();
         }
-        var elapsed = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         var timedOut = failure is TimeoutException or IOException or SocketException;
         Console.WriteLine(JsonSerializer.Serialize(new { mode = "deadline", timedOut, availablePoolWorkers = available,
             elapsedMilliseconds = elapsed, failureType = failure?.GetType().Name, runtime = RuntimeInformation.FrameworkDescription }, Json));
@@ -178,7 +179,7 @@ internal static class PolicyHeartbeatProcessProbe
         var exitCode = AppBuilder.Configure<QuitApplication>().UsePlatformDetect().StartWithClassicDesktopLifetime([]);
         var app = (QuitApplication)Application.Current!;
         try { app.Verify(exitCode); return exitCode; }
-        finally { app.Servers.Dispose(); }
+        finally { app.ReleaseCleanup(); app.Servers.Dispose(); }
     }
 
     private sealed class QuitApplication : Sunder.App.App
@@ -204,7 +205,7 @@ internal static class PolicyHeartbeatProcessProbe
             desktop.ShutdownRequested += (EventHandler<ShutdownRequestedEventArgs>)handler.CreateDelegate(typeof(EventHandler<ShutdownRequestedEventArgs>), this);
             var gateway = new RuntimeClientTransport(() => Servers.Gateway);
             var transport = new AppRuntimeProcessTransport(gateway, _ => Servers.Worker);
-            _connection = new Connection(transport);
+            _connection = new Connection(transport, Servers);
             var supervisor = new AppProcessPolicySupervisor(_connection,
                 runtime => new(Environment.ProcessId, "isolated-quit", new string('b', 64), "probe", Guid.NewGuid(), runtime),
                 () => Dispatcher.UIThread.Post(RequestPolicyShutdown), Environment.FailFast, RuntimeContinuousClock.Read, TimeProvider.System,
@@ -251,6 +252,7 @@ internal static class PolicyHeartbeatProcessProbe
         internal void Verify(int exitCode)
         {
             Require(exitCode == 0, "Native desktop exit did not succeed.");
+            Servers.CompleteExitHandoff();
             Require(Stopwatch.GetElapsedTime(_quitStarted) >= TimeSpan.FromSeconds(6), "Cleanup did not span the heartbeat grace.");
             Require(Volatile.Read(ref Servers.Heartbeats) >= _heartbeatsBefore + 5, "Heartbeats stopped during ordinary cleanup.");
             Require(_connection!.Shutdowns == 1 && _cleanup.Calls == 1, "Repeated Quit replayed finalization or service disposal.");
@@ -259,26 +261,34 @@ internal static class PolicyHeartbeatProcessProbe
             Require(Servers.Errors.IsEmpty, string.Join("; ", Servers.Errors));
             Console.WriteLine(JsonSerializer.Serialize(new { mode = TimeoutCleanup ? "quit-timeout" : "quit", nativeDesktopExited = true,
                 heartbeats = Servers.Heartbeats, shutdowns = _connection.Shutdowns, cleanupCompleted = _cleanup.Completed,
+                canceledExitReplies = Servers.CanceledExitReplies,
                 elapsedMilliseconds = Stopwatch.GetElapsedTime(_quitStarted).TotalMilliseconds,
                 runtime = RuntimeInformation.FrameworkDescription }, Json));
         }
+
+        internal void ReleaseCleanup() => _cleanup.Release();
 
         private static FieldInfo Field(string name) => typeof(Sunder.App.App).GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
     }
 
     private sealed class DelayedQuitCleanup : IAsyncDisposable
     {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int Calls;
         internal bool Completed;
+        internal void Release() => _release.TrySetResult();
         public async ValueTask DisposeAsync()
         {
             Interlocked.Increment(ref Calls);
-            await Task.Delay(QuitApplication.TimeoutCleanup ? 6500 : 4200).ConfigureAwait(false);
+            // The timeout case must still be pending at native exit, including
+            // while the probe verifies the canceled heartbeat connection.
+            if (QuitApplication.TimeoutCleanup) await _release.Task.ConfigureAwait(false);
+            else await Task.Delay(4200).ConfigureAwait(false);
             Completed = true;
         }
     }
 
-    private sealed class Connection(AppRuntimeProcessTransport transport) : IAppPolicyConnection
+    private sealed class Connection(AppRuntimeProcessTransport transport, Servers? exitServers = null) : IAppPolicyConnection
     {
         internal int Shutdowns;
         public string? DiagnosticPhase => transport.HandshakePhase;
@@ -289,10 +299,11 @@ internal static class PolicyHeartbeatProcessProbe
             => Task.FromResult(new RuntimeAppPolicySessionDescriptor(Guid.NewGuid().ToString("N"), request.Process, "active"));
         public Task<RuntimeAppPackageLoadPermitResult> PermitAsync(RuntimeAppPackageLoadPermitRequest request, CancellationToken token)
             => Task.FromResult(new RuntimeAppPackageLoadPermitResult(true, null, new string('d', 32), request.Session, request.Package, null) { Development = true });
-        public Task<RuntimeAppPolicySessionStatus> ShutdownAsync(RuntimeAppPolicySessionRequest request, CancellationToken token)
+        public async Task<RuntimeAppPolicySessionStatus> ShutdownAsync(RuntimeAppPolicySessionRequest request, CancellationToken token)
         {
             Interlocked.Increment(ref Shutdowns);
-            return Task.FromResult(new RuntimeAppPolicySessionStatus(request.SessionId, "shutdown-requested", null, true, []));
+            if (exitServers is not null) await exitServers.HoldExitReplyAsync(token);
+            return new RuntimeAppPolicySessionStatus(request.SessionId, "shutdown-requested", null, true, []);
         }
     }
 
@@ -308,6 +319,11 @@ internal static class PolicyHeartbeatProcessProbe
             [RuntimeProtocolFeatures.VersionedApiV1, RuntimeProtocolFeatures.OfficialRuntimeDownloadsV1], new("Sunder.Runtime.Host", "1.0.0", "1.0.0"));
         private int _stopped;
         private readonly int _replyDelayMilliseconds;
+        private readonly TaskCompletionSource _exitReplyPending = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ManualResetEventSlim _releaseExitReply = new();
+        private readonly ManualResetEventSlim _exitReplyCompleted = new();
+        private int _holdExitReply;
+        internal int CanceledExitReplies;
         internal int Heartbeats;
         internal volatile bool Unavailable;
         internal ConcurrentQueue<string> Errors { get; } = new();
@@ -340,7 +356,7 @@ internal static class PolicyHeartbeatProcessProbe
                     Volatile.Write(ref _pipe, pipe);
                     pipe.WaitForConnection();
                     if (Volatile.Read(ref _stopped) != 0) return;
-                    Respond(pipe, true);
+                    ServeConnection(pipe, true);
                 }
             });
         }
@@ -357,6 +373,22 @@ internal static class PolicyHeartbeatProcessProbe
 
         internal void ReplaceRuntime() => Volatile.Write(ref _handshake, _handshake with { RuntimeInstanceId = Guid.NewGuid() });
 
+        internal async Task HoldExitReplyAsync(CancellationToken token)
+        {
+            Volatile.Write(ref _holdExitReply, 1);
+            await _exitReplyPending.Task.WaitAsync(token);
+        }
+
+        internal void CompleteExitHandoff()
+        {
+            // The production supervisor has canceled its in-flight transport by
+            // the time the native lifetime returns. Prove that cancellation on
+            // the actual connection rather than hoping quit overlaps a write.
+            _releaseExitReply.Set();
+            Require(_exitReplyCompleted.Wait(TimeSpan.FromSeconds(5)), "The canceled exit heartbeat did not drain.");
+            Require(CanceledExitReplies == 1, "Exit handoff did not cancel the held heartbeat connection.");
+        }
+
         private void ServeSockets(Socket listener, bool worker)
         {
             while (Volatile.Read(ref _stopped) == 0)
@@ -365,9 +397,28 @@ internal static class PolicyHeartbeatProcessProbe
                 if (Volatile.Read(ref _stopped) != 0) return;
                 socket.ReceiveTimeout = 3000; socket.SendTimeout = 3000;
                 using var stream = new NetworkStream(socket);
-                Respond(stream, worker);
+                ServeConnection(stream, worker);
             }
         }
+
+        private void ServeConnection(Stream stream, bool worker)
+        {
+            try { Respond(stream, worker); }
+            catch (Exception error) when (IsPeerDisconnect(error))
+            {
+                // A deadline or exit handoff can close a client between response
+                // writes. Retire that connection; keep accepting later proofs.
+            }
+        }
+
+        private static bool IsPeerDisconnect(Exception error) => error switch
+        {
+            SocketException socket => socket.SocketErrorCode is SocketError.ConnectionReset
+                or SocketError.ConnectionAborted or SocketError.Shutdown,
+            IOException { InnerException: SocketException socket } => IsPeerDisconnect(socket),
+            IOException io when OperatingSystem.IsWindows() => (io.HResult & 0xffff) is 109 or 232 or 233,
+            _ => false,
+        };
 
         private void Respond(Stream stream, bool worker)
         {
@@ -375,7 +426,8 @@ internal static class PolicyHeartbeatProcessProbe
             while (!header.ToString().EndsWith("\r\n\r\n", StringComparison.Ordinal))
             {
                 var next = stream.ReadByte();
-                Require(next >= 0 && header.Length < 16384, "Invalid HTTP request header.");
+                if (next < 0) return; // Client cancellation before the request completed.
+                Require(header.Length < 16384, "Invalid HTTP request header.");
                 header.Append((char)next);
             }
             var lines = header.ToString().Split("\r\n", StringSplitOptions.RemoveEmptyEntries);
@@ -398,6 +450,19 @@ internal static class PolicyHeartbeatProcessProbe
                     response = JsonSerializer.SerializeToUtf8Bytes(new RuntimeAppPolicySessionStatus(request.SessionId, "active", null, false, []), Json);
                     Interlocked.Increment(ref Heartbeats);
                 }
+                if (Volatile.Read(ref _holdExitReply) != 0)
+                {
+                    _exitReplyPending.TrySetResult();
+                    Require(_releaseExitReply.Wait(TimeSpan.FromSeconds(5)), "The exit heartbeat was never released.");
+                    try
+                    {
+                        Require(stream.ReadByte() == -1, "The exit heartbeat client remained connected.");
+                        Interlocked.Increment(ref CanceledExitReplies);
+                    }
+                    catch (Exception error) when (IsPeerDisconnect(error)) { Interlocked.Increment(ref CanceledExitReplies); }
+                    finally { _exitReplyCompleted.Set(); }
+                    return;
+                }
             }
             var framing = worker ? "Transfer-Encoding: chunked" : $"Content-Length: {response.Length}";
             var prefix = Encoding.ASCII.GetBytes($"HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{framing}\r\nConnection: close\r\n\r\n");
@@ -418,6 +483,7 @@ internal static class PolicyHeartbeatProcessProbe
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _stopped, 1) != 0) return;
+            _releaseExitReply.Set();
             // Closing a socket underneath blocking Accept can spin in Dispose on
             // macOS. Wake the owned listener and join its thread before closing it.
             Wake(_gateway);
@@ -434,6 +500,7 @@ internal static class PolicyHeartbeatProcessProbe
             }
             Require(_gatewayThread.Join(5000) && _workerThread.Join(5000), "The isolated HTTP servers did not stop.");
             _gateway.Dispose(); _worker?.Dispose(); Volatile.Read(ref _pipe)?.Dispose();
+            _releaseExitReply.Dispose(); _exitReplyCompleted.Dispose();
             Directory.Delete(_directory, recursive: true);
         }
 

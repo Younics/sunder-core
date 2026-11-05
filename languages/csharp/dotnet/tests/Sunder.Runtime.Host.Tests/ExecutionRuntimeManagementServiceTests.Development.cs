@@ -3,6 +3,8 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
 
+using static Sunder.Runtime.Host.TestSupport.ExecutionRuntimeFixture;
+
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class ExecutionRuntimeManagementServiceTests

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
@@ -16,6 +17,7 @@ import {
 import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 import { dotnetTestArguments } from "./dotnet-test-command.mjs";
 import { selectScenario } from "./ci-scenarios.mjs";
+import { createNodeTestWorkspace } from "./node-test-workspace.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const fixtureSource = "languages/csharp/dotnet/tests/Inventory.Tests/Declarations.cs";
@@ -574,6 +576,17 @@ test("Node matrix builds every packed input before selecting all packed scenario
     await mkdir(scripts, { recursive: true });
     const runner = resolve(scripts, "run-node-test-matrix-with-results.mjs");
     await writeFile(runner, await readFile(resolve(repositoryRoot, "scripts/test-oracles/run-node-test-matrix-with-results.mjs")));
+    await writeFile(resolve(scripts, "node-test-workspace.mjs"), await readFile(resolve(repositoryRoot, "scripts/test-oracles/node-test-workspace.mjs")));
+    const nodeRoot = resolve(root, "languages/typescript/node");
+    await mkdir(resolve(nodeRoot, "node_modules"), { recursive: true });
+    await mkdir(resolve(root, "specs"));
+    await mkdir(resolve(root, "languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Contracts"), { recursive: true });
+    for (const [directory, name] of [["sdk", "@sunder/sdk"], ["package-tool", "@sunder/package-tool"], ["create-sunder-package", "create-sunder-package"]]) {
+      const path = resolve(nodeRoot, "packages", directory);
+      await mkdir(resolve(path, "dist"), { recursive: true });
+      await writeFile(resolve(path, "package.json"), JSON.stringify({ name }));
+      await writeFile(resolve(path, "dist/previous.js"), "unchanged checkout output");
+    }
     await writeFile(resolve(scripts, "core-test-policy.mjs"), `import { loadCoreTestModel as load } from ${JSON.stringify(pathToFileURL(resolve(repositoryRoot, "scripts/test-oracles/core-test-policy.mjs")).href)};
       export const loadCoreTestModel = (_, policy, scope) => load(${JSON.stringify(repositoryRoot)}, policy, scope);`);
     await writeFile(resolve(scripts, "fixture.test.mjs"), "");
@@ -585,7 +598,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
       import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
       import { dirname, resolve } from "node:path";
       childProcess.spawnSync = (command, args, options) => {
-        appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, env: {
+        appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, cwd: options.cwd, env: {
           packedClosure: options.env.SUNDER_TEST_PACKED_CLOSURE,
           packedServices: options.env.SUNDER_TEST_PACKED_SERVICES,
         } }) + "\\n");
@@ -606,11 +619,58 @@ test("Node matrix builds every packed input before selecting all packed scenario
     for (const workspace of ["@sunder/sdk", "@sunder/package-tool", "create-sunder-package"]) {
       const build = commands.findIndex(({ args }) => args.join(" ") === `run build --workspace ${workspace}`);
       assert.ok(build >= 0 && build < toolReport, `${workspace} must be built before packed package-tool tests`);
+      assert.notEqual(commands[build].cwd, nodeRoot);
     }
+    assert.equal(await readFile(resolve(nodeRoot, "packages/sdk/dist/previous.js"), "utf8"), "unchanged checkout output");
     assert.deepEqual(commands[toolReport].env, { packedClosure: "1", packedServices: "1" });
     assert.ok(commands.some(({ args }) => args[1] === "node-sdk"));
     assert.ok(commands.some(({ args }) => args[1] === "node-create-sunder-package"));
     assert.ok(commands.some(({ args }) => args.join(" ") === "run templates:typecheck"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Node producers own workspace links and dependency writes", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-node-isolation-"));
+  try {
+    const checkout = resolve(root, "checkout");
+    const source = resolve(checkout, "languages/typescript/node");
+    const sdk = resolve(source, "packages/sdk");
+    const contracts = "languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Contracts";
+    const oracle = `${contracts}/example.rpc.json`;
+    await mkdir(resolve(sdk, "dist"), { recursive: true });
+    await mkdir(resolve(source, "node_modules/@sunder"), { recursive: true });
+    await mkdir(resolve(source, "node_modules/dependency"));
+    await mkdir(resolve(sdk, "node_modules/private-dependency/dist"), { recursive: true });
+    await mkdir(resolve(checkout, "specs"));
+    await mkdir(resolve(checkout, contracts), { recursive: true });
+    await writeFile(resolve(checkout, oracle), "authored wire oracle");
+    await writeFile(resolve(sdk, "package.json"), JSON.stringify({ name: "@sunder/sdk", main: "dist/index.js" }));
+    await writeFile(resolve(sdk, "dist/index.js"), "checkout");
+    await writeFile(resolve(source, "node_modules/dependency/value"), "locked dependency");
+    await writeFile(resolve(sdk, "node_modules/private-dependency/dist/index.js"), "workspace dependency");
+    await symlink(sdk, resolve(source, "node_modules/@sunder/sdk"), process.platform === "win32" ? "junction" : "dir");
+    const producers = [createNodeTestWorkspace(checkout, root), createNodeTestWorkspace(checkout, root)];
+    for (const [index, producer] of producers.entries()) {
+      const output = resolve(producer.nodeRoot, "packages/sdk/dist");
+      await assert.rejects(stat(output), { code: "ENOENT" });
+      await mkdir(output);
+      await writeFile(resolve(output, "index.js"), `producer ${index}`);
+      const require = createRequire(resolve(producer.nodeRoot, "consumer.cjs"));
+      assert.equal(await readFile(require.resolve("@sunder/sdk"), "utf8"), `producer ${index}`);
+      assert.equal(await readFile(resolve(output, "../node_modules/private-dependency/dist/index.js"), "utf8"), "workspace dependency");
+      assert.equal(await readFile(resolve(producer.root, oracle), "utf8"), "authored wire oracle");
+    }
+    await writeFile(resolve(producers[0].nodeRoot, "node_modules/dependency/value"), "private mutation");
+    await writeFile(resolve(producers[0].root, oracle), "private oracle mutation");
+    await rm(resolve(producers[0].nodeRoot, "packages/sdk/dist"), { recursive: true });
+    assert.equal(await readFile(resolve(producers[1].nodeRoot, "packages/sdk/dist/index.js"), "utf8"), "producer 1");
+    assert.equal(await readFile(resolve(producers[1].nodeRoot, "node_modules/dependency/value"), "utf8"), "locked dependency");
+    assert.equal(await readFile(resolve(source, "node_modules/dependency/value"), "utf8"), "locked dependency");
+    assert.equal(await readFile(resolve(sdk, "dist/index.js"), "utf8"), "checkout");
+    assert.equal(await readFile(resolve(producers[1].root, oracle), "utf8"), "authored wire oracle");
+    assert.equal(await readFile(resolve(checkout, oracle), "utf8"), "authored wire oracle");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

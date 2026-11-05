@@ -3,7 +3,7 @@ using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
-using static Sunder.Runtime.Host.Tests.ActivePolicyTestContext;
+using static Sunder.Runtime.Host.TestSupport.ActivePolicyTestContext;
 
 namespace Sunder.Runtime.Host.Tests;
 

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json;
 using Microsoft.Build.Framework;
 using Sunder.Package.Build.Tasks;
@@ -15,19 +14,20 @@ namespace Sunder.Package.Build.Tests;
 
 internal static class PackageManifestFixture
 {
+    internal static string ManifestAssemblyPath => typeof(Fixtures.ManifestPackage.FixturePackageModule).Assembly.Location;
+
     internal static GenerateSunderPackageManifestTask CreateTask(string manifestPath, IBuildEngine buildEngine)
         => new()
         {
             BuildEngine = buildEngine,
-            TargetAssemblyPath = Assembly.GetExecutingAssembly().Location,
+            TargetAssemblyPath = ManifestAssemblyPath,
             ManifestOutputPath = manifestPath,
-            EntryAssembly = Path.GetFileName(Assembly.GetExecutingAssembly().Location),
+            EntryAssembly = Path.GetFileName(ManifestAssemblyPath),
             PackageVersion = "1.2.3",
-            ProjectDirectory = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!,
+            ProjectDirectory = Path.GetDirectoryName(ManifestAssemblyPath)!,
             TargetFramework = "net10.0",
             SdkCapabilities = [new MSBuildTaskItem(SunderSdkCapabilities.CallbacksV1)],
             ReferencePaths = SdkReferencePaths(includeAvalonia: true, includeStacks: true),
-            DynamicAccessAcknowledgements = TestAssemblyDynamicAccessAcknowledgements(),
         };
 
     internal static GenerateSunderPackageManifestTask CreateFixtureTask(
@@ -44,8 +44,6 @@ internal static class PackageManifestFixture
             PackageVersion = "1.2.3",
             ProjectDirectory = Path.GetDirectoryName(assemblyPath)!,
             TargetFramework = "net10.0",
-            DynamicAccessAcknowledgements = Path.GetFileName(assemblyPath) == Path.GetFileName(Assembly.GetExecutingAssembly().Location)
-                ? TestAssemblyDynamicAccessAcknowledgements() : [],
         };
         ConfigureWorkerTask(task, "linux-x64");
         return task;
@@ -73,7 +71,7 @@ internal static class PackageManifestFixture
     }
 
     internal static string CSharpWorkerModuleName()
-        => Path.GetFileName(Assembly.GetExecutingAssembly().Location);
+        => Path.GetFileName(ManifestAssemblyPath);
 
     internal static MSBuildTaskItem[] CreateDotNetWorkerFiles(
         string directory,
@@ -124,52 +122,6 @@ internal static class PackageManifestFixture
             .Where(static path => path is not null)
             .Select(static path => new MSBuildTaskItem(path!))
             .ToArray();
-
-    internal static MSBuildTaskItem[] TestAssemblyDynamicAccessAcknowledgements()
-        =>
-        [
-            new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.ImportedProvider_CompilesRegistrationAndCoalescesOnlyExplicitConsumerGrants"),
-            new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_GeneratesRealSixMethodProviderAndPreservesSemanticContentBehavior"),
-            new("Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.StackPlatform_TemplateUsesSelectedImportAndGeneratedRegistrationWithoutPrivateBootstrap"),
-            new("Sunder.Package.Build.Tests.SunderRpcAuthoringReceiptTests.Parse_RejectsCrossArtifactSelectionsEvenWhenAuthorityCountAndFormatGraphMatch"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImplementationCodecTests+RuntimeProbe..ctor"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedPackageApiIsLazyOwnsUnaryScopesRejectsDriftAndDoesNotRetry"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.ImportedExample"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCancellation_UsesOriginalCallerAndRetainsRemoteDispatchMetadata"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.UnchangedGeneratedClient_UsesAdmittedCurrentProviderWithoutRelabelingItsIdentity"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.GeneratedCatalogBorrowedSelectionProbesFreshPermissionAfterEndpointUnavailable"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InvokeCollectibleImportedGraph"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.AssertNoCollectibleJsonAccessorEntries"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedPackageStreamOpensLazilyAndRetirementCancelsAndDrainsItsScope"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.InjectedRoleClientsUseReviewedRangeAndExactTupleWithoutRestoreVersionAuthority"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpUnionCodecTests+RuntimeProbe..ctor"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpUnionCodecTests+RuntimeProbe.CodecRoundTrip"),
-            new("Sunder.Package.Build.Tests.StackContributorSourceParityTests.NeutralTransport_EmitsActualServicePartialAndCompilesWithOnlySdkAndCuratedBcl"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpProviderDeclarationTests.Declaration_ProvidesImmutableIdentityAndErrorsWithoutConstructingServiceAndForwardsExactly"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Project_CompilesMixedSourceIntoSeparateRoleAssembliesWithoutImplementationLeakage"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.ConstructorValues_ExecuteTypedAppWorkerRoundTripsWithIndependentDomainRecords"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedTypedStream_PreservesCancellationErrorsRetirementAndEnumeratorOwnership"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedComposition_OwnsLocalServicesOnceAndPreservesStagedLifecycle"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedStorageMigrations_SnapshotPlansAndPrepareInDependencyOrderWithoutLifecycleComposition"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedWorkerMixedApi_KeepsOrdinaryCallsLocalAndRoutesHostContextThroughExplicitBrokerUse"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedActivation_PreservesDependencyOrderCancellationAndCandidateCleanup"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedCallbacks_PreserveSdkRoutingAndOwnServicesOnConstructionFailure"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.GeneratedAppComposition_UsesTransientModelsAndOneDisposableHelperForInterfaceConstructors"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Configure"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Stage"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.ShutdownReason"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.Number"),
-            new("Sunder.Package.Build.Tests.SunderPackageRoleProjectionTests.DeclarationOnlyCatalogPreservesSixNaturalSignaturesAndDispatchesExactForeignProvider"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.ImportedNaturalProviderNeedsNoContextUnitOrAuthoredTransportAdapter"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalCatalogEntriesAreLazyExactBoundAndRetiredWithTheirOwner"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalCatalogWatchPreservesBothCursorPartsLifecycleAndReset"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalProviderContextFreeExplicitAndInheritedBindingsRemainValid"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.NaturalProviderMixedMethodsReceiveTheActualHostContextForAuthorizationContentAndStreams"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpModelProjectionTests.LoadProjectionProbe"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.MultiContractProviderUsesOneInstanceAndExplicitDescribeBindingsWithRealContext"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpImportPrepassTests.PrivateServiceReusesValidatedImportedRecordAndCodecWithoutClaimingItsOwnership"),
-            new("Sunder.Package.Build.Tests.SunderRpcCSharpModelProjectionTests.ProjectedNullableRequiredResourcesRetainTypedMembersAndWithClones"),
-        ];
 
     internal static MSBuildTaskItem[] DynamicAccessAcknowledgements()
         =>

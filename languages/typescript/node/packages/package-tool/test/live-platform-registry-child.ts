@@ -10,6 +10,7 @@ import { readPlatformCatalogs } from "../src/rpc-platform-catalogs";
 import { currentRid, loadProjectWithOwnedFrame } from "../src/model";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { bundleProduction, writeTargetLeaf } from "../src/package";
+import { installFixtureSdk } from "./service-fixtures";
 
 // Private test companion pins its loopback TLS certificate and the selected Registry.
 async function main(): Promise<void> {
@@ -44,6 +45,7 @@ async function main(): Promise<void> {
     const project = join(dirname(inputPath), "node-" + extension); const cache = join(project, "cache"); const lockPath = join(project, "sunder-contracts.lock.json");
     if (phase === "build") {
       await mkdir(join(project, "src"), { recursive: true });
+      await installFixtureSdk(project);
       await writeFile(lockPath, await readFile(join(fixtures, "minimal-contract-lock.json")));
       await writeFile(join(project, "sunder-contracts.owned.json"), await readFile(join(fixtures, "minimal-package-owned-baseline.json")));
       await writeFile(join(project, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Live Stack", version: `1.0.${index + 1}`,

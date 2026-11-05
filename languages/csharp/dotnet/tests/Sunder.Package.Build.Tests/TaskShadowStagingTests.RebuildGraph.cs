@@ -7,6 +7,46 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed partial class TaskShadowStagingTests
 {
+    [Fact]
+    [Trait("Category", "Artifact")]
+    [Trait("Capability", "Process")]
+    [Trait("Capability", "Filesystem")]
+    public async Task OwnerBuild_CoalescesSharedDependenciesUnderReleaseCallerGlobals()
+    {
+        await using var scope = TemporaryDirectoryScope.Create("sunder-task-shadow-release-graph");
+        var root = FindRepositoryRoot();
+        var fixture = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(scope.GetPath("fixture"));
+        CopyDirectory(Path.Combine(root, "languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/TaskShadowCleanBuild"), fixture);
+        var owner = Path.Combine(fixture, "Sunder.Package.Build/Sunder.Package.Build.csproj");
+        var dependency = Path.Combine(fixture, "Sunder.Package.Format/Sunder.Package.Format.csproj");
+        var sourceLock = Path.Combine(root, "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.SourceLock.targets");
+        var record = scope.GetPath("shared-compilations.txt");
+        var ownerDocument = XDocument.Load(owner);
+        ownerDocument.Root!.AddFirst(new XElement("PropertyGroup", new XElement("SunderPackageBuildSourceLockTargetsPath", sourceLock)));
+        ownerDocument.Save(owner);
+        var document = XDocument.Load(dependency);
+        document.Root!.Add(XElement.Parse($$"""
+            <Target Name="RecordSharedCompilation" BeforeTargets="CoreCompile">
+              <Error Condition="'$(GeneratePackageOnBuild)' != 'false'" Text="The owner lost the caller's no-pack setting." />
+              <WriteLinesToFile File="{{record}}" Lines="compile" Overwrite="false" />
+            </Target>
+            """));
+        document.Save(dependency);
+        var driver = scope.WriteAllText("ReleaseGraph.proj", $$"""
+            <Project>
+              <ItemGroup><Participant Include="{{owner}};{{dependency}}" /></ItemGroup>
+              <Target Name="Run">
+                <MSBuild Projects="@(Participant)" Targets="Build" BuildInParallel="true" />
+              </Target>
+            </Project>
+            """);
+        AssertSuccess(await RunDotnetAsync(fixture, "restore", owner, "--nologo"));
+        AssertSuccess(await RunMsbuildAsync(driver, fixture, "Run", "-m:2", "-p:Configuration=Release",
+            "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false",
+            "-p:ShouldUnsetParentConfigurationAndPlatform=false"));
+        Assert.Equal(["compile"], await File.ReadAllLinesAsync(record));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

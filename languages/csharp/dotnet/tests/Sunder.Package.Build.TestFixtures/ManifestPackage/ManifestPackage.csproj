@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk.Stacks\Sunder.Sdk.Stacks.csproj" />
+    <ProjectReference Include="..\..\..\libraries\Sunder.App.Bridge\Sunder.App.Bridge.csproj" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+</Project>

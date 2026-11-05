@@ -3,7 +3,7 @@ using System.Text.Json.Nodes;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
-using static Sunder.Runtime.Host.Tests.ActivePolicyTestContext;
+using static Sunder.Runtime.Host.TestSupport.ActivePolicyTestContext;
 
 namespace Sunder.Runtime.Host.Tests;
 
@@ -172,6 +172,7 @@ public sealed class PackageLifecyclePolicyCacheTests
 
     [Theory]
     [InlineData("missing")]
+    [InlineData("locked")]
     [InlineData("corrupt")]
     [InlineData("watermark")]
     [InlineData("fingerprint")]
@@ -185,8 +186,10 @@ public sealed class PackageLifecyclePolicyCacheTests
         await context.RefreshAsync();
         var file = context.Cache.FilePath(Origin);
         var json = JsonNode.Parse(await File.ReadAllTextAsync(file))!;
+        using var locked = failure == "locked" ? new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None) : null;
         switch (failure)
         {
+            case "locked": break;
             case "missing": File.Delete(file); File.Delete(PackageLifecyclePolicyCache.IntentPath(file)); break;
             case "corrupt": await File.WriteAllTextAsync(file, "{"); break;
             default:
@@ -200,8 +203,40 @@ public sealed class PackageLifecyclePolicyCacheTests
                 await File.WriteAllTextAsync(file, json.ToJsonString());
                 break;
         }
-        Assert.NotNull(await Record.ExceptionAsync(() => context.Cache.CheckpointClockAsync(Origin, default)));
+        var error = await Record.ExceptionAsync(() => context.Cache.CheckpointClockAsync(Origin, default));
+        Assert.NotNull(error);
+        if (failure == "locked")
+        {
+            var diagnostic = PackagePolicyFailure.Describe(error);
+            Assert.Contains("hresult=0x", diagnostic);
+            Assert.Contains("ReadDocumentAsync", diagnostic);
+            Assert.DoesNotContain(file, diagnostic);
+            Assert.DoesNotContain(Origin, diagnostic);
+        }
         Assert.Equal(PackagePolicyErrorCodes.PolicyRequired, Assert.Throws<PackagePolicyDeniedException>(() => context.Require()).Code);
+    }
+
+    [Fact]
+    public async Task OriginDiscoveryWaitsForTheWritersFenceBeforeOpeningEitherSnapshot()
+    {
+        using var context = new ActivePolicyTestContext();
+        await context.RefreshAsync();
+        var path = context.Cache.FilePath(Origin);
+        Task discovery;
+        using (await RuntimeFileLock.AcquireExclusiveAsync(path + ".lock", default))
+        using (new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        using (new FileStream(PackageLifecyclePolicyCache.IntentPath(path), FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            discovery = context.Cache.LoadKnownOriginsAsync(default);
+            Assert.False(discovery.IsCompleted, "Discovery opened a policy file outside the writer's origin fence.");
+            context.Require();
+        }
+        await discovery.WaitAsync(TimeSpan.FromSeconds(5));
+        context.Require();
+        context.Response = request => Blocked(request, 2);
+        await context.RefreshAsync();
+        await context.Cache.LoadKnownOriginsAsync(default);
+        Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, Assert.Throws<PackagePolicyDeniedException>(() => context.Require()).Code);
     }
 
     [Fact]

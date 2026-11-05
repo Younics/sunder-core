@@ -11,7 +11,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 using Xunit;
-using static Sunder.Runtime.Host.Tests.ActivePolicyTestContext;
+using static Sunder.Runtime.Host.TestSupport.ActivePolicyTestContext;
 
 namespace Sunder.Runtime.Host.Tests;
 
@@ -440,6 +440,7 @@ public sealed class InstalledPackagePolicyTests
             await WaitForPersistenceFailureAsync();
             var error = Assert.Single(logs.Entries, entry => entry.Level == LogLevel.Error);
             Assert.Equal(nameof(RuntimeOperationRejectedException), error.Properties["FailureType"]);
+            Assert.StartsWith(nameof(RuntimeOperationRejectedException) + "(hresult=0x", Assert.IsType<string>(error.Properties["Failure"]));
             await service.StopPersistenceAsync(default);
         }
         finally { await service.StopAsync(default).WaitAsync(TimeSpan.FromSeconds(5)); }

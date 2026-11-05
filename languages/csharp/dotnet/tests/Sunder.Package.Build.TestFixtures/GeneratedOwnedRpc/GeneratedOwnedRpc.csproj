@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>ImplementationFirstRpc</AssemblyName>
+    <Version>7.6.5</Version>
+    <RuntimeIdentifier>$(NETCoreSdkRuntimeIdentifier)</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
+    <SelfContained>false</SelfContained>
+    <UseAppHost>false</UseAppHost>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackagePrimaryProject>true</SunderPackagePrimaryProject>
+    <SunderPackageComposeRuntimeIdentifiers>$(NETCoreSdkRuntimeIdentifier)</SunderPackageComposeRuntimeIdentifiers>
+    <SunderPackageAppProject>App\GeneratedOwnedRpc.App.csproj</SunderPackageAppProject>
+    <SunderPackageAppTargetFramework>$(TargetFramework)</SunderPackageAppTargetFramework>
+    <SunderContractLockPath>$(MSBuildThisFileDirectory)..\ImplementationFirstRpc\sunder-contracts.lock.json</SunderContractLockPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="App\**\*.cs" />
+    <Compile Include="..\ImplementationFirstRpc\Program.cs" Link="Program.cs" />
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk.Worker\Sunder.Sdk.Worker.csproj" />
+    <!-- Composition owns the App build. Its SDK prerequisite participates in the
+         ordinary graph, while the App project itself is restored without a second writer. -->
+    <ProjectReference Include="..\..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj"
+                      ReferenceOutputAssembly="false" Private="false" PrivateAssets="all" ExcludeAssets="all" />
+    <ProjectReference Include="App\GeneratedOwnedRpc.App.csproj"
+                      ReferenceOutputAssembly="false" BuildReference="false" Private="false" PrivateAssets="all" ExcludeAssets="all" />
+    <ProjectReference Include="..\..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+    <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)" Role="runtime" Rid="$(RuntimeIdentifier)" Kind="worker" />
+  </ItemGroup>
+  <Import Project="..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
+</Project>

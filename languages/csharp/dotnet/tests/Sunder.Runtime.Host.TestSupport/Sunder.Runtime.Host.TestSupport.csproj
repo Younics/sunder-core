@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="..\..\host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
+    <ProjectReference Include="..\Sunder.Core.TestSupport\Sunder.Core.TestSupport.csproj" />
+    <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj" ReferenceOutputAssembly="false" />
+    <PackageReference Include="xunit" PrivateAssets="all" />
+    <InternalsVisibleTo Include="Sunder.Runtime.Host.Tests" />
+    <InternalsVisibleTo Include="Sunder.App.Integration.Tests" />
+  </ItemGroup>
+</Project>

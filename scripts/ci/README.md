@@ -49,6 +49,9 @@ ordinary reports replace their owning selection's previous output. Hosted report
 after 14 days; release handoffs retain their release-specific policies. Large VSTest
 logs and crash dumps require `SUNDER_TEST_DIAGNOSTICS=1`; process receipts, stdout,
 stderr, TRX and hang watchdogs remain enabled.
+Restore/build binlogs and incomplete-to-final profile sidecars preserve failures before
+test discovery. Aggregate reporting runs after failed or cancelled producers and retains
+`core-test-summary.json`; accepted evidence requires every selected native RID's lanes.
 
 ```sh
 # Preview old reports; default retention is five newest children and fourteen days.

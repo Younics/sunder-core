@@ -169,7 +169,10 @@
     <_SunderPackageBuildTaskUnlockedCleanDependsOn>$(CleanDependsOn)</_SunderPackageBuildTaskUnlockedCleanDependsOn>
     <_SunderPackageBuildTaskUnlockedPackDependsOn>$(PackDependsOn)</_SunderPackageBuildTaskUnlockedPackDependsOn>
     <_SunderPackageBuildTaskGeneratePackageOnBuild>$(GeneratePackageOnBuild)</_SunderPackageBuildTaskGeneratePackageOnBuild>
-    <_GlobalPropertiesToRemoveFromProjectReferences>$(_GlobalPropertiesToRemoveFromProjectReferences);BuildProjectReferences;GeneratePackageOnBuild;SunderPackageBuildTaskSourceLockAlreadyHeld;SunderPackageBuildTaskSourceLockPath;SunderPackageBuildSourceLockTargetsPath</_GlobalPropertiesToRemoveFromProjectReferences>
+    <!-- Preserve caller globals on shared dependencies. Removing a caller's
+         GeneratePackageOnBuild=false creates a second SDK instance writing the
+         same deps.json (and unexpectedly packing it). Only lease state is local. -->
+    <_GlobalPropertiesToRemoveFromProjectReferences>$(_GlobalPropertiesToRemoveFromProjectReferences);SunderPackageBuildTaskSourceLockAlreadyHeld;SunderPackageBuildTaskSourceLockPath;SunderPackageBuildSourceLockTargetsPath</_GlobalPropertiesToRemoveFromProjectReferences>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(SunderPackageBuildTaskSourceLockOwner)' == 'true' and '$(SunderPackageBuildTaskSourceLockAlreadyHeld)' != 'true'">
@@ -211,7 +214,7 @@
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="ResolveReferences"
              BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=false;BuildProjectReferences=true" />
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath)" />
     <_SunderManagePackageBuildTaskSourceLock Action="Acquire"
                                              LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
                                              Context="owner-build $(MSBuildProjectFullPath)"
@@ -221,7 +224,7 @@
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="_BuildSunderPackageBuildTaskWithoutSourceLock"
              BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=false;BuildProjectReferences=true">
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath)">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskLockedBuildOutputs" />
     </MSBuild>
     <Error Condition="'@(_SunderPackageBuildTaskLockedBuildOutputs)' == ''"
@@ -236,7 +239,7 @@
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="Pack"
              BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=true;NoBuild=true"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);NoBuild=true"
              Condition="'$(_SunderPackageBuildTaskGeneratePackageOnBuild)' == 'true'" />
     <_SunderManagePackageBuildTaskSourceLock Action="Release"
                                              LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
@@ -284,7 +287,7 @@
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="_BuildSunderPackageBuildTaskWithoutSourceLock"
              BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=false;BuildProjectReferences=true;_SunderPackageBuildTaskRebuildInvocationId=$(_SunderPackageBuildTaskRebuildInvocationId)">
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);_SunderPackageBuildTaskRebuildInvocationId=$(_SunderPackageBuildTaskRebuildInvocationId)">
       <Output TaskParameter="TargetOutputs" ItemName="_SunderPackageBuildTaskFreshRebuildOutputs" />
     </MSBuild>
     <Error Condition="'@(_SunderPackageBuildTaskFreshRebuildOutputs)' == ''"
@@ -298,7 +301,7 @@
       <TargetPathWithTargetPlatformMoniker Include="@(_SunderPackageBuildTaskFreshRebuildOutputs)" />
     </ItemGroup>
     <MSBuild Projects="$(MSBuildProjectFullPath)" Targets="Pack" BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=true;NoBuild=true;_SunderPackageBuildTaskRebuildInvocationId=$(_SunderPackageBuildTaskRebuildInvocationId)"
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);NoBuild=true;_SunderPackageBuildTaskRebuildInvocationId=$(_SunderPackageBuildTaskRebuildInvocationId)"
              Condition="'$(_SunderPackageBuildTaskGeneratePackageOnBuild)' == 'true'" />
     <_SunderManagePackageBuildTaskSourceLock Action="Release"
                                              LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
@@ -320,7 +323,7 @@
     <MSBuild Projects="$(MSBuildProjectFullPath)"
              Targets="_PackSunderPackageBuildTaskWithoutSourceLock"
              BuildInParallel="false"
-             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);GeneratePackageOnBuild=$(_SunderPackageBuildTaskGeneratePackageOnBuild);BuildProjectReferences=true" />
+             Properties="SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath)" />
     <_SunderManagePackageBuildTaskSourceLock Action="Release"
                                              LockPath="$(_SunderPackageBuildTaskSourceLockFullPath)"
                                              Context="owner-pack $(MSBuildProjectFullPath)"

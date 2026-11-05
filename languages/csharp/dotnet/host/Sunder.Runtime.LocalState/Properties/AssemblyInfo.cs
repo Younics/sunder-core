@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Sunder.App.Integration.Tests")]
 [assembly: InternalsVisibleTo("Sunder.App")]
 [assembly: InternalsVisibleTo("Sunder.Runtime.Host.Tests")]
+[assembly: InternalsVisibleTo("Sunder.Runtime.Host.TestSupport")]
 [assembly: InternalsVisibleTo("Sunder.Host.Supervisor")]
 [assembly: InternalsVisibleTo("Sunder.Host.Client")]
 [assembly: InternalsVisibleTo("Sunder.Host.Supervisor.Tests")]

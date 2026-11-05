@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
-using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using Sunder.Core.TestSupport;
 using Xunit;
@@ -90,7 +89,7 @@ public sealed partial class ServiceApiEditorGeneratorTests
         }
     }
 
-    private static string EditorProjectPath([CallerFilePath] string sourcePath = "")
-        => Path.GetFullPath(Path.Combine(Path.GetDirectoryName(sourcePath)!,
-            "../../packages/Sunder.Package.Build/Sunder.Package.Build.csproj"));
+    private static string EditorProjectPath()
+        => Path.Combine(PackageManifestFixture.FindRepositoryRoot(),
+            "languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj");
 }

@@ -112,17 +112,25 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         foreach (var file in files)
         {
             PackageStorePathGuard.EnsureSafe(file, paths.RootPath);
-            await using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            RegistryActivePolicyClient.Require(stream.Length is > 0 and <= MaximumFileBytes, "Policy cache exceeds its byte bound.");
-            var bytes = new byte[checked((int)stream.Length)];
-            await stream.ReadExactlyAsync(bytes, token);
-            RegistryActivePolicyClient.Require(stream.ReadByte() == -1, "Policy cache changed during origin discovery.");
+            // Discovery participates in the same origin lock as refresh and
+            // reconciliation. In particular, no discovery handle may span a
+            // durable replacement or its post-publication flush on Windows.
+            var path = file.EndsWith(".intent.json", StringComparison.Ordinal) ? file[..^12] + ".json" : file;
+            using var lease = await RuntimeFileLock.AcquireExclusiveAsync(path + ".lock", token);
+            byte[] bytes;
+            await using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete))
+            {
+                RegistryActivePolicyClient.Require(stream.Length is > 0 and <= MaximumFileBytes, "Policy cache exceeds its byte bound.");
+                bytes = new byte[checked((int)stream.Length)];
+                await stream.ReadExactlyAsync(bytes, token);
+                RegistryActivePolicyClient.Require(stream.ReadByte() == -1, "Policy cache changed during origin discovery.");
+            }
             var state = JsonSerializer.Deserialize<PackagePolicyOriginFile>(bytes, RegistryActivePolicyClient.Json)
                 ?? throw new InvalidDataException("Policy cache is empty.");
-            RegistryActivePolicyClient.Require(file == FilePath(state.Origin) || file == IntentPath(FilePath(state.Origin)), "Policy cache filename does not match its origin.");
+            RegistryActivePolicyClient.Require(path == FilePath(state.Origin), "Policy cache filename does not match its origin.");
             // Discovery grants nothing. The authoritative read is under that origin's
             // lock and includes the durable generation and continuous-clock fence.
-            try { await LoadAsync(state.Origin, checkpointClock, token); }
+            try { await LoadUnderLockAsync(state.Origin, path, checkpointClock, token); }
             catch (PackagePolicyDeniedException) { }
         }
     }
@@ -300,6 +308,11 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
     {
         origin = RegistryActivePolicyClient.Origin(origin); var path = FilePath(origin);
         using var lease = await RuntimeFileLock.AcquireExclusiveAsync(path + ".lock", token);
+        return await LoadUnderLockAsync(origin, path, checkpointClock, token);
+    }
+
+    private async Task<PackagePolicyOriginFile?> LoadUnderLockAsync(string origin, string path, bool checkpointClock, CancellationToken token)
+    {
         var state = await ReadFileAsync(origin, path, token);
         if (state is null) { _snapshots.TryRemove(origin, out _); return null; }
         if (checkpointClock)

@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Version>7.6.5</Version>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <SunderPackageProject>true</SunderPackageProject>
+    <SunderPackageRootProject>..\GeneratedOwnedRpc.csproj</SunderPackageRootProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\..\ImplementationFirstRpc\App\*.cs" Link="%(Filename)%(Extension)" />
+    <ProjectReference Include="..\..\..\..\packages\Sunder.Sdk\Sunder.Sdk.csproj" />
+    <ProjectReference Include="..\..\..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />
+    <ProjectReference Include="..\..\..\..\packages\Sunder.Package.Build\Sunder.Package.Build.csproj" ReferenceOutputAssembly="false" PrivateAssets="all" />
+  </ItemGroup>
+  <Import Project="..\..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
+</Project>

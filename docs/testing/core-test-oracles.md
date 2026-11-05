@@ -147,19 +147,39 @@ Do not repeat broad checks after documentation or unrelated edits. Keep useful s
 theories for distinct inputs/bounds; avoid cloning a full process fixture for the same
 behavior. Identify the surviving coverage before deleting or merging a test.
 
-Only parallelize independent checks. The npm public-artifact checks clean shared
-`dist`/`dist-test` directories, so finish them before compiling the Node helpers used
-by .NET interop tests. From `languages/typescript/node`, prepare with `npm run build`
-and `npm exec -- tsc -p packages/package-tool/tsconfig.test.json` using the repository's
-Node/npm versions. Then run the required interop selection without another Node output
-cleanup in parallel. After a prerequisite failure, rerun the affected cases rather
-than repeating already-passed full suites.
+Manifest/output tests consume the source-built `ManifestPackage` project under
+`Sunder.Package.Build.TestFixtures`, through an ordinary project reference. Its
+authored SDK calls define the capability expectations. Tests that need deliberate
+dynamic reflection keep their separate fixtures and acknowledgements; unrelated
+test-helper reflection is outside the manifest input.
+
+App process-policy behavior consumes the source-built `GeneratedOwnedRpc` App/Worker
+fixture through project references and a build-produced path marker. It links the
+existing implementation-first sources and validates the composed package before use.
+Fresh restore/build/pack coverage remains in Package.Build's build-system tests.
+Host-aware policy, runtime-management and package helpers live in
+`Sunder.Runtime.Host.TestSupport`, shared by Host and App integration tests;
+`Sunder.Core.TestSupport` remains host-neutral. App integration has no dependency on
+the Host test assembly. Shared build dependencies retain caller globals such as
+`GeneratePackageOnBuild=false` and `BuildProjectReferences`; only source-lock lease
+properties are removed when resolving their project references.
+
+Only parallelize independent checks. The Node matrix and `core_ci.py module` build
+private source/dependency trees with workspace links redirected into each copy.
+Matrix runs remove successful copies and retain failed ones for diagnosis; the
+interop producer remains available for its consumers. For direct commands using
+checkout outputs, finish npm artifact cleanup before compiling the Node helpers:
+from `languages/typescript/node`, run `npm run build` and
+`npm exec -- tsc -p packages/package-tool/tsconfig.test.json` using the repository's
+Node/npm versions. Run the required interop selection without another cleanup of
+those outputs in parallel. After a prerequisite failure, rerun the affected cases
+rather than repeating already-passed full suites.
 
 ### Owning-job CI evidence
 
 `run-dotnet-tests-with-results.mjs` executes selected .NET projects serially and
-writes one TRX per project. `run-node-test-matrix-with-results.mjs` removes
-selected generated output, rebuilds the selected workspaces, and routes their Node
+writes one TRX per project. `run-node-test-matrix-with-results.mjs` starts with
+isolated generated output, builds the selected workspaces, and routes their Node
 groups through the dual spec/JUnit reporter. Selected Python and shell release fixtures
 write a separate JUnit report. Python runs are batched once per source module while preserving
 per-method timings, failures and skips. The [CI commands](../../scripts/ci/README.md)
@@ -178,7 +198,7 @@ node scripts/test-oracles/run-release-fixtures-with-results.mjs
 node scripts/test-oracles/summarize-core-test-results.mjs
 ```
 
-The summarizer writes `core-test-evidence.json`, not a second case inventory. It
+The summarizer writes accepted `core-test-evidence.json`, not a second case inventory. It
 contains aggregate discovered, executed, passed, failed, and skipped counts for
 each report, project/lane pair, and lane. The only individual test identities in
 the compact evidence are tests that actually skipped; each must match an
@@ -189,10 +209,16 @@ sidecar (even beside a passing TRX), failed test, or report containing zero test
 fails evidence generation. Raw TRX/JUnit artifacts retain individual
 outcomes and durations for diagnosis.
 
+Every attempted summary also writes `core-test-summary.json` with observed counts,
+failed cases, invalid reports, failed/incomplete command sidecars and missing coverage.
+Hosted steps append these diagnostics to the GitHub step summary. Restore/build
+commands retain binlogs and execution sidecars even when tests have not started;
+profile sidecars begin incomplete so cancellation cannot imply successful execution.
+
 `.github/workflows/sunder-ci.yml` runs `all` for PR/merge-queue, scheduled and default
 manual validation. Main pushes run `repository`; `sunder-sdk-release.yml` owns the
 complementary `sdk` validation on main. Component releases pass their explicit scopes.
-Every successful selection's `test-results` job downloads its portable/native reports
+Every selection's `test-results` job runs with `always()`, downloads its available portable/native reports
 and runs `summarize-core-test-results.mjs <directory> --scope <scope> --aggregate`.
 CLI has no native test lane. Report paths and artifact names include the scope so
 App and Host calls in the same release cannot overwrite each other.
@@ -202,6 +228,10 @@ Downloaded reports resolve absolute paths against complete declared source paths
 so different checkout roots retain component ownership. Native
 jobs enforce their own per-architecture required execution and platform-specific
 skip rules; the aggregate does not reinterpret Windows/macOS skips as Linux results.
+The aggregate additionally requires accepted lane evidence under every selected native
+RID artifact. Passing results from another architecture cannot cover a missing runner.
+Upstream job results also reject failures outside test execution, such as packaging
+or artifact upload failures. Its summary is retained when a producer fails or is cancelled.
 Externally gated live Registry, Agent and retained-release tests retain their
 explicit inputs and owning acceptance lanes, rather than pretending an unselected
 skip is execution evidence. The two App web-bridge JavaScript VM tests are required
@@ -233,6 +263,8 @@ report artifacts. The six native vendor-runtime checks remain separate required
 coverage. App release signing still uses an x64 runner for both Windows package
 targets because its signing client is x64. Hosted-runner allocation failures are
 infrastructure failures, not test passes or a reason to drop a required lane.
+Official-runtime and unsigned packaging jobs wait for the platform matrix to finish,
+reducing simultaneous native runner demand while retaining every required RID.
 
 The Supervisor reset/drain fixture uses `TemporaryDirectoryScope.RunAsync` so a
 cleanup failure cannot hide the original test/process diagnostics. Both failures

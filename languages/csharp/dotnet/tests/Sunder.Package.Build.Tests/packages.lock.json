@@ -175,6 +175,22 @@
           "xunit.extensibility.core": "[2.9.3]"
         }
       },
+      "manifestpackage": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
+          "Sunder.App.Bridge": "[1.0.0, )",
+          "Sunder.Sdk": "[1.0.0, )",
+          "Sunder.Sdk.Avalonia": "[1.0.0, )",
+          "Sunder.Sdk.Stacks": "[1.0.0, )"
+        }
+      },
+      "sunder.app.bridge": {
+        "type": "Project",
+        "dependencies": {
+          "Avalonia": "[12.1.4, )"
+        }
+      },
       "sunder.core.testsupport": {
         "type": "Project"
       },
@@ -184,7 +200,7 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.sdk": {
@@ -199,20 +215,20 @@
         "dependencies": {
           "Avalonia": "[12.1.4, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.0, )"
         }
       },
       "Avalonia": {

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Sunder.Package.Build.Tasks;
@@ -126,8 +125,8 @@ public sealed class PackageRpcManifestTests
         var targetDirectory = Path.Combine(root, "target");
         var devPackage = Path.Combine(root, "sunder-dev");
         Directory.CreateDirectory(targetDirectory);
-        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
-        File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(ManifestAssemblyPath));
+        File.Copy(ManifestAssemblyPath, assemblyPath);
         var workerFiles = CreateDotNetWorkerFiles(targetDirectory, "linux-x64", assemblyPath);
         var emitEngine = new TestBuildEngine();
         Assert.True(new EmitSunderDevOutputTask
@@ -463,8 +462,8 @@ public sealed class PackageRpcManifestTests
         var targetDirectory = Path.Combine(project, "target");
         Directory.CreateDirectory(project);
         Directory.CreateDirectory(targetDirectory);
-        var targetAssembly = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
-        File.Copy(Assembly.GetExecutingAssembly().Location, targetAssembly);
+        var targetAssembly = Path.Combine(targetDirectory, Path.GetFileName(ManifestAssemblyPath));
+        File.Copy(ManifestAssemblyPath, targetAssembly);
         var descriptorPath = Path.Combine(project, "snapshot.rpc.json");
         WriteSnapshotDescriptor(descriptorPath, "original");
 
@@ -500,7 +499,6 @@ public sealed class PackageRpcManifestTests
                 <ReferencePath Include="{{typeof(IPackageStackExporter).Assembly.Location}}" />
                 <ReferencePath Include="{{typeof(SunderWorkerProviderRegistration).Assembly.Location}}" />
                 <SunderSdkCapability Include="callbacks.v1" />
-                <SunderSdkDynamicAccess Include="{{string.Join(';', TestAssemblyDynamicAccessAcknowledgements().Select(static item => item.ItemSpec))}}" />
                 <SunderRpcBinding Include="{{descriptorPath}}"
                                   Namespace="Test.Snapshot.Generated"
                                   OutputFile="Snapshot.g.cs" />

@@ -16,7 +16,7 @@ using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.LocalState;
 using Xunit;
-using static Sunder.Runtime.Host.Tests.ActivePolicyTestContext;
+using static Sunder.Runtime.Host.TestSupport.ActivePolicyTestContext;
 
 namespace Sunder.Runtime.Host.Tests;
 

@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json.Nodes;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
@@ -16,8 +15,8 @@ internal static class PackageOutputFixture
         var targetDirectory = Path.Combine(leafRoot, "target");
         var devPackage = Path.Combine(leafRoot, "sunder-dev");
         Directory.CreateDirectory(targetDirectory);
-        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
-        File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(ManifestAssemblyPath));
+        File.Copy(ManifestAssemblyPath, assemblyPath);
         var nativePath = Path.Combine(targetDirectory, "runtimes", rid, "native", "fixture.bin");
         Directory.CreateDirectory(Path.GetDirectoryName(nativePath)!);
         File.WriteAllText(nativePath, nativeContent);
@@ -68,8 +67,8 @@ internal static class PackageOutputFixture
         var targetDirectory = Path.Combine(leafRoot, "target");
         var devPackage = Path.Combine(leafRoot, "sunder-dev");
         Directory.CreateDirectory(targetDirectory);
-        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(Assembly.GetExecutingAssembly().Location));
-        File.Copy(Assembly.GetExecutingAssembly().Location, assemblyPath);
+        var assemblyPath = Path.Combine(targetDirectory, Path.GetFileName(ManifestAssemblyPath));
+        File.Copy(ManifestAssemblyPath, assemblyPath);
         var descriptorPath = WriteMinimalV1Descriptor(leafRoot);
         var manifestPath = Path.Combine(leafRoot, "sunder-package.json");
         var manifestEngine = new TestBuildEngine();

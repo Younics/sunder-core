@@ -1,5 +1,4 @@
 using System.IO.Compression;
-using System.Reflection;
 using System.Text.Json;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Tasks;
@@ -136,7 +135,7 @@ public sealed class PackageArchiveTests
             "payload",
             "shared",
             "lib",
-            Path.GetFileName(Assembly.GetExecutingAssembly().Location));
+            Path.GetFileName(ManifestAssemblyPath));
         File.AppendAllText(assemblyPath, "tampered-after-signing-and-indexing");
         var output = Path.Combine(project, "bin", "package.sunderpkg");
         var buildEngine = new TestBuildEngine();
@@ -317,8 +316,8 @@ public sealed class PackageArchiveTests
             File.Copy(file.ItemSpec, destination);
         }
         File.Copy(
-            Assembly.GetExecutingAssembly().Location,
-            Path.Combine(devPackage, "payload", "shared", "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location)));
+            ManifestAssemblyPath,
+            Path.Combine(devPackage, "payload", "shared", "lib", Path.GetFileName(ManifestAssemblyPath)));
         PackageContentIndexer.Write(devPackage);
     }
 }

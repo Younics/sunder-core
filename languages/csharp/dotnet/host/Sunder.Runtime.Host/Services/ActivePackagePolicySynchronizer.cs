@@ -104,7 +104,7 @@ internal sealed class ActivePackagePolicySynchronizer(
                     }
                 }
                 catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
-                { logger.LogWarning("Active policy subject/clock capture failed ({FailureType}).", error.GetType().Name); }
+                { logger.LogWarning("Active policy subject/clock capture failed ({FailureType}; {Failure}).", error.GetType().Name, PackagePolicyFailure.Describe(error)); }
                 await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, token);
             }
         }
@@ -120,12 +120,12 @@ internal sealed class ActivePackagePolicySynchronizer(
             var success = false;
             try { await synchronizer.RefreshAsync(subjects, token); success = true; }
             catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
-            { logger.LogWarning("Active package policy refresh failed ({FailureType}); existing leases retain their original deadlines.", error.GetType().Name); }
+            { logger.LogWarning("Active package policy refresh failed ({FailureType}; {Failure}); existing leases retain their original deadlines.", error.GetType().Name, PackagePolicyFailure.Describe(error)); }
             finally { schedule.Completed(started, clock.Read(), success); }
             EnforceActive();
         }
         catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
-        { logger.LogWarning("Active policy refresh could not prove clock continuity ({FailureType}).", error.GetType().Name); }
+        { logger.LogWarning("Active policy refresh could not prove clock continuity ({FailureType}; {Failure}).", error.GetType().Name, PackagePolicyFailure.Describe(error)); }
         finally { concurrency.Release(); }
     }
 
@@ -187,7 +187,7 @@ internal sealed class ActivePackagePolicySynchronizer(
                 EnforceActive();
             }
             catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
-            { logger.LogError("Policy invalidation persistence failed ({FailureType}); execution remains denied.", error.GetType().Name); }
+            { logger.LogError("Policy invalidation persistence failed ({FailureType}; {Failure}); execution remains denied.", error.GetType().Name, PackagePolicyFailure.Describe(error)); }
             await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, token);
         }
     }
@@ -202,7 +202,7 @@ internal sealed class ActivePackagePolicySynchronizer(
                 if (installedPolicies is not null) await installedPolicies.ReconcileAsync(token);
             }
             catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
-            { logger.LogError("Installed policy persistence failed ({FailureType}); retained policy evidence remains authoritative.", error.GetType().Name); }
+            { logger.LogError("Installed policy persistence failed ({FailureType}; {Failure}); retained policy evidence remains authoritative.", error.GetType().Name, PackagePolicyFailure.Describe(error)); }
             await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, token);
         }
     }

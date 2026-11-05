@@ -7,7 +7,7 @@ using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
 using Xunit;
-using static Sunder.Runtime.Host.Tests.ExecutionRuntimeManagementServiceTests;
+using static Sunder.Runtime.Host.TestSupport.ExecutionRuntimeFixture;
 
 namespace Sunder.App.Integration.Tests;
 

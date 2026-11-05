@@ -8,6 +8,8 @@ using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Compatibility;
 using Xunit;
 
+using static Sunder.Runtime.Host.TestSupport.ExecutionRuntimeFixture;
+
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class ExecutionRuntimeManagementServiceTests
@@ -84,23 +86,4 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
         Assert.True(PackageStorePolicy.CatalogBindingsEqual([package], await fixture.InstalledPackages.ListAsync()));
     }
 
-    internal static async Task<RegistryRuntimeArchitectureTests.RegistryArtifactFixture> ConfigureReviewedPackageAsync(
-        ManagementFixture fixture, PackagePolicyHandler registry, InstalledPackageRecord original, string origin, string version, string fingerprint)
-    {
-        var published = await RegistryRuntimeArchitectureTests.CreateRegistryArtifactAsync(fixture.Paths.RootPath,
-            original.PackageId, origin, original.PackageId, original.Version, version,
-            runtimeIdentifiers: [PackageTargetSelection.GetCurrentRuntimeIdentifier()], roles: ["runtime"],
-            runtimeRequiredHostCapabilities: ["core.v1", "execution-runtime.v1", "rpc.v1", "worker-protocol.v1",
-                SunderSdkCapabilities.DockerEnvironmentV1]);
-        var authority = ActivePolicyTestContext.Allowed(new("", [], [], null));
-        var plan = new RegistryResolveInstallPlanResponse(true, [published.PlanItem], [], [], [], [], fingerprint,
-            fixture.Provider.GetRequiredService<TimeProvider>().GetUtcNow().AddMinutes(5))
-        {
-            PackagePolicy = authority.PackagePolicy,
-            ResolutionPolicy = new(authority.PackagePolicy, [], [], [], []),
-        };
-        registry.PlansByOrigin[new Uri(origin).GetLeftPart(UriPartial.Authority)] = plan;
-        registry.Artifacts = published.ContentByUrl;
-        return published;
-    }
 }

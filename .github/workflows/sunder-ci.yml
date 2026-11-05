@@ -87,7 +87,7 @@ jobs:
       scope: ${{ inputs.scope || (github.event_name == 'push' && 'repository' || 'all') }}
 
   test-results:
-    if: ${{ !cancelled() && needs.build-test-pack.result == 'success' && (needs.native.result == 'success' || needs.native.result == 'skipped') }}
+    if: always()
     needs: [build-test-pack, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -100,22 +100,32 @@ jobs:
           dotnet: 'false'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: sunder-core-results-${{ env.CI_SCOPE }}
+          pattern: sunder-core-results-${{ env.CI_SCOPE }}
+          merge-multiple: true
           path: artifacts/ci-results/${{ env.CI_SCOPE }}/core
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: needs.native.result == 'success'
+        if: always()
         with:
           pattern: sunder-platform-${{ env.CI_SCOPE }}-*
           path: artifacts/ci-results/${{ env.CI_SCOPE }}/platform
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: env.CI_SCOPE == 'all' || env.CI_SCOPE == 'sdk' || env.CI_SCOPE == 'host'
+        if: always() && (env.CI_SCOPE == 'all' || env.CI_SCOPE == 'sdk' || env.CI_SCOPE == 'host')
         with:
           pattern: official-runtime-${{ env.CI_SCOPE }}-*
           path: artifacts/ci-results/${{ env.CI_SCOPE }}/official
       - name: Audit owning-job reports without rebuilding or rerunning tests
+        if: always()
         env:
           RELEASE_PACKAGES: ${{ inputs.release-packages }}
+          SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
         run: |
           args=()
           [[ "$RELEASE_PACKAGES" != true ]] || args+=(--require-scenario generated-templates)
           node scripts/test-oracles/summarize-core-test-results.mjs "artifacts/ci-results/$CI_SCOPE" --scope "$CI_SCOPE" --aggregate "${args[@]}"
+      - name: Retain aggregate summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-test-summary-${{ env.CI_SCOPE }}
+          path: artifacts/ci-results/${{ env.CI_SCOPE }}/core-test-summary.json
+          if-no-files-found: error

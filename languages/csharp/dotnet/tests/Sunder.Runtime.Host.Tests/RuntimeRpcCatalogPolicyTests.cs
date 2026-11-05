@@ -5,7 +5,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Rpc;
 using Xunit;
-using static Sunder.Runtime.Host.Tests.ActivePolicyTestContext;
+using static Sunder.Runtime.Host.TestSupport.ActivePolicyTestContext;
 using static Sunder.Runtime.Host.Tests.RuntimeRpcBrokerFixture;
 
 namespace Sunder.Runtime.Host.Tests;

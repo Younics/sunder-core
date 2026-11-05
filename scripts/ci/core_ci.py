@@ -90,12 +90,33 @@ def source(scope="all", work=None):
     selected = selection(scope)
     if "sdk" in selected["components"]: node_inputs(restore=False)
     solution = build_input(selected, work)
-    run("dotnet", "restore", solution, "--locked-mode")
+    diagnostics = ROOT / "artifacts/test-results" / scope / "build"
+    with execution_evidence(diagnostics, "restore"):
+        run("dotnet", "restore", solution, "--locked-mode", "-bl:" + str(diagnostics / "restore.binlog"))
     # A scoped solution lists roots; transitive project references must inherit
     # Release even when they have no entry in the solution's configuration map.
-    run("dotnet", "build", solution, "-c", "Release", "--no-restore",
-         "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false",
-         "-p:ShouldUnsetParentConfigurationAndPlatform=false")
+    with execution_evidence(diagnostics, "build"):
+        run("dotnet", "build", solution, "-c", "Release", "--no-restore",
+             "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false",
+             "-p:ShouldUnsetParentConfigurationAndPlatform=false", "-bl:" + str(diagnostics / "build.binlog"))
+
+
+@contextmanager
+def execution_evidence(directory, name):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / (name + ".process.json")
+    status = dict(status=None, signal=None, error="Execution did not complete", cleanupComplete=False)
+    path.write_text(json.dumps(status) + "\n", encoding="utf-8")
+    try:
+        yield
+    except BaseException as error:
+        status.update(status=getattr(error, "returncode", 1), error=type(error).__name__ + ": " + str(error)[:4096],
+                      cleanupComplete=isinstance(error, (subprocess.CalledProcessError, OSError)))
+        raise
+    else:
+        status.update(status=0, error=None, cleanupComplete=True)
+    finally:
+        path.write_text(json.dumps(status) + "\n", encoding="utf-8")
 
 
 def templates(work, feed=None, package_output=None):
@@ -164,12 +185,16 @@ def one_record(records, name):
     return values[0]
 
 
-def module_inputs():
+def module_inputs(work=None):
     rids = [row["rid"] for row in platforms()["include"]]
     rid = property_value(project("Sunder.Cli"), "NETCoreSdkRuntimeIdentifier")
     if rid not in rids: raise ValueError("Unsupported interop host RID: " + rid)
-    run("npm", "--prefix", NODE, "run", "module:package")
-    fixture = NODE / "fixtures/runtime-backed-worker"
+    workspace = json.loads(run("node", ROOT / "scripts/test-oracles/node-test-workspace.mjs",
+                               work or ROOT / "artifacts/node-producers", capture=True))
+    node = Path(workspace["nodeRoot"])
+    run("npm", "--prefix", node, "run", "build")
+    run("npm", "--prefix", node, "run", "module:package")
+    fixture = node / "fixtures/runtime-backed-worker"
     manifest = json.loads((fixture / "sunder.package.json").read_text())
     archive = fixture / "dist" / f"{manifest['id']}.{manifest['version']}.sunderpkg"
     leaf = fixture / "dist/targets" / rid
@@ -218,7 +243,7 @@ def validate(profile, *, rid=None, scope="all"):
     selected = selection(scope)
     components = selected["components"]
     output = ROOT / "artifacts/test-results" / scope
-    with local_environment(), tempfile.TemporaryDirectory(prefix="sunder-ci-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
+    with execution_evidence(output, profile), local_environment(), tempfile.TemporaryDirectory(prefix="sunder-ci-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
         work = Path(temporary)
         if profile == "portable":
             if "sdk" in components:
@@ -238,7 +263,7 @@ def validate(profile, *, rid=None, scope="all"):
             source(scope, work)
             oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "dotnet-linux")
             dotnet_tests("primary-lane", "dotnet-linux", scope=scope, directory="dotnet")
-            if "interop" in selected["scenarios"]["portable"]: module_inputs()
+            if "interop" in selected["scenarios"]["portable"]: module_inputs(work)
             for scenario in selected["scenarios"]["portable"]: dotnet_tests("scenario", scenario, scope=scope)
         elif profile == "candidate":
             if "sdk" not in components: raise ValueError("Candidate packages require SDK validation")

@@ -20,7 +20,7 @@ using Sunder.Sdk.Storage;
     PackageId = "test.dependency",
     VersionRange = ">=$(PackageVersion) <$(NextPackageMajorVersion).0.0")]
 
-namespace Sunder.Package.Build.Tests;
+namespace Sunder.Package.Build.Tests.Fixtures.ManifestPackage;
 
 
 public sealed class FixturePackageModule : ISunderAppPackageModule, Sunder.App.Bridge.IAppPackageEntryPointV1

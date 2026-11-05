@@ -1,6 +1,6 @@
 using Sunder.Runtime.Host.Services;
 
-namespace Sunder.Runtime.Host.Tests;
+namespace Sunder.Runtime.Host.TestSupport;
 
 internal sealed class TestExecutionRuntimeGarbageCollectionAuthority : IExecutionRuntimeGarbageCollectionAuthority
 {

@@ -6,7 +6,7 @@ using Sunder.Core.TestSupport;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Host.Services;
 
-namespace Sunder.Runtime.Host.Tests;
+namespace Sunder.Runtime.Host.TestSupport;
 
 internal sealed class ActivePolicyTestContext : IDisposable
 {

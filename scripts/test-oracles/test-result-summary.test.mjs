@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,10 +9,12 @@ import { expectedScriptReports, loadCoreTestModel, repositoryRoot } from "./core
 import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
 import {
   auditCoreTestReports,
+  auditNativeEvidence,
   buildCoreTestEvidence,
   materializeExpectedSkip,
   parseJunitReport,
   parseTrxReport,
+  summarizeResults,
 } from "./summarize-core-test-results.mjs";
 
 test("aggregate audit covers the union of owning jobs without requiring unselected external artifacts", () => {
@@ -334,6 +336,81 @@ test("evidence cannot accept a passing TRX left by a timed-out or unclean runner
         root, "--allow-partial", "--require-test", id], { encoding: "utf8" });
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /Test command failed/u);
+      const summary = JSON.parse(await readFile(resolve(root, "core-test-summary.json"), "utf8"));
+      assert.equal(summary.accepted, false);
+      assert.equal(summary.counts.passed, 1);
+      assert.match(summary.issues.join("\n"), /Test command failed/u);
+      await assert.rejects(access(resolve(root, "core-test-evidence.json")));
     }
+    // Finalize failed commands, failed cases and missing coverage together.
+    const report = resolve(root, "Sunder.Core.TestSupport.Tests.trx");
+    await writeFile(report, (await readFile(report, "utf8")).replace('outcome="Passed"', 'outcome="Failed"'));
+    const result = spawnSync(process.execPath, [fileURLToPath(new URL("./summarize-core-test-results.mjs", import.meta.url)),
+      root, "--allow-partial", "--require-test", id, "--require-test", id.replace("ManualTime_DelayCannotCompleteBeforeItsClockBoundary", "missing")], { encoding: "utf8" });
+    assert.equal(result.status, 1);
+    const summary = JSON.parse(await readFile(resolve(root, "core-test-summary.json"), "utf8"));
+    assert.equal(summary.counts.failed, 1);
+    assert.equal(summary.failures[0].name, id);
+    assert.match(summary.issues.join("\n"), /Test command failed/u);
+    assert.match(summary.issues.join("\n"), /not declared/u);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("native aggregate requires every selected RID even when other platforms cover the same tests", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-native-evidence-"));
+  const model = loadCoreTestModel(repositoryRoot, undefined, "sdk");
+  const platforms = JSON.parse(await readFile(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms;
+  try {
+    for (const family of ["sunder-platform", "official-runtime"]) {
+      for (const { rid } of platforms) {
+        const directory = resolve(root, family === "sunder-platform" ? "platform" : "official", `${family}-sdk-${rid}`);
+        await mkdir(directory, { recursive: true });
+        await writeFile(resolve(directory, "core-test-evidence.json"), JSON.stringify({ schemaVersion: 1, scope: "sdk",
+          operatingSystem: { win: "Windows", linux: "Linux", osx: "MacOS" }[rid.split("-")[0]],
+          counts: { executed: 1, failed: 0 }, lanes: [{ lane: family === "sunder-platform" ? "host-platform" : "official-runtime", executed: 1, failed: 0 }] }));
+      }
+    }
+    const issues = [];
+    assert.equal(auditNativeEvidence(root, model, platforms, issues).length, 12);
+    assert.deepEqual(issues, []);
+    await rm(resolve(root, "platform/sunder-platform-sdk-osx-arm64"), { recursive: true });
+    const rows = auditNativeEvidence(root, model, platforms, issues);
+    assert.equal(rows.filter(row => !row.complete).length, 1);
+    assert.match(issues.join("\n"), /Missing required native evidence: sunder-platform-sdk-osx-arm64/u);
+    const invalid = resolve(root, "official/official-runtime-sdk-win-arm64/core-test-evidence.json");
+    const document = JSON.parse(await readFile(invalid, "utf8"));
+    delete document.counts.executed;
+    await writeFile(invalid, JSON.stringify(document));
+    assert.equal(auditNativeEvidence(root, model, platforms, issues).filter(row => !row.complete).length, 2);
+    assert.match(issues.join("\n"), /official-runtime-sdk-win-arm64: invalid owning-job evidence/u);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("aggregate retains upstream failure even when no selected native lane or failed testcase reports it", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-job-summary-"));
+  const previous = process.env.SUNDER_CI_JOB_RESULTS;
+  const exitCode = process.exitCode;
+  try {
+    const model = { scope: "cli", policy: { scopes: { cli: ["cli"] }, projectLanes: { "Example.Tests": ["dotnet-linux"] } },
+      declarations: [{ id: "Example.Tests.Cases.Pass", project: "Example.Tests", component: "cli", framework: "dotnet", primaryLane: "dotnet-linux" }] };
+    await writeFile(resolve(root, "Example.Tests.trx"), `<TestRun>
+      <Results><UnitTestResult testId="case" executionId="run" testName="Example.Tests.Cases.Pass" outcome="Passed" /></Results>
+      <TestDefinitions><UnitTest id="case"><TestMethod className="Example.Tests.Cases" name="Pass" /></UnitTest></TestDefinitions>
+      <ResultSummary outcome="Completed"><Counters total="1" executed="1" passed="1" failed="0" /></ResultSummary></TestRun>`);
+    process.env.SUNDER_CI_JOB_RESULTS = JSON.stringify({ "build-test-pack": { result: "success" }, native: { result: "skipped" } });
+    assert.equal(summarizeResults(root, model, { aggregate: true }).accepted, true);
+    for (const result of ["failure", "cancelled"]) {
+      process.env.SUNDER_CI_JOB_RESULTS = JSON.stringify({ "build-test-pack": { result }, native: { result: "skipped" } });
+      const summary = summarizeResults(root, model, { aggregate: true });
+      assert.equal(summary.accepted, false);
+      assert.equal(summary.counts.passed, 1);
+      assert.deepEqual(summary.issues, [`Owning job 'build-test-pack' ended with '${result}'.`]);
+      assert.deepEqual(JSON.parse(await readFile(resolve(root, "core-test-summary.json"), "utf8")), summary);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.SUNDER_CI_JOB_RESULTS;
+    else process.env.SUNDER_CI_JOB_RESULTS = previous;
+    process.exitCode = exitCode;
+    await rm(root, { recursive: true, force: true });
+  }
 });

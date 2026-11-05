@@ -4,7 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Sunder.Runtime.Host.Services;
 
-namespace Sunder.Runtime.Host.Tests;
+namespace Sunder.Runtime.Host.TestSupport;
 
 internal static class TestWorkerFixture
 {
@@ -126,7 +126,7 @@ internal static class TestWorkerFixture
 
     private static string OutputDirectory
         => Path.Combine(
-            WorkerReleaseMetrics.FindRepositoryRoot(),
+            FindRepositoryRoot(),
             "languages",
             "csharp",
             "dotnet",
@@ -165,4 +165,11 @@ internal static class TestWorkerFixture
                 Path.AltDirectorySeparatorChar))
             .Parent?.Name
            ?? "Debug";
+
+    private static string FindRepositoryRoot()
+    {
+        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
+            if (File.Exists(Path.Combine(directory.FullName, "Sunder.Core.slnx"))) return directory.FullName;
+        throw new DirectoryNotFoundException("The source-built test Worker repository is unavailable.");
+    }
 }

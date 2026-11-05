@@ -78,8 +78,10 @@ jobs:
 
   official-runtimes:
     name: Official runtime native launch (${{ matrix.rid }})
-    needs: prepare
-    if: needs.prepare.outputs.official_tests == 'true'
+    # Reuse native capacity in successive phases instead of requesting a second
+    # six-RID matrix while platform/process jobs still occupy the same runners.
+    needs: [prepare, platform]
+    if: ${{ !cancelled() && needs.prepare.outputs.official_tests == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -101,14 +103,14 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: official-runtime-${{ inputs.scope }}-${{ matrix.rid }}
-          path: artifacts/test-results/${{ inputs.scope }}/official
+          path: artifacts/test-results/${{ inputs.scope }}
           if-no-files-found: error
           retention-days: 14
 
   packaging:
     name: Unsigned packaging smoke (${{ matrix.rid }})
-    needs: prepare
-    if: needs.prepare.outputs.app_packaging == 'true'
+    needs: [prepare, platform]
+    if: ${{ !cancelled() && needs.prepare.outputs.app_packaging == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:

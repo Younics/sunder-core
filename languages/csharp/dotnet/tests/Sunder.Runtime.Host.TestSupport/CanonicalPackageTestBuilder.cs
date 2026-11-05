@@ -8,7 +8,7 @@ using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 
-namespace Sunder.Runtime.Host.Tests;
+namespace Sunder.Runtime.Host.TestSupport;
 
 internal static class CanonicalPackageTestBuilder
 {

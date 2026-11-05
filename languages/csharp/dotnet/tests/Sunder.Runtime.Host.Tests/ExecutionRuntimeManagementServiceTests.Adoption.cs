@@ -11,6 +11,8 @@ using Sunder.Runtime.Host.Services;
 using Sunder.Runtime.LocalState;
 using Xunit;
 
+using static Sunder.Runtime.Host.TestSupport.ExecutionRuntimeFixture;
+
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class ExecutionRuntimeManagementServiceTests
@@ -100,27 +102,4 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
         }
     }
 
-    internal static async Task<WebApplication> StartOfficialAdoptionHttpAsync(ManagementFixture fixture)
-    {
-        var builder = WebApplication.CreateSlimBuilder();
-        builder.WebHost.UseKestrel().UseUrls("http://127.0.0.1:0");
-        builder.Services.AddSingleton(fixture.Provider.GetRequiredService<RuntimeBearerTokenValidator>());
-        builder.Services.AddSingleton(fixture.Provider.GetRequiredService<RuntimeProtocolDescriptor>());
-        builder.Services.AddSingleton(fixture.Provider.GetRequiredService<RuntimeOperationGate>());
-        builder.Services.AddSingleton(fixture.ManagementState);
-        builder.Services.AddSingleton(fixture.Installation);
-        builder.Services.AddSingleton(fixture.Updates);
-        builder.Services.AddSingleton(fixture.Management);
-        builder.Services.AddSingleton(fixture.Prerequisites);
-        builder.Services.AddSingleton(fixture.Provider.GetRequiredService<RegistryPackageChangeOrchestrator>());
-        builder.Services.AddSingleton(fixture.Provider.GetRequiredService<RegistryAuthCoordinator>());
-        builder.Services.AddSingleton(fixture.Provider.GetRequiredService<RegistryAuthenticatedOperations>());
-        var app = builder.Build();
-        app.UseMiddleware<RuntimeProblemDetailsMiddleware>();
-        app.UseMiddleware<RuntimeBearerAuthenticationMiddleware>();
-        app.MapRuntimeHandshakeEndpoint();
-        app.MapGroup("/api/v1").MapExecutionRuntimeEndpoints().MapRegistryEndpoints();
-        try { await app.StartAsync(); return app; }
-        catch { await app.DisposeAsync(); throw; }
-    }
 }

@@ -362,15 +362,11 @@
           "System.Security.Cryptography.ProtectedData": "[10.0.13, )"
         }
       },
-      "sunder.runtime.host.tests": {
+      "sunder.runtime.host.testsupport": {
         "type": "Project",
         "dependencies": {
-          "Microsoft.NET.Test.Sdk": "[18.11.0, )",
           "Sunder.Core.TestSupport": "[1.0.0, )",
-          "Sunder.Runtime.Client": "[1.0.0, )",
-          "Sunder.Runtime.Host": "[1.0.0, )",
-          "Sunder.Sdk.Avalonia": "[1.0.0, )",
-          "xunit": "[2.9.3, )"
+          "Sunder.Runtime.Host": "[1.0.0, )"
         }
       },
       "sunder.runtime.localstate": {

@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import shutil
@@ -24,6 +25,7 @@ class CiMetadataTests(unittest.TestCase):
             self.assertEqual("prepared", Path(os.environ["SUNDER_TEST_LOCAL_INPUT"]).read_text())
             raise RuntimeError("test failure")
         with patch.dict(os.environ, {}, clear=True), patch.object(core_ci, "run"), \
+                patch.object(core_ci, "execution_evidence", side_effect=lambda *args: nullcontext()), \
                 patch.object(core_ci, "selection", return_value={"components": ["sdk"]}), \
                 patch.object(core_ci, "templates", side_effect=templates), patch.object(core_ci, "dotnet_tests", side_effect=consume):
             with self.assertRaisesRegex(RuntimeError, "test failure"): core_ci.validate("candidate")
@@ -52,6 +54,7 @@ class CiMetadataTests(unittest.TestCase):
         for scope, scenarios in (("all", ["interop", "app-interop"]), ("sdk", ["interop"]), ("repository", ["app-interop"])):
             calls.clear()
             with self.subTest(scope=scope), patch.object(core_ci, "run", side_effect=record("run")), \
+                    patch.object(core_ci, "execution_evidence", side_effect=lambda *args: nullcontext()), \
                     patch.object(core_ci, "oracle", side_effect=record("oracle")), \
                     patch.object(core_ci, "source", side_effect=record("source")), patch.object(core_ci, "module_inputs", side_effect=record("module")), \
                     patch.object(core_ci, "dotnet_tests", side_effect=record("tests")):
@@ -65,6 +68,21 @@ class CiMetadataTests(unittest.TestCase):
                                  [row[1] for row in calls if row[0] == "tests"])
                 self.assertEqual(scope != "repository", any(row[1][0:2] == ("npm", "ci") for row in calls))
                 self.assertEqual(scope != "repository", any(row[0] == "module" for row in calls))
+
+    def test_source_build_failure_retains_diagnostics_before_dotnet_tests_start(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            calls = []
+            def run(*args, **kwargs):
+                calls.append(args)
+                if args[:2] == ("dotnet", "build"): raise subprocess.CalledProcessError(1, args)
+            with patch.object(core_ci, "ROOT", root), patch.object(core_ci, "selection", return_value={"scope": "cli", "components": ["cli"], "buildProjects": []}), \
+                    patch.object(core_ci, "run", side_effect=run):
+                with self.assertRaises(subprocess.CalledProcessError): core_ci.source("cli", root)
+            diagnostics = root / "artifacts/test-results/cli/build"
+            self.assertEqual(0, json.loads((diagnostics / "restore.process.json").read_text())["status"])
+            self.assertEqual(1, json.loads((diagnostics / "build.process.json").read_text())["status"])
+            self.assertTrue(all(any(str(arg).endswith(".binlog") for arg in call) for call in calls))
 
     def test_toolchain_changes_follow_the_owners_without_rewriting_workflows(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -130,7 +148,7 @@ class CiMetadataTests(unittest.TestCase):
             for rid in rids:
                 (fixture / "dist/targets" / rid).mkdir(parents=True)
             for rid in rids:
-                with self.subTest(rid=rid), patch.object(core_ci, "NODE", root), patch.object(core_ci, "run") as run, \
+                with self.subTest(rid=rid), patch.object(core_ci, "run", return_value=json.dumps({"nodeRoot": str(root)})) as run, \
                      patch.object(core_ci, "target", return_value=Path("cli.dll")), \
                      patch.object(core_ci, "property_value", return_value=rid), patch.dict(os.environ, {}, clear=True):
                     values = core_ci.module_inputs()
@@ -138,6 +156,8 @@ class CiMetadataTests(unittest.TestCase):
                     self.assertEqual(rids, values["SUNDER_NODE_MODULE_EXPECTED_RIDS"].split(","))
                     self.assertEqual(fixture / "dist/targets" / rid, values["SUNDER_NODE_MODULE_LEAF_PATH"])
                     self.assertIn(values["SUNDER_NODE_MODULE_PACKAGE_PATH"], run.call_args.args)
+                    self.assertEqual(("node", core_ci.ROOT / "scripts/test-oracles/node-test-workspace.mjs"), run.call_args_list[0].args[:2])
+                    self.assertEqual(("npm", "--prefix", root, "run", "build"), run.call_args_list[1].args)
                     # Other target leaves cannot substitute for the executing Host.
                     values["SUNDER_NODE_MODULE_LEAF_PATH"].rmdir()
                     with self.assertRaisesRegex(ValueError, "Missing current-RID"):

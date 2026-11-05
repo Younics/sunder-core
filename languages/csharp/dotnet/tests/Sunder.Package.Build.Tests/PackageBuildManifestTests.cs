@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Sunder.Package.Build.Tasks;
@@ -45,7 +44,7 @@ public sealed class PackageBuildManifestTests
             var role = target.GetProperty("role").GetString();
             Assert.Contains(target.GetProperty("rid").GetString(), SunderPackageFormat.SupportedRuntimeIdentifiers);
             Assert.Equal("avalonia", target.GetProperty("kind").GetString());
-            Assert.Equal($"lib/{Path.GetFileName(Assembly.GetExecutingAssembly().Location)}", target.GetProperty("entryPoint").GetString());
+            Assert.Equal($"lib/{Path.GetFileName(ManifestAssemblyPath)}", target.GetProperty("entryPoint").GetString());
             Assert.Equal("net10.0", target.GetProperty("targetFramework").GetString());
             Assert.False(string.IsNullOrWhiteSpace(target.GetProperty("sdkVersion").GetString()));
             Assert.Equal("12.1.4", target.GetProperty("avaloniaVersion").GetString()!.Split('+')[0]);
@@ -75,7 +74,6 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.ContributionsV1,
             SunderSdkCapabilities.ViewsV1,
             SunderSdkCapabilities.SettingsViewsV1,
-            SunderSdkCapabilities.SettingsNavigationV1,
             SunderSdkCapabilities.SettingsSchemaV1,
             SunderSdkCapabilities.SettingsV1,
             SunderSdkCapabilities.StorageV1,
@@ -84,10 +82,6 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.SecretsV1,
             SunderSdkCapabilities.LoggingV1,
             SunderSdkCapabilities.NotificationsV1,
-            SunderSdkCapabilities.BackgroundProcessesV1,
-            SunderSdkCapabilities.RpcV1,
-            // The dispatch-evidence fixture calls this member-gated App API.
-            SunderSdkCapabilities.WorkerExecutionObservationsV1,
             SunderSdkCapabilities.ShellViewV1,
             SunderSdkCapabilities.ViewNavigationPreparationV1,
             SunderSdkCapabilities.CallbacksV1,
@@ -95,17 +89,13 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.StacksV1,
             SunderSdkCapabilities.StacksRpcV1,
             SunderSdkCapabilities.ThemingV1,
-            // The role-projection fixture now exercises owned Worker composition.
-            SunderSdkCapabilities.BackgroundServicesV1,
-            SunderSdkCapabilities.RuntimeGenerationsV1,
-            Sunder.Sdk.Worker.SunderWorkerCapabilities.ProtocolV1,
         }.Order(StringComparer.OrdinalIgnoreCase), capabilities.Order(StringComparer.OrdinalIgnoreCase));
     }
 
     [Fact]
     public void GenerateManifest_ReadsMetadataFromIncompatibleMachineAssembly()
     {
-        var assemblyPath = CopyAssemblyWithIncompatibleMachine(Assembly.GetExecutingAssembly().Location);
+        var assemblyPath = CopyAssemblyWithIncompatibleMachine(ManifestAssemblyPath);
         var manifestPath = Path.Combine(Path.GetDirectoryName(assemblyPath)!, "sunder-package.json");
         var buildEngine = new TestBuildEngine();
         var task = CreateFixtureTask(assemblyPath, manifestPath, buildEngine);

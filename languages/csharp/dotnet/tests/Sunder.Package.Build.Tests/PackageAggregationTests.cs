@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using Sunder.Core.TestSupport;
@@ -27,7 +26,7 @@ public sealed class PackageAggregationTests
         {
             var managedDestination = Path.Combine(leaf, "payload", role, "win-x64", managedRidPath);
             Directory.CreateDirectory(Path.GetDirectoryName(managedDestination)!);
-            File.Copy(Assembly.GetExecutingAssembly().Location, managedDestination);
+            File.Copy(ManifestAssemblyPath, managedDestination);
             File.WriteAllBytes(
                 Path.Combine(leaf, "payload", role, "win-x64", nativeExecutablePath),
                 [0x7f, (byte)'E', (byte)'L', (byte)'F', 1, 2, 3, 4]);
@@ -50,7 +49,7 @@ public sealed class PackageAggregationTests
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         var firstIndex = await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json"));
-        Assert.True(File.Exists(Path.Combine(output, "payload", "app", "win-x64", "lib", Path.GetFileName(Assembly.GetExecutingAssembly().Location))));
+        Assert.True(File.Exists(Path.Combine(output, "payload", "app", "win-x64", "lib", Path.GetFileName(ManifestAssemblyPath))));
         Assert.True(File.Exists(Path.Combine(
             output,
             "payload",

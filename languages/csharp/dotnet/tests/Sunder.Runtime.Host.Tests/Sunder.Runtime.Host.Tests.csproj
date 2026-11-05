@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Using Include="Sunder.Runtime.Host.TestSupport" />
+    <ProjectReference Include="..\Sunder.Runtime.Host.TestSupport\Sunder.Runtime.Host.TestSupport.csproj" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Client\Sunder.Runtime.Client.csproj" />
     <ProjectReference Include="..\..\packages\Sunder.Sdk.Avalonia\Sunder.Sdk.Avalonia.csproj" />

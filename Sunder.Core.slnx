@@ -20,6 +20,7 @@
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Format.Tests/Sunder.Package.Format.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Projections.Tests/Sunder.Package.Projections.Tests.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.Tests/Sunder.Runtime.Host.Tests.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.TestSupport/Sunder.Runtime.Host.TestSupport.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.TestWorker/Sunder.Runtime.Host.TestWorker.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Sunder.Runtime.Host.InteropWorker.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Runtime.Client.Tests/Sunder.Runtime.Client.Tests.csproj" />
@@ -46,6 +47,8 @@
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/AuthoredReflection/AuthoredReflection.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ExternalDependency/ExternalDependency.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/GeneratedAvalonia/GeneratedAvalonia.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/GeneratedOwnedRpc/GeneratedOwnedRpc.csproj" />
+    <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/ManifestPackage/ManifestPackage.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/MissingExternal/MissingExternal.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/MissingSdkDependency/MissingSdkDependency.csproj" />
     <Project Path="languages/csharp/dotnet/tests/Sunder.Package.Build.TestFixtures/SourceReferencePackage/SourceReferencePackage.csproj" />

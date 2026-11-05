@@ -32,8 +32,8 @@ public sealed class PackageWorkerManifestTests
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         var generated = Assert.Single(document.RootElement.GetProperty("targets").EnumerateArray());
         Assert.Equal(SunderPackageFormat.WorkerTargetKind, generated.GetProperty("kind").GetString());
-        Assert.Equal("lib/Sunder.Package.Build.Tests.dll", generated.GetProperty("entryPoint").GetString());
-        Assert.Equal("Sunder.Package.Build.Tests.dll", task.WorkerEntryPointRelativePath);
+        Assert.Equal("lib/ManifestPackage.dll", generated.GetProperty("entryPoint").GetString());
+        Assert.Equal("ManifestPackage.dll", task.WorkerEntryPointRelativePath);
     }
 
     [Fact]
@@ -48,7 +48,7 @@ public sealed class PackageWorkerManifestTests
 
         Assert.False(task.Execute());
         Assert.Contains(buildEngine.Errors, error =>
-            error.Contains("official managed module 'lib/Sunder.Package.Build.Tests.dll'", StringComparison.Ordinal));
+            error.Contains("official managed module 'lib/ManifestPackage.dll'", StringComparison.Ordinal));
     }
 
     [Fact]

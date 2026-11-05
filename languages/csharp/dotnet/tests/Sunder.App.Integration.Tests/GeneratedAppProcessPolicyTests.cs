@@ -15,7 +15,7 @@ using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host;
 using Sunder.Runtime.Host.Endpoints;
 using Sunder.Runtime.Host.Services;
-using Sunder.Runtime.Host.Tests;
+using Sunder.Runtime.Host.TestSupport;
 using Sunder.Runtime.LocalState;
 using Xunit;
 
@@ -201,63 +201,16 @@ public sealed class GeneratedAppProcessPolicyTests(GeneratedOwnedRpcPackageFixtu
 
 public sealed class GeneratedOwnedRpcPackageFixture : IAsyncLifetime
 {
-    private readonly TemporaryDirectoryScope _temporary = TemporaryDirectoryScope.Create("sunder-generated-app-policy-package");
     internal string PackagePath { get; private set; } = null!;
     public async Task InitializeAsync()
     {
-        var root = new DirectoryInfo(AppContext.BaseDirectory);
-        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Sunder.Core.slnx"))) root = root.Parent;
-        Assert.NotNull(root);
-        var dotnet = Path.Combine(root.FullName, "languages", "csharp", "dotnet");
-        var fixture = _temporary.GetPath("fixture");
-        if (OperatingSystem.IsMacOS() && fixture.StartsWith("/var/", StringComparison.Ordinal)) fixture = "/private" + fixture;
-        Copy(Path.Combine(dotnet, "tests", "Sunder.Package.Build.TestFixtures", "ImplementationFirstRpc"), fixture);
-        var configuration = "NativeAppPolicy-" + Guid.NewGuid().ToString("N");
-        var packages = Path.Combine(dotnet, "packages");
-        var properties = new[]
-        {
-            $"-p:Configuration={configuration}",
-            $"-p:SunderSdkWorkerProject={Path.Combine(packages, "Sunder.Sdk.Worker", "Sunder.Sdk.Worker.csproj")}",
-            $"-p:SunderSdkProject={Path.Combine(packages, "Sunder.Sdk", "Sunder.Sdk.csproj")}",
-            $"-p:SunderPackageBuildProject={Path.Combine(packages, "Sunder.Package.Build", "Sunder.Package.Build.csproj")}",
-            $"-p:SunderPackageBuildTargetsPath={Path.Combine(packages, "Sunder.Package.Build", "build", "Sunder.Package.Build.targets")}",
-        };
-        var project = Path.Combine(fixture, "ImplementationFirstRpc.csproj");
-        await RunAsync(fixture, ["restore", project, "--disable-parallel", "-p:RestoreLockedMode=false", .. properties]);
-        await RunAsync(fixture, ["restore", Path.Combine(fixture, "App", "ImplementationFirstRpc.App.csproj"), "--disable-parallel", "-p:RestoreLockedMode=false", .. properties]);
-        await RunAsync(fixture, ["build", project, "--no-restore", "--disable-build-servers", "-p:SunderPackagePrimaryProject=true",
-            $"-p:SunderPackageComposeRuntimeIdentifiers={RuntimeInformation.RuntimeIdentifier}", .. properties]);
-        PackagePath = Path.Combine(fixture, "bin", configuration, "net10.0", "sunder-dev");
+        var marker = Path.Combine(AppContext.BaseDirectory, "sunder-policy-package-path.txt");
+        Assert.True(File.Exists(marker), "Build Sunder.App.Integration.Tests before running its generated package behavior tests.");
+        PackagePath = (await File.ReadAllTextAsync(marker)).Trim();
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(PackagePath);
         Assert.True(validation.Success, string.Join(" | ", validation.Errors));
         Assert.Single(validation.Manifest!.Provides!);
         Assert.Single(validation.Manifest.UsesContracts!);
     }
-    public Task DisposeAsync() => _temporary.DisposeAsync().AsTask();
-
-    private static void Copy(string source, string target)
-    {
-        Directory.CreateDirectory(target);
-        foreach (var file in Directory.EnumerateFiles(source)) File.Copy(file, Path.Combine(target, Path.GetFileName(file)));
-        foreach (var directory in Directory.EnumerateDirectories(source).Where(path => Path.GetFileName(path) is not ("bin" or "obj"))) Copy(directory, Path.Combine(target, Path.GetFileName(directory)));
-    }
-    private static async Task RunAsync(string directory, string[] arguments)
-    {
-        var logRoot = Path.GetDirectoryName(directory)!;
-        await File.WriteAllTextAsync(Path.Combine(logRoot, "build-progress.txt"), string.Join(" ", arguments));
-        var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
-        { WorkingDirectory = directory, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        start.Environment["DOTNET_CLI_DO_NOT_USE_MSBUILD_SERVER"] = "1";
-        foreach (var argument in arguments) start.ArgumentList.Add(argument);
-        using var process = Process.Start(start)!;
-        var output = process.StandardOutput.ReadToEndAsync();
-        var error = process.StandardError.ReadToEndAsync();
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(5));
-        try { await Task.WhenAll(process.WaitForExitAsync(timeout.Token), output, error).WaitAsync(timeout.Token); }
-        catch { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } throw; }
-        var text = await output + "\n" + await error;
-        await File.WriteAllTextAsync(Path.Combine(logRoot, "build-" + arguments[0] + "-" + Path.GetFileName(arguments[1]) + ".log"), text);
-        Assert.True(process.ExitCode == 0, text);
-    }
+    public Task DisposeAsync() => Task.CompletedTask;
 }
