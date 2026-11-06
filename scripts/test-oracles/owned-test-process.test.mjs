@@ -54,7 +54,7 @@ test("owned command preserves argument bytes, exit status and streamed diagnosti
   const args = ['space value', 'quote"value', 'trailing\\', ''];
   const result = await runOwnedTestProcess(process.execPath, ["-e",
     "console.log(JSON.stringify(process.argv.slice(1))); console.error('failure detail'); process.exit(7)", ...args], options());
-  assert.equal(result.status, 7);
+  assert.equal(result.status, 7, JSON.stringify(result));
   assert.equal(result.error, null);
   assert.equal(result.cleanupComplete, true);
   assert.deepEqual(JSON.parse(await readFile(`${options().logStem}.stdout.log`, "utf8")), args);

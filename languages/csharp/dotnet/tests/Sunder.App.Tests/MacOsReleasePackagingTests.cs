@@ -64,7 +64,7 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("set(files) - EVIDENCE == expected", publisher, StringComparison.Ordinal);
         Assert.DoesNotContain("-Setup.pkg", publisher, StringComparison.Ordinal);
         Assert.DoesNotContain("-Portable.zip", publisher, StringComparison.Ordinal);
-        Assert.Contains("scripts/release/generate-app-feeds.py release-assets", workflow, StringComparison.Ordinal);
+        Assert.Contains("scripts/release/generate-app-feeds.py artifacts/app-release-assets", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("vpk upload github", workflow, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-x64-stable.dmg", installer, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-arm64-stable.dmg", installer, StringComparison.Ordinal);

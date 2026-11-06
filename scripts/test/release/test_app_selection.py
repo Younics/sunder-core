@@ -134,6 +134,25 @@ class AppSelectionTests(unittest.TestCase):
                 self.assertEqual(1, sum(call.args[0].endswith("/dispatches") for call in api.call_args_list))
                 remote.assert_called_once_with(TAG, SOURCE)
 
+    def test_tag_creation_preserves_rejection_and_recovers_only_a_matching_lost_ack(self):
+        self.selection()
+        plan = app.select("1.0.0", SOURCE)
+        for observed in (None, OLD, SOURCE):
+            with self.subTest(observed=observed), patch.object(app.sdk, "source_guard"), \
+                 patch.object(app, "select", return_value=copy.deepcopy(plan)), \
+                 patch.object(app, "tag_source", side_effect=[None, observed]), \
+                 patch.object(app.c, "remote_tag") as remote, patch.object(app, "api") as api:
+                api.side_effect = [ValueError("Tag creation rejected by repository rules"), dict(workflow_run_id=123)]
+                if observed == SOURCE:
+                    self.assertEqual("App release started", app.launch(plan)["reason"])
+                    remote.assert_called_once_with(TAG, SOURCE)
+                    self.assertEqual(2, api.call_count)
+                else:
+                    with self.assertRaisesRegex(ValueError, "Tag creation rejected"):
+                        app.launch(plan)
+                    remote.assert_not_called()
+                    self.assertEqual(1, api.call_count)
+
     def test_launch_rechecks_state_before_mutations_and_reruns_only_failed_jobs(self):
         self.selection(source=SOURCE, candidates=[run()])
         with patch.object(app, "pages", return_value=[]): plan = app.select("1.0.0", SOURCE)

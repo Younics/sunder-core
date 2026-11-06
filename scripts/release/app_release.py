@@ -198,7 +198,8 @@ def launch(plan):
             api("git/refs", "POST", dict(ref="refs/tags/" + current["tag"], sha=current["artifactSourceCommit"]))
         except (ValueError, subprocess.TimeoutExpired):
             # Reconcile one lost acknowledgement; never move or replace a tag.
-            pass
+            if tag_source(current["tag"]) != current["artifactSourceCommit"]:
+                raise
     c.remote_tag(current["tag"], current["artifactSourceCommit"])
     try:
         response = api(f"actions/workflows/{Path(WORKFLOW).name}/dispatches", "POST", dict(ref=current["tag"]))

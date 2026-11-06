@@ -33,10 +33,11 @@ class PackageReleaseTests(unittest.TestCase):
         return get
 
     def test_never_published_newer_equal_and_lower_versions(self):
+        packages = [dict(package, version="1.0.0") for package in self.packages]
         for published, expected in ((None, True), (["0.9.0"], True), (["1.0.0"], False), (["1.10.0"], False)):
             with self.subTest(published=published):
                 get = (lambda _: None) if published is None else self.history(published)
-                plan = sdk.select(self.packages, SOURCE, [], get)
+                plan = sdk.select(packages, SOURCE, [], get)
                 self.assertTrue(all(row["selected"] is expected for row in plan["packages"]))
 
     def test_independent_versions_and_mixed_registry_selection(self):

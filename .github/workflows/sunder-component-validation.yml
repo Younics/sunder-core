@@ -115,9 +115,7 @@ jobs:
         env:
           SUNDER_CI_STEPS: ${{ toJSON(steps) }}
           CI_REPORT_ARTIFACT: sunder-results-${{ inputs.bundle }}-component-${{ inputs.scope }}
-        run: |
-          python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
-          node scripts/test-oracles/summarize-core-test-results.mjs "artifacts/test-results/$CI_COMPONENT" --scope "$CI_COMPONENT" --allow-partial --github-summary
+        run: python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
       - name: Retain component reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
