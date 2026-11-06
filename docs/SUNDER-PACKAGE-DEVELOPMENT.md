@@ -1,16 +1,12 @@
 # Sunder Package Development
 
-> **Source channel:** This manual tracks the first supported SDK release, `1.0.0`, .NET 10, and Runtime protocol revision 1. Use the selected component's release tag for released behavior.
+Build tools, integrations, and desktop panels for Sunder using C#, TypeScript, or
+JavaScript. Start with a service and an optional Avalonia or web UI; Sunder's tooling
+generates typed APIs, registration, and the connection between the UI and worker.
 
-> **Current RPC authoring:** Use
-> [ordinary C# services](package-development/ORDINARY-SERVICES.md) or
-> [TypeScript/checked-JavaScript services](SUNDER-NODE-PROCESS-PACKAGES.md#author-ordinary-services).
-> Tooling derives descriptors, codecs, provider registration and managed consumers.
-> [Implementation-First RPC Authoring](package-development/IMPLEMENTATION-FIRST-RPC.md)
-> documents the source, lock, generation and evolution rules. Captured descriptor-first
-> and Node DSL examples are historical evidence, not current package-author recipes.
-
-This is the canonical landing page for public Sunder package development. The focused guides describe the current universal-package implementation in this repository.
+For a first project, choose the [.NET template](../languages/csharp/dotnet/packages/Sunder.Package.Templates/README.md)
+or [Node/React initializer](../languages/typescript/node/packages/create-sunder-package/README.md).
+The guides below cover development, testing, data, user interfaces, and distribution.
 
 ## Start Here
 
@@ -45,9 +41,9 @@ The table is not a closed capability list. Future Python, Rust, Go, and other wo
 
 | Authoring need | Add/use |
 | --- | --- |
-| Framework-dependent .NET Worker Runtime | Exact coordinated versions of `Sunder.Sdk.Worker` and `Sunder.Package.Build` |
-| Avalonia views/settings | Add `Sunder.Sdk.Avalonia` only to the App leaf that uses Avalonia |
-| Stack contribution | Add `Sunder.Sdk.Stacks` to the Worker leaf that implements the contributor |
+| .NET services and workers | `Sunder.Sdk.Worker` and `Sunder.Package.Build` in the authored project |
+| Avalonia views/settings | Add an App-scoped `Sunder.Sdk.Avalonia` reference, as the template does |
+| Stack contribution | Add a Worker-scoped `Sunder.Sdk.Stacks` reference and select its platform contract |
 | New managed canonical package | Install `Sunder.Package.Templates`; it is a scaffold tool, not a runtime dependency |
 | Node worker services | `defineService` from `@younics/sunder-sdk`, `services.module` and `@younics/sunder-package-tool`; consume through generated `#sunder/api` tokens |
 | Browser code in a web App | Generated `#sunder/api` plus `createBrowserContext` from `@younics/sunder-sdk/browser`; choose any web framework |
@@ -102,7 +98,7 @@ The Node SDK uses Worker V1 and strict keyed RPC descriptor V1 beneath ordinary
 service authoring. `@younics/sunder-package-tool` emits thin CommonJS modules whose exact-RID
 target records bind `sunder.runtime.node` 24.x and `sunder.node-worker-module.v1`;
 Node executable bytes remain in separately trusted execution-runtime artifacts.
-Its surface remains intentionally narrower than the coordinated .NET SDK family.
+Its surface remains intentionally narrower than the .NET SDK family.
 
 ## Architecture In One Minute
 
@@ -118,7 +114,7 @@ Its surface remains intentionally narrower than the coordinated .NET SDK family.
 
 - [Sunder Package Standard](SUNDER-PACKAGE-STANDARD.md) is the normative source for package identity, metadata, generated manifests, output layout, archive validation, and package/Stack format limits. Developer guides link to it instead of redefining the format.
 - [Sunder SDK Compatibility](SUNDER-SDK-COMPATIBILITY.md) defines the Host/SDK/target compatibility boundary and capabilities.
-- [Sunder V1 Baseline](SUNDER-V1-BASELINE.md) defines the coordinated unreleased baseline and no-shim policy.
+- [Sunder V1 Baseline](SUNDER-V1-BASELINE.md) describes the architectural baseline and development-history policy.
 - [Sunder CLI](SUNDER-CLI.md) is the command reference.
 
 ## Drift Protection

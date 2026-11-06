@@ -15,10 +15,11 @@ permissions:
 env:
   SCENARIO: ${{ inputs.scenario }}
   CI_COMPONENT: ${{ inputs.scenario }}
+  CI_JOB_NAME: ${{ inputs.scenario == 'interop' && 'Cross-language compatibility — .NET ↔ Node' || 'Package templates — Generate, build, package, run' }}
 
 jobs:
   consumers:
-    name: Prepare and test consumers
+    name: ${{ inputs.scenario == 'interop' && 'Cross-language compatibility — .NET ↔ Node' || 'Package templates — Generate, build, package, run' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -54,9 +55,11 @@ jobs:
           merge-multiple: true
           path: artifacts/packages
       - name: Test .NET and Node package interoperability
+        id: interop_test
         if: inputs.scenario == 'interop'
         run: python3 -B scripts/ci/core_ci.py interop --scope sdk
       - name: Generate, build, package and run candidate templates
+        id: templates_test
         if: inputs.scenario == 'generated-templates'
         run: python3 -B scripts/ci/core_ci.py template-consumers --scope sdk
       - name: Retain tested candidate archives
@@ -74,3 +77,9 @@ jobs:
           path: artifacts/test-results/sdk
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize consumer results
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-${{ inputs.bundle }}-consumers-${{ inputs.scenario }}
+        run: python3 -B scripts/ci/report.py job --directory artifacts/test-results/sdk

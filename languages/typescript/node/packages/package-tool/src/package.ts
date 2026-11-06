@@ -988,7 +988,9 @@ function configuredRpcDeclarations(
         audience: provider.audience,
       };
     });
-  return { usesContracts, provides };
+  // Compare source declarations in the same order as manifests and leaf unions.
+  // Source export order does not change the required provider/use set.
+  return { usesContracts: usesContracts.sort(compareContractUses), provides: provides.sort(compareProviders) };
 }
 
 function exactContract(project: PreparedProject, contractId: string, contractVersion: string): LoadedContract {

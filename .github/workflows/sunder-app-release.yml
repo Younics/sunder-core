@@ -1,20 +1,23 @@
 name: Sunder App — Release
+run-name: Sunder App — ${{ github.ref_name }} — Validate, package and release
 
 on:
   push:
     tags: ["app/v*"]
+  workflow_dispatch:
 
 permissions: {}
 concurrency:
   group: sunder-release-${{ github.ref_name }}
   cancel-in-progress: false
 env:
-  RELEASE_CHANNEL: stable
   RELEASE_REPO_URL: https://github.com/${{ github.repository }}
 
 jobs:
   validation:
-    name: App / Validation
+    name: App — Validation
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: app
@@ -23,7 +26,9 @@ jobs:
       actions: read
 
   runtime-validation:
-    name: Host / Validation
+    name: Host — Bundled runtime validation
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: host
@@ -32,50 +37,71 @@ jobs:
       actions: read
 
   prepare:
-    name: App / Select version and platforms
+    name: App — Verify authored version, tag and platforms
     runs-on: ubuntu-24.04
     permissions:
-      contents: read
+      contents: write # Discover unfinished drafts; evaluation receives no token.
+      actions: read
     outputs:
       version: ${{ steps.release.outputs.version }}
+      channel: ${{ steps.release.outputs.channel }}
+      skip: ${{ steps.release.outputs.skip }}
       matrix: ${{ steps.platforms.outputs.app }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
       - id: release
-        run: python3 -B scripts/release/github_release.py metadata "$GITHUB_REF_NAME"
+        name: Verify exact App release context and original invocation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/app_release.py prepare
       - id: platforms
         run: python3 -B scripts/ci/metadata.py matrices
 
   package:
-    name: App / Package and sign / ${{ matrix.rid }}
+    name: App ${{ needs.prepare.outputs.version }} — ${{ matrix.package_task }} — ${{ matrix.rid }}
     needs: [prepare, validation, runtime-validation]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     environment: sunder-app-signing
     permissions:
       contents: read
+      actions: read
       id-token: write
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     env:
+      RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
+      CI_JOB_NAME: App ${{ needs.prepare.outputs.version }} — ${{ matrix.package_task }} — ${{ matrix.rid }}
       VERSION: ${{ needs.prepare.outputs.version }}
       RUNTIME: ${{ matrix.rid }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Reuse an original verified platform artifact on retry
+        id: retained
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/app_release.py retained --rid "$RUNTIME"
       - uses: ./.github/actions/setup
+        if: steps.retained.outputs.reuse != 'true'
         with:
           node: 'false'
           packaging: 'true'
       - name: Install Velopack CLI
+        if: steps.retained.outputs.reuse != 'true'
         shell: pwsh
         run: ./scripts/release/install-velopack.ps1
       - name: Azure login for Windows signing
-        if: runner.os == 'Windows'
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'Windows'
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
@@ -83,7 +109,7 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
       - name: Configure Azure Trusted Signing
         id: windows-signing
-        if: runner.os == 'Windows'
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'Windows'
         shell: pwsh
         env:
           AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT || secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
@@ -92,7 +118,7 @@ jobs:
         run: ./scripts/release/configure-windows-signing.ps1
       - name: Configure Apple signing and notarization
         id: apple-signing
-        if: runner.os == 'macOS'
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'macOS'
         shell: bash
         env:
           APPLE_BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_BUILD_CERTIFICATE_BASE64 }}
@@ -104,7 +130,8 @@ jobs:
           APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
         run: bash scripts/release/configure-apple-signing.sh
       - name: Package Sunder for Windows
-        if: runner.os == 'Windows'
+        id: windows_package
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'Windows'
         shell: pwsh
         env:
           WINDOWS_PUBLISHER_SUBJECT: ${{ vars.WINDOWS_PUBLISHER_SUBJECT || secrets.WINDOWS_PUBLISHER_SUBJECT }}
@@ -116,7 +143,8 @@ jobs:
             -WindowsSignParams "/fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib `"$env:DLIB_PATH`" /dmdf `"$env:METADATA_PATH`"" `
             -WindowsPublisherSubject $env:WINDOWS_PUBLISHER_SUBJECT
       - name: Package Sunder for Unix
-        if: runner.os != 'Windows'
+        id: unix_package
+        if: steps.retained.outputs.reuse != 'true' && runner.os != 'Windows'
         shell: bash
         env:
           APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
@@ -130,16 +158,19 @@ jobs:
           fi
           bash scripts/release/package-sunder.sh "${arguments[@]}"
       - name: Inspect the signed and notarized mounted DMG
-        if: runner.os == 'macOS'
+        id: dmg_inspection
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'macOS'
         shell: bash
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bash scripts/release/macos/verify-sunder-dmg.sh "artifacts/velopack/$RELEASE_CHANNEL/$RUNTIME/Sunder-app-$RUNTIME-$RELEASE_CHANNEL.dmg" "$RUNTIME"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.retained.outputs.reuse != 'true'
         with:
           name: sunder-app-release-${{ matrix.rid }}
           path: artifacts/velopack/${{ env.RELEASE_CHANNEL }}/${{ matrix.rid }}/*
           if-no-files-found: error
+          retention-days: 90
       - name: Clean up Apple signing keychain
         if: always() && runner.os == 'macOS'
         shell: bash
@@ -147,13 +178,24 @@ jobs:
           APPLE_KEYCHAIN_PATH: ${{ steps.apple-signing.outputs.keychain_path }}
         run: |
           if [[ -n "$APPLE_KEYCHAIN_PATH" && -f "$APPLE_KEYCHAIN_PATH" ]]; then security delete-keychain "$APPLE_KEYCHAIN_PATH"; fi
+      - name: Summarize native App packaging
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-app-release-${{ matrix.rid }}
+        run: python3 -B scripts/ci/report.py job
 
   release:
-    name: App / Publish verified installers
+    name: App ${{ needs.prepare.outputs.version }} — Publish verified installers
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: sunder-github-release-promotion
+    concurrency:
+      group: sunder-app-promotion
+      cancel-in-progress: false
+    env:
+      RELEASE_CHANNEL: ${{ needs.prepare.outputs.channel }}
     permissions:
       contents: write
     steps:
@@ -171,12 +213,34 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: sunder-app-release-*
-          path: release-assets
+          path: artifacts/app-release-assets
       - name: Generate Full-only update feeds and publish exact App assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          python3 -B scripts/release/generate-app-feeds.py release-assets --channel "$RELEASE_CHANNEL"
-          python3 -B scripts/release/github_release.py stage "$GITHUB_REF_NAME" --directory release-assets --channel "$RELEASE_CHANNEL"
-          python3 -B scripts/release/github_release.py finalize "$GITHUB_REF_NAME" --directory release-assets --channel "$RELEASE_CHANNEL"
+          python3 -B scripts/release/generate-app-feeds.py artifacts/app-release-assets --channel "$RELEASE_CHANNEL"
+          python3 -B scripts/release/github_release.py stage "$GITHUB_REF_NAME" --directory artifacts/app-release-assets --channel "$RELEASE_CHANNEL"
+          python3 -B scripts/release/github_release.py finalize "$GITHUB_REF_NAME" --directory artifacts/app-release-assets --channel "$RELEASE_CHANNEL"
+
+  summary:
+    name: Results — App release and installer downloads
+    if: always()
+    needs: [prepare, validation, runtime-validation, package, release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Report App publication outcome
+        env:
+          SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 -B scripts/release/app_release.py summary
+      - name: Link App jobs and durations
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/report.py jobs

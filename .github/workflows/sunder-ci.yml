@@ -33,7 +33,7 @@ env:
 
 jobs:
   preflight:
-    name: Repository / Policy and documentation preflight
+    name: Repository — Policy and documentation checks
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -50,7 +50,13 @@ jobs:
           dotnet: 'false'
       - name: Select component owners and execution lanes
         id: selection
-        run: python3 -B scripts/ci/metadata.py components --scope "$CI_SCOPE"
+        env:
+          RELEASE_PACKAGES: ${{ inputs.release-packages }}
+        run: |
+          args=()
+          [[ "$RELEASE_PACKAGES" != true ]] || args+=(--release-packages)
+          python3 -B scripts/ci/metadata.py components --scope "$CI_SCOPE" "${args[@]}"
+          python3 -B scripts/ci/report.py plan --scope "$CI_SCOPE"
       - name: Validate test ownership and documentation
         run: |
           node scripts/test-oracles/check-core-test-policy.mjs
@@ -80,6 +86,7 @@ jobs:
     uses: ./.github/workflows/sunder-component-validation.yml
     with:
       scope: ${{ matrix.scope }}
+      display-name: ${{ matrix.job_name }}
       bundle: ${{ inputs.scope || 'all' }}
       release-packages: ${{ inputs.release-packages || false }}
 
@@ -110,7 +117,7 @@ jobs:
       scope: ${{ inputs.scope || 'all' }}
 
   test-results:
-    name: Results / Required validation gate
+    name: Results — Required validation gate
     if: always()
     needs: [preflight, components, cross-language, templates, native]
     runs-on: ubuntu-24.04
@@ -133,9 +140,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p "artifacts/ci-results/$CI_SCOPE"
-          if ! gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" --jq '[.[].jobs[] | {name, html_url}]' > "artifacts/ci-results/$CI_SCOPE/jobs.json"; then
-            echo '[]' > "artifacts/ci-results/$CI_SCOPE/jobs.json"
-          fi
+          python3 -B scripts/ci/report.py jobs --output "artifacts/ci-results/$CI_SCOPE/jobs.json"
       - name: Audit required jobs and exact test selections
         if: always()
         env:

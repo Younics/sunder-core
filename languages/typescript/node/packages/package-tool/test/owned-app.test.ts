@@ -118,7 +118,10 @@ test(`owned ${extension} ${exposure} App defaults and managed calls keep exact i
 });
 
 test("owned App source projection packs role-isolated leaves and rejects stale prebuilt grants", { timeout: 180_000 }, async () => {
-  const optional = source.replace('exposure:"package"', 'exposure:"public",appUse:{actions:["discover","invoke"]},runtimeUse:{required:true,actions:["discover"]}');
+  // Source order differs from canonical contract order. Release comparison must
+  // still retain both providers and their independently scoped consumer policies.
+  const optional = source.replace('exposure:"package"', 'exposure:"public",appUse:{actions:["discover","invoke"]},runtimeUse:{required:true,actions:["discover"]}')
+    + '\nexport const greeting=defineService({greet(){return "Hello";}});\n';
   const root = await project("ts", optional);
   const run = (...args: string[]) => exec(process.execPath, [cli, ...args, "--project", root]);
   try {
@@ -127,14 +130,18 @@ test("owned App source projection packs role-isolated leaves and rejects stale p
     await run("build");
     const runtime = JSON.parse(await readFile(resolve(root, "dist/targets", currentRid(), "manifest/sunder-package.json"), "utf8"));
     const app = JSON.parse(await readFile(resolve(root, "dist/targets", `app-${currentRid()}`, "manifest/sunder-package.json"), "utf8"));
-    assert.equal(runtime.provides.length, 1);
+    assert.deepEqual(runtime.provides.map((provider: { providerId: string }) => provider.providerId),
+      ["example.app.greeting.provider", "example.app.messages.provider"]);
     assert.equal(runtime.usesContracts.length, 1);
     assert.equal(runtime.usesContracts[0].role, "runtime");
     assert.equal(runtime.usesContracts[0].required, true);
     assert.deepEqual(runtime.usesContracts[0].actions, ["discover"]);
-    assert.deepEqual(app.provides, []); assert.equal(app.usesContracts.length, 1);
-    assert.equal(app.usesContracts[0].required, false);
-    assert.deepEqual(app.usesContracts[0].actions, ["discover", "invoke"]);
+    assert.deepEqual(app.provides, []);
+    assert.deepEqual(app.usesContracts.map((use: { contractId: string; required: boolean; actions: string[] }) =>
+      ({ contractId: use.contractId, required: use.required, actions: use.actions })), [
+      { contractId: "example.app.greeting", required: true, actions: ["discover", "invoke"] },
+      { contractId: "example.app.messages", required: false, actions: ["discover", "invoke"] },
+    ]);
     const sources = ["--discovery-root", resolve(root, "dist/targets"), "--leaf", resolve(root, "dist/targets", currentRid()), "--leaf", resolve(root, "dist/targets", `app-${currentRid()}`)];
     await run("package", ...sources);
     const archivePath = resolve(root, "dist/example.app.1.0.0.sunderpkg");

@@ -20,18 +20,19 @@ version ledger. Examples are `nuget-sunder-sdk/v1.2.0`,
 Historical combined `sdk/v*` releases remain recognizable by their package assets;
 new publication does not create coordinated SDK tags.
 
-Only a stable App release becomes GitHub `latest`. Package, CLI, Host and App
+Only the newest stable App release becomes GitHub `latest`. Package, CLI, Host and App
 prerelease announcements use `make_latest=false`. npm consumer channels are
 `latest` for stable versions and `next` for prereleases.
 
 ## Existing workflow checks
 
-`sunder-sdk-release.yml` (**Sunder Core — Main CI and SDK Release**) owns
+`sunder-sdk-release.yml` (**Sunder Core — Main CI and Releases**) owns
 protected-main pushes and manual dispatch on `main`. It selects versions, calls
 the reusable `sunder-ci.yml` with `scope: all`, stages tested archives, publishes
 selected npm packages before NuGet packages, and finalizes their project releases
-in the same run. There is no tag redispatch, separate approval workflow or
-per-release configuration. PRs, merge queues, weekly schedules and default manual
+in the same run. SDK publication retains its main-workflow provenance identity.
+Independent App selection starts its exact-tag release workflow and links that run
+in the main summary. PRs, merge queues, weekly schedules and default manual
 validation also use `all`.
 Desktop build, test and installer failures therefore belong to App validation, while
 SDK validation retains package-side Avalonia/bridge contracts and Host/CLI consumers.
@@ -106,8 +107,9 @@ History comes from NuGet's version index, npm's complete version history and
 published GitHub package archives, not mutable dist tags or exact-version absence.
 For example, unpublished `1.9.0` is skipped after `1.10.0`. Prereleases participate
 in SemVer precedence; build metadata cannot make a version newer. Source changes
-without a version increase do not publish. No selected versions means no release
-packing, tags, publishing login or registry writes; normal source validation remains.
+without a version increase do not publish. No selected SDK versions means no SDK
+release packing, tags, publishing login or registry writes; normal source validation
+and independent App selection remain.
 Only HTTP 404 means absent. Authentication, rate-limit and service failures stop.
 
 The six public NuGets are `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`,
@@ -249,7 +251,45 @@ bytes and source; use a new authored version for changed payloads.
 
 ## Publish App, CLI or standalone Host
 
-After authorization, create and push `app/vX.Y.Z`, `cli/vX.Y.Z` or `host/vX.Y.Z`.
+The App authors its independent `<Version>` in
+`languages/csharp/dotnet/host/Sunder.App/Sunder.App.csproj`. The selector requires
+one unconditional literal version and checks its evaluated Release value; the
+.NET SDK's implicit `1.0.0` default is not a release version owner.
+
+On protected-main pushes or dispatches, App selection compares that version with
+published `app/v*` releases using SemVer. Stable releases ignore prereleases as
+their baseline; prereleases also respect already published stable versions.
+An established major may receive a newer maintenance release alongside a newer
+major, but it cannot replace that newer stable App as GitHub `latest`. A previously
+unpublished older major is not backfilled. Drafts do not count as publications.
+
+App selection is independent of SDK selection/publication and SDK artifact recovery.
+Main creates the exact App tag at its source commit, then explicitly dispatches
+`sunder-app-release.yml` on that tag. A `GITHUB_TOKEN`-created tag push alone does
+not trigger another workflow. Dispatch needs `actions: write`; tag creation and
+draft discovery need `contents: write`. Tag creation policies must permit this
+workflow token to create `app/v*`, while preventing tag updates/deletion.
+The workflow file path stays stable for existing npm provenance.
+
+The main summary reports **App release started** and links the App run; it does
+not report completed App publication. The App run independently validates its
+authored version, exact tag/checkout/workflow source, and (for dispatch) main
+ancestry, then validates App/Host, packages six RIDs and publishes verified assets.
+Stable versions use the `stable` Velopack channel; prereleases use `beta`.
+The App summary reports the final publication result and installer download link.
+
+Already-published App versions are skipped. An existing matching ancestor tag
+keeps its original source; an active run is linked, and a failed run is resumed
+with **Re-run failed jobs**. A draft's retained provenance identifies its original
+run. Recovery requires unexpired original platform artifacts (retained for 90
+days); source, inventory and invocation conflicts fail rather than replacing bytes.
+A package-job retry after successful artifact upload reuses that verified artifact,
+including failures in later cleanup/reporting. Unacknowledged dispatches reconcile
+against exact-tag/source runs before another dispatch. App release promotion is
+serialized so maintenance releases cannot race a newer stable `latest` selection.
+
+Manual exact-tag App pushes remain supported. After authorization, create and push
+`app/vX.Y.Z` (matching its authored version), `cli/vX.Y.Z` or `host/vX.Y.Z`.
 Their tag workflows validate the actual native outputs before announcement, using
 `sunder-github-release-promotion`. The App additionally uses `sunder-app-signing`.
 CLI/Host archives have no OS signing step and must not be described as signed.

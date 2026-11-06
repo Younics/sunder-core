@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "ci"))
 import metadata
 import core_ci
+import report
 
 
 class CiMetadataTests(unittest.TestCase):
@@ -182,6 +183,43 @@ class CiMetadataTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "Unknown native partition"):
                     core_ci.validate("platform", scope="sdk", partition="../unowned")
                 self.assertEqual(1, run.call_count)
+
+    def test_job_labels_follow_actual_tasks_and_policy_partition_counts(self):
+        ordinary = metadata.component_matrices()
+        self.assertTrue(all("pack selected" not in row["job_name"] for row in ordinary["components"]["include"]))
+        release = metadata.component_matrices(release_packages=True)
+        self.assertEqual({"npm", "dotnet"}, {row["scope"] for row in release["components"]["include"] if "pack selected" in row["job_name"]})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("eng/ci/platforms.json", "eng/test-oracles/core-test-policy.json"):
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(metadata.ROOT / name, path)
+            path = root / "eng/test-oracles/core-test-policy.json"
+            policy = json.loads(path.read_text())
+            policy["nativePartitions"][0]["shards"] = 5
+            path.write_text(json.dumps(policy))
+            rows = metadata.component_matrices(root)["platform"]["include"]
+            self.assertEqual(len(rows), len({row["job_name"] for row in rows}))
+            self.assertEqual(6, sum("Package.Build tests" in row["job_name"] and row["job_name"].endswith("5/5") for row in rows))
+            self.assertFalse(any(row["job_name"].endswith("/3") for row in rows))
+
+    def test_paginated_job_links_keep_attempt_and_duration_without_slurp_jq_conflict(self):
+        env = dict(GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2")
+        job = dict(id=1, name="App — Process tests — linux-x64", html_url="https://github.com/Younics/sunder-core/actions/runs/123/job/1",
+                   status="completed", conclusion="success", started_at="2026-11-07T10:00:00Z", completed_at="2026-11-07T10:02:13Z")
+        pages = [dict(jobs=[job]), dict(jobs=[dict(job, id=2, name="Host — Process tests — linux-x64")])]
+        with patch.dict(os.environ, env), patch.object(report.subprocess, "check_output", return_value=json.dumps(pages).encode()) as gh:
+            rows = report.collect_jobs()
+            self.assertEqual(2, len(rows))
+            self.assertEqual("2m 13s", rows[0]["duration"])
+            args = gh.call_args.args[0]
+            self.assertIn("--slurp", args)
+            self.assertNotIn("--jq", args)
+            self.assertIn("/attempts/2/jobs", args[-1])
+            self.assertIn(job["html_url"], "\n".join(report.job_table(rows)))
+            gh.side_effect = subprocess.CalledProcessError(1, "gh")
+            self.assertEqual([], report.collect_jobs())
 
     def test_fixture_version_changes_select_current_host_leaf_and_preserve_all_rids(self):
         with tempfile.TemporaryDirectory() as temporary:

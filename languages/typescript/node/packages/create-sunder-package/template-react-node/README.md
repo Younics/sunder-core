@@ -1,39 +1,77 @@
 # SUNDER_PACKAGE_NAME
 
-React App and Node service package `SUNDER_PACKAGE_ID`.
+A React desktop view backed by a Node service. Package ID: `SUNDER_PACKAGE_ID`.
 
-The configured `src/services` module exports ordinary `defineService` functions.
-TypeScript or checked JavaScript supplies types; Sunder generates contracts, clients,
-dispatch and Worker bootstrap. The browser uses `useApi(Self)` from the current root's
-`ApiProvider`, and calls `api.messages.send(...)`. Root/component lifetimes manage
-cancellation and cleanup. Browser code does not import Worker implementations.
+## Get started
+
+Use Node 24.18.1 or newer within Node 24, the npm version in `package.json`, and
+Sunder with its CLI on PATH.
 
 ```sh
 npm install
 npm test
-npm run sunder:dev
-npm run build
-npm run package
+npm run sunder:dev:once
+sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1
+sunder dev package run dist/sunder-dev --watch
 ```
 
-Private services follow the complete owning package version: no Accept/Freeze or
-owned baseline is needed. Public services retain explicit `contracts:accept`, reviewed
-owned history and `contracts:freeze` before release. Commit the package contract lock;
-keep `.sunder/` untracked. Normal builds never modify either tracked artifact.
+Open this package's view in Sunder. After connecting to the worker, it displays
+a greeting from the `messages.send` service.
 
-This App receives the default private-service grants. Runtime consumers receive no
-permission from the App. External package selection records reviewed consumer roles;
-App/Runtime grants are generated independently. The browser waits for the document's
-existing bridge readiness event without polling or eager discovery.
+## Customize your first feature
 
-`npm test` checks source/generated Worker and browser types plus service behavior.
-`sunder:dev` watches and emits the current-RID development package. `build` produces
-separate Node and Vite App leaves. `package` emits twelve exact-RID leaves in one
-deterministic archive with adjacent ownership evidence. React is optional outside
-this preset; framework-neutral Apps use `createBrowserContext(Self)` directly.
+1. Edit the heading in the `app/src/App` component.
+2. Edit the greeting returned by `send` in the configured `src/services` module.
+3. Update the expected greeting in `test/package.test.cjs`.
+4. Run `npm test`, rebuild, and open the view again.
 
-`smoke` delegates to the managed Host. Select an approved Node execution runtime first
-with `sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1`.
-Native addons belong to exact-RID `nativeAssets`; Node/runtime distributions are not
-package payload. Add optional capabilities and real `configure(context)` lifecycle
-hooks as the package needs them.
+The App uses `useApi(Self)` to call generated services. Its root creates a browser
+context and supplies `ApiProvider`; keep that setup when adding components. Make
+calls in effects or event handlers and handle loading, errors, and cancellation.
+
+Sunder generates typed APIs and Worker bootstrap. Browser code imports
+`#sunder/api`, not the worker implementation. TypeScript projects use `.ts`/`.tsx`;
+JavaScript projects use `.js`/`.jsx` with checked JSDoc.
+
+## Daily commands
+
+| Script | Purpose |
+| --- | --- |
+| `npm test` | Generate APIs, check worker/browser types, and test services. |
+| `npm run sunder:dev` | Watch source and rebuild `dist/sunder-dev`. |
+| `npm run sunder:dev:once` | Build the development package once. |
+| `npm run build` | Build current-platform Node and web output. |
+| `npm run smoke` | Check startup using the Sunder Host. |
+| `npm run package` | Build the universal `.sunderpkg` archive. |
+
+For live development, keep Sunder's output watcher running and launch
+`npm run sunder:dev` in a second terminal. The web UI runs inside Sunder, which
+supplies its service bridge.
+
+## Package and install
+
+Set your extension version in `sunder.package.json`, then run `npm run package`.
+Use the archive path printed by the command:
+
+```sh
+sunder dev package validate <archive.sunderpkg>
+sunder package install --file <archive.sunderpkg>
+```
+
+## Configuration and source control
+
+- Edit services, components, styles, and package configuration as ordinary source.
+- Keep the private starter service for your own App/backend interaction.
+- Select external package APIs explicitly before using their generated tokens.
+- Add worker capabilities when using Host settings, state, files, secrets, or logging.
+- Commit the npm lockfile and `sunder-contracts.lock.json`; keep `.sunder/` and `dist/` untracked.
+
+Public service APIs have an explicit accept/check/freeze workflow. The App and
+worker declare their consumer use independently. Use the tool reference when
+adding cross-package calls or public extension contracts.
+
+## Learn more
+
+- [Add a service and call it from React](https://github.com/Younics/sunder-core/blob/main/languages/typescript/node/packages/sdk/README.md)
+- [Build and packaging tutorial](https://github.com/Younics/sunder-core/blob/main/languages/typescript/node/packages/package-tool/README.md)
+- [API selection and lifecycle reference](https://github.com/Younics/sunder-core/blob/main/docs/package-development/NODE-TOOL-REFERENCE.md)

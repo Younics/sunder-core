@@ -1,132 +1,162 @@
+<p><img src="https://raw.githubusercontent.com/Younics/sunder-core/main/languages/csharp/dotnet/packages/Sunder.Sdk/icon.png" alt="Sunder" width="96" height="96" /></p>
+
 # Sunder.Package.Templates
 
-> **Release/source channel:** The NuGet README describes that published template version. The repository copy may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+**Create your first Sunder package with `dotnet new`.**
 
-`dotnet new sunder-package` creates one authored .NET project with ordinary services
-and optional Avalonia views. Sunder generates typed APIs, composition and isolated
-Worker/App outputs. Node/React presets use `npm create @younics/sunder-package@latest` and the
-same package/runtime model.
+Start with a working C# service, add an optional Avalonia desktop view, and build
+an installable extension for [Sunder](https://sunderapp.io). The template configures
+the SDK, build tooling, package metadata, and generated service integration so you
+can start with application code.
 
-Repository contributors: tokenized project, C# and XAML inputs under `templates/`
-use a `.in` suffix. They are not buildable projects or Avalonia resources of this
-packaging project. Packing removes that suffix from content entry names; generated
-projects use ordinary `.csproj`, `.cs`, `.props` and `.axaml` files. Validate changes
-through `Sunder.Package.Templates.Tests`, including actual generated-project builds,
-rather than restoring or compiling the raw payload.
+Choose a headless service for automation or integrations, a desktop package for
+interactive tools, or add Stack support to share portable package setup.
 
-## Install And Create
+## Prerequisites
 
-```powershell
+- **.NET 10 SDK** to create and build the project. The generated `global.json`
+  specifies the SDK version used by the template.
+- **Sunder and the `sunder` CLI** to run and install the result.
+- A Sunder-managed **.NET 10 runtime**, selected before running the package.
+
+## Install
+
+```sh
 dotnet new install Sunder.Package.Templates
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package"
-dotnet new sunder-package --name MyUiPackage --packageId my.company.ui --packageName "My UI Package" --withAvalonia
 ```
 
-Use `--output` to select an empty destination.
+This installs a project template. You do not add it as a library reference to your
+application. Use `dotnet new sunder-package --help` to inspect its options.
 
-| Option | Meaning |
-| --- | --- |
-| `--packageId <id>` | Required lowercase dot-separated package identity. |
-| `--packageName <name>` | Required user-facing name. |
-| `--withAvalonia` | Adds Avalonia references and a starter package view. |
-| `--noDefaultView` | With Avalonia, retains SDK references but omits the starter view. No empty App role is emitted until UI source is added. |
-| `--withStacks` | Adds the domain Stack contributor; requires explicit local or Registry platform-contract selection. |
-| `--withPackageDependency` | Adds an installed-package dependency, independently of API selection. |
-| `--dependencyPackageId <id>` | Required with `--withPackageDependency`. |
-| `--dependencyVersionRange <range>` | Required reviewed dependency range; there is no SDK-derived default. |
+## Tutorial: build a greeting extension
 
-## Generated Shape
+### 1. Create a project with a desktop view
+
+```sh
+dotnet new sunder-package --name HelloSunder --packageId example.hello --packageName "Hello Sunder" --withAvalonia --output HelloSunder
+cd HelloSunder
+```
+
+The generated project looks like this:
 
 ```text
-MyPackage/
-  MyPackage.csproj
+HelloSunder/
+  HelloSunder.csproj
+  global.json
   PackageMetadata.cs
   sunder-contracts.lock.json
-  Assets/icon.png
   Services/SampleService.cs
-  Views/                         # optional Avalonia source
-    Avalonia.PackageReferences.props
-    DefaultPackageView.axaml
-    DefaultPackageView.axaml.cs
-    DefaultPackageViewModel.cs
-  Stacks/                        # optional Stack source/references
+  Assets/icon.png
+  Views/DefaultPackageView.axaml
+  Views/DefaultPackageView.axaml.cs
+  Views/DefaultPackageViewModel.cs
 ```
 
-The annotated service generates `ISampleService`, which the view model receives
-through its constructor. For `my.company.package`, it lives in
-`Sunder.Generated.Packages.My_Company_Package_Services`. Author business records once;
-owned roles reuse them and importers receive generated records in the authority
-package's `_Models` namespace. `[SunderPackageView]` supplies view metadata. Default DI,
-Worker entry, App module, provider registration and RPC lifetime are generated.
-Source folders do not define role boundaries, and authors maintain no App/Protocol
-project, manual descriptor, client scope or default bootstrap.
+### 2. Explore the service
 
-Templates declare their SDK/tooling dependencies independently through ordinary
-NuGet references. Update those references normally. The package's own version is `1.0.0` in
-its project file. The starter service is private, so its descriptor version follows
-the complete package version. Explicitly public APIs have reviewed contract versions.
+`Services/SampleService.cs` contains a `[SunderService]` class with `GreetAsync`
+and a streaming `GreetManyAsync` method. The greeting implementation is ordinary C#:
 
-## Build, Run And Package
-
-With `--withStacks`, select the platform import described below before the first
-Build. Local selection requires no Registry.
-
-```powershell
-dotnet restore .\MyPackage\MyPackage.csproj
-dotnet build .\MyPackage\MyPackage.csproj --no-restore
-dotnet run --project .\MyPackage\MyPackage.csproj --no-build
-dotnet msbuild .\MyPackage\MyPackage.csproj -t:PackSunderPackage -p:Configuration=Release
+```csharp
+public Task<string> GreetAsync(string name, CancellationToken cancellationToken = default)
+{
+    cancellationToken.ThrowIfCancellationRequested();
+    return Task.FromResult($"Hello, {name}!");
+}
 ```
 
-Retain the contract lock. Private-only source needs no owned baseline or Accept/Freeze
-step. Explicitly public contracts use reviewed acceptance and immutable history.
-Normal Build/Rebuild are offline and never change selections automatically.
+The build generates `ISampleService`. The view model receives it through its
+constructor and calls it when the user chooses **Create greeting**. Change the
+returned text to personalize the extension.
 
-Build composes the current RID at `bin/Debug/net10.0/sunder-dev`. Internal role outputs
-are under `sunder-roles/<role>/<rid>`; Pack builds all declared RIDs and emits one
-validated `.sunderpkg`. Runtime payloads carry managed modules and package-owned
-dependencies, not apphosts or embedded .NET runtimes. First-restore flags avoid
-downloading SDK runtime/apphost packs that Sunder's managed launch does not use.
+### 3. Build and run
 
-`dotnet run` delegates to `sunder dev package run`. The Sunder CLI must be on PATH
-or selected with `-p:SunderCliPath=...`. Forward `-- --watch` to reload changed
-development output. Runtime acquisition is explicit through Sunder; a missing
-managed runtime is not replaced with a direct Worker launch or hidden download.
-Qualified prebuilt packing consumes exact retained role-input evidence without
-rebuilding; ordinary Pack builds current source. See the
-[prebuilt contract](https://github.com/Younics/sunder-core/blob/main/docs/package-development/PREBUILT-ROLE-INPUTS.md).
+```sh
+dotnet build
+sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
+dotnet run --no-build
+```
 
-## Optional Stack Contributor
+Open **Hello Sunder** in the workspace, enter your name, and create a greeting.
+Sunder loads the UI and launches its worker from the generated development package.
 
-Select `sunder.stack.contributor` with `ImplementSunderPlatformApi` before first Build.
-Use `SunderPlatformCatalogPath` for a local Core catalog, or `SunderRegistryOrigin` for
-a published catalog. Build validates the private service and imported contributor
-together. Generated composition registers the exact selected adapter automatically.
+### 4. Develop with reload
 
-Local creation and development require no Registry. Published selection uses the
-explicitly chosen Registry's administrator-published catalog.
-Missing selection reports `platform-api.import-not-found`; unsupported SDK/catalog
-version lines report `platform-api.catalog-version-unsupported`. No catalog signing
-key or trust bundle is needed. The legacy embedded SDK descriptor does not create a
-Registry selection.
+In one terminal, load the package with output watching:
 
-See the generated README and the package-development documentation for explicit
-public package API selection, optional presence/readiness, updates and offline restore.
-Selected C# packages expose `IPackageApi` in their canonical flat `_Services`
-namespace. Use `IServiceProviders<TService>` for multiple implementations and
-`provider.Service` / `provider.Reference` for calls and typed references. Content
-uses `SunderContent` with normal async disposal. Generated bindings own transport;
-type availability does not infer consumer grants.
-For narrow imported use, `SunderRuntimeUse(typeof(...), Actions = ["discover"])`
-declares only discovery against an already selected canonical service type.
-`SunderOptionalServiceReference` explicitly opts a direct nullable reference member
-into safe-absence-as-null behavior; the default remains strict. Replayable content
-watches can opt into provider-local `CompleteOnResponseContentRetirement`.
-The ordinary-service guide covers the failure boundaries and transient
-`JsonIgnore` / `SunderServiceMember` distinction. Compiled JSON metadata and automatic
-empty-request/completion handling require no authored resolver or `Unit` type.
+```sh
+dotnet run --no-build -- --watch
+```
 
-- Ordinary services: https://github.com/Younics/sunder-core/blob/main/docs/package-development/ORDINARY-SERVICES.md
-- Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
-- Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
-- SDK compatibility: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-SDK-COMPATIBILITY.md
+In another terminal, inside the project directory:
+
+```sh
+dotnet watch build
+```
+
+Edit the service or view. The first process watches built packages; the second
+rebuilds your source. Successful updates are loaded by Sunder.
+
+### 5. Create an installable archive
+
+```sh
+dotnet msbuild -t:PackSunderPackage -p:Configuration=Release
+```
+
+Pack reports the `.sunderpkg` path. Validate and install that file:
+
+```sh
+sunder dev package validate <archive.sunderpkg>
+sunder package install --file <archive.sunderpkg>
+```
+
+Your extension starts at version `1.0.0`; change `Version` in its project when
+releasing an update. That version belongs to your extension, independently of the
+template and SDK package versions.
+
+## Choose your starting point
+
+| Option | What you get |
+| --- | --- |
+| Default | A headless C# worker with a sample service. |
+| `--withAvalonia` | A view, view model, and App SDK reference. |
+| `--withAvalonia --noDefaultView` | Avalonia references so you can author your own first view. |
+| `--withStacks` | A Stack contributor stub for portable export/import. |
+| `--withPackageDependency` | An explicit installed-package dependency. |
+
+Always supply `--packageId` (a stable lowercase dotted ID) and `--packageName`
+(a user-facing name). `--name` selects the C# project name, and `--output` selects
+an empty destination directory.
+
+Stack contributors need a selected `sunder.stack.contributor` platform contract
+before their first build. Follow the [Stack tutorial](../Sunder.Sdk.Stacks/README.md)
+to provide a Core platform catalog or select one from your Registry.
+
+An installed-package dependency also needs `--dependencyPackageId` and an explicit
+`--dependencyVersionRange`, for example `">=2.0.0 <3.0.0"`. Choose the range for
+that dependency. When you select another package's API, tooling derives its
+dependency automatically.
+
+## What should I edit or commit?
+
+Edit services, models, views, assets, and `PackageMetadata.cs`. Commit the project,
+source, and `sunder-contracts.lock.json`. Sunder generates Worker bootstrap, typed
+clients, registration, manifests, and `sunder-dev` output.
+
+The sample service is private to your package and builds directly. Public APIs
+have an explicit contract-evolution workflow; see the
+[service guide](../../../../../docs/package-development/ORDINARY-SERVICES.md).
+
+## Troubleshooting and next steps
+
+- **Template not found:** rerun the install command and check `dotnet new list sunder`.
+- **SDK selection fails:** install a .NET SDK allowed by the generated `global.json`.
+- **CLI not found:** put `sunder` on PATH or use `-p:SunderCliPath=<path>` with `dotnet run`.
+- **Stack build asks for a platform import:** select the catalog before building.
+- [Add storage and useful service behavior](../Sunder.Sdk/README.md)
+- [Style and extend the desktop view](../Sunder.Sdk.Avalonia/README.md)
+- [Build and packaging options](../Sunder.Package.Build/README.md)
+- [Prefer TypeScript or JavaScript?](../../../../typescript/node/packages/create-sunder-package/README.md)
+- [Report an issue](https://github.com/Younics/sunder-core/issues)
+
+Licensed under [MIT](LICENSE).

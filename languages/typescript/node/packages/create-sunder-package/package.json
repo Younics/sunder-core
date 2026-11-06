@@ -1,7 +1,8 @@
 {
   "name": "@younics/create-sunder-package",
-  "version": "1.0.0",
-  "description": "Scaffold runtime-backed Sunder Node Worker packages and combined React App packages.",
+  "version": "1.0.1",
+  "description": "Create a Sunder extension with Node services, optional React UI, TypeScript or JavaScript, and ready-to-use build scripts and tests.",
+  "keywords": ["sunder", "create", "scaffold", "typescript", "javascript", "react"],
   "license": "MIT",
   "repository": {
     "type": "git",

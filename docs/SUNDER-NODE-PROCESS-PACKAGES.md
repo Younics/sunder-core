@@ -1,6 +1,8 @@
 # Sunder TypeScript And JavaScript Service Packages
 
-> **Source channel:** This page tracks current source and may be ahead of npm. For a release, use the page from the matching `sdk/v*` tag and the README embedded in each npm tarball.
+Build a Node service or a React-backed desktop panel for Sunder. For a step-by-step
+first project, start with the [initializer tutorial](../languages/typescript/node/packages/create-sunder-package/README.md).
+This guide covers service authoring, runtime integration, packaging, and UI lifetimes.
 
 `npm create @younics/sunder-package@latest` scaffolds a runtime-backed service package. Choose
 `--language ts` (the default) or `--language js` for independently authored checked
@@ -22,7 +24,7 @@ These are authoring presets, not a closed package model. The canonical format pe
 | `@younics/sunder-package-tool` | TS/checked-JS service analysis, generated `#sunder/api` runtime/types, public lifecycle and exact imports, development output, exact-RID Worker/web leaves, managed smoke and package aggregation. |
 | `@younics/create-sunder-package` | `node` and `react-node` presets in TS or genuine JS/JSX. |
 
-The Node SDK intentionally has a narrower surface than the coordinated .NET SDK family. Worker code receives Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code uses `#sunder/api` with `@younics/sunder-sdk/browser` and, optionally, `@younics/sunder-sdk/react`; the main export is for Node and build contexts. React is an optional peer, not a dependency of headless Workers.
+The Node SDK intentionally has a narrower surface than the .NET SDK family. Worker code receives Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code uses `#sunder/api` with `@younics/sunder-sdk/browser` and, optionally, `@younics/sunder-sdk/react`; the main export is for Node and build contexts. React is an optional peer, not a dependency of headless Workers.
 
 ## Author Ordinary Services
 
@@ -114,7 +116,7 @@ or imported contracts add no consumer grants. Worker broker consumption always
 requires independent explicit `runtimeUse`. Package imports store reviewed
 `consumerRoles` for App, Runtime or both; Add defaults to both, Update preserves the
 selection, and Restore never widens or migrates it. See the
-[tool lifecycle and selection guide](../languages/typescript/node/packages/package-tool/README.md#private-and-public-versions).
+[tool lifecycle and selection guide](package-development/NODE-TOOL-REFERENCE.md#private-and-public-versions).
 
 ## Package And Runtime Trust
 
@@ -324,7 +326,7 @@ tooling, protocol integration and explicitly owned discovery/content workflows.
 `Catalogs` from `#sunder/api` exposes explicit list/get/watch/provider selection;
 normal views use the managed APIs above. Content-bearing methods require an
 existing caller-owned content scope, kept open until consumption completes. See
-the [SDK content-scope guidance](../languages/typescript/node/packages/sdk/README.md#use-generated-apis).
+the [SDK content-scope guidance](package-development/NODE-SDK-REFERENCE.md#use-generated-apis).
 These advanced wire APIs do not restore schema-constructor authoring or add a
 browser content/session protocol.
 

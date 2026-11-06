@@ -1,78 +1,194 @@
+<p><img src="https://raw.githubusercontent.com/Younics/sunder-core/main/languages/csharp/dotnet/packages/Sunder.Sdk/icon.png" alt="Sunder" width="96" height="96" /></p>
+
 # Sunder.Sdk.Stacks
 
-> **Release/source channel:** The NuGet README describes that published package version. The repository copy tracks current source and may be ahead of NuGet; use the matching `sdk/v*` tag when auditing a release.
+**Let users save, share, and restore your package's setup.**
 
-`Sunder.Sdk.Stacks` contains the public package-author contracts for contributing data to Sunder Stack export and import operations.
+A Sunder **Stack** is a portable collection of selected setup from one or more
+packages. Use this SDK to make your package's presets, workspace configuration,
+or reusable workflows participate in Stack export and import.
 
-Install it alongside the coordinated `Sunder.Sdk` version when a package implements a Stack contributor:
+Your contributor decides which data to export and how to apply it. Sunder presents
+the selection and import preview, validates the archive, and coordinates the operation.
 
-```powershell
+## Install and prerequisites
+
+Use a .NET 10 Sunder package, the Sunder CLI, and a Core platform catalog containing
+`sunder.stack.contributor` (or a Registry that publishes that catalog).
+
+```sh
 dotnet add package Sunder.Sdk.Stacks
 ```
 
-The package preserves the `Sunder.Sdk.Stacks` namespace while using its own assembly and NuGet package identity. Packages that do not use Stack contracts only need `Sunder.Sdk`.
-
-## Implementation-First Providers
-
-`IPackageStackContributor` is marked as a platform-import domain surface. Implement
-its exporter/importer/applied interfaces on a partial class and bind that class with
-`[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "my.package.stack")]`
-from `Sunder.Sdk.Services`. Ordinary package composition registers it automatically;
-advanced explicit composition can use `contributor.CreateSunderRpcProviderRegistration()`.
-The [template contributor](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Stacks/StackSupport.cs.in)
-provides a complete example.
-
-Explicitly select the platform contract; private-only source needs no Accept/Freeze:
-
-```powershell
-dotnet msbuild MyPackage.csproj -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderRegistryOrigin=https://registry.example/
-dotnet build MyPackage.csproj
-```
-
-The Registry-published Core catalog and exact lock/cache provide the descriptor, hashes, wire
-types, dispatch and registration. The SDK marker does not establish ownership or
-select a version. Platform imports add neither consumer uses nor a dependency on
-`sunder.core`. Multiple contributors need distinct provider IDs. Stack providers
-use public audience for Host orchestration.
-
-`StackContributorServiceAdapter` retains local domain behavior: six-method
-composition, optional capability flags and errors, single-use content registration,
-lazy content opening and Host-stamped owner/contributor identity. The generated
-package-local bridge checks domain DTO representation against the selected
-descriptor and validates values with its exact schemas. Domain objects remain
-local; no shared CLR object identity crosses processes. The SDK does not depend on
-`Sunder.Sdk.Worker` or the build tooling.
-
-The SDK retains an automatic bundle asset for lower-level consumers. Generated
-packages exclude that asset and use their reviewed platform import (as the template does):
+For generated single-project packages, use the same reference shape as the template:
 
 ```xml
-<PackageReference Include="Sunder.Sdk.Stacks" Version="1.0.0" ExcludeAssets="buildTransitive" />
+<PackageReference Include="Sunder.Sdk.Stacks" Version="1.0.1" ExcludeAssets="buildTransitive" SunderPackageAssetRole="worker" />
 ```
 
-Selection accepts a local Core-exported catalog without a Registry, or the chosen
-Registry's administrator-published catalog. No catalog signing key or trust bundle
-is needed. Select the import before the first Build when starting a contributor.
-Tests exercise the real six-method `2.0.0`
-descriptor through source and live isolated Registry composition. The Core Host
-now compiles its own internal Stack client, codecs and descriptor from checked
-Core source through a private build-only export. The shared SDK
-`StackContributorRpcClient` and `SunderStackContributorRpc.CreateClient` are removed.
-Canonical first-party providers use reviewed platform locks and generated composition.
-The retained SDK descriptor/provider surface is a separate compatibility boundary;
-source derivation preserves all 48 definitions and both issued descriptor/ABI hashes.
-See [platform imports](https://github.com/Younics/sunder-core/blob/main/docs/package-development/PLATFORM-CONTRACT-IMPORTS.md).
+The explicit platform selection supplies the contract used by generated registration.
 
-Import preview must be side-effect free. The Runtime owns the resulting expiring, single-use plan and binds it to the validated archive, Runtime generation, exact provider activation, schema versions, selected fragments, inputs, remaps, actions, and conflicts. Import receives the immutable fragment/input/remap snapshot from that plan.
+## Tutorial: share a greeting preference
 
-Stack content is latest-by-identity, not author-versioned. The archive's system format,
-your fragment schema versions, and the exact contributor RPC contract are independent.
-Your importer may support multiple fragment versions. Unsupported selected versions
-must produce a blocking fragment-specific conflict, never a successful empty preview
-or import. Core separately controls its supported archive reader set and retirement floor.
+This contributor exports one non-secret greeting prefix, shows an import action,
+and writes the prefix only after the user selects that action.
 
-Required inputs explicitly use `StackValueSensitivity.Public` or `Secret`. Public values remain visible in import review; secret values are masked, must not have portable defaults, and must never be written to logs or contributor diagnostics.
+### 1. Create the package and select the platform contract
 
-Atomicity is contributor-local. The Runtime continues collecting contributor results after an individual failure and reports the overall operation as completed, partial, or failed. Contributors must return `Partial` and accurately report committed items when any selected action commits before another action fails; `Failed` means that no selected action committed.
+```sh
+dotnet new install Sunder.Package.Templates
+dotnet new sunder-package --name HelloStacks --packageId example.preferences --packageName "Hello Stacks" --withStacks --output HelloStacks
+cd HelloStacks
+dotnet restore
+dotnet msbuild -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderPlatformCatalogPath=/path/to/sunder-platform-contracts.v1.json
+```
 
-See the [Stack package guide](https://github.com/Younics/sunder-core/blob/main/docs/package-development/STACKS.md) for contributor registration, export selection, package requirements, expiring import plans, scoped ids, and post-import handling.
+Replace the catalog path with the matching Core catalog supplied for your Sunder
+environment. Alternatively, use `-p:SunderRegistryOrigin=https://your-registry.example/`
+instead of the catalog property. See [platform selection](../../../../../docs/package-development/PLATFORM-CONTRACT-IMPORTS.md)
+for catalog sources and restore instructions. Commit the resulting contract lock.
+
+### 2. Implement the contributor
+
+Replace `Stacks/StackSupport.cs` with:
+
+```csharp
+using System.Text.Json;
+using Sunder.Sdk.Abstractions;
+using Sunder.Sdk.Services;
+using Sunder.Sdk.Stacks;
+
+namespace HelloStacks;
+
+[SunderServiceProvider(typeof(IPackageStackContributor), ProviderId = "example.preferences.stack")]
+public sealed partial class PackageStackContributor(IPackageContext context)
+    : IPackageStackExporter, IPackageStackImporter
+{
+    private const string FragmentId = "example.preferences.greeting";
+    private const string SchemaId = "example.preferences.greeting";
+    private const string ActionId = "restore-prefix";
+
+    public string ContributorId => "example.preferences.stack";
+    public string DisplayName => "Greeting preferences";
+
+    public ValueTask<IReadOnlyList<StackExportItemDescriptor>> ListExportItemsAsync(
+        StackExportDiscoveryContext discovery, CancellationToken cancellationToken = default)
+        => ValueTask.FromResult<IReadOnlyList<StackExportItemDescriptor>>(
+            [new("greeting", "Greeting prefix", "preferences")]);
+
+    public async ValueTask<StackExportContribution> ExportAsync(
+        StackExportRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!request.IsItemSelected("greeting")) return new([], [], []);
+        var prefix = await context.Storage.State.GetValueAsync("greeting.prefix", cancellationToken)
+            ?? "Hello";
+        return new(
+            [new StackFragmentExport(FragmentId, SchemaId, 1, "Greeting prefix",
+                JsonSerializer.Serialize(new { prefix }), SourceItemId: "greeting")],
+            [new StackPackageRequirement(context.PackageId, CreatedWithVersion: context.Version)],
+            []);
+    }
+
+    public ValueTask<StackImportPreview> PreviewImportAsync(
+        StackImportPreviewRequest request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            _ = ReadPrefix(request.Fragments);
+            return ValueTask.FromResult(new StackImportPreview(
+                [new(ActionId, "Restore greeting prefix", StackImportActionKind.Update)], [], [], []));
+        }
+        catch (InvalidOperationException)
+        {
+            return ValueTask.FromResult(new StackImportPreview([], [],
+                [new("unsupported-greeting", "Expected one valid version-1 greeting fragment.",
+                    StackImportConflictSeverity.Error, request.Fragments.FirstOrDefault()?.FragmentId)], []));
+        }
+    }
+
+    public async ValueTask<StackImportResult> ImportAsync(
+        StackImportRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.SelectedActionIds.Count == 0)
+            return new(StackImportOutcome.Completed, [], new Dictionary<string, string>(), [], []);
+        if (request.SelectedActionIds.Count != 1 || request.SelectedActionIds[0] != ActionId)
+            return new(StackImportOutcome.Failed, [], new Dictionary<string, string>(), [], ["Unknown import action."]);
+
+        string prefix;
+        try { prefix = ReadPrefix(request.Fragments); }
+        catch (InvalidOperationException)
+        {
+            return new(StackImportOutcome.Failed, [], new Dictionary<string, string>(), [], ["Invalid greeting fragment."]);
+        }
+
+        await context.Storage.State.SetValueAsync("greeting.prefix", prefix, cancellationToken);
+        return new(StackImportOutcome.Completed,
+            [new("greeting", "Greeting prefix", "preferences")], new Dictionary<string, string>(), [], []);
+    }
+
+    private static string ReadPrefix(IReadOnlyList<StackFragmentImport> fragments)
+    {
+        if (fragments.Count != 1 || fragments[0].FragmentId != FragmentId
+            || fragments[0].SchemaId != SchemaId || fragments[0].SchemaVersion != 1)
+            throw new InvalidOperationException();
+        try
+        {
+            using var document = JsonDocument.Parse(fragments[0].JsonPayload);
+            if (document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("prefix", out var value)
+                && value.ValueKind == JsonValueKind.String
+                && value.GetString() is { Length: > 0 and <= 80 } prefix)
+                return prefix;
+        }
+        catch (JsonException) { }
+        throw new InvalidOperationException();
+    }
+}
+```
+
+The preview validates data and describes an action without changing state. Import
+validates again, honors the selected action, and reports the item it committed.
+
+### 3. Try the round trip
+
+```sh
+dotnet build
+sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
+dotnet run --no-build
+```
+
+In Sunder's Stack export flow, select **Greeting prefix** from **Hello Stacks**.
+Import the resulting Stack: the preview offers **Restore greeting prefix**. Apply
+it to store the value in this package's `greeting.prefix` state key. Your services
+can read that key using the same package context.
+
+## Contributor responsibilities
+
+| Interface | Responsibility |
+| --- | --- |
+| `IPackageStackExporter` | List selectable items and export the requested data. |
+| `IPackageStackImporter` | Preview changes, then apply the selected actions. |
+| `IPackageStackImportAppliedHandler` | Refresh derived caches after committed changes. |
+
+Keep schema IDs stable and version your fragment format when its shape changes.
+Support older fragment versions explicitly or return an error conflict. The
+fragment's schema version is independent of your package version.
+
+For several actions, report `Partial` if some changes committed and others failed;
+`Failed` means nothing committed. Import preview is read-only. Include only portable
+non-secret configuration in exported JSON; request credentials at import using
+`StackRequiredInputDescriptor` with `StackValueSensitivity.Secret`.
+
+## Troubleshooting and more resources
+
+- **`platform-api.import-not-found`:** select the platform catalog before building.
+- **Contributor is absent:** confirm its worker activated, its provider ID is unique,
+  and the selected contract matches your Sunder environment.
+- **Import cannot proceed:** inspect the fragment conflicts returned by preview.
+- [Stack lifecycle, payload files, and import rules](../../../../../docs/package-development/STACKS.md)
+- [Platform contract selection](../../../../../docs/package-development/PLATFORM-CONTRACT-IMPORTS.md)
+- [Package storage](../../../../../docs/package-development/DATA-AND-LOGGING.md)
+- [Report an issue](https://github.com/Younics/sunder-core/issues)
+
+Licensed under [MIT](../Sunder.Sdk/LICENSE).

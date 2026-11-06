@@ -62,14 +62,22 @@ class GitHubReleaseTests(unittest.TestCase):
             release.GitHubRelease("Younics/sunder-agent-package", "agent-provider-openai/v2.0.0-01")
 
     def candidate(self, root, store):
-        artifacts = []
-        for name in sorted(release.core_names("cli", "1.0.0")):
+        component, version = store.tag.split("/v", 1)
+        names = sorted(release.core_names(component, version))
+        for name in names:
             (root / name).write_bytes(name.encode())
+        if component == "app":
+            for rid in release.RIDS:
+                full = f"Sunder-{version}-app-{rid}-stable-full.nupkg"
+                (root / f"releases.app-{rid}-stable.json").write_text(json.dumps(dict(Assets=[dict(
+                    FileName=full, SHA256=release.file_identity(root / full)[1][7:])])))
+        artifacts = []
+        for name in names:
             size, digest = release.file_identity(root / name)
             artifacts.append(dict(path=name, size=size, sha256=digest[7:]))
-        invocation = dict(repository=store.repository, releaseId=12, sha="a" * 40, ref="refs/tags/cli/v1.0.0",
+        invocation = dict(repository=store.repository, releaseId=12, sha="a" * 40, ref="refs/tags/" + store.tag,
                           refName=store.tag, runId="123", runAttempt="1",
-                          workflowRef=store.repository + "/.github/workflows/sunder-cli-release.yml@refs/tags/" + store.tag)
+                          workflowRef=store.repository + f"/.github/workflows/sunder-{component}-release.yml@refs/tags/" + store.tag)
         provenance = dict(schemaVersion=1, buildType="https://sunderapp.io/provenance/github-actions/v1", invocation=invocation,
                           sources=[dict(name="sunder-core", sha="a" * 40)], artifacts=artifacts)
         sbom = dict(spdxVersion="SPDX-2.3", dataLicense="CC0-1.0", files=[dict(fileName="./" + item["path"],
@@ -81,10 +89,36 @@ class GitHubReleaseTests(unittest.TestCase):
         return evidence
 
     def invocation(self, **changes):
-        return patch.dict(os.environ, dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
+        values = dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
             GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/cli/v1.0.0", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2",
             GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-cli-release.yml@refs/tags/cli/v1.0.0",
-            GITHUB_OUTPUT="", **changes), clear=True)
+            GITHUB_OUTPUT="")
+        return patch.dict(os.environ, dict(values, **changes), clear=True)
+
+    def test_only_app_accepts_exact_tag_dispatch_and_maintenance_does_not_replace_latest(self):
+        import app_release
+        for component, newer in (("app", False), ("app", True), ("cli", False), ("host", False)):
+            with self.subTest(component=component, newer=newer), tempfile.TemporaryDirectory() as directory:
+                store = MemoryRelease()
+                store.tag = component + "/v1.0.0"
+                store.value["tag_name"] = store.tag
+                root = Path(directory)
+                self.candidate(root, store)
+                for path in root.iterdir(): store.add(path, path.read_bytes())
+                published = [dict(tag_name="app/v2.0.0", draft=False, prerelease=False)] if newer else []
+                with self.invocation(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/tags/" + store.tag,
+                        GITHUB_WORKFLOW_REF=f"{store.repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{store.tag}"), \
+                     patch.object(app_release, "tag_guard") as guard, patch.object(app_release.sdk, "github_releases", return_value=published), \
+                     patch.object(release.subprocess, "run"):
+                    if component != "app":
+                        with self.assertRaisesRegex(ValueError, "tag workflow"): release.core_stage(store, root, component, "stable", finalize=True)
+                        self.assertEqual([], store.requests)
+                    else:
+                        original = copy.deepcopy(store.bytes)
+                        release.core_stage(store, root, component, "stable", finalize=True)
+                        guard.assert_called_once_with(store.tag)
+                        self.assertEqual(str(not newer).lower(), store.value["make_latest"])
+                        self.assertEqual(original, store.bytes)
 
     def test_creation_lost_response_reuses_the_same_numeric_draft(self):
         store = MemoryRelease(); store.exists = False

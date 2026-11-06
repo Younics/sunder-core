@@ -462,11 +462,12 @@ test("aggregate retains upstream failure even when no selected native lane or fa
     await writeFile(resolve(component, "Example.Tests.trx"), await readFile(resolve(root, "Example.Tests.trx")));
     await rm(resolve(root, "Example.Tests.trx"));
     const stepsPath = resolve(component, "steps.json");
-    await writeFile(stepsPath, JSON.stringify({ component: "cli", steps: [{ stage: "dotnet_build", outcome: "success" }, { stage: "dotnet_test", outcome: "success" }] }));
+    const jobName = "CLI — Build and test — linux-x64";
+    await writeFile(stepsPath, JSON.stringify({ component: "cli", jobName, steps: [{ stage: "dotnet_build", outcome: "success" }, { stage: "dotnet_test", outcome: "success" }] }));
     process.env.SUNDER_CI_JOB_RESULTS = JSON.stringify(Object.fromEntries(["preflight", "components", "cross-language", "templates", "native"]
       .map(name => [name, { result: ["preflight", "components"].includes(name) ? "success" : "skipped" }])));
     const jobUrl = "https://github.com/Younics/sunder-core/actions/runs/1/job/2";
-    await writeFile(resolve(root, "jobs.json"), JSON.stringify([{}, null, { name: "Validation / CLI / Build, test and pack", html_url: jobUrl }]));
+    await writeFile(resolve(root, "jobs.json"), JSON.stringify([{}, null, { name: `Validation / CLI / ${jobName}`, html_url: jobUrl }]));
     const accepted = summarizeResults(root, model, { aggregate: true, componentLayout: true });
     assert.equal(accepted.accepted, true);
     assert.equal(accepted.components[0].url, jobUrl);

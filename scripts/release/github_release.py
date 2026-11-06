@@ -272,10 +272,14 @@ def core_stage(store, directory, component, channel, finalize=False):
     c.require(store.repository == c.REPOSITORY, "Core publication requires the Core repository")
     c.require(component in ("app", "cli", "host"), "SDK packages release individually from the main workflow")
     source = c.sha(os.environ["GITHUB_SHA"], 40)
-    c.require(os.environ["GITHUB_EVENT_NAME"] == "push" and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
+    c.require(os.environ["GITHUB_EVENT_NAME"] in (("push", "workflow_dispatch") if component == "app" else ("push",))
+              and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
               "Component publication requires its tag workflow")
     c.require(os.environ["GITHUB_WORKFLOW_REF"] == f"{store.repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{store.tag}", "Unexpected component workflow")
     c.require(os.environ["GITHUB_WORKFLOW_SHA"] == source, "Workflow/source mismatch")
+    if component == "app":
+        import app_release
+        app_release.tag_guard(store.tag)
     subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag], check=True, cwd=ROOT)
     version = store.tag.split("/v", 1)[1]
     expected = core_names(component, version, channel)
@@ -324,7 +328,12 @@ def core_stage(store, directory, component, channel, finalize=False):
         before = store.get(release_id, draft=True)
         c.require(before["assets"] == verified["assets"] and before["target_commitish"] == source
                   and before["prerelease"] is ("-" in version), "Release changed after byte verification")
-        latest = component == "app" and "-" not in version
+        latest = False
+        if component == "app":
+            # Maintenance-major releases must not replace a newer stable App as
+            # GitHub's latest release. The App promotion job serializes this check.
+            import sdk_release
+            latest = app_release.history(version, sdk_release.github_releases(store))["make_latest"]
         try:
             store.api("releases/" + str(release_id), "PATCH", {"draft": False, "make_latest": str(latest).lower()})
         except (ValueError, subprocess.TimeoutExpired):

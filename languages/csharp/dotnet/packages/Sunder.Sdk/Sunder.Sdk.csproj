@@ -6,13 +6,13 @@
     <Nullable>enable</Nullable>
     <IsPackable>true</IsPackable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <AllowedOutputExtensionsInPackageBuildOutputFolder>$(DefaultAllowedOutputExtensionsInPackageBuildOutputFolder);.xml</AllowedOutputExtensionsInPackageBuildOutputFolder>
     <WarningsAsErrors>$(WarningsAsErrors);CS1591</WarningsAsErrors>
     <Title>Sunder.Sdk</Title>
-    <Description>Public contracts and abstractions for authoring Sunder packages, including App lifecycle, settings, storage, logging, callbacks, authentication, RPC, and package metadata.</Description>
+    <Description>Build Sunder extensions with C# services, typed APIs, settings, persistent storage, secrets, and logging.</Description>
     <PackageTags>sunder;package;plugin;sdk;extensions</PackageTags>
     <Authors>Younics</Authors>
     <PackageProjectUrl>https://sunderapp.io</PackageProjectUrl>

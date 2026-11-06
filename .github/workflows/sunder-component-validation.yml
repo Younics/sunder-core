@@ -6,6 +6,9 @@ on:
       scope:
         type: string
         required: true
+      display-name:
+        type: string
+        required: true
       bundle:
         type: string
         required: true
@@ -17,10 +20,11 @@ permissions:
   contents: read
 env:
   CI_COMPONENT: ${{ inputs.scope }}
+  CI_JOB_NAME: ${{ inputs.display-name }}
 
 jobs:
   validate:
-    name: Build, test and pack
+    name: ${{ inputs.display-name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -106,6 +110,14 @@ jobs:
         env:
           SUNDER_CI_STEPS: ${{ toJSON(steps) }}
         run: python3 -B scripts/ci/core_ci.py step-results --scope "$CI_COMPONENT"
+      - name: Summarize component results
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-${{ inputs.bundle }}-component-${{ inputs.scope }}
+        run: |
+          python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
+          node scripts/test-oracles/summarize-core-test-results.mjs "artifacts/test-results/$CI_COMPONENT" --scope "$CI_COMPONENT" --allow-partial --github-summary
       - name: Retain component reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

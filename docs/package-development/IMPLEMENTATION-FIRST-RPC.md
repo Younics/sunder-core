@@ -833,7 +833,7 @@ canonical inputs and opt-in `SunderPackageBuildTaskSourceGlobalProperties` owner
 Short fresh-identity MSBuild dependency requests avoid long `Yield` waits that can
 starve the holder's nested build. Existing staging markers, atomic copy, and validation
 remain in use; owner snapshots stay under `obj/sunder-package-build-task-sources`
-with no automatic cache GC. See [source task loading](../../languages/csharp/dotnet/packages/Sunder.Package.Build/README.md#source-task-loading)
+with no automatic cache GC. See [source task loading](MSBUILD-REFERENCE.md#source-task-loading)
 and [task-shadow regression coverage](../../languages/csharp/dotnet/tests/Sunder.Package.Build.Tests/TaskShadowStagingTests.cs).
 The coverage includes `-m:1`/`-m:2`, 1/2/4 bootstrap configurations, real per-consumer
 globals, and one owner snapshot per canonical input; this is not clean-checkout/native proof.

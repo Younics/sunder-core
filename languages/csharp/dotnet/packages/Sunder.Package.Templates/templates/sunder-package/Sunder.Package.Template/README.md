@@ -1,122 +1,102 @@
 # SUNDER_PACKAGE_NAME_TEXT
 
-This package is authored in one `Sunder.Package.Template.csproj`. Add services,
-ordinary value types and optional UI source; Sunder owns typed APIs, DI/bootstrap,
-isolated Worker/App compilation and package composition.
+A Sunder extension built with C# services and optional Avalonia UI.
 
-## Source
+## Prerequisites
 
-- `Services/SampleService.cs` declares `[SunderService]` and ordinary string/Task/stream methods.
-- Optional `Views/` source declares `[SunderPackageView]` and injects the generated
-  `ISampleService` from the canonical package's flat `_Services` namespace.
-- Optional `Stacks/` source implements the selected platform extension.
-- `PackageMetadata.cs` owns package identity and ordinary package dependencies.
+- The .NET 10 SDK selected by `global.json`.
+- Sunder and the `sunder` CLI on PATH.
+- A Sunder-managed .NET 10 runtime for running the package.
 
-Folders are organizational. The App has generated role-local RPC clients and does
-not reference the Worker implementation assembly. All coordinated SDK references
-use the dependency ranges authored in the template, independently of the template package version.
+## Build and run
 
-Author each business record once. Owned roles reuse that source; imported records
-come from the authority package's generated `_Models` namespace. Sunder generates
-transport envelopes, codecs and clients from validated projection metadata.
+If you selected Stack support, complete [Stack setup](#stack-setup) before building.
 
-## Build, Run And Pack
-
-Set the package version in the project file. The initial service is private: its
-generated version follows that complete package version automatically. If this
-package includes Stack support, select the platform contract below before Build.
-
-```bash
-dotnet restore Sunder.Package.Template.csproj
-dotnet build Sunder.Package.Template.csproj --no-restore
+```sh
+dotnet build Sunder.Package.Template.csproj
+sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
 dotnet run --project Sunder.Package.Template.csproj --no-build
+```
+
+With the Avalonia option, open the package's view in Sunder and choose **Create
+greeting**. The view calls `Services/SampleService.cs` through its generated
+`ISampleService` API. The default headless preset runs the service without adding
+a workspace view.
+
+## Make it your own
+
+1. Change the returned greeting in `Services/SampleService.cs`.
+2. With Avalonia enabled, edit the heading and controls in `Views/DefaultPackageView.axaml`.
+3. Set your display name, summary, and icon in `PackageMetadata.cs` and `Assets/`.
+4. Rebuild and run to see the result.
+
+Add ordinary async methods to the partial `[SunderService]` class to grow your API.
+Use business records for structured values. Sunder generates typed clients,
+registration, dependency injection, and the Worker/App connection.
+
+## Develop with reload
+
+In one terminal:
+
+```sh
+dotnet run --project Sunder.Package.Template.csproj --no-build -- --watch
+```
+
+In a second terminal, inside this project:
+
+```sh
+dotnet watch build
+```
+
+The source watcher builds changes; Sunder watches `bin/Debug/net10.0/sunder-dev`
+and loads completed package updates. Keep both processes running.
+
+## Package and install
+
+Set your extension's `Version` in the project file, then run:
+
+```sh
 dotnet msbuild Sunder.Package.Template.csproj -t:PackSunderPackage -p:Configuration=Release
 ```
 
-Retain `sunder-contracts.lock.json`. Private-only source needs no owned baseline,
-Accept or Freeze step. Ordinary builds remain offline and never change selections.
-Only explicitly public APIs use reviewed Accept/Freeze and immutable public history.
+Use the archive path printed by Pack:
 
-Build creates `bin/Debug/net10.0/sunder-dev` for the current RID. Internal outputs are
-under `sunder-roles/<role>/<rid>`. Pack builds every declared RID into one universal
-archive, with shared descriptors/content and exact role/RID payloads. Workers are
-framework-dependent modules; Sunder manages the shared execution runtime.
-
-Run delegates to `sunder dev package run`; install Sunder and put its CLI on PATH,
-or set `-p:SunderCliPath=...`. Use `dotnet run --no-build -- --watch` to watch rebuilt
-development output. Runtime acquisition remains explicit. No package module is
-executed directly outside its Host lifecycle.
-
-## Optional Stack Contributor
-
-With `--withStacks`, select the platform import before the first Build:
-
-```bash
-dotnet msbuild Sunder.Package.Template.csproj -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderPlatformCatalogPath=./catalog.json
+```sh
+sunder dev package validate <archive.sunderpkg>
+sunder package install --file <archive.sunderpkg>
 ```
 
-`Stacks/StackSupport.cs` implements domain behavior. Generated composition registers
-the provider and wraps the SDK semantic adapter; the exact platform lock supplies
-its descriptor and identity. A local Core-exported catalog needs no Registry. To select
-a published catalog, use `SunderRegistryOrigin=https://registry.example/` instead.
-No catalog signing key or trust bundle is needed.
-Exact `RestoreSunderContracts` can hydrate an existing selection without updating it.
+Pack builds the declared platform targets into one `.sunderpkg`. The worker uses
+Sunder's shared execution runtime.
 
-## Consume Another Package's API
+## Stack setup
 
-A fresh project can select imports before its first Build. One command selects the
-complete public API from an unpublished local archive:
+If `Stacks/` exists, select the platform contract before the first build. Supply
+the matching Core catalog for your Sunder environment:
 
-```bash
-dotnet msbuild Sunder.Package.Template.csproj -t:AddSunderPackageApi -p:SunderPackageId=example.weather -p:SunderPackageVersionRange=">=1.0.0 <2.0.0" -p:SunderPackageApiPresence=optional -p:SunderPackageCandidatePath=./weather.sunderpkg
-dotnet build Sunder.Package.Template.csproj --no-restore
+```sh
+dotnet restore Sunder.Package.Template.csproj
+dotnet msbuild Sunder.Package.Template.csproj -t:ImplementSunderPlatformApi -p:SunderContractId=sunder.stack.contributor -p:SunderPlatformCatalogPath=/path/to/sunder-platform-contracts.v1.json
 ```
 
-Inject `Sunder.Generated.Packages.Example_Weather_Services.IPackageApi` to call descriptor-derived
-services and import `Sunder.Generated.Packages.Example_Weather_Models` for their values.
-These namespaces derive from `example.weather`, not an import alias. The generated
-proxy owns discovery, cancellation and stream disposal; construction performs no calls.
-For business selection among implementations, inject `IServiceProviders<TService>`
-from `Sunder.Sdk.Services`, call `ListAsync`, and use the selected `provider.Service`.
-Its `provider.Reference` is a typed reference to that exact activation; entries are
-borrowed and need no disposal.
-Public APIs are selected as a whole; package-private contracts stay private. No
-descriptor, hash, contract-version inventory or Protocol reference is authored.
-Imported selection does not grant additional caller authority.
+Alternatively, use `SunderRegistryOrigin` for your Registry's published catalog.
+The generated contributor is an empty starting point; implement discovery,
+export, preview, and import in `Stacks/StackSupport.cs`.
 
-A real implementation may bind several imported contracts by repeating
-`SunderServiceProvider`; explicit interface methods resolve name collisions.
-Use `SunderContent` for content and dispose it and its read streams normally.
-Generated bindings manage registration and scopes. A transient `[JsonIgnore]`
-property transfers only when explicitly marked `SunderServiceMember`; it remains
-excluded from normal JSON. Include server invocation context only for genuine
-authenticated-caller policy. Long operations declare `SunderMethod.TimeoutSeconds`
-(up to 2100) on the contract method, subject to Host limits.
+## Source control and APIs
 
-Reference availability is strict even for a non-null nullable reference. Mark a
-direct nullable reference property with `SunderOptionalServiceReference` only when
-safe absence should transfer as null; permission and unsafe failures still propagate.
-For narrow imported consumption, a class can declare
-`[SunderRuntimeUse(typeof(IExecutionTargetService), Actions = ["discover"])]` using
-the selected service's canonical namespace. That requests discovery, not invocation.
-Replayable content watches may opt into `CompleteOnResponseContentRetirement = true`
-on their provider implementation method; consumers then resnapshot/resume after
-authenticated response-authority retirement. Other failures remain failures.
-Generated JSON metadata covers the supported model graph without reflection-cache
-retention of collectible types. Authors supply no `Unit` or empty-request records.
+Commit your project, source, assets, and `sunder-contracts.lock.json`. Keep generated
+outputs under `bin/` and `obj/` out of source control. The starter service is
+private to this package and builds directly. Public APIs use an explicit
+contract-versioning workflow, and imported APIs are selected through the build
+tooling before use.
 
-Package presence and provider readiness are independent. Add defaults to required
-package presence, optional provider readiness, and both App/Runtime consumer roles.
-Existing narrowed role selections survive Update and Restore. `RequireSunderPackageApi` and
-`UnrequireSunderPackageApi` review a contract's readiness override. Discovery includes
-authorized providers; selected-package resolution requires one matching active provider.
+## Help and next steps
 
-Use `SunderRegistryOrigin` instead of a candidate for published selection.
-`UpdateSunderPackageApi` changes selections explicitly using a new local candidate or the locked origin.
-`RestoreSunderContracts` restores exact existing selections offline/from that origin.
-`SunderPackageCandidatePath` supports local unpublished development; publication still
-independently establishes authority. Content hashes are provenance, not routing pins.
-
-- Ordinary services: https://github.com/Younics/sunder-core/blob/main/docs/package-development/ORDINARY-SERVICES.md
-- Package development: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-DEVELOPMENT.md
-- Package standard: https://github.com/Younics/sunder-core/blob/main/docs/SUNDER-PACKAGE-STANDARD.md
+- **CLI not found:** put `sunder` on PATH or pass `-p:SunderCliPath=<path>` to Run.
+- **Generated interface missing:** build the project and use the namespace derived
+  from its package ID.
+- [C# SDK tutorial](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Sdk/README.md)
+- [Avalonia views](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/README.md)
+- [Stack tutorial](https://github.com/Younics/sunder-core/blob/main/languages/csharp/dotnet/packages/Sunder.Sdk.Stacks/README.md)
+- [Build and dependency reference](https://github.com/Younics/sunder-core/blob/main/docs/package-development/MSBUILD-REFERENCE.md)

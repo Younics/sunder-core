@@ -1,10 +1,9 @@
 # SDK surface map
 
-The SDK is currently **UNFROZEN / UNRELEASED**. This map explains intended usage;
-it does not turn public generated-code dependencies into private APIs. After the
-first supported baseline, compatible fixes remain allowed and public contract
-changes require the compatibility/release gates in
-[the policy](../SUNDER-SDK-COMPATIBILITY.md).
+Use this map to choose the API layer for your package. Most extensions use ordinary
+services, generated clients, and package-context capabilities. Advanced integration
+and generated runtime support have distinct responsibilities; their public contracts
+follow the [compatibility policy](../SUNDER-SDK-COMPATIBILITY.md).
 
 ## Four usage layers
 
@@ -43,7 +42,7 @@ aid, not a binary or supported-release receipt; internal tooling is listed separ
 Protected release snapshots and the supported-release ledger are never regenerated
 by this command.
 
-## Approved unreleased changes
+## Pre-1.0 design history
 
 - `IBackgroundProcessQueue` / `BackgroundProcess*` became
   `IBackgroundTaskQueue` / `BackgroundTask*`, with `TaskId`, `TaskChanged` and
@@ -60,6 +59,5 @@ by this command.
 - Dependency template switches describe packages and require an explicit reviewed
   version range; they do not inherit a package version from the SDK version.
 
-These are intentional pre-freeze source/ABI changes, not additive fixes to an
-already supported release. Older development artifacts need rebuilding; earlier
-qualification results retain their own exact source/artifact scope.
+These changes preceded the supported 1.0 baseline. They describe the transition
+from earlier development artifacts, rather than migration steps for a new package.

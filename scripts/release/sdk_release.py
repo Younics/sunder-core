@@ -177,6 +177,7 @@ def prepare(path):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.writelines(f"{key}={value}\n" for key, value in outputs.items())
     print(json.dumps(outputs))
+    summary(plan, {"select": {"result": "success", "outputs": outputs}})
 
 
 def pack(plan, directory, kind=None):
@@ -388,8 +389,13 @@ def summary(plan, jobs):
     if not os.environ.get("GITHUB_STEP_SUMMARY"):
         return
     lines = ["## SDK release", "", "| Stage | Result |", "|---|---|"]
+    labels = {"select": "Select independent package versions", "validation": "Required source validation",
+              "stage": "Retain tested packages / recover original archives", "publish-npm": "Publish missing npm versions",
+              "publish-nuget": "Publish missing NuGet versions", "finalize": "Finalize accepted package releases"}
     recovered = jobs.get("select", {}).get("outputs", {}).get("recover") == "true"
     for name, row in jobs.items():
+        if name not in labels:
+            continue
         result = row.get("result", "missing")
         if result == "skipped":
             kind = {"publish-npm": "npm", "publish-nuget": "nuget"}.get(name)
@@ -399,14 +405,18 @@ def summary(plan, jobs):
                 result = "No newer version selected"
             else:
                 result = "Blocked by prerequisite"
-        lines.append(f"| {name} | {result} |")
+        lines.append(f"| {labels[name]} | {result} |")
     if plan:
         lines += ["", f"Artifact source: `{plan['artifactSourceCommit']}`",
                   f"Workflow source: `{os.environ.get('GITHUB_SHA', plan['artifactSourceCommit'])}`", "",
-                  "| Package | Version | Registry | Selection |", "|---|---|---|---|"]
+                  "| Package | Authored | Published baseline | Registry | Selection |", "|---|---|---|---|---|"]
         for row in plan["packages"]:
             selection = ("Retained tested archive" if recovered else "Selected") if row["selected"] else "Already published / no newer version"
-            lines.append(f"| {row['name']} | {row['version']} | {row['kind']} | {selection} |")
+            name = row["name"]
+            if row["selected"] and jobs.get("finalize", {}).get("result") == "success":
+                name = f"[{name}](https://github.com/{c.REPOSITORY}/releases/tag/{row['tag']})"
+                selection = "Registry accepted; GitHub release finalized"
+            lines.append(f"| {name} | {row['version']} | {row['latest'] or 'none'} | {row['kind']} | {selection} |")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
         stream.write("\n".join(lines) + "\n")
 

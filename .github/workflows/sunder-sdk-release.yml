@@ -1,4 +1,4 @@
-name: Sunder Core — Main CI and SDK Release
+name: Sunder Core — Main CI and Releases
 
 on:
   push:
@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   select:
-    name: SDK / Select independent package versions
+    name: SDK — Select independent package versions
     if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -42,6 +42,66 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  select-app:
+    name: App — Compare authored and published versions
+    if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # Draft discovery; project evaluation receives no token.
+      actions: read
+    outputs:
+      version: ${{ steps.selection.outputs.version }}
+      action: ${{ steps.selection.outputs.action }}
+      reason: ${{ steps.selection.outputs.reason }}
+      run_url: ${{ steps.selection.outputs.run_url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Select App independently of SDK publication and recovery
+        id: selection
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/app_release.py select
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-app-release-selection
+          path: artifacts/app-release-plan.json
+          if-no-files-found: error
+          retention-days: 90
+
+  release-app:
+    name: App ${{ needs.select-app.outputs.version }} — Start or resume tagged release
+    needs: select-app
+    if: needs.select-app.outputs.action == 'dispatch' || needs.select-app.outputs.action == 'rerun'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      reason: ${{ steps.launch.outputs.reason }}
+      run_url: ${{ steps.launch.outputs.run_url }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-app-release-selection
+          path: artifacts
+      - name: Dispatch the exact App tag or resume its original failed run
+        id: launch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/app_release.py launch
+
   validation:
     name: Validation
     needs: select
@@ -55,7 +115,7 @@ jobs:
       release-packages: ${{ needs.select.outputs.selected_count != '0' }}
 
   stage:
-    name: SDK / Stage tested packages
+    name: SDK — Retain tested packages or recover original archives
     needs: [select, validation]
     if: always() && needs.select.result == 'success' && needs.select.outputs.selected_count != '0' && (needs.validation.result == 'success' || needs.select.outputs.recover == 'true')
     runs-on: ubuntu-24.04
@@ -78,18 +138,26 @@ jobs:
           name: sunder-tested-sdk
           path: artifacts/packages
       - name: Automatically tag and retain the tested archives
+        id: stage
         if: needs.select.outputs.recover != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py stage --directory artifacts/retained-packages
       - name: Recover staged archives without rebuilding
+        id: recover
         if: needs.select.outputs.recover == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
+      - name: Summarize retained package staging
+        if: always()
+        env:
+          CI_JOB_NAME: SDK — Retain tested packages or recover original archives
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/report.py job
 
   publish-npm:
-    name: npm libraries / Publish
+    name: npm libraries — Publish missing versions
     needs: [select, stage]
     if: always() && needs.stage.result == 'success' && needs.select.outputs.npm_count != '0'
     runs-on: ubuntu-24.04
@@ -114,13 +182,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
       - name: Publish missing npm versions to their consumer channels
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: python3 -B scripts/release/sdk_release.py npm --directory artifacts/retained-packages
+      - name: Summarize npm publication
+        if: always()
+        env:
+          CI_JOB_NAME: npm libraries — Publish missing versions
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/report.py job
 
   publish-nuget:
-    name: .NET libraries / Publish NuGet
+    name: .NET libraries — Publish missing NuGet versions
     needs: [select, stage, publish-npm]
     if: always() && needs.stage.result == 'success' && needs.select.outputs.nuget_count != '0' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped')
     runs-on: ubuntu-24.04
@@ -150,13 +225,20 @@ jobs:
         with:
           user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
       - name: Publish missing NuGet versions
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: python3 -B scripts/release/sdk_release.py nuget --directory artifacts/retained-packages
+      - name: Summarize NuGet publication
+        if: always()
+        env:
+          CI_JOB_NAME: .NET libraries — Publish missing NuGet versions
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/report.py job
 
   finalize:
-    name: SDK / Finalize accepted package releases
+    name: SDK — Finalize accepted package releases
     needs: [select, stage, publish-npm, publish-nuget]
     if: always() && needs.stage.result == 'success' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') && (needs.publish-nuget.result == 'success' || needs.publish-nuget.result == 'skipped')
     runs-on: ubuntu-24.04
@@ -174,19 +256,27 @@ jobs:
           name: core-release-selection
           path: artifacts
       - name: Finalize retained releases after successful publication
+        id: finalize
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
           python3 -B scripts/release/sdk_release.py finalize --directory artifacts/retained-packages
+      - name: Summarize SDK release finalization
+        if: always()
+        env:
+          CI_JOB_NAME: SDK — Finalize accepted package releases
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/report.py job
 
   summary:
-    name: Results / SDK release overview
+    name: Results — CI, SDK publication and App release overview
     if: always()
-    needs: [select, validation, stage, publish-npm, publish-nuget, finalize]
+    needs: [select, select-app, release-app, validation, stage, publish-npm, publish-nuget, finalize]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -200,4 +290,11 @@ jobs:
         if: always()
         env:
           SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
-        run: python3 -B scripts/release/sdk_release.py summary
+        run: |
+          python3 -B scripts/release/sdk_release.py summary
+          python3 -B scripts/release/app_release.py summary
+      - name: Link job outcomes and durations
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/report.py jobs

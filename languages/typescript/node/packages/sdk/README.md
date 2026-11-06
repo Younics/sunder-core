@@ -1,72 +1,124 @@
+<p><img src="https://raw.githubusercontent.com/Younics/sunder-core/main/languages/csharp/dotnet/packages/Sunder.Sdk/icon.png" alt="Sunder" width="96" height="96" /></p>
+
 # @younics/sunder-sdk
 
-> **SDK status: UNFROZEN / UNRELEASED.** This README describes the current source
-> candidate, not a supported release. The supported-release ledger contains no releases.
+**Build Sunder extensions with TypeScript, JavaScript, and optional web UI.**
 
-Sunder packages author ordinary services in TypeScript or checked JavaScript. The
-package tool derives their portable contracts and generates registration, Worker
-bootstrap, validated value conversion and package-local clients. The main SDK has
-no runtime dependencies. React is an optional peer used only by `@younics/sunder-sdk/react`.
+[Sunder](https://sunderapp.io) is an extensible desktop workspace. This SDK lets
+your package define services in Node, call them through generated typed APIs, and
+connect a browser or React interface to its backend.
 
-After the first supported release, compatible fixes and additions remain allowed
-while supported source, runtime ABI and behavioral contracts must be preserved. See
-the [compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md).
+Use ordinary functions and business types. Sunder's package tooling generates the
+service contracts, clients, registration, and worker bootstrap. The main SDK has
+**zero runtime dependencies**; React is an optional peer for the React entry point.
 
-## Start with the scaffold
+## What can I build?
 
-Use coordinated candidate packages from your local tarballs or candidate feed while
-the SDK is unreleased; do not assume npm `latest` matches this source. With the
-candidate `create-sunder-package` command available:
+- A React panel backed by a Node service.
+- A headless integration, automation tool, or data-processing service.
+- A package that streams progress or returns downloadable content.
+- A reusable API consumed by other Sunder packages.
+
+## Install and prerequisites
+
+Use **Node 24.18.1 or newer within Node 24**, npm, and Sunder with the `sunder` CLI.
+The generated project specifies its npm/toolchain versions.
 
 ```sh
-create-sunder-package MyPackage --package-id my.company.package --package-name "My Package"
+npm install @younics/sunder-sdk
 ```
 
-The default `node` preset creates `src/services.ts`, ordinary package scripts, a
-contract lock and the `#sunder/api` import mapping. Add `--preset react-node` for a
-React App, or `--language js` for independently authored checked JavaScript/JSDoc.
-After entering the generated directory:
+For a new extension, use the initializer in the tutorial. It configures both this
+SDK and `@younics/sunder-package-tool`.
+
+## Tutorial: call a Node service from React
+
+### 1. Create a package
 
 ```sh
+npm create @younics/sunder-package@latest hello-sunder -- --preset react-node --package-id example.hello --package-name "Hello Sunder"
+cd hello-sunder
 npm install
-npm test
-npm run sunder:dev
 ```
 
-Use `npm run build` for exact-RID output and `npm run package` for the universal
-archive. Normal authors maintain services and business models, not Worker bootstrap,
-provider registrations, descriptors or role leaves. See the
-[creator guide](../create-sunder-package/README.md).
+The project has Node service code in `src/services.ts` and React code in
+`app/src/`. Its generated API is available through `#sunder/api`.
 
-The source producer (`sunder:dev`) and the Host's output watcher have separate jobs.
-A requested Host watch, a running producer, a successful build and an applied output
-generation are independent observations; none proves all the others.
+### 2. Add a greeting service
 
-## Define a service
-
-The scaffold configures one `services.module` in `sunder.package.json`. Export
-ordinary `defineService` definitions from that module:
+Append this definition to `src/services.ts`, below the starter `messages` service.
+The file already imports `defineService` and `ServiceContext` from this SDK.
 
 ```ts
-import { defineService, type ServiceContext } from "@younics/sunder-sdk";
-
 export const greeting = defineService({
   async greet(name: string, context: ServiceContext): Promise<string> {
     context.signal.throwIfAborted();
-    return `Hello, ${name}!`;
+    return `Hello, ${name}! Your Node service is connected.`;
   },
 }, {
-  constraints: { "greet.name": { minLength: 1, maxLength: 200 } },
-  runtimeUse: {},
+  constraints: {
+    "greet.name": { minLength: 1, maxLength: 120 },
+    "greet.result": { minLength: 1, maxLength: 256 },
+  },
 });
 ```
 
-JavaScript uses exactly the same definition with checked JSDoc:
+The service is private to your package by default. Its owning App can call it
+through the generated API. Constraints describe accepted values, and cancellation
+comes from the current invocation's `ServiceContext`.
+
+### 3. Display its result
+
+Replace `app/src/App.tsx` with:
+
+```tsx
+import { useEffect, useState } from "react";
+import { useApi } from "@younics/sunder-sdk/react";
+import { Self } from "#sunder/api";
+
+export function App() {
+  const api = useApi(Self);
+  const [message, setMessage] = useState("Connecting...");
+
+  useEffect(() => {
+    const cancellation = new AbortController();
+    void api.greeting.greet("Sunder", { signal: cancellation.signal }).then(
+      result => { if (!cancellation.signal.aborted) setMessage(result); },
+      () => { if (!cancellation.signal.aborted) setMessage("Check the package logs and try again."); },
+    );
+    return () => cancellation.abort();
+  }, [api]);
+
+  return <main><h1>Hello Sunder</h1><p role="status">{message}</p></main>;
+}
+```
+
+Keep the generated `main.tsx`. It creates a browser context and provides it through
+`ApiProvider`. The React component uses the generated client rather than importing
+the worker implementation.
+
+### 4. Check and run
+
+```sh
+npm test
+npm run sunder:dev:once
+sunder runtime ensure sunder.runtime.node ">=24.18.1 <25.0.0" sunder.node-worker-module.v1
+sunder dev package run dist/sunder-dev --watch
+```
+
+Open **Hello Sunder** in the workspace. The view should display
+**Hello, Sunder! Your Node service is connected.**
+
+For live development, run `npm run sunder:dev` in a second terminal. It rebuilds
+the development package while Sunder watches the resulting output.
+
+## JavaScript works too
+
+Create the same React preset with `--language js`. Services use checked JSDoc,
+and the App uses `.jsx`. For example, append this service to `src/services.js`
+(which already imports `defineService`):
 
 ```js
-// @ts-check
-import { defineService } from "@younics/sunder-sdk";
-
 export const greeting = defineService({
   /**
    * @param {string} name
@@ -75,454 +127,74 @@ export const greeting = defineService({
    */
   async greet(name, context) {
     context.signal.throwIfAborted();
-    return `Hello, ${name}!`;
+    return `Hello, ${name}! Your Node service is connected.`;
   },
 }, {
-  constraints: { "greet.name": { minLength: 1, maxLength: 200 } },
-  runtimeUse: {},
+  constraints: {
+    "greet.name": { minLength: 1, maxLength: 120 },
+    "greet.result": { minLength: 1, maxLength: 256 },
+  },
 });
 ```
 
-The compiler does not execute source to discover a contract. It requires complete
-supported parameter/result types and rejects ambiguous `any`, `unknown`, dynamic
-method inventories, generic/overloaded methods and unsupported values. Ordinary
-method bodies can use normal Node APIs. A final `ServiceContext` or `AbortSignal`
-parameter is supplied out of band. Unary methods return a value, promise or `void`;
-async iterables are streams. An uniterated generated stream performs no RPC.
-
-Supported values include primitives, ordinary records, optional/nullable fields,
-lists, string-keyed maps, supported literal enums/tagged unions, productive named
-recursion, `bigint`, `Uint8Array`, explicit `JsonValue`/`JsonObject`, natural
-`SunderContent`, and typed `ServiceReference<T>` values. `number` means finite binary64; use a semantic `format: "integer"` or
-`"float32"` constraint when those semantics are intended. Formatted strings and exact
-decimal constraints remain explicit. Absence, null and present values stay distinct.
-Other native classes, tuples, arbitrary unions and custom codecs are not inferred.
-
-Author business types once and use them directly in method signatures. Owned bindings
-reuse those source types; imported models are generated from reviewed package
-projection metadata rather than mirrored by hand.
-
-Constraints name `method.parameter`, `method.result`, or `Type.property` paths.
-They supply facets, not a second schema. Public exposure, exceptional stable wire
-names, provider IDs for multiple implementations, idempotency and errors likewise
-remain explicit semantic intent. All values still pass the existing RPC V1 codecs
-and validators at the process boundary.
-
-Private services default to package exposure and use the complete owning package
-SemVer, including metadata. They need no independent Accept/Freeze or owned baseline.
-Public services use `exposure: "public"` and retain reviewed contract history. See
-[the tool workflow](../package-tool/README.md).
-
-An ordinary **owned concrete** `defineService` also declares its owning App's
-intent: private defaults are required with all applicable actions; public defaults
-are optional (`required: false`) with all applicable actions. Making that service
-public therefore keeps its own UI callable without adding `appUse`. Explicit
-`appUse` readiness/actions override the default. Public declaration-only services
-still need explicit App intent; binding implementations to local declarations or
-imported contracts creates no additional consumer grant. The compiler preserves
-declaration-owned policy across those bindings. Runtime broker use remains a
-separate, explicit `runtimeUse` policy.
+The React example above also works as `App.jsx`. Both languages use the same
+service generation and validation workflow.
 
 ## Use generated APIs
 
-`#sunder/api` exports `Self` and Pascal-case selected-package aliases:
+| Import | Purpose |
+| --- | --- |
+| `@younics/sunder-sdk` | Node service authoring, worker APIs, and natural content values |
+| `@younics/sunder-sdk/browser` | Framework-neutral browser context and browser-safe APIs |
+| `@younics/sunder-sdk/react` | `ApiProvider` and `useApi` for React |
+| `#sunder/api` | Generated `Self`, selected-package tokens, models, and clients |
 
-```ts
-import { Self, Weather } from "#sunder/api";
+Worker code uses `context.api(Self)` when it has explicitly declared Runtime
+consumer use. Browser code uses `createBrowserContext(Self)` and React components
+use `useApi(Self)`. Call services in effects or event handlers. The owning context
+controls call lifetimes and should be disposed when its UI root is removed.
 
-const own = context.api(Self);
-const weather = context.api(Weather);
-const message = await own.greeting.greet("Sunder", { signal });
+Select another package through the package tool before using its generated token.
+Selection records its API and consumer roles in `sunder-contracts.lock.json`.
+See [package selection](../../../../../docs/package-development/NODE-TOOL-REFERENCE.md#package-selection-and-consumer-roles).
+
+## Add richer behavior
+
+- **Streaming:** use an async generator to report progress or watch changes.
+- **Files and content:** return `SunderContent`; consumers open and dispose it.
+- **Settings, state, secrets, and logs:** declare the required `workerCapabilities`
+  and use the Host-backed worker context.
+- **Initialization and cleanup:** export `configure(context)` for lifecycle hooks;
+  generated bootstrap continues to own service registration.
+- **Public APIs:** opt into public exposure and use the tool's contract-versioning workflow.
+
+The [SDK reference](../../../../../docs/package-development/NODE-SDK-REFERENCE.md)
+contains examples for content, provider selection, errors, cancellation, and lifetimes.
+
+## Package and share
+
+```sh
+npm run package
 ```
 
-`Self` uses the normalized source definition keys, even when distinct contracts
-preserve the same wire service name. Selected packages always have a full-contract-ID
-scope, including a selection with only one contract. Scopes retain underscore
-separators: `example.messages` becomes `example_Messages`. For
-`example.dependency.first` and `example.dependency.second`, both with service
-`messages`, use `dependency.example_Dependency_First.messages.send(request)`
-and `dependency.example_Dependency_Second.messages.send(request)`. Scope and service
-name collisions are checked within their actual object scope; no suffix or hash
-chooses a winner. Imported calls take the descriptor's request value (including an
-explicit `{}` for an empty request) and return its result value. They do not guess
-the producer language's original parameter list or `void` spelling.
-
-Acquiring an API performs no discovery. Calls lazily resolve exactly one matching
-active provider; ambiguity, catalog reset and stale identities fail without retry.
-Each call/stream owns cancellation, deadline and terminal cleanup. Generated tokens
-are bound to the package's current binding generation, not a global transport.
-Tokens grant no authority. In particular, providing a service does not grant Runtime
-broker use: declare `runtimeUse` explicitly when needed.
-
-Framework-neutral browser owners use `createBrowserContext(Self)` from
-`@younics/sunder-sdk/browser` and call `context.api(Self)`. Dispose the context when its root
-is removed. It waits for the immutable document's `sunder:ready` event and respects
-the existing bridge lifetime signal; it does not poll or introduce a new protocol.
-
-React roots provide that context through `ApiProvider` from `@younics/sunder-sdk/react`.
-Components use `useApi(Self)`. Each hook's effect owns only that component's calls;
-StrictMode cleanup/remount creates a fresh child owner. Call services in effects or
-event handlers, not during render. The browser SDK and generated declarations do not
-require Node ambient types. Worker code does not import React.
-
-Each service has a generated `Providers` catalog with `list`, `get`, `watch`, and
-`resolve`. A provider exposes its immutable `snapshot`, exact-bound `.Service`, and
-`.Reference`. The selected-package resolver retains the reviewed package range;
-list/watch can report other visible exact-contract providers. No catalog operation
-grants permissions. Advanced `Catalogs` and the raw RPC APIs remain available for
-deliberate low-level integrations.
-
-## Entry points and generation ownership
-
-- Node service authors use `@younics/sunder-sdk`; browser authors use `@younics/sunder-sdk/browser`.
-- Optional React integration uses `@younics/sunder-sdk/react`.
-- Normal service calls and model imports come from the generated `#sunder/api`.
-- `@younics/sunder-sdk/generated` is the supported, browser-safe **generated-runtime ABI**.
-  Its exported signatures and referenced types are compatibility commitments after
-  release, not unprotected implementation details. It is for generated code, not an
-  ordinary author import or a replacement for `#sunder/api`.
-
-TypeScript source/binding generation belongs to `@younics/sunder-package-tool`, not the
-runtime SDK. Normal projects use its `sunder-package generate` workflow through the
-scaffolded scripts. Low-level descriptor generation is also owned by that tooling;
-the SDK entry points contain runtime contracts and support, not a build-time generator.
-
-## Natural content and provider references
-
-```ts
-import { defineService, SunderContent, type ServiceReference } from "@younics/sunder-sdk";
-import { Self, Services } from "#sunder/api";
-
-export const files = defineService({
-  download(): SunderContent {
-    return SunderContent.fromBytes(new Uint8Array([1, 2, 3]), { fileName: "data.bin" });
-  },
-}, { runtimeUse: {} });
-
-type Work = { greeting: ServiceReference<typeof greeting>; attachment: SunderContent };
-const provider = await context.api(Self).greeting.Providers.resolve();
-await provider.Reference.Service.greet("Sunder");
-
-const content = await context.api(Self).files.download();
-try {
-  const stream = await content.openRead(signal); // ReadableStream<Uint8Array>
-  // Consume the stream and release its reader when finished.
-} finally {
-  await content.dispose();
-}
-```
-
-`fromBytes` privately copies bytes and exposes a known SHA-256. `fromStream` accepts
-a `ReadableStream<Uint8Array>` or `AsyncIterable<Uint8Array>`, consumes its current
-position once, and owns the source unless `leaveOpen: true`. Dispose stream content
-even if it was never opened. Node's `contentFromFile(path, options)` convenience is
-lazy and locally repeatable and never deletes the source file. It is exported only
-from the Node entry point. Browser authors import `SunderContent` from
-`@younics/sunder-sdk/browser`.
-
-Generated visitors register nested/optional/union/list/map resources asynchronously
-and coalesce aliases per value. A returned content object retains its call scope
-after unary return, stream completion, or early iteration exit. Disposing the last
-received content closes that scope. Either the original call signal or the original
-enumeration signal, the Host-clamped deadline, and API/document/component owner
-retirement revoke retained content earlier, even after the iterator has ended.
-`disposeAsync()` drains an API owner's outstanding resources. Borrowed request
-content cannot extend a provider invocation. Forwarding content reads through the
-receiver's authority and registers a new reference for the new target; it never
-forwards an old token as a grant. Local repeatability does not change the existing
-default single-use transport policy. Sending does not dispose author-owned content.
-
-Generated streaming methods return a lazy `ServiceStream<T>`. Supply independent
-enumeration cancellation with `.withCancellation(signal)` or
-`stream[Symbol.asyncIterator](signal)`; the method's `{ signal }` remains separate:
-
-```ts
-const stream = context.api(Self).documents.watch({ signal: caller.signal });
-for await (const reply of stream.withCancellation(enumerator.signal)) {
-  heldContent = reply.content[0];
-  break;
-}
-// Either cancellation still revokes heldContent after this early exit.
-enumerator.abort();
-```
-
-Use `ServiceReference<typeof sourceDefinition>` for owned declarations and
-`ServiceReference<typeof Services.Weather.example_Weather.forecast>` for an imported service token
-(the `Services` tree follows the same package/contract/service scopes as `api`).
-The canonical token path is `Services.Contracts.CExample_Weather.forecast`;
-`Services.Self` keeps the source-shaped owned service keys.
-JSDoc uses the identical types through `import("@younics/sunder-sdk")` or the browser entry.
-`SelfModels` and selected `<Token>Models` remain type-only namespaces.
-
-Checked JavaScript uses ordinary implementation inference for content returns and
-JSDoc for service-reference identity; it requires no authored schemas or codecs:
-
-```js
-import { defineService, SunderContent } from "@younics/sunder-sdk";
-
-export const greeting = defineService({
-  /** @param {string} name */
-  greet(name) { return `Hello, ${name}`; },
-}, { runtimeUse: {} });
-
-export const documents = defineService({
-  download() { return SunderContent.fromBytes(new Uint8Array([1, 2, 3])); },
-  /** @param {import("@younics/sunder-sdk").ServiceReference<typeof greeting>} reference */
-  greetThrough(reference) { return reference.Service.greet("Sunder"); },
-});
-```
-
-A reference carries the full eleven-field provider locator. Send and receive both
-validate the exact visible activation, including both increases and decreases in
-session generation. The receiver attaches its own typed client and API lifetime;
-the sender's service object and temporary decoding scope are not transferred.
-References come from existing provider bindings, not public constructors or callback
-registration. Ordinary JSON serialization of natural resources rejects use outside
-the generated marshaller. Browser resource adapters use the same existing scoped
-RPC/content operations, with full activation snapshots; no RPC framing is added.
-
-### Binding retirement and request participants
-
-Providers and references expose the same natural lifecycle API:
-
-```ts
-readonly retirementSignal: AbortSignal;
-ensureCurrent(signal?: AbortSignal): Promise<void>;
-tryReportInvariantViolation(error: unknown, signal?: AbortSignal): Promise<boolean>;
-```
-
-One receiver-owned observer starts on actual catalog/reference/service use, using
-both cursor components, an initial snapshot, subscription startup, and a second
-snapshot before readiness. It retires issued bindings before recovery from EOF,
-reset, or invalid observations. Recovery creates fresh bindings; existing references
-and already acquired proxies never retarget. `.Reference` and `retirementSignal`
-remain inspectable after retirement and disposal. A business run can link that
-signal to its own cancellation without watching catalogs or managing RPC leases.
-
-`ensureCurrent` verifies all eleven identity fields through the receiver's broker.
-Invariant reporting returns `false` for stale pre-report validation and preserves
-structured permission/unavailable/dispatch/retry failures. Successful reporting
-retires the exact local binding; its acknowledgement survives that retirement.
-
-Generated request visitors automatically register referenced services as operation
-participants on send and provider decode. Participant retirement cancels the call
-and the domain method/stream's `ServiceContext.signal`, even before the domain code
-invokes that target. Participants and exact-target retirement stay linked through
-retained content; output references borrow the receiver lifetime without retaining
-their decoding scope. Limits are 128 contracts, 4096 live bindings/cached providers
-(including pending binding cleanup), 128 typed entries per provider, and 4096
-participants per operation. Recovery waits 250 ms; disposal drains the watch,
-queries, reports and resource cleanup.
-
-### Method timeout hints
-
-Declare ordinary call timing once in service semantics:
-
-```ts
-export const tasks = defineService({
-  async run() { return "done"; },
-}, { methods: { run: { timeoutSeconds: 2100 } } });
-```
-
-`timeoutSeconds` accepts integer `0..2100`; omission or `0` uses the Host default.
-Generated calls request the timeout automatically, bounded by the parent invocation
-and the Host's effective deadline. Nonzero policies request the existing
-`rpc.extended-deadline.v1` capability. Policies are emitted separately from the RPC
-descriptor/ABI, in optional contract-entry `methodPolicies` metadata after
-`modelProjection`. Empty maps/defaults are omitted, imported policies retain exact
-selection evidence, and TS/checkJs use the same rules.
-
-## Errors and extension implementations
-
-### Explicit imported Runtime use
-
-A bound imported provider can declare a targeted Runtime use with
-`ServiceOptions.runtimeUses`. Each `ServiceRuntimeUse<TService>` contains a
-canonical generated `service: ServiceToken<TService>` and optional `required`
-and `actions` policy:
-
-```ts
-import { defineService } from "@younics/sunder-sdk";
-import { Implementations, Services } from "#sunder/api";
-
-export const holder = defineService({
-  holderHandle(request) { return true; },
-}, {
-  implements: Implementations.holder,
-  runtimeUses: [{
-    service: Services.Contracts.CExample_Typed_Target.target,
-    actions: ["discover"],
-  }],
-});
-```
-
-This same syntax is checked JavaScript. It adds only optional Runtime discovery
-(`required: false` by default) for that exact imported contract. It creates no
-whole-package API selection or App use. An omitted `actions` uses the contract's
-applicable actions; explicitly use `["discover"]` for reference validation only.
-Invoking/subscribing to a target still requires those separately declared actions.
-
-Provider-only imports materialize recursive reference types from the **same pinned
-artifact inventory**, with no permission inferred from a field. Unrelated cached
-types, authored lookalikes, private/platform targets and conflicting declarations
-are rejected. The compiler emits ordered `roleUses` evidence with the exact
-contract/version/hash/service tuple and canonical shared projection type identity.
-Authors never write that evidence, a new lock field, or a handwritten manifest.
-Removing explicit discovery again fails normal generation/Update when the
-provider's reachable request/output/error graph still needs the reference.
-
-### Domain errors
-
-`defineServiceError<Details>({ description })` declares an ordinary error-detail
-type in `errors`. Each method explicitly lists its allowed error codes in
-`methods.<name>.errors`. `Errors` from `#sunder/api` exposes generated, validating
-error factories. A detail-bearing factory also exposes `.details(error)` for the
-typed result prepared by the receiving operation. Natural content/reference details
-use the same generated visitors and lifetime rules. Infrastructure failures remain Host-authenticated; undeclared
-errors and unexpected exceptions become sanitized provider faults.
-
-After selecting an extension with `api implement` or `platform implement`, use:
-
-```ts
-import { defineService } from "@younics/sunder-sdk";
-import { Implementations } from "#sunder/api";
-
-export const extension = defineService({
-  examplePing(request, context) { context.signal.throwIfAborted(); return request; },
-}, { implements: Implementations.extension });
-```
-
-Imported handler names always concatenate the camel-case service ID and Pascal-case
-method ID: service `example` / method `ping` is `examplePing`, even for a
-single-service contract. Adding another service does not rename existing handlers;
-normalized handler-name collisions are rejected within the contract.
-
-Imported types and authority come from the exact lock/cache. No schemas or consumer
-grants are redeclared. A declaration-only extension uses
-`defineService<OrdinaryInterface>(null, { declarationOnly: true, exposure: "public" })`;
-JS supplies a checked JSDoc `ServiceDefinition<OrdinaryInterface>` annotation.
-Local implementations bind that definition through the same `implements` option.
-Multiple implementations require distinct stable `providerId` values.
-
-### Consumer requirements and raw RPC
-
-Typed imported calls and method captures contribute requirements automatically,
-separately for Worker and App sources. Full output models require every declared
-member; property-read usage does not silently narrow them. The original lock,
-descriptor and hashes stay intact across compatible in-range provider updates.
-Imports without requirement metadata keep exact matching.
-
-Declare raw/dynamic calls with literal method wire IDs. An optional explicit view
-describes a deliberately narrow raw output model, not a generated full model:
-
-```ts
-import { declareRpcUse, declareRpcView } from "@younics/sunder-sdk";
-import { Services } from "#sunder/api";
-
-const people = Services.Dependency.example_Directory.people;
-declareRpcUse(people, ["read"]);
-declareRpcView(people, "Person", ["name"]);
-```
-
-These functions do not perform RPC or grant access. Raw output definitions are
-exact by default. A view cannot narrow a definition also required by typed calls
-or a service-reference protocol value. Browser sources import these functions
-from `@younics/sunder-sdk/browser` and pass `"app"` as the final argument. The default role
-is `"runtime"`. Tooling stamps `rpc.consumer-requirements.v1` so older Hosts reject
-unsupported targets before activation. See the
-[compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md#imported-api-compatibility).
-
-## Lifecycle and package APIs
-
-Export an optional `configure(context)` from the service module, returning
-`Omit<WorkerOptions, "providers">`. The generated bootstrap owns providers. Real
-`onCandidateStarted`, `onGenerationCommitted`, `onBeforeStorageMigrations`,
-`onActivated` and `onShutdown` callbacks retain their staged lifecycle and signals.
-
-`WorkerContext` retains Host-mediated settings, state, files, secrets, structured
-logging, callbacks/auth, persistent role-local workspace and exact-generation faults.
-`PackageStorageKeyMigration` retains exact, opaque-ID, JSON-identity and bounded
-cleanup rules. The pre-migration callback receives read-only state for its exact
-generation; normal package data becomes available on activation.
-
-Invocation content registration/opening is authority-bound. Discard opened content
-when finished; the Host also revokes it at the invocation/scope terminal boundary.
-Worker stdout remains reserved for protocol framing. Use Host logging for events and
-bounded `safeStderr` diagnostics. Declare optional APIs in `workerCapabilities`;
-package code cannot raise the fixed Worker transport limits.
-
-### Advanced transport and Worker integration
-
-Direct `runWorker`, raw provider registrations, transport adapters and manual role
-leaves are advanced integration boundaries, not the scaffold workflow. Ordinary
-packages keep the generated Worker bootstrap and use `configure` only for actual
-lifecycle behavior.
-
-## Explicit optional service-reference occurrences
-
-References are strict by default, including nullable references. To preserve
-expected absence at one record property, use a type-only marker:
-
-```ts
-import type { OptionalServiceReference } from "@younics/sunder-sdk";
-
-export type ExecutionContext = {
-  executionTarget: OptionalServiceReference<typeof executionService> | null;
-};
-```
-
-Checked JavaScript uses the same type in JSDoc:
-
-```js
-/** @typedef {{executionTarget: import("@younics/sunder-sdk").OptionalServiceReference<typeof executionService> | null}} ExecutionContext */
-```
-
-The marker is assignable from an ordinary `ServiceReference`; it creates no
-runtime wrapper. It is allowed only on a direct, required nullable record
-property, not optional (`?`) properties, nonnullable values, collections or
-transparent root values. Generated projection metadata records the owner/member
-policy; descriptor/ABI bytes and the eleven-field locator stay unchanged.
-
-Only safe, not-dispatched absence/staleness/unavailability during exact reference
-lookup becomes explicit wire `null` or a decoded null. Permission, validation,
-protocol, deadline, provider-fault and unsafe/possibly-dispatched errors propagate.
-Live optional references keep their exact-bound proxy and retirement signal, but
-do not enroll the outer operation as a required participant. A nested target call
-still cancels on that target's retirement. Caller, main-callee, required dependency,
-deadline and owner cancellation remain authoritative. A strict occurrence of the
-same object or complete locator wins, regardless of traversal order. Domain
-fallbacks must retain nested-call dispatch/retry metadata; this feature does not
-make possibly-dispatched failures safely replayable.
-
-## Replayable content streams (provider-local completion)
-
-Local `SunderContent.fromBytes(bytes)` and `SunderContent.fromStream(source)` use
-`application/octet-stream` and the display name `content.bin` when options are
-omitted, so default resources satisfy Host registration requirements. Received
-content retains its exact metadata; its display name is never treated as a path.
-
-Worker registration metadata and logical content references use distinct timestamp
-spellings. Host seven-digit UTC registration timestamps are converted losslessly
-to RPC V1 canonical UTC at that boundary, without rounding fractional digits.
-Received logical references retain their exact text when opened. Ordinary
-`date-time` model fields may use profile-valid offsets; content-reference expiry
-must remain canonical UTC.
-
-A concrete provider may set `methods.<name>.completeOnResponseContentRetirement: true`
-in `defineService` for a server stream whose response contains `SunderContent`.
-This defaults to false and is local to that implementation; it does not change
-the descriptor, ABI, consumer method policies, or public projection metadata.
-
-Use this only when callers can resume from their last delivered revision or
-explicitly resnapshot. During generated response serialization, a Host-authenticated
-content-registration retirement can complete the stream without emitting the failed
-item. The four accepted kind/code pairs are `unavailable/rpc.content.authority-revoked`,
-`deadline-exceeded/rpc.call.deadline-exceeded`, `stale-endpoint/rpc.endpoint.stale`, and
-`cancelled/rpc.call.cancelled`, all with safe, not-dispatched metadata. Caller cancellation,
-provider-body errors, source open/read errors, and forged or reused errors still fail.
-
-## Documentation channel
-
-Repository links in this README follow current source. Before publishing a package
-README, provide documentation bound to its actual release; no release tag is implied
-here.
+This builds the declared platform targets and reports a `.sunderpkg` archive.
+Use `sunder dev package validate <archive.sunderpkg>` to validate it, then
+`sunder package install --file <archive.sunderpkg>` to install it locally.
+
+## Troubleshooting
+
+| Symptom | Next step |
+| --- | --- |
+| `#sunder/api` cannot be resolved | Run `npm run typecheck`; it generates APIs before checking source. |
+| Browser context is unavailable | Load the packaged view in Sunder; it needs the Sunder bridge. |
+| Worker cannot start | Ensure the Sunder-managed Node runtime is installed. |
+| Calls are denied | Check the selected API's consumer roles and package permissions. |
+
+## Learn more
+
+- [Project initializer](../create-sunder-package/README.md)
+- [Build and package tooling](../package-tool/README.md)
+- [Node package development](../../../../../docs/SUNDER-NODE-PROCESS-PACKAGES.md)
+- [Report an issue](https://github.com/Younics/sunder-core/issues)
+
+Licensed under [MIT](LICENSE).

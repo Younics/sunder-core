@@ -526,7 +526,7 @@ function auditComponentStages(directory, model, reports, issues) {
     const prefix = `sunder-results-${model.scope}-component-${component.scope}/`;
     const path = resolve(directory, prefix, "steps.json");
     const rows = reports.filter(report => report.source.startsWith(prefix));
-    const job = hosted.find(job => job.name.endsWith(`${labels[component.scope]} / Build, test and pack`));
+    let job;
     let steps = [];
     try {
       const document = JSON.parse(readFileSync(path, "utf8"));
@@ -535,6 +535,12 @@ function auditComponentStages(directory, model, reports, issues) {
         throw new Error("Invalid component stage outcomes");
       }
       steps = document.steps;
+      // The child records its generated display name. Renames and partition
+      // labels do not require a second hardcoded name in the summary renderer.
+      if (typeof document.jobName === "string") {
+        const matches = hosted.filter(job => job.name === document.jobName || job.name.endsWith(` / ${document.jobName}`));
+        if (matches.length === 1) job = matches[0];
+      }
       for (const step of steps.filter(step => ["failure", "cancelled"].includes(step.outcome))) {
         issues.push(`${labels[component.scope]} / ${step.stage}: ${step.outcome}.`);
       }

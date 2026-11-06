@@ -26,7 +26,10 @@ def platforms(root=ROOT, profile="native"):
         for key in ("os", "appRunner"):
             if key in row and not re.fullmatch(r"[A-Za-z0-9._-]+", row[key]):
                 raise ValueError("Invalid runner label")
-    return {"include": [{"rid": row["rid"], "os": row.get("appRunner", row["os"]) if profile == "app" else row["os"]}
+    return {"include": [{"rid": row["rid"], "os": row.get("appRunner", row["os"]) if profile == "app" else row["os"],
+                         **({"package_task": "Package and sign" if row["rid"].startswith("win-") else
+                            "Package, sign and notarize" if row["rid"].startswith("osx-") else "Package unsigned AppImage"}
+                            if profile == "app" else {})}
                         for row in rows if profile != "packaging" or row.get("packagingSmoke")]}
 
 
@@ -74,10 +77,14 @@ def matrices(root=ROOT, scope="all"):
             "official_tests": "host" in owners, "app_packaging": "app" in owners}
 
 
-def component_matrices(root=ROOT, scope="all"):
+def component_matrices(root=ROOT, scope="all", release_packages=False):
     policy = json.loads((Path(root) / "eng/test-oracles/core-test-policy.json").read_text())
     owners = policy["scopes"][scope]
     components = [{"scope": COMPONENTS[owner][0], "name": COMPONENTS[owner][1]} for owner in owners]
+    for row in components:
+        task = "Release tooling tests" if row["scope"] == "repository" else (
+            "Build, test and pack selected candidates" if release_packages and row["scope"] in ("npm", "dotnet") else "Build and test")
+        row["job_name"] = f"{row['name']} — {task} — linux-x64"
     native = []
     for owner in owners:
         if owner not in ("dotnet", "host", "app"):
@@ -85,13 +92,21 @@ def component_matrices(root=ROOT, scope="all"):
         component, label = COMPONENTS[owner]
         for row in matrices(root, component)["platform"]["include"]:
             partition = row["partition"]
-            native.append({**row, "scope": component, "component": label,
-                           "label": "Process tests" if partition == "main" else "Package.Build " + partition.rsplit("-", 1)[1] + "/3"})
+            label, part = "Process tests", ""
+            if partition != "main":
+                name, index = partition.rsplit("-", 1)
+                rule = next(rule for rule in policy["nativePartitions"] if rule["name"] == name and rule["component"] == owner)
+                label = rule["project"].removeprefix("Sunder.").removesuffix(".Tests") + " tests"
+                part = f" — {index}/{rule['shards']}"
+            native.append({**row, "scope": component, "component": COMPONENTS[owner][1],
+                           "label": label, "job_name": f"{COMPONENTS[owner][1]} — {label} — {row['rid']}{part}"})
     # Both second-phase native consumers share one capacity budget.
     consumers = ([{**row, "scope": "host", "task": "official", "component": "Host", "label": "Official Node and .NET runtimes"}
                   for row in platforms(root)["include"]] if "host" in owners else [])
     consumers += ([{**row, "scope": "app", "task": "packaging", "component": "App", "label": "Unsigned packaging smoke"}
-                   for row in platforms(root, "packaging")["include"]] if "app" in owners else [])
+                    for row in platforms(root, "packaging")["include"]] if "app" in owners else [])
+    for row in consumers:
+        row["job_name"] = f"{row['component']} — {row['label']} — {row['rid']}"
     return dict(components={"include": components}, platform={"include": native}, consumers={"include": consumers},
                 platform_tests=bool(native), consumer_tests=bool(consumers), interop=all(owner in owners for owner in ("dotnet", "host", "npm")),
                 component_scopes=[row["scope"] for row in components])
@@ -102,10 +117,11 @@ def main():
     parser.add_argument("action", choices=("toolchains", "matrices", "components"))
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--packaging", action="store_true")
+    parser.add_argument("--release-packages", action="store_true")
     parser.add_argument("--scope", default="all")
     args = parser.parse_args()
     emit(toolchains(args.root, args.packaging) if args.action == "toolchains" else
-         component_matrices(args.root, args.scope) if args.action == "components" else matrices(args.root, args.scope))
+         component_matrices(args.root, args.scope, args.release_packages) if args.action == "components" else matrices(args.root, args.scope))
 
 
 if __name__ == "__main__":

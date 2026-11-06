@@ -63,7 +63,8 @@ test("component tags finalize the same verified assets after their build and tes
     const source = await workflow(`${component}-release`);
     assert.match(source, new RegExp(`tags: \\["${component}/v\\*"\\]`, "u"));
     assert.doesNotMatch(source, /production.acceptance|SUNDER_.*ACCEPTANCE_DRIVER/u);
-    assert.doesNotMatch(source, /workflow_dispatch:/u);
+    if (component === "app") assert.match(source, /workflow_dispatch:/u);
+    else assert.doesNotMatch(source, /workflow_dispatch:/u);
     assert.match(source, /group: sunder-release-\$\{\{ github\.ref_name \}\}/u);
     assert.match(source, /github_release\.py stage/u);
     assert.match(source, /github_release\.py finalize/u);
@@ -75,7 +76,7 @@ test("component tags finalize the same verified assets after their build and tes
   }
 });
 
-test("project selection precedes release packaging without tag redispatch or manual coordinates", async () => {
+test("SDK selection precedes its candidate packaging and retains main workflow provenance", async () => {
   const source = await workflow("sdk-release");
   const select = source.slice(source.indexOf("\n  select:"), source.indexOf("\n  validation:"));
   assert.match(select, /github.ref == 'refs\/heads\/main'/u);
@@ -112,6 +113,34 @@ test("project selection precedes release packaging without tag redispatch or man
   }
   assert.equal(scope({ scope: "sdk" }, { event_name: "push" }), "sdk");
   assert.match(source.slice(source.indexOf("\n  validation:"), source.indexOf("\n  stage:")), /scope: all/u);
+});
+
+test("App selection is independent of SDK recovery and dispatch retains exact-tag signing authority", async () => {
+  const source = await workflow("sdk-release");
+  const select = source.slice(source.indexOf("\n  select-app:"), source.indexOf("\n  release-app:"));
+  const launch = source.slice(source.indexOf("\n  release-app:"), source.indexOf("\n  validation:"));
+  assert.doesNotMatch(select, /needs:|needs\.|selected_count/u);
+  assert.match(select, /app_release\.py select/u);
+  assert.match(launch, /needs: select-app/u);
+  assert.doesNotMatch(launch, /needs\.(?:select\.|validation|finalize)|secrets\./u);
+  assert.match(launch, /actions: write/u);
+  assert.match(launch, /app_release\.py launch/u);
+  const app = await workflow("app-release");
+  assert.match(app, /workflow_dispatch:/u);
+  const prepare = app.slice(app.indexOf("\n  prepare:"), app.indexOf("\n  package:"));
+  assert.match(prepare, /fetch-depth: 0/u);
+  assert.match(prepare, /app_release\.py prepare/u);
+  const packageJob = app.slice(app.indexOf("\n  package:"), app.indexOf("\n  release:"));
+  assert.match(packageJob, /app_release\.py retained --rid/u);
+  assert.ok(packageJob.indexOf("app_release.py retained") < packageJob.indexOf("configure-windows-signing"));
+  for (const name of ["Package Sunder for Windows", "Package Sunder for Unix", "Inspect the signed and notarized mounted DMG"]) {
+    assert.match(workflowStep(packageJob, name), /steps.retained.outputs.reuse != 'true'/u);
+  }
+  assert.match(packageJob, /retention-days: 90/u);
+  assert.match(app, /group: sunder-app-promotion/u);
+  const path = /--directory (artifacts\/app-release-assets)/u.exec(app)?.[1];
+  assert.ok(path);
+  assert.equal(spawnSync("git", ["check-ignore", "-q", "--no-index", `${path}/installer.exe`], { cwd: root }).status, 0);
 });
 
 test("SDK publication consumes tested packages and keeps registry credentials in their owning jobs", async () => {

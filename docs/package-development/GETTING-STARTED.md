@@ -1,32 +1,30 @@
 # Getting Started
 
-**SDK status: UNFROZEN / UNRELEASED.** This guide tracks the current SDK 1.1 source
-candidate and .NET 10; it does not claim a supported release. After the first supported
-release, compatible fixes and additions remain allowed while supported source, binary
-and behavioral contracts must be preserved. See the [compatibility policy](../SUNDER-SDK-COMPATIBILITY.md).
+Create a Sunder extension with a C# service and an optional desktop view, run it
+locally, and package it for installation. For TypeScript or JavaScript, start with
+the [Node/React initializer](../../languages/typescript/node/packages/create-sunder-package/README.md).
 
 ## Prerequisites
 
 - .NET 10 SDK for building.
 - Sunder App and the `sunder` CLI for package development and installation.
-- A feed containing the coordinated SDK packages, or locally packed source candidates.
+- Access to NuGet.org to install the templates and SDK packages.
 
 Sunder-managed execution runtimes are separate from your development SDK. Install
 required package runtimes through the App or CLI when prompted.
 
 ## Create A Package
 
-Install a locally packed coordinated template candidate (or the matching version from
-your candidate feed), then create one authored project:
+Install the template, then create a project with a starter Avalonia view:
 
 ```sh
-dotnet new install "<path-to-candidate-template.nupkg>"
-dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --output MyPackage
+dotnet new install Sunder.Package.Templates
+dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withAvalonia --output MyPackage
 dotnet restore MyPackage/MyPackage.csproj
 dotnet build MyPackage/MyPackage.csproj --no-restore
 ```
 
-The template creates **one authored Library project** with `SunderPackageProject=true`,
+Omit `--withAvalonia` for a headless service package. The template creates **one authored Library project** with `SunderPackageProject=true`,
 package metadata, an ordinary private service and a contract lock. Sunder generates
 interfaces, clients, DI, Worker entry points and optional App composition.
 
@@ -70,9 +68,11 @@ the compiled [Quickstart](../../languages/csharp/dotnet/samples/Sunder.Package.Q
 
 ## Run And Watch
 
-Build emits `MyPackage/bin/Debug/net10.0/sunder-dev`. Load that generated package:
+Build emits `MyPackage/bin/Debug/net10.0/sunder-dev`. Select the execution runtime
+and load that generated package:
 
 ```sh
+sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-worker-module.v1
 sunder dev package run MyPackage/bin/Debug/net10.0/sunder-dev --watch
 ```
 

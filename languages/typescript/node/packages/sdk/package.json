@@ -1,7 +1,8 @@
 {
   "name": "@younics/sunder-sdk",
-  "version": "1.0.0",
-  "description": "Zero-dependency TypeScript SDK for Sunder RPC V1 contracts and Worker V1 Runtime packages.",
+  "version": "1.0.1",
+  "description": "Build Sunder extensions with TypeScript or JavaScript services, generated typed APIs, and optional browser or React UI.",
+  "keywords": ["sunder", "sdk", "typescript", "javascript", "extensions", "react"],
   "license": "MIT",
   "repository": {
     "type": "git",

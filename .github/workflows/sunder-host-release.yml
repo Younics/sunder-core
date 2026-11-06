@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validation:
-    name: Host / Validation
+    name: Host — Validation
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: host
@@ -19,7 +19,7 @@ jobs:
       actions: read
 
   prepare:
-    name: Host / Select version and platforms
+    name: Host — Select version and platforms
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -36,7 +36,7 @@ jobs:
         run: python3 -B scripts/ci/metadata.py matrices
 
   package:
-    name: Host / Package and smoke / ${{ matrix.rid }}
+    name: Host ${{ needs.prepare.outputs.version }} — Package and smoke — ${{ matrix.rid }}
     needs: [prepare, validation]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -53,6 +53,7 @@ jobs:
         with:
           global-json-file: global.json
       - name: Publish Supervisor and nested Runtime
+        id: package
         shell: pwsh
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -63,9 +64,16 @@ jobs:
           name: sunder-runtime-host-${{ matrix.rid }}
           path: artifacts/release/*
           if-no-files-found: error
+      - name: Summarize Host packaging
+        if: always()
+        env:
+          CI_JOB_NAME: Host ${{ needs.prepare.outputs.version }} — Package and smoke — ${{ matrix.rid }}
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-runtime-host-${{ matrix.rid }}
+        run: python3 -B scripts/ci/report.py job
 
   release:
-    name: Host / Publish verified archives
+    name: Host ${{ needs.prepare.outputs.version }} — Publish verified archives
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -91,3 +99,25 @@ jobs:
         run: |
           python3 -B scripts/release/github_release.py stage "$GITHUB_REF_NAME" --directory release-assets
           python3 -B scripts/release/github_release.py finalize "$GITHUB_REF_NAME" --directory release-assets
+
+  summary:
+    name: Results — Host release and downloads
+    if: always()
+    needs: [prepare, validation, package, release]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Summarize Host release
+        env:
+          SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 -B scripts/ci/report.py release
+      - name: Link jobs and durations
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/report.py jobs

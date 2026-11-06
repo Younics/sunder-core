@@ -51,11 +51,29 @@ artifacts and `rehearsal.json`; publication uses the hosted selected-release flo
 
 - **Sunder Core — CI** runs the complete graph for PRs, merge queues, scheduled
   checks and manual validation.
-- **Sunder Core — Main CI and SDK Release** is the main-push entry point. It calls
+- **Sunder Core — Main CI and Releases** is the main-push entry point. It calls
   the same complete graph, then stages and publishes the tested selected packages.
   Its workflow path remains `sunder-sdk-release.yml`, preserving publication identity.
+- App selection independently compares its authored project version with published
+  `app/v*` releases and starts/resumes the exact-tag App workflow. SDK recovery or
+  an empty SDK selection does not suppress it. The main overview links to the App
+  run and distinguishes launch from completed publication.
 - App, Host and CLI retain independent tag releases with named validation,
-  platform packaging/signing, and publication jobs.
+  platform packaging/signing, and publication jobs. App tags are created and
+  explicitly dispatched by main; manual tag pushes also remain supported.
+
+Reusable **child jobs** carry `component — task — platform — partition` names.
+Examples are `Host — Process tests — linux-arm64` and
+`.NET libraries — Package.Build tests — win-x64 — 2/3`. Partition totals come
+from the test policy. Packaging labels distinguish signed Windows installers,
+signed/notarized macOS DMGs and unsigned Linux AppImages. Component names mention
+candidate packing only when release candidates are requested.
+
+The preflight summary lists selected tasks and explains native matrix counts and
+the six-runner capacity limit. Each producer summarizes its execution/results and
+links its diagnostic artifacts. Final overviews include job links and durations
+from the current run attempt. Pagination is decoded separately from `gh api`;
+an unavailable navigation API cannot hide or replace required test results.
 
 Component jobs expose restore, build, test, pack and verification steps. npm has
 individual SDK, package-tool and creator test steps sharing a temporary producer
@@ -84,14 +102,14 @@ before builds. Inline/fenced code is excluded from relative-link parsing; actual
 repository links remain source-commit bound. General link checking uses
 `check-markdown-links.py --tracked` so retained producer workspaces are not source inputs.
 
-The final **Results / Required validation gate** audits all owning reports using
+The final **Results — Required validation gate** audits all owning reports using
 `--aggregate --component-layout`. Its overview links to component jobs and shows
 stage outcomes, counts, native completeness and missing evidence. Only the explicit
 `--github-summary` option writes hosted summaries, keeping reporter fault injection
 isolated. The SDK release overview separately shows selected versions and publish
 outcomes. Report names include both validation bundle and component, so App and Host
 validation can coexist in the same tag run. Required-check rules should target
-`Results / Required validation gate` (including the caller prefix when applicable).
+`Results — Required validation gate` (including the caller prefix when applicable).
 
 High-level commands keep prepared environment values in their process and clean
 temporary template/runtime workspaces on success or failure. Low-level `templates`

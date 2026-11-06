@@ -1,18 +1,13 @@
 # Single-project .NET package authoring
 
-**SDK status: UNFROZEN / UNRELEASED.** This is current-source documentation, not a
-supported-release declaration. After the first supported release, compatible fixes
-and additions remain allowed while supported source, binary and behavioral contracts
-must be preserved. See the [compatibility policy](../SUNDER-SDK-COMPATIBILITY.md).
-
-Status: the template and compiled Quickstart now use one authored project. Ordinary
-Build, development composition and direct multi-RID Pack include restored NuGet/project
-ownership, compiled XAML/resources and generated App preview routing. The workflow is
-IDE-independent; native and production-release qualification remains separate.
+Author your services, business models, and optional Avalonia UI in one .NET project.
+Sunder's tooling builds the worker and App parts, generates their integration, and
+produces development output or a distributable archive. The workflow uses standard
+.NET commands in your preferred editor.
 
 ## One authored package
 
-Start with `dotnet new sunder-package` from the coordinated template candidate; see
+Start with `dotnet new sunder-package` from `Sunder.Package.Templates`; see
 [Getting Started](GETTING-STARTED.md). The default scaffold already contains ordinary
 service source. Add `--withAvalonia` for the starter view/view model rather than
 creating another project or writing an App module.

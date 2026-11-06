@@ -14,7 +14,7 @@ env:
 
 jobs:
   prepare:
-    name: Select native components and platforms
+    name: Native — Select components, platforms and partitions
     runs-on: ubuntu-24.04
     outputs:
       platform: ${{ steps.platforms.outputs.platform }}
@@ -29,7 +29,7 @@ jobs:
         run: python3 -B scripts/ci/metadata.py components --scope "$CI_SCOPE"
 
   platform:
-    name: ${{ matrix.component }} / ${{ matrix.label }} / ${{ matrix.rid }}
+    name: ${{ matrix.job_name }}
     needs: prepare
     if: needs.prepare.outputs.platform_tests == 'true'
     runs-on: ${{ matrix.os }}
@@ -41,6 +41,7 @@ jobs:
     env:
       CI_COMPONENT: ${{ matrix.scope }}
       NATIVE_PARTITION: ${{ matrix.partition }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -78,9 +79,16 @@ jobs:
           path: artifacts/test-results/${{ matrix.scope }}
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize native execution
+        if: always()
+        shell: bash
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-${{ inputs.scope }}-platform-${{ matrix.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
+        run: python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
 
   consumers:
-    name: ${{ matrix.component }} / ${{ matrix.label }} / ${{ matrix.rid }}
+    name: ${{ matrix.job_name }}
     # Share capacity with platform tests; official launch and packaging together
     # also stay within the six-runner budget.
     needs: [prepare, platform]
@@ -94,6 +102,7 @@ jobs:
     env:
       CI_COMPONENT: ${{ matrix.scope }}
       RID: ${{ matrix.rid }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -129,3 +138,10 @@ jobs:
           path: artifacts/test-results/${{ matrix.scope }}
           if-no-files-found: error
           retention-days: 14
+      - name: Summarize native consumer results
+        if: always()
+        shell: bash
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-${{ inputs.scope }}-${{ matrix.task }}-${{ matrix.scope }}-${{ matrix.rid }}
+        run: python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"

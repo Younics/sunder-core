@@ -345,7 +345,7 @@ def component_stage(action, scope, *, scenario=None, rid=None):
         rows = [{"stage": name, "outcome": row["outcome"]} for name, row in steps.items()
                 if "outcome" in row]
         output.mkdir(parents=True, exist_ok=True)
-        (output / "steps.json").write_text(json.dumps(dict(component=scope, steps=rows), indent=2) + "\n")
+        (output / "steps.json").write_text(json.dumps(dict(component=scope, jobName=os.environ.get("CI_JOB_NAME"), steps=rows), indent=2) + "\n")
         return
     with execution_evidence(output, action), local_environment():
         if action in ("restore", "build"):

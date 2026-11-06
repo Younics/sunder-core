@@ -16,20 +16,22 @@ dotnet new sunder-package `
   --withAvalonia
 ```
 
-For an existing project, reference `Sunder.Sdk.Avalonia` and the Avalonia packages used directly by the project, using the coordinated `1.1` SDK range.
-
-Register a control from `RegisterAppContributions`:
+For an existing package, add an App-scoped `Sunder.Sdk.Avalonia` reference as shown
+in the [themed view tutorial](../../languages/csharp/dotnet/packages/Sunder.Sdk.Avalonia/README.md).
+Mark the control with `SunderPackageView` from `Sunder.Sdk.Packaging`:
 
 ```csharp
-registry.RegisterPackageView<QuickstartView>(new PackageViewRegistration(
-    id: "my.company.package.main",
-    name: "My Package",
-    iconAssetPath: "assets/icon.png",
-    defaultPlacement: PackageViewPlacement.Middle,
-    showInHotbarByDefault: true));
+[SunderPackageView("my.company.package.main", "My Package",
+    ViewModel = typeof(MyViewModel), IconPath = "assets/icon.png")]
+public partial class MyView : UserControl
+{
+    public MyView() => InitializeComponent();
+}
 ```
 
-View ids are persistent shell/navigation identities. Make them stable, globally unique, and package-prefixed. The current App treats collisions case-insensitively. `DefaultPlacement` and `ShowInHotbarByDefault` apply before the user customizes the shell.
+Generated composition registers the view. For custom App modules, the explicit
+`RegisterPackageView` API remains available in the [.NET SDK reference](DOTNET-SDK-REFERENCE.md#advanced-explicit-contribution-registration).
+View ids are persistent shell/navigation identities. Make them stable, globally unique, and package-prefixed. The current App treats collisions case-insensitively. Placement defaults apply before the user customizes the shell.
 
 The App creates a view lazily with `ActivatorUtilities` from the package App provider, so constructor parameters may be package services or host-provided App services. A view is cached once per view id and App generation until explicitly invalidated, package disable/unload, or generation replacement. Do not assume a new control for each navigation.
 
