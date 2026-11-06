@@ -1,0 +1,116 @@
+name: Sunder Component Validation
+
+on:
+  workflow_call:
+    inputs:
+      scope:
+        type: string
+        required: true
+      bundle:
+        type: string
+        required: true
+      release-packages:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+env:
+  CI_COMPONENT: ${{ inputs.scope }}
+
+jobs:
+  validate:
+    name: Build, test and pack
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Download independent release selection
+        if: inputs.release-packages && (inputs.scope == 'npm' || inputs.scope == 'dotnet')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Restore npm dependencies
+        id: npm_restore
+        if: inputs.scope == 'npm' || inputs.scope == 'dotnet' || inputs.scope == 'repository'
+        run: npm ci --prefix languages/typescript/node
+      - name: Build and typecheck npm libraries
+        id: npm_build
+        if: inputs.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action build --work "$RUNNER_TEMP/npm-tests"
+      - name: Test @sunder/sdk
+        id: npm_sdk_test
+        if: inputs.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @sunder/sdk --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Test @sunder/package-tool
+        id: npm_tool_test
+        if: inputs.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @sunder/package-tool --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Test create-sunder-package
+        id: npm_creator_test
+        if: inputs.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project create-sunder-package --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Typecheck generated npm templates
+        id: npm_templates_test
+        if: inputs.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action templates --work "$RUNNER_TEMP/npm-tests"
+      - name: Audit npm execution and skip evidence
+        id: npm_evidence_test
+        if: always() && inputs.scope == 'npm' && steps.npm_build.outcome == 'success'
+        run: node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/npm/node --scope npm --allow-partial --require-primary-lane node
+      - name: Build Node inputs for .NET generators
+        id: node_inputs_build
+        if: inputs.scope == 'dotnet'
+        run: python3 -B scripts/ci/core_ci.py node-inputs --no-restore
+      - name: Restore .NET projects
+        id: dotnet_restore
+        if: inputs.scope != 'npm' && inputs.scope != 'repository'
+        run: python3 -B scripts/ci/core_ci.py restore --scope "$CI_COMPONENT"
+      - name: Build .NET projects
+        id: dotnet_build
+        if: inputs.scope != 'npm' && inputs.scope != 'repository'
+        run: python3 -B scripts/ci/core_ci.py build --scope "$CI_COMPONENT"
+      - name: Test .NET projects
+        id: dotnet_test
+        if: inputs.scope != 'npm' && inputs.scope != 'repository'
+        run: python3 -B scripts/ci/core_ci.py test --scope "$CI_COMPONENT"
+      - name: Test release and packaging scripts
+        id: fixtures_test
+        if: inputs.scope == 'repository' || inputs.scope == 'app'
+        run: python3 -B scripts/ci/core_ci.py fixtures --scope "$CI_COMPONENT"
+      - name: Test repository tooling
+        id: tooling_test
+        if: inputs.scope == 'repository'
+        run: python3 -B scripts/ci/core_ci.py script-tests --scope "$CI_COMPONENT"
+      - name: Build npm distribution inputs after artifact tests
+        id: npm_distribution_build
+        if: inputs.release-packages && inputs.scope == 'npm'
+        run: npm run build --prefix languages/typescript/node
+      - name: Pack and verify selected package candidates
+        id: pack
+        if: inputs.release-packages && (inputs.scope == 'npm' || inputs.scope == 'dotnet')
+        run: python3 -B scripts/ci/core_ci.py pack --scope "$CI_COMPONENT"
+      - name: Retain candidate packages for consumer validation
+        if: steps.pack.outputs.package_count != '' && steps.pack.outputs.package_count != '0'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-candidate-${{ inputs.scope }}
+          path: artifacts/packages/*
+          if-no-files-found: error
+      - name: Record stage outcomes
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/core_ci.py step-results --scope "$CI_COMPONENT"
+      - name: Retain component reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-${{ inputs.bundle }}-component-${{ inputs.scope }}
+          path: artifacts/test-results/${{ inputs.scope }}
+          if-no-files-found: error
+          retention-days: 14

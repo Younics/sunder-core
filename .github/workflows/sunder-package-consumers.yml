@@ -1,0 +1,76 @@
+name: Sunder Package Consumers
+
+on:
+  workflow_call:
+    inputs:
+      scenario:
+        type: string
+        required: true
+      bundle:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+env:
+  SCENARIO: ${{ inputs.scenario }}
+  CI_COMPONENT: ${{ inputs.scenario }}
+
+jobs:
+  consumers:
+    name: Prepare and test consumers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Prepare Node producer inputs
+        run: python3 -B scripts/ci/core_ci.py node-inputs
+      - name: Restore cross-language consumer projects
+        if: inputs.scenario == 'interop'
+        run: python3 -B scripts/ci/core_ci.py restore --scope sdk --scenario interop
+      - name: Build cross-language consumer projects
+        if: inputs.scenario == 'interop'
+        run: python3 -B scripts/ci/core_ci.py build --scope sdk --scenario interop
+      - name: Restore template consumer projects
+        if: inputs.scenario == 'generated-templates'
+        run: python3 -B scripts/ci/core_ci.py restore --scope sdk --scenario generated-templates
+      - name: Build template consumer projects
+        if: inputs.scenario == 'generated-templates'
+        run: python3 -B scripts/ci/core_ci.py build --scope sdk --scenario generated-templates
+      - name: Download independent release selection
+        if: inputs.scenario == 'generated-templates'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Download exact candidate archives
+        if: inputs.scenario == 'generated-templates'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sunder-candidate-*
+          merge-multiple: true
+          path: artifacts/packages
+      - name: Test .NET and Node package interoperability
+        if: inputs.scenario == 'interop'
+        run: python3 -B scripts/ci/core_ci.py interop --scope sdk
+      - name: Generate, build, package and run candidate templates
+        if: inputs.scenario == 'generated-templates'
+        run: python3 -B scripts/ci/core_ci.py template-consumers --scope sdk
+      - name: Retain tested candidate archives
+        if: inputs.scenario == 'generated-templates'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-tested-sdk
+          path: artifacts/packages/*
+          if-no-files-found: error
+      - name: Retain consumer reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-${{ inputs.bundle }}-consumers-${{ inputs.scenario }}
+          path: artifacts/test-results/sdk
+          if-no-files-found: error
+          retention-days: 14

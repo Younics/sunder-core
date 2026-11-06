@@ -17,6 +17,7 @@ import {
   bundleProductionWithGeneratedRpcBindings,
   prepareProject,
   writeTargetLeaf,
+  type PreparedProject,
 } from "./package";
 import {
   generateRpcBindingsForLoadedProjectLocked,
@@ -33,6 +34,13 @@ export async function buildModuleTarget(
 ): Promise<{ leafPath: string; modulePath: string; bytes: number }> {
   const rid = options.rid ?? currentRid();
   const project = await prepareProject(options.projectPath, options);
+  return await buildModuleTargetForPreparedProject(project, rid);
+}
+
+/** Internal command-local reuse; generation and publication still revalidate the snapshot. */
+export async function buildModuleTargetForPreparedProject(
+  project: PreparedProject, rid: SunderRid = currentRid(),
+): Promise<{ leafPath: string; modulePath: string; bytes: number }> {
   return await withRpcBindingsOutputLock(project.root, async () => {
     await generateRpcBindingsForLoadedProjectLocked(project);
     const workRoot = resolve(project.outputRoot, ".sunder-module", rid);

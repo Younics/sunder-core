@@ -6,7 +6,8 @@ const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..")
 
 export function ciScenarios(components, profile, root = repositoryRoot) {
   const scenarios = JSON.parse(readFileSync(resolve(root, "eng/test-oracles/ci-scenarios.json"), "utf8"));
-  return Object.entries(scenarios).filter(([, scenario]) => scenario.profile === profile && components.includes(scenario.component))
+  return Object.entries(scenarios).filter(([, scenario]) => scenario.profile === profile && components.includes(scenario.component)
+    && (scenario.consumers ?? []).every(component => components.includes(component)))
     .map(([name]) => name);
 }
 

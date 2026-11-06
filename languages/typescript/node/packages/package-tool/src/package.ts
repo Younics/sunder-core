@@ -565,21 +565,32 @@ export async function bundleProductionWithGeneratedRpcBindings(project: Prepared
 
 export async function buildWebTarget(projectPath: string, configuredRid?: SunderRid, options: RegistryOriginOptions = {}): Promise<string | null> {
   return await withRpcBindingsOutputLock(projectPath, async () => {
-    const project = await prepareProject(projectPath, options);
-    if (project.config.app === undefined) return null;
-    await generateRpcBindingsForLoadedProjectLocked(project);
-    const rid = configuredRid ?? currentRid();
-    const webRoot = resolve(project.outputRoot, ".sunder-web-work", rid);
-    const leafRoot = resolve(project.outputRoot, "targets", `app-${rid}`);
-    const discoveryRoot = requireDiscoveryRoot(resolve(project.outputRoot, "targets"), leafRoot);
-    await withOutputLocks([targetLeafDiscoveryKey(discoveryRoot)], async () => {
-      await withOutputLocks([webRoot, leafRoot], async () => {
-        await buildWebAssetsLocked(project, webRoot);
-        await writeWebTargetLeafLocked(project, rid, webRoot, leafRoot);
-      });
-    });
-    return leafRoot;
+    return await buildWebTargetLocked(await prepareProject(projectPath, options), configuredRid);
   });
+}
+
+/** Internal command-local reuse, including validation when the snapshot has no App. */
+export async function buildWebTargetForPreparedProject(project: PreparedProject, configuredRid?: SunderRid): Promise<string | null> {
+  return await withRpcBindingsOutputLock(project.root, () => buildWebTargetLocked(project, configuredRid));
+}
+
+async function buildWebTargetLocked(project: PreparedProject, configuredRid?: SunderRid): Promise<string | null> {
+  if (project.config.app === undefined) {
+    await revalidateOwnedRpc(project);
+    return null;
+  }
+  await generateRpcBindingsForLoadedProjectLocked(project);
+  const rid = configuredRid ?? currentRid();
+  const webRoot = resolve(project.outputRoot, ".sunder-web-work", rid);
+  const leafRoot = resolve(project.outputRoot, "targets", `app-${rid}`);
+  const discoveryRoot = requireDiscoveryRoot(resolve(project.outputRoot, "targets"), leafRoot);
+  await withOutputLocks([targetLeafDiscoveryKey(discoveryRoot)], async () => {
+    await withOutputLocks([webRoot, leafRoot], async () => {
+      await buildWebAssetsLocked(project, webRoot);
+      await writeWebTargetLeafLocked(project, rid, webRoot, leafRoot);
+    });
+  });
+  return leafRoot;
 }
 
 export async function writeTargetLeaf(input: LeafBuildInput): Promise<string> {

@@ -89,12 +89,61 @@ def absolute_links(text, source):
     return URL.sub(replace, text)
 
 
+def markdown_prose(text):
+    """Mask code without changing offsets, so only prose supplies Markdown links."""
+    masked = list(text)
+    def hide(start, end):
+        masked[start:end] = ["\n" if char == "\n" else " " for char in text[start:end]]
+    fence = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+        if fence:
+            hide(offset, offset + len(line))
+            if marker and marker[1][0] == fence[0] and len(marker[1]) >= len(fence) and not marker[2].strip():
+                fence = None
+        elif marker and (marker[1][0] != "`" or "`" not in marker[2]):
+            fence = marker[1]
+            hide(offset, offset + len(line))
+        elif line.startswith(("    ", "\t")):
+            hide(offset, offset + len(line))
+        offset += len(line)
+    prose = "".join(masked)
+    position = 0
+    for marker in re.finditer(r"`+", prose):
+        if marker.start() < position or escaped(prose, marker.start()):
+            continue
+        closing = re.search(r"(?<!`)" + re.escape(marker[0]) + r"(?!`)", prose[marker.end():])
+        if closing:
+            position = marker.end() + closing.end()
+            hide(marker.start(), position)
+    return "".join(masked)
+
+
+def escaped(text, offset):
+    preceding = text[:offset]
+    return (len(preceding) - len(preceding.rstrip("\\"))) % 2 == 1
+
+
 def render(data, source_path, source):
-    text = absolute_links(data.decode("utf-8"), source)
-    def replace(match):
-        return match[1] + pin_url(match[2], source, source_path) + match[3]
+    text = data.decode("utf-8")
+    prose = markdown_prose(text)
+    replacements = []
     for pattern in (MARKDOWN_TARGET, REFERENCE_TARGET, HTML_TARGET):
-        text = pattern.sub(replace, text)
+        for match in pattern.finditer(prose):
+            if escaped(text, match.start()):
+                continue
+            try:
+                target = pin_url(match[2], source, source_path)
+            except ValueError as error:
+                line = text.count("\n", 0, match.start()) + 1
+                raise ValueError(f"{source_path}:{line}: {error}") from error
+            replacements.append((match.start(2), match.end(2), target))
+    for start, end, target in sorted(replacements, reverse=True):
+        text = text[:start] + target + text[end:]
+    # Absolute repository URLs retain the release provenance policy, including
+    # URLs shown in examples; code expressions are never relative link targets.
+    text = absolute_links(text, source)
     return text.encode("utf-8")
 
 
@@ -131,8 +180,35 @@ def manifest(source, package):
     return value
 
 
+def selected_packages(source, package_names=None):
+    inventory = packages(source)
+    if package_names is None:
+        return inventory
+    def name(package):
+        return package["item"].get("packageId", package["item"].get("name"))
+    known = {name(package) for package in inventory}
+    c.require(package_names and len(set(package_names)) == len(package_names) and set(package_names) <= known,
+              "Documentation verification needs an exact nonempty public package selection")
+    return [package for package in inventory if name(package) in package_names]
+
+
+def check(root, commit):
+    """Read committed real package documents without builds, overlays or credentials."""
+    source = Source(root, commit)
+    errors = []
+    for package in packages(source):
+        for path in package["documents"].values():
+            try:
+                render(source.read(path), path, source)
+            except ValueError as error:
+                errors.append(str(error))
+        if package["kind"] == "npm":
+            manifest(source, package)
+    c.require(not errors, "\n".join(errors))
+
+
 @contextmanager
-def pack_inputs(source):
+def pack_inputs(source, package_names=None):
     """A bounded pack-only overlay, restored byte-for-byte even on command failure.
 
     npm packs its directory's README/package.json; it has no alternate-readme option.
@@ -140,7 +216,7 @@ def pack_inputs(source):
     manufacturing replacement npm pack digests after tests have consumed them.
     """
     source.clean()
-    inventory = packages(source)
+    inventory = selected_packages(source, package_names)
     replacements = {}
     for package in inventory:
         for path in package["documents"].values():
@@ -172,7 +248,7 @@ def pack_inputs(source):
 
 
 @contextmanager
-def pack_context(root, commit):
+def pack_context(root, commit, package_names=None):
     # Local/PR packaging stays unchanged. Release docs use the workflow's source.
     ref = os.environ.get("GITHUB_REF", "")
     if os.environ.get("GITHUB_WORKFLOW_REF") != f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main":
@@ -182,7 +258,7 @@ def pack_context(root, commit):
               and os.environ.get("GITHUB_SHA") == commit and os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY,
               "Source-bound documentation requires the exact release workflow")
     source = Source(root, commit)
-    with pack_inputs(source):
+    with pack_inputs(source, package_names):
         yield
 
 
@@ -222,12 +298,7 @@ def archive_texts(path, package):
 
 def verify(root, directories, commit, package_names=None):
     source = Source(root, commit)
-    inventory = packages(source)
-    if package_names is not None:
-        known = {package["item"]["packageId"] if package["kind"] == "nuget" else package["item"]["name"] for package in inventory}
-        c.require(package_names and len(set(package_names)) == len(package_names) and set(package_names) <= known,
-                  "Documentation verification needs an exact nonempty public package selection")
-        inventory = [package for package in inventory if (package["item"]["packageId"] if package["kind"] == "nuget" else package["item"]["name"]) in package_names]
+    inventory = selected_packages(source, package_names)
     for directory in directories:
         c.require(Path(directory).is_dir() and not Path(directory).is_symlink(), "Documentation artifact directory must be real")
     for package in inventory:
@@ -260,6 +331,8 @@ def verify(root, directories, commit, package_names=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="action", required=True)
+    check_parser = subparsers.add_parser("check")
+    check_parser.add_argument("--commit")
     pack_parser = subparsers.add_parser("pack")
     pack_parser.add_argument("commit")
     pack_parser.add_argument("command", nargs=argparse.REMAINDER)
@@ -267,7 +340,10 @@ def main():
     verify_parser.add_argument("commit")
     verify_parser.add_argument("directories", nargs="+", type=Path)
     args = parser.parse_args()
-    if args.action == "pack":
+    if args.action == "check":
+        check(ROOT, args.commit or c.command("git", "rev-parse", "HEAD", cwd=ROOT).decode().strip())
+        print("Package documentation preflight passed.")
+    elif args.action == "pack":
         command = args.command[1:] if args.command[:1] == ["--"] else args.command
         c.require(command, "An existing pack command is required")
         pack(ROOT, args.commit, command)

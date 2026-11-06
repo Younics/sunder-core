@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import html
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
@@ -136,10 +137,15 @@ def check(files: list[Path], repository_root: Path) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", nargs="*", default=["."], help="Markdown files or directories (default: repository root)")
+    parser.add_argument("--tracked", action="store_true", help="Check Git-owned Markdown only, excluding generated workspaces")
     arguments = parser.parse_args()
     repository_root = Path.cwd().resolve()
     try:
         files = markdown_files([Path(value) for value in arguments.paths])
+        if arguments.tracked:
+            tracked = subprocess.check_output(["git", "ls-files", "-z", "--", "*.md"], cwd=repository_root).decode().split("\0")
+            owned = {(repository_root / path).resolve() for path in tracked if path}
+            files = [path for path in files if path in owned]
     except ValueError as error:
         print(error, file=sys.stderr)
         return 2

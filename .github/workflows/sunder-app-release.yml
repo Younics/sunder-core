@@ -1,4 +1,4 @@
-name: Sunder App Release
+name: Sunder App — Release
 
 on:
   push:
@@ -14,20 +14,25 @@ env:
 
 jobs:
   validation:
+    name: App / Validation
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: app
     permissions:
       contents: read
+      actions: read
 
   runtime-validation:
+    name: Host / Validation
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: host
     permissions:
       contents: read
+      actions: read
 
   prepare:
+    name: App / Select version and platforms
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -44,6 +49,7 @@ jobs:
         run: python3 -B scripts/ci/metadata.py matrices
 
   package:
+    name: App / Package and sign / ${{ matrix.rid }}
     needs: [prepare, validation, runtime-validation]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
@@ -143,6 +149,7 @@ jobs:
           if [[ -n "$APPLE_KEYCHAIN_PATH" && -f "$APPLE_KEYCHAIN_PATH" ]]; then security delete-keychain "$APPLE_KEYCHAIN_PATH"; fi
 
   release:
+    name: App / Publish verified installers
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 45

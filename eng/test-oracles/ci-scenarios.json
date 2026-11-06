@@ -1,11 +1,11 @@
 {
   "generated-templates": {
-    "component": "sdk", "profile": "candidate",
+    "component": "dotnet", "profile": "candidate", "consumers": ["host", "npm"],
     "selectors": ["Sunder.Runtime.Host.Tests.GeneratedTemplateRuntimeHostSmokeTests."],
     "environment": { "SUNDER_REQUIRE_DOTNET_TEMPLATE_HOST_SMOKE": "1", "SUNDER_REQUIRE_NODE_TEMPLATE_HOST_SMOKE": "1" }
   },
   "interop": {
-    "component": "sdk", "profile": "portable",
+    "component": "dotnet", "profile": "portable", "consumers": ["host", "npm"],
     "selectors": [
       "Sunder.Runtime.Host.Tests.CrossLanguageWorkerRuntimeHostTests.",
       "Sunder.Package.Format.Tests.NodePackageArchiveCompatibilityTests.NodePackageArchive_WhenConfigured_IsAcceptedByDotNetInspector",

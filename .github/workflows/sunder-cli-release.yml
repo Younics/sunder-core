@@ -1,4 +1,4 @@
-name: Sunder CLI Release
+name: Sunder CLI — Release
 
 on:
   push:
@@ -10,6 +10,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   prepare:
+    name: CLI / Select version and platforms
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -26,13 +27,16 @@ jobs:
         run: python3 -B scripts/ci/metadata.py matrices
 
   test:
+    name: CLI / Validation
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: cli
     permissions:
       contents: read
+      actions: read
 
   package:
+    name: CLI / Package and smoke / ${{ matrix.rid }}
     needs: [prepare, test]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -61,6 +65,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    name: CLI / Publish verified archives
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 30

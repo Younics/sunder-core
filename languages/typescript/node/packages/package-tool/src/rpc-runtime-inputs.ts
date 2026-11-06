@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { builtinModules } from "node:module";
 import { lstat, open, realpath } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, relative, resolve, sep, posix, win32 } from "node:path";
-import { build as esbuild, type BuildOptions, type Loader, type OnLoadResult, type OnResolveArgs, type OnResolveResult, type Plugin } from "esbuild";
+import { build as esbuild, type BuildOptions, type Loader, type Metafile, type OnLoadResult, type OnResolveArgs, type OnResolveResult, type Plugin } from "esbuild";
 import { NODE_TARGET } from "./toolchains.generated";
 import { projectSdkCompatibility, type PackageToolCompatibility } from "./compatibility";
 
@@ -125,9 +125,17 @@ export async function captureOwnedRuntimeInputs(
             if (!edge) throw new Error(`RPC bundle requested an uncaptured runtime resolution (${identity}).`);
             return edge;
           }
+          if (mode === "verify" && !edges.has(identity)) throw new Error(`rpc-authoring.unsupported-source: RPC runtime resolution input set changed; retry generation (${identity}).`);
           const sourceEntry: OnResolveResult | undefined = args.namespace === "sunder-owned-rpc" && canonicalPath(args.path) === canonicalPath(modulePath.replace(/\.[jt]s$/u, ".js"))
             ? { path: modulePath, namespace: "file" } : undefined;
           const virtual = sourceEntry ?? generatedResolution(args) ?? await generatedImportAlias(args, mode === "capture");
+          // A fresh build shares its native resolver across the whole graph.
+          // Forwarding every import through build.resolve creates a new resolver
+          // with uncached directory reads for each edge. Verification instead
+          // compares the complete native graph below, while onLoad serves only
+          // captured bytes. Indirect entries into generated roots still need the
+          // overlay redirect, including when stale physical output exists.
+          if (mode === "verify" && !virtual && edges.get(identity)?.namespace !== "sunder-owned-rpc") return undefined;
           let resolved = virtual ?? await build.resolve(args.path, { importer: args.namespace === "sunder-owned-rpc" ? resolve(args.resolveDir, basename(args.importer)) : args.importer, namespace: args.namespace === "sunder-owned-rpc" ? "file" : args.namespace,
             resolveDir: args.resolveDir, kind: args.kind, pluginData: bypass });
           if (resolved.errors?.length) return resolved;
@@ -164,7 +172,9 @@ export async function captureOwnedRuntimeInputs(
             inputs.set(args.path, input);
             if (inputs.size > 512) throw new Error("rpc-authoring.source-limit-exceeded: Runtime graph exceeds 512 files.");
           }
-          if (!input) throw new Error("RPC bundle requested an uncaptured runtime file.");
+          if (!input) throw new Error(mode === "verify"
+            ? `rpc-authoring.unsupported-source: RPC runtime resolution input set changed; retry generation (${args.path}).`
+            : "RPC bundle requested an uncaptured runtime file.");
           return { contents: exportName && input.real === realModule
             ? `${source}\nimport { bind as $sunderOwnedRpcBind } from "sunder-owned-rpc:adapter";\n$sunderOwnedRpcBind(${exportName});\n`
             : input.bytes, loader: input.loader, resolveDir: dirname(args.path) };
@@ -173,12 +183,13 @@ export async function captureOwnedRuntimeInputs(
       },
     };
   }
-  const scan = async (mode: "capture" | "verify"): Promise<void> => {
-    await esbuild({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: "node", format: "cjs", target: NODE_TARGET,
+  const scan = async (mode: "capture" | "verify"): Promise<string> => {
+    const result = await esbuild({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: "node", format: "cjs", target: NODE_TARGET,
       ...workerResolutionOptions(projectSdkCompatibility(root)), tsconfigRaw: {}, write: false, metafile: true, logLevel: "silent", plugins: [plugin(mode)] });
+    return runtimeGraphFingerprint(result.metafile);
   };
-  await scan("capture");
-  const revalidate = async (): Promise<void> => {
+  const capturedGraph = await scan("capture");
+  const revalidatePhysicalInputs = async (): Promise<void> => {
     const inputEntries = [...inputs];
     for (let offset = 0; offset < inputEntries.length; offset += 16) {
       await Promise.all(inputEntries.slice(offset, offset + 16).map(async ([path, input]) => {
@@ -198,9 +209,15 @@ export async function captureOwnedRuntimeInputs(
         }
       }));
     }
-    // A fresh resolver checks negative candidates and export/import selection;
-    // captured bytes are used even for this non-executing validation build.
-    await scan("verify");
+  };
+  const revalidate = async (): Promise<void> => {
+    await revalidatePhysicalInputs();
+    // Include import edges, not just file membership: a symlink can retarget an
+    // import to another already-captured file without changing either file.
+    if (await scan("verify") !== capturedGraph) throw new Error("rpc-authoring.unsupported-source: RPC runtime resolution input set changed; retry generation.");
+    // Native resolution reads live package metadata (including sideEffects),
+    // so fence those bytes and physical identities on both sides of the scan.
+    await revalidatePhysicalInputs();
   };
   await revalidate();
   const projectRelative = (path: string): string | undefined => {
@@ -257,6 +274,15 @@ export function runtimePathIdentity(root: string, realRoot: string, paths = proc
 
 const bypass = Symbol("esbuild-native-resolution");
 const loaders: Readonly<Record<string, Loader>> = { ".js": "js", ".mjs": "js", ".cjs": "js", ".ts": "ts", ".tsx": "tsx", ".jsx": "jsx", ".json": "json" };
+
+function runtimeGraphFingerprint(metafile: Metafile): string {
+  // esbuild's input paths include namespaces/suffixes and use portable spelling.
+  // Keep each import's original specifier, resolved path, kind and external flag.
+  const graph = Object.entries(metafile.inputs).map(([path, input]) => [path, {
+    ...input, imports: input.imports.map(edge => JSON.stringify(edge)).sort(),
+  }] as const).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  return createHash("sha256").update(JSON.stringify(graph)).digest("hex");
+}
 
 // This is only package-import target selection, not a second file resolver.
 // Non-owned targets still go through esbuild. Conditions retain JSON key order.

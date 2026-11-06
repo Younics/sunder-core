@@ -17,7 +17,7 @@ export {
   type LeafDiscoverySource,
   type PreparedProject,
 } from "./package";
-export * from "./module";
+export { buildModuleTarget, smokeModuleTarget, type ModuleBuildOptions } from "./module";
 export * from "./registry";
 export { generateRpcBindings } from "./rpc-bindings";
 export { generateTypeScriptBindings, authoringBindingModel, type TypeScriptGeneratorOptions } from "./generator";

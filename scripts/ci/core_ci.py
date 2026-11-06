@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import xml.etree.ElementTree as ET
 
 from metadata import ROOT, platforms
@@ -66,7 +67,7 @@ def selection(scope):
     value = json.loads(subprocess.check_output(["node", str(ROOT / "scripts/test-oracles/core-test-policy.mjs"),
                                                "--scope", scope], cwd=ROOT))
     roots = {str(project(name).relative_to(ROOT)) for name in value["projects"]}
-    if "sdk" in value["components"]:
+    if "dotnet" in value["components"]:
         packages = json.loads((ROOT / "eng/test-oracles/core-public-packages.json").read_text())
         roots.update(row["project"] for row in packages["nuget"])
         roots.update(str(project(name).relative_to(ROOT)) for name in ("Sunder.Cli", "Sunder.ExecutionRuntime.Build"))
@@ -83,22 +84,31 @@ def build_input(selected, work):
     return path
 
 
-def source(scope="all", work=None):
+def source(scope="all", work=None, stage=None, scenario=None, prepare_node=True):
     if work is None:
         with tempfile.TemporaryDirectory(prefix="sunder-source-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
-            return source(scope, Path(temporary))
+            return source(scope, Path(temporary), stage, scenario, prepare_node)
     selected = selection(scope)
-    if "sdk" in selected["components"]: node_inputs(restore=False)
+    if scenario:
+        preview = json.loads(run("node", ROOT / "scripts/test-oracles/run-dotnet-tests-with-results.mjs",
+                                 "--scope", scope, "--scenario", scenario, "--list", capture=True))
+        names = [row["project"] for row in preview["projects"]] + ["Sunder.Cli", "Sunder.ExecutionRuntime.Build"]
+        selected["buildProjects"] = sorted({str(project(name).relative_to(ROOT)) for name in names})
+    if not selected["buildProjects"]:
+        return
+    if prepare_node and "dotnet" in selected["components"] and stage != "restore": node_inputs(restore=False)
     solution = build_input(selected, work)
     diagnostics = ROOT / "artifacts/test-results" / scope / "build"
-    with execution_evidence(diagnostics, "restore"):
-        run("dotnet", "restore", solution, "--locked-mode", "-bl:" + str(diagnostics / "restore.binlog"))
+    if stage != "build":
+        with execution_evidence(diagnostics, "restore"):
+            run("dotnet", "restore", solution, "--locked-mode", "-bl:" + str(diagnostics / "restore.binlog"))
     # A scoped solution lists roots; transitive project references must inherit
     # Release even when they have no entry in the solution's configuration map.
-    with execution_evidence(diagnostics, "build"):
-        run("dotnet", "build", solution, "-c", "Release", "--no-restore",
-             "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false",
-             "-p:ShouldUnsetParentConfigurationAndPlatform=false", "-bl:" + str(diagnostics / "build.binlog"))
+    if stage != "restore":
+        with execution_evidence(diagnostics, "build"):
+            run("dotnet", "build", solution, "-c", "Release", "--no-restore",
+                 "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false",
+                 "-p:ShouldUnsetParentConfigurationAndPlatform=false", "-bl:" + str(diagnostics / "build.binlog"))
 
 
 @contextmanager
@@ -106,6 +116,9 @@ def execution_evidence(directory, name):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / (name + ".process.json")
     status = dict(status=None, signal=None, error="Execution did not complete", cleanupComplete=False)
+    started = time.monotonic()
+    status.update(stage=name, component=os.environ.get("CI_COMPONENT", directory.name),
+                  job=os.environ.get("GITHUB_JOB"), sourceCommit=os.environ.get("GITHUB_SHA"))
     path.write_text(json.dumps(status) + "\n", encoding="utf-8")
     try:
         yield
@@ -116,6 +129,7 @@ def execution_evidence(directory, name):
     else:
         status.update(status=0, error=None, cleanupComplete=True)
     finally:
+        status["elapsedSeconds"] = round(time.monotonic() - started, 3)
         path.write_text(json.dumps(status) + "\n", encoding="utf-8")
 
 
@@ -250,33 +264,34 @@ def validate(profile, *, rid=None, scope="all", partition=None):
     with execution_evidence(output, profile), local_environment(), tempfile.TemporaryDirectory(prefix="sunder-ci-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
         work = Path(temporary)
         if profile == "portable":
-            if "sdk" in components:
+            if "dotnet" in components or "npm" in components:
                 run("node", ROOT / "scripts/toolchains.mjs")
                 run("node", ROOT / "scripts/release/check-sdk-version.mjs")
             if "ci" in components:
                 oracle("check-core-test-policy")
-                run(sys.executable, "-B", ROOT / "scripts/test/check-markdown-links.py", ROOT)
+                run(sys.executable, "-B", ROOT / "scripts/test/check-markdown-links.py", "--tracked", ROOT)
             if "release-fixtures.junit.xml" in selected["reports"]:
                 oracle("run-release-fixtures-with-results", "--scope", scope, "--results-directory", output / "scripts")
             if "node" in selected["lanes"]:
-                if "sdk" in components: run("npm", "ci", "--prefix", NODE)
+                if any(owner in components for owner in ("dotnet", "npm", "ci")): run("npm", "ci", "--prefix", NODE)
                 oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "node")
                 oracle("run-node-test-matrix-with-results", "--scope", scope, "--results-directory", output / "node")
                 oracle("summarize-core-test-results", output / "node", "--scope", scope, "--allow-partial", "--require-primary-lane", "node")
             # Artifact tests remove Node outputs; interop preparation must follow them.
             source(scope, work)
-            oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "dotnet-linux")
-            dotnet_tests("primary-lane", "dotnet-linux", scope=scope, directory="dotnet")
+            if "dotnet-linux" in selected["lanes"]:
+                oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "dotnet-linux")
+                dotnet_tests("primary-lane", "dotnet-linux", scope=scope, directory="dotnet")
             if "interop" in selected["scenarios"]["portable"]: module_inputs(work)
             for scenario in selected["scenarios"]["portable"]: dotnet_tests("scenario", scenario, scope=scope)
         elif profile == "candidate":
-            if "sdk" not in components: raise ValueError("Candidate packages require SDK validation")
+            if "dotnet" not in components: raise ValueError("Candidate packages require SDK validation")
             run(sys.executable, "-B", ROOT / "scripts/release/sdk_release.py", "pack")
             run(sys.executable, "-B", ROOT / "scripts/release/sdk_release.py", "feed", "--directory", "artifacts/test-feed")
             templates(work)
             dotnet_tests("scenario", "generated-templates", scope=scope)
         else:
-            if "sdk" in components or "host" in components: node_inputs()
+            if "dotnet" in components or "host" in components: node_inputs()
             run("dotnet", "restore", build_input(selected, work), "--locked-mode")
             if profile == "platform":
                 os.environ["SUNDER_REQUIRE_NODE24_HOST_INTEGRATION"] = "1"
@@ -287,7 +302,7 @@ def validate(profile, *, rid=None, scope="all", partition=None):
                     if partition != "main": os.environ["SUNDER_TEST_DIAGNOSTICS"] = "1"
                     dotnet_tests("native-partition", partition, scope=scope, build=True, directory="platform/" + partition)
                 if partition not in (None, "main"): return
-                if os.name == "nt" and "sdk" in components: dotnet_tests("scenario", "output-lock", scope=scope, build=True, directory="lock-interop")
+                if os.name == "nt" and "dotnet" in components: dotnet_tests("scenario", "output-lock", scope=scope, build=True, directory="lock-interop")
                 if "app" in components:
                     dotnet_tests("primary-lane", "app-packaging", scope=scope, build=True)
                     if os.name == "nt": run("pwsh", "-File", ROOT / "scripts/ci/check-powershell.ps1")
@@ -321,24 +336,86 @@ def rehearse(output):
         (output / "rehearsal.json").write_text(json.dumps(dict(scope="local-artifact-rehearsal", **plan), indent=2) + "\n")
 
 
+def component_stage(action, scope, *, scenario=None, rid=None):
+    """Hosted steps use the same owners as local profiles, with visible boundaries."""
+    selected = selection(scope) if action not in ("step-results", "packaging") else None
+    output = ROOT / "artifacts/test-results" / scope
+    if action == "step-results":
+        steps = json.loads(os.environ["SUNDER_CI_STEPS"])
+        rows = [{"stage": name, "outcome": row["outcome"]} for name, row in steps.items()
+                if "outcome" in row]
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "steps.json").write_text(json.dumps(dict(component=scope, steps=rows), indent=2) + "\n")
+        return
+    with execution_evidence(output, action), local_environment():
+        if action in ("restore", "build"):
+            source(scope, stage=action, scenario=scenario, prepare_node=False)
+        elif action == "fixtures":
+            if "release-fixtures.junit.xml" in selected["reports"]:
+                oracle("run-release-fixtures-with-results", "--scope", scope, "--results-directory", output / "scripts")
+        elif action == "script-tests":
+            if "node-core-oracles.junit.xml" in selected["reports"]:
+                try:
+                    oracle("run-node-test-matrix-with-results", "--scope", scope, "--results-directory", output / "node", "--action", "scripts")
+                finally:
+                    oracle("summarize-core-test-results", output / "node", "--scope", scope, "--allow-partial", "--require-primary-lane", "node")
+        elif action == "test":
+            if "dotnet-linux" in selected["lanes"]:
+                oracle("run-core-test-lane", "--scope", scope, "--primary-lane", "dotnet-linux")
+                dotnet_tests("primary-lane", "dotnet-linux", scope=scope, directory="dotnet")
+            if "app" in selected["components"]:
+                dotnet_tests("scenario", "app-interop", scope=scope)
+        elif action == "pack":
+            sys.path.insert(0, str(ROOT / "scripts/release"))
+            import sdk_release
+            kind = {"npm": "npm", "dotnet": "nuget"}[scope]
+            plan = sdk_release.load(ROOT / "artifacts/release-plan.json")
+            rows = sdk_release.selected(plan, kind)
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
+                    stream.write(f"package_count={len(rows)}\n")
+            sdk_release.pack(plan, ROOT / "artifacts/packages", kind)
+        elif action in ("interop", "template-consumers"):
+            with tempfile.TemporaryDirectory(prefix="sunder-consumers-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
+                work = Path(temporary)
+                if action == "interop":
+                    module_inputs(work)
+                    dotnet_tests("scenario", "interop", scope=scope)
+                else:
+                    run(sys.executable, "-B", ROOT / "scripts/release/sdk_release.py", "feed", "--directory", "artifacts/test-feed")
+                    templates(work)
+                    dotnet_tests("scenario", "generated-templates", scope=scope)
+        elif action == "packaging":
+            if rid not in [row["rid"] for row in platforms(profile="packaging")["include"]]:
+                raise ValueError("Unsupported packaging smoke RID")
+            run("bash", ROOT / "scripts/test/release/smoke-app-packaging.sh", rid)
+        else:
+            raise ValueError("Unknown component stage: " + action)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("source", "node-inputs", "templates", "module", "official-inputs", "portable", "platform", "official", "candidate", "rehearse"))
+    parser.add_argument("action", choices=("source", "node-inputs", "templates", "module", "official-inputs", "portable", "platform", "official", "candidate", "rehearse",
+                                          "restore", "build", "fixtures", "script-tests", "test", "pack", "interop", "template-consumers", "step-results", "packaging"))
     parser.add_argument("--work", type=Path)
     parser.add_argument("--rid", choices=[row["rid"] for row in platforms()["include"]])
     parser.add_argument("--scope", choices=tuple(json.loads((ROOT / "eng/test-oracles/core-test-policy.json").read_text())["scopes"]), default="all")
     parser.add_argument("--partition", help="Native method partition (main or a policy-owned project shard)")
+    parser.add_argument("--scenario", choices=("interop", "generated-templates"), help="Build only the selected consumer roots")
+    parser.add_argument("--no-restore", action="store_true", help="Node inputs only: use the already restored workspace")
     parser.add_argument("--list", action="store_true", help="Print scope ownership and build roots without changing outputs")
     args = parser.parse_args()
     if args.list:
         print(json.dumps(selection(args.scope), indent=2))
+    elif args.action in ("restore", "build", "fixtures", "script-tests", "test", "pack", "interop", "template-consumers", "step-results", "packaging"):
+        component_stage(args.action, args.scope, scenario=args.scenario, rid=args.rid)
     elif args.action in ("portable", "platform", "official", "candidate"):
         validate(args.action, rid=args.rid, scope=args.scope, partition=args.partition)
     elif args.action == "rehearse":
         if args.work is None: parser.error("rehearse requires a new --work output directory")
         rehearse(args.work)
     elif args.action == "source": source(args.scope)
-    elif args.action == "node-inputs": node_inputs()
+    elif args.action == "node-inputs": node_inputs(restore=not args.no_restore)
     elif args.action == "module": module_inputs()
     else:
         if args.work is None: parser.error("Prepared inputs require --work; use a validation profile for automatic cleanup")

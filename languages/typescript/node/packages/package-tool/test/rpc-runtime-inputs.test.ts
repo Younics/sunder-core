@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, rm, symlink, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve, posix, win32 } from "node:path";
 import test from "node:test";
@@ -61,4 +61,66 @@ test("cold and materialized runtime replay share filesystem identities without a
     await writeFile(other, "module.exports = 99;");
     await assert.rejects(replay(other), /uncaptured runtime resolution/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("runtime verification rejects a retargeted import even when every resolved file was already captured", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-runtime-inputs-"));
+  try {
+    await installFixtureSdk(root);
+    const first = resolve(root, "src/first");
+    const second = resolve(root, "src/second");
+    const selected = resolve(root, "src/selected");
+    await mkdir(first, { recursive: true });
+    await mkdir(second);
+    await writeFile(resolve(first, "index.js"), "module.exports = 1;");
+    await writeFile(resolve(second, "index.js"), "module.exports = 2;");
+    await symlink(first, selected, process.platform === "win32" ? "junction" : "dir");
+    const entry = resolve(root, "src/worker.js");
+    await writeFile(entry, 'module.exports = [require("./first"), require("./second"), require("./selected")];');
+    const captured = await captureOwnedRuntimeInputs(root, entry, entry, "", "", new Map());
+    assert.deepEqual([...captured.sourceFiles].sort(), [entry, resolve(first, "index.js"), resolve(second, "index.js")].map(path => path.replaceAll("\\", "/")).sort());
+    await captured.revalidate();
+
+    await rm(selected);
+    await symlink(second, selected, process.platform === "win32" ? "junction" : "dir");
+    await assert.rejects(captured.revalidate(), /runtime resolution input set changed/);
+
+    // Replay remains bound to the captured edges even with validation isolated.
+    const result = await build({ absWorkingDir: root, entryPoints: [entry], bundle: true, platform: "node", format: "cjs",
+      write: false, logLevel: "silent", plugins: [captured.plugin(async () => {})] });
+    const module = { exports: undefined as unknown };
+    new Function("module", result.outputFiles[0]!.text)(module);
+    assert.deepEqual(module.exports, [1, 2, 1]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("runtime verification fences package metadata changes during the native scan even with an unchanged import graph", async (t) => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-runtime-inputs-"));
+  try {
+    await installFixtureSdk(root);
+    const entry = resolve(root, "worker.js");
+    await writeFile(entry, "module.exports = 42;");
+    await writeFile(resolve(root, "package.json"), '{"sideEffects":true}');
+    const config = await realpath(resolve(root, "package.json"));
+    const captured = await captureOwnedRuntimeInputs(root, entry, entry, "", "", new Map());
+    const fs = require("node:fs/promises") as typeof import("node:fs/promises");
+    const open = fs.open;
+    let changed = false;
+    t.mock.method(fs, "open", async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args);
+      if (String(args[0]) === config && !changed) {
+        changed = true;
+        const close = handle.close.bind(handle);
+        // Change metadata after the first byte check has read and checked it,
+        // but before native resolution reads sideEffects from the filesystem.
+        t.mock.method(handle, "close", async () => {
+          await close();
+          await writeFile(config, '{"sideEffects":false}');
+        });
+      }
+      return handle;
+    });
+    await assert.rejects(captured.revalidate(), /runtime resolution configuration changed/);
+    assert.equal(changed, true);
+  } finally { t.mock.restoreAll(); await rm(root, { recursive: true, force: true }); }
 });

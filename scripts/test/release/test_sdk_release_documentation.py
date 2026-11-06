@@ -152,6 +152,30 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
                         raise RuntimeError("pack failed")
             self.assert_restored()
 
+    def test_code_and_escaped_link_shapes_are_preserved_while_prose_links_are_bound(self):
+        path = NODE + "sdk/README.md"
+        examples = ("`stream[Symbol.asyncIterator](signal)`\n"
+                    "``code ` [example](absent)``\n"
+                    "```ts\nstream[Symbol.asyncIterator](signal)\n```\n"
+                    "~~~~text\n[example](absent)\n~~~\n[still code](absent)\n~~~~\n"
+                    "    [indented](absent)\n"
+                    "\\[escaped](absent)\n")
+        prose = "[policy](../../../../../docs/policy.md)\n"
+        self.assertEqual(examples + f"[policy]({URL}/blob/{COMMIT}/docs/policy.md)\n",
+                         d.render((examples + prose).encode(), path, self.source).decode())
+        with self.assertRaisesRegex(ValueError, re.escape(path) + r":2:.*absent"):
+            d.render(b"`[code](absent)`\n[real](absent)", path, self.source)
+
+    def test_pack_selection_leaves_other_package_inputs_untouched(self):
+        path = NODE + "sdk/README.md"
+        self.files[path] += b"[broken](absent)\n"
+        (self.root / path).write_bytes(self.files[path])
+        with d.pack_inputs(self.source, ["Sunder.Sdk"]):
+            self.assertEqual(self.files[path], (self.root / path).read_bytes())
+        with self.assertRaisesRegex(ValueError, re.escape(path)):
+            d.check(self.root, COMMIT)
+        self.assert_restored()
+
     def test_dirty_wrong_or_hidden_modified_source_is_rejected_before_staging(self):
         self.head = "b" * 40
         with self.assertRaisesRegex(ValueError, "exact checked-out commit"):
@@ -285,17 +309,17 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
                     d.verify(self.root, [self.root / "artifacts"], COMMIT)
 
     def test_ci_binds_before_pack_and_artifact_consumption_using_the_existing_commands(self):
-        ci = (d.ROOT / ".github/workflows/sunder-ci.yml").read_text()
-        wrapper = ci.index('core_ci.py candidate')
-        self.assertLess(wrapper, ci.index("name: Retain the tested candidate feed"))
+        ci = (d.ROOT / ".github/workflows/sunder-component-validation.yml").read_text()
+        wrapper = ci.index('core_ci.py pack')
+        self.assertLess(wrapper, ci.index("name: Retain candidate packages for consumer validation"))
         driver = (d.ROOT / "scripts/ci/core_ci.py").read_text().split('elif profile == "candidate":', 1)[1].split("        else:", 1)[0]
         self.assertLess(driver.index('"pack"'), driver.index("templates(work)"))
-        packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(plan, directory):", 1)[1].split("def feed(", 1)[0]
-        self.assertIn('documentation.pack_context(ROOT, plan["artifactSourceCommit"])', packer)
+        packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(plan, directory, kind=None):", 1)[1].split("def feed(", 1)[0]
+        self.assertIn('documentation.pack_context(ROOT, plan["artifactSourceCommit"], [row["name"] for row in rows])', packer)
         self.assertLess(packer.index("with context:"), packer.index('["dotnet", "pack"'))
         self.assertLess(packer.index("with context:"), packer.index('["npm", "pack"'))
         self.assertLess(packer.index("verify-node-package-artifacts.mjs"), packer.index("documentation.verify("))
-        self.assertIn('if release and selected(plan):', packer)
+        self.assertIn('if release:', packer)
 
 
 if __name__ == "__main__":

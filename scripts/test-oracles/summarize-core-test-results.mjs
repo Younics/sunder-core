@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { componentFor, expectedScriptReports, loadCoreTestModel, nodeProject, repositoryRoot } from "./core-test-policy.mjs";
+import { componentFor, expectedScriptReports, loadCoreTestModel, nodeProject, repositoryRoot, scopeModel } from "./core-test-policy.mjs";
 import { currentOperatingSystem } from "./test-lane-prerequisites.mjs";
 import { ciScenarios, selectScenario } from "./ci-scenarios.mjs";
 import { nativePartitionNames, selectNativePartition } from "./native-test-partitions.mjs";
@@ -153,15 +153,16 @@ export function buildCoreTestEvidence(reports, model = loadCoreTestModel(), opti
   };
 }
 
-export function auditCoreTestReports(reports, model = loadCoreTestModel(), requiredTests = [], issues) {
+export function auditCoreTestReports(reports, model = loadCoreTestModel(), requiredTests = [], issues, options = {}) {
   const results = ownedResults(reports, model);
   const check = action => {
     try { action(); }
     catch (error) { if (issues === undefined) throw error; issues.push(error.message); }
   };
   for (const name of expectedScriptReports(model)) {
-    check(() => { if (reports.filter((report) => basename(report.source) === name).length !== 1) {
-      throw new Error(`Core aggregate requires exactly one '${name}' report from its owning job.`);
+    const expected = options.componentLayout ? componentModels(model).filter(component => expectedScriptReports(component).includes(name)).length : 1;
+    check(() => { if (reports.filter((report) => basename(report.source) === name).length !== expected) {
+      throw new Error(`Core aggregate requires exactly ${expected === 1 ? "one" : expected} '${name}' report(s) from its owning jobs.`);
     } });
   }
   // Owning jobs validate platform-specific skips and required external-input
@@ -177,19 +178,22 @@ export function auditCoreTestReports(reports, model = loadCoreTestModel(), requi
   return counts(results);
 }
 
-export function auditNativeEvidence(directory, model, platforms, issues, reports = []) {
+export function auditNativeEvidence(directory, model, platforms, issues, reports = [], options = {}) {
   const components = model.policy.scopes[model.scope];
   const families = [
-    ...(components.some(owner => ["sdk", "host", "app"].includes(owner)) ? ["sunder-platform"] : []),
+    ...(components.some(owner => ["dotnet", "host", "app"].includes(owner)) ? ["sunder-platform"] : []),
     ...(components.includes("host") ? ["official-runtime"] : []),
   ];
   return families.flatMap(family => platforms.map(({ rid }) => {
-    const artifact = `${family}-${model.scope}-${rid}`;
+    const artifact = options.componentLayout
+      ? `sunder-results-${options.bundle}-${family === "sunder-platform" ? "platform" : "official"}-${model.scope}-${rid}`
+      : `${family}-${model.scope}-${rid}`;
     const start = issues.length;
     const partitions = family === "sunder-platform" ? nativePartitionNames(model) : [undefined];
     for (const partition of partitions) {
       const name = artifact + (partition === undefined || partition === "main" ? "" : "-" + partition);
-      const root = resolve(directory, family === "sunder-platform" ? "platform" : "official", name);
+      const root = options.componentLayout ? resolve(directory, name)
+        : resolve(directory, family === "sunder-platform" ? "platform" : "official", name);
       const evidence = existsSync(root) ? listFiles(root).filter(path => basename(path) === "core-test-evidence.json") : [];
       const expectedLanes = family === "official-runtime" ? ["official-runtime"]
         : ["host-platform", ...(partition === "main" && components.includes("app") ? ["app-packaging"] : [])];
@@ -215,6 +219,16 @@ export function auditNativeEvidence(directory, model, platforms, issues, reports
             }
             partitionEvidence++;
           }
+          if (options.componentLayout && family === "official-runtime") {
+            const prefix = relative(directory, dirname(path)).replaceAll("\\", "/") + "/";
+            const rebuilt = buildCoreTestEvidence(reports.filter(report => report.source.startsWith(prefix)), model, {
+              allowPartial: true, operatingSystem: document.operatingSystem,
+              requiredTests: selectScenario("official", model.declarations, document.operatingSystem).tests.map(test => test.id),
+            });
+            if (Object.keys(rebuilt.counts).some(key => rebuilt.counts[key] !== document.counts[key])) {
+              throw new Error("official-runtime counts differ from its reports");
+            }
+          }
           for (const row of document.lanes) {
             if (Number.isSafeInteger(row.executed) && row.executed > 0 && row.failed === 0) lanes.add(row.lane);
           }
@@ -224,7 +238,7 @@ export function auditNativeEvidence(directory, model, platforms, issues, reports
       const missing = expectedLanes.filter(lane => !lanes.has(lane));
       if (missing.length > 0) issues.push(`Missing required native evidence: ${name} (${missing.join(", ")}).`);
     }
-    return { artifact, rid, complete: issues.length === start };
+    return { artifact, component: model.scope, rid, complete: issues.length === start };
   }));
 }
 
@@ -387,6 +401,13 @@ function main() {
   const allowPartialIndex = arguments_.indexOf("--allow-partial");
   const allowPartial = allowPartialIndex >= 0;
   if (allowPartial) arguments_.splice(allowPartialIndex, 1);
+  const githubSummaryIndex = arguments_.indexOf("--github-summary");
+  const githubSummary = githubSummaryIndex >= 0;
+  if (githubSummary) arguments_.splice(githubSummaryIndex, 1);
+  const componentLayoutIndex = arguments_.indexOf("--component-layout");
+  const componentLayout = componentLayoutIndex >= 0;
+  if (componentLayout) arguments_.splice(componentLayoutIndex, 1);
+  if (componentLayout && !aggregate) throw new Error("Component layout requires --aggregate.");
   const requiredTests = [];
   const requiredPrimaryLanes = [];
   let requiredNativePartition;
@@ -408,7 +429,7 @@ function main() {
     throw new Error("Usage: summarize-core-test-results.mjs [directory] [--aggregate | --allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
   }
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
-  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes, requiredNativePartition });
+  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes, requiredNativePartition, githubSummary, componentLayout });
 }
 
 export function summarizeResults(directory, model, options = {}) {
@@ -418,11 +439,17 @@ export function summarizeResults(directory, model, options = {}) {
   if (options.aggregate && process.env.SUNDER_CI_JOB_RESULTS !== undefined) {
     try {
       const results = JSON.parse(process.env.SUNDER_CI_JOB_RESULTS);
-      const nativeRequired = model.policy.scopes[model.scope].some(owner => ["sdk", "host", "app"].includes(owner));
-      for (const name of ["build-test-pack", "native"]) {
+      const owners = model.policy.scopes[model.scope];
+      const nativeRequired = owners.some(owner => ["dotnet", "host", "app"].includes(owner));
+      const optional = new Set([
+        ...(!nativeRequired ? ["native"] : []),
+        ...(!["dotnet", "host", "npm"].every(owner => owners.includes(owner)) ? ["cross-language"] : []),
+        ...(!(options.requiredTests ?? []).some(id => id.includes("GeneratedTemplateRuntimeHostSmokeTests")) ? ["templates"] : []),
+      ]);
+      for (const name of options.componentLayout ? ["preflight", "components", "cross-language", "templates", "native"] : ["build-test-pack", "native"]) {
         const result = results[name]?.result ?? "missing";
         jobs.push({ job: name, result });
-        if (result !== "success" && !(name === "native" && !nativeRequired && result === "skipped")) {
+        if (result !== "success" && !(optional.has(name) && result === "skipped")) {
           issues.push(`Owning job '${name}' ended with '${result}'.`);
         }
       }
@@ -449,14 +476,22 @@ export function summarizeResults(directory, model, options = {}) {
   const outcomes = counts(results);
   let evidence;
   try {
-    if (options.aggregate) auditCoreTestReports(reports, model, options.requiredTests, issues);
+    if (options.aggregate) auditCoreTestReports(reports, model, options.requiredTests, issues, options);
     else evidence = buildCoreTestEvidence(reports, model, options);
   } catch (error) { issues.push(error.message); }
-  const native = options.aggregate ? auditNativeEvidence(directory, model,
-    JSON.parse(readFileSync(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms, issues, reports) : [];
+  const platforms = JSON.parse(readFileSync(resolve(repositoryRoot, "eng/ci/platforms.json"), "utf8")).platforms;
+  const native = options.aggregate ? (options.componentLayout ? componentModels(model) : [model]).flatMap(component =>
+    auditNativeEvidence(directory, component, platforms, issues, reports, { ...options, bundle: model.scope })) : [];
+  const components = options.componentLayout ? auditComponentStages(directory, model, reports, issues) : [];
+  if (options.componentLayout && model.policy.scopes[model.scope].includes("app")) {
+    for (const { rid } of platforms.filter(row => row.packagingSmoke)) {
+      const receipt = resolve(directory, `sunder-results-${model.scope}-packaging-app-${rid}`, "packaging.process.json");
+      if (!existsSync(receipt)) issues.push(`Missing required App packaging result: ${rid}.`);
+    }
+  }
   const failures = results.filter(result => result.outcome === "Failed").map(({ report, name }) => ({ report, name }));
   const summary = { schemaVersion: 1, scope: model.scope, accepted: issues.length === 0 && failures.length === 0,
-    counts: outcomes, failures, issues, jobs, native };
+    counts: outcomes, failures, issues, jobs, native, ...(options.componentLayout ? { components, sourceCommit: process.env.GITHUB_SHA } : {}) };
   mkdirSync(directory, { recursive: true });
   writeFileSync(resolve(directory, "core-test-summary.json"), `${JSON.stringify(summary, null, 2)}\n`, "utf8");
   // Failed command metadata is never promoted to accepted owning-job evidence.
@@ -467,12 +502,79 @@ export function summarizeResults(directory, model, options = {}) {
     + [...failures.map(value => `FAILED ${value.report}: ${value.name}`), ...issues].join("\n") + "\n";
   process.stdout.write(text);
   if (issues.length > 0) process.stderr.write(issues.join("\n") + "\n");
-  if (process.env.GITHUB_STEP_SUMMARY) {
-    const escaped = text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `<h3>Core test results</h3><pre>${escaped}</pre>\n`);
+  if (options.githubSummary && process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, renderGithubSummary(summary));
   }
   if (!summary.accepted) process.exitCode = 1;
   return summary;
+}
+
+function componentModels(model) {
+  return model.policy.scopes[model.scope].map(owner => scopeModel(model, owner === "ci" ? "repository" : owner));
+}
+
+function auditComponentStages(directory, model, reports, issues) {
+  const jobsPath = resolve(directory, "jobs.json");
+  let hosted = [];
+  // Links are optional presentation; the required job outcomes come from needs.
+  try {
+    const value = JSON.parse(readFileSync(jobsPath, "utf8"));
+    if (Array.isArray(value)) hosted = value.filter(job => typeof job?.name === "string" && typeof job.html_url === "string");
+  } catch { /* An unavailable Actions API must not hide the actual audit. */ }
+  const labels = { npm: "npm libraries", dotnet: ".NET libraries", repository: "Repository", app: "App", host: "Host", cli: "CLI" };
+  return componentModels(model).map(component => {
+    const prefix = `sunder-results-${model.scope}-component-${component.scope}/`;
+    const path = resolve(directory, prefix, "steps.json");
+    const rows = reports.filter(report => report.source.startsWith(prefix));
+    const job = hosted.find(job => job.name.endsWith(`${labels[component.scope]} / Build, test and pack`));
+    let steps = [];
+    try {
+      const document = JSON.parse(readFileSync(path, "utf8"));
+      if (document.component !== component.scope || !Array.isArray(document.steps) || document.steps.length === 0
+          || document.steps.some(step => !["success", "failure", "cancelled", "skipped"].includes(step.outcome))) {
+        throw new Error("Invalid component stage outcomes");
+      }
+      steps = document.steps;
+      for (const step of steps.filter(step => ["failure", "cancelled"].includes(step.outcome))) {
+        issues.push(`${labels[component.scope]} / ${step.stage}: ${step.outcome}.`);
+      }
+      // Recheck each script owner's report separately. A sibling's result cannot
+      // substitute for a missing component or introduce a foreign source.
+      if (rows.length) ownedResults(rows, component);
+    } catch (error) { issues.push(`${component.scope}: missing or invalid component results (${error.message}).`); }
+    return { component: component.scope, name: labels[component.scope], steps,
+      counts: counts(rows.flatMap(report => report.results)), url: job?.html_url };
+  });
+}
+
+export function renderGithubSummary(summary) {
+  const escape = text => String(text).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("|", "&#124;");
+  const status = (steps, pattern) => {
+    const selected = steps.filter(step => pattern.test(step.stage));
+    if (selected.some(step => step.outcome === "failure")) return "Failed";
+    if (selected.some(step => step.outcome === "cancelled")) return "Cancelled";
+    if (selected.some(step => step.outcome === "success")) return "Passed";
+    return steps.some(step => ["failure", "cancelled"].includes(step.outcome)) ? "Blocked" : "Not selected";
+  };
+  let text = `## Core ${escape(summary.scope)} — ${summary.accepted ? "Passed" : "Failed"}\n\n`;
+  if (summary.sourceCommit) text += `Source: \`${escape(summary.sourceCommit)}\`\n\n`;
+  text += `**${summary.counts.passed} passed · ${summary.counts.failed} failed · ${summary.counts.skipped} skipped**\n\n`;
+  if (summary.components) {
+    text += "| Component | Build | Tests | Pack | Passed cases |\n|---|---|---|---|---:|\n";
+    for (const component of summary.components) {
+      const name = component.url ? `[${escape(component.name)}](${component.url})` : escape(component.name);
+      text += `| ${name} | ${status(component.steps, /build|restore/u)} | ${status(component.steps, /test/u)} | ${status(component.steps, /^pack$/u)} | ${component.counts.passed} |\n`;
+    }
+    text += "\n### Required jobs\n\n";
+    for (const job of summary.jobs) text += `- **${escape(job.job)}**: ${job.result === "skipped" && summary.issues.some(issue => issue.includes(`'${job.job}'`)) ? "blocked" : escape(job.result)}\n`;
+    text += `\nNative component/RID groups: **${summary.native.filter(row => row.complete).length}/${summary.native.length} complete**.\n`;
+  }
+  if (summary.failures.length || summary.issues.length) {
+    text += "\n### Failures and missing evidence\n\n";
+    text += [...summary.failures.map(row => `${row.report}: ${row.name}`), ...summary.issues]
+      .map(value => `<pre>${escape(value)}</pre>\n`).join("");
+  }
+  return text + "\n";
 }
 
 function requireDotnetDeclarations(declarations, results) {

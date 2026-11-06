@@ -1,12 +1,14 @@
 {
   "schemaVersion": 1,
   "scopes": {
-    "all": ["sdk", "host", "cli", "app", "ci"],
-    "sdk": ["sdk", "host", "cli"],
+    "all": ["npm", "dotnet", "host", "cli", "app", "ci"],
+    "sdk": ["npm", "dotnet", "host", "cli", "ci"],
+    "npm": ["npm"],
+    "dotnet": ["dotnet"],
     "app": ["app"],
     "host": ["host"],
     "cli": ["cli"],
-    "repository": ["app", "ci"]
+    "repository": ["ci"]
   },
   "componentRules": [
     { "component": "app", "attributes": "Trait\\(\\s*\"Component\"\\s*,\\s*\"App\"" },
@@ -14,9 +16,10 @@
     { "component": "host", "project": "^Sunder\\.(?:Runtime|Host)\\..*\\.Tests$" },
     { "component": "cli", "project": "^Sunder\\.Cli\\.Tests$" },
     { "component": "app", "source": "/test_(?:macos_dmg|app_release)\\.py$" },
-    { "component": "ci", "source": "^scripts/test-oracles/(?:owned-test-process|test-evidence-tools|test-result-summary)\\.test\\.mjs$|/release-workflows\\.test\\.mjs$|/test_(?:ci|artifacts)\\.py$|/current-candidate\\.test\\.mjs$" }
+    { "component": "npm", "source": "^languages/typescript/node/" },
+    { "component": "ci", "source": "^scripts/" }
   ],
-  "defaultComponent": "sdk",
+  "defaultComponent": "dotnet",
   "primaryLanes": [
     "app-packaging",
     "dotnet-linux",
@@ -53,7 +56,7 @@
   ],
   "defaultDotnetLane": "dotnet-linux",
   "nativePartitions": [
-    { "name": "package-build", "component": "sdk", "project": "Sunder.Package.Build.Tests", "shards": 3 }
+    { "name": "package-build", "component": "dotnet", "project": "Sunder.Package.Build.Tests", "shards": 3 }
   ],
   "inertDotnetSources": [
     {

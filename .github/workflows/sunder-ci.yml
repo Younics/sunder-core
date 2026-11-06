@@ -1,8 +1,6 @@
-name: Sunder Core CI
+name: Sunder Core — CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   merge_group:
   workflow_dispatch:
@@ -10,15 +8,15 @@ on:
       scope:
         type: choice
         default: all
-        options: [all, sdk, app, host, cli, repository]
+        options: [all, sdk, npm, dotnet, app, host, cli, repository]
   workflow_call:
     inputs:
       scope:
-        description: Component validation scope; main repository checks complement the SDK run.
+        description: Validation bundle; jobs expose individual component ownership.
         type: string
         required: true
       release-packages:
-        description: Pack and validate the caller's selected project versions.
+        description: Pack the caller's selected versions and test those exact candidates.
         type: boolean
         default: false
   schedule:
@@ -26,26 +24,40 @@ on:
 
 permissions:
   contents: read
+  actions: read
 concurrency:
-  group: sunder-core-ci-${{ inputs.scope || 'repository' }}-${{ github.event.pull_request.number || github.run_id }}
+  group: sunder-core-ci-${{ inputs.scope || 'all' }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
-  CI_SCOPE: ${{ inputs.scope || (github.event_name == 'push' && 'repository' || 'all') }}
+  CI_SCOPE: ${{ inputs.scope || 'all' }}
+
 jobs:
-  build-test-pack:
+  preflight:
+    name: Repository / Policy and documentation preflight
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 10
+    outputs:
+      components: ${{ steps.selection.outputs.components }}
+      interop: ${{ steps.selection.outputs.interop }}
+      platform_tests: ${{ steps.selection.outputs.platform_tests }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: inputs.release-packages
         with:
-          name: core-release-selection
-          path: artifacts
+          dotnet: 'false'
+      - name: Select component owners and execution lanes
+        id: selection
+        run: python3 -B scripts/ci/metadata.py components --scope "$CI_SCOPE"
+      - name: Validate test ownership and documentation
+        run: |
+          node scripts/test-oracles/check-core-test-policy.mjs
+          node scripts/toolchains.mjs
+          node scripts/release/check-sdk-version.mjs
+          python3 -B scripts/test/check-markdown-links.py --tracked .
+          python3 -B scripts/release/sdk_release_documentation.py check
       - name: Compare supported release history and public surfaces
         if: env.CI_SCOPE == 'all' || env.CI_SCOPE == 'sdk'
         env:
@@ -58,37 +70,49 @@ jobs:
             if [[ "$base" == "$(git rev-parse HEAD)" ]]; then base="$(git rev-parse HEAD^)"; fi
           fi
           node scripts/compatibility/check-supported-releases.mjs --base-ref "$base"
-      - name: Build and test
-        id: tests
-        run: python3 -B scripts/ci/core_ci.py portable --scope "$CI_SCOPE"
-      - name: Pack and test selected developer packages
-        if: inputs.release-packages
-        run: python3 -B scripts/ci/core_ci.py candidate --scope "$CI_SCOPE"
-      - name: Retain the tested candidate feed
-        if: inputs.release-packages
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sunder-tested-sdk
-          path: artifacts/packages/*
-          if-no-files-found: error
-      - name: Retain test reports
-        if: always() && steps.tests.outcome != 'skipped' && steps.tests.outcome != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: sunder-core-results-${{ env.CI_SCOPE }}
-          path: artifacts/test-results/${{ env.CI_SCOPE }}
-          if-no-files-found: error
-          retention-days: 14
+
+  components:
+    name: ${{ matrix.name }}
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.components) }}
+    uses: ./.github/workflows/sunder-component-validation.yml
+    with:
+      scope: ${{ matrix.scope }}
+      bundle: ${{ inputs.scope || 'all' }}
+      release-packages: ${{ inputs.release-packages || false }}
+
+  cross-language:
+    name: Cross-language compatibility — .NET ↔ Node
+    needs: preflight
+    if: needs.preflight.outputs.interop == 'true'
+    uses: ./.github/workflows/sunder-package-consumers.yml
+    with:
+      scenario: interop
+      bundle: ${{ inputs.scope || 'all' }}
+
+  templates:
+    name: Package templates — Generate, build, package, run
+    needs: [preflight, components]
+    if: inputs.release-packages
+    uses: ./.github/workflows/sunder-package-consumers.yml
+    with:
+      scenario: generated-templates
+      bundle: ${{ inputs.scope || 'all' }}
 
   native:
-    if: inputs.scope != 'cli'
+    name: Native
+    needs: preflight
+    if: needs.preflight.outputs.platform_tests == 'true'
     uses: ./.github/workflows/sunder-host-validation.yml
     with:
-      scope: ${{ inputs.scope || (github.event_name == 'push' && 'repository' || 'all') }}
+      scope: ${{ inputs.scope || 'all' }}
 
   test-results:
+    name: Results / Required validation gate
     if: always()
-    needs: [build-test-pack, native]
+    needs: [preflight, components, cross-language, templates, native]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -98,22 +122,21 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           dotnet: 'false'
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - name: Download component, consumer and native reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: sunder-core-results-${{ env.CI_SCOPE }}
-          merge-multiple: true
-          path: artifacts/ci-results/${{ env.CI_SCOPE }}/core
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+          pattern: sunder-results-${{ env.CI_SCOPE }}-*
+          path: artifacts/ci-results/${{ env.CI_SCOPE }}
+      - name: Resolve job links for the component overview
         if: always()
-        with:
-          pattern: sunder-platform-${{ env.CI_SCOPE }}-*
-          path: artifacts/ci-results/${{ env.CI_SCOPE }}/platform
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: always() && (env.CI_SCOPE == 'all' || env.CI_SCOPE == 'sdk' || env.CI_SCOPE == 'host')
-        with:
-          pattern: official-runtime-${{ env.CI_SCOPE }}-*
-          path: artifacts/ci-results/${{ env.CI_SCOPE }}/official
-      - name: Audit owning-job reports without rebuilding or rerunning tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "artifacts/ci-results/$CI_SCOPE"
+          if ! gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" --jq '[.[].jobs[] | {name, html_url}]' > "artifacts/ci-results/$CI_SCOPE/jobs.json"; then
+            echo '[]' > "artifacts/ci-results/$CI_SCOPE/jobs.json"
+          fi
+      - name: Audit required jobs and exact test selections
         if: always()
         env:
           RELEASE_PACKAGES: ${{ inputs.release-packages }}
@@ -121,7 +144,7 @@ jobs:
         run: |
           args=()
           [[ "$RELEASE_PACKAGES" != true ]] || args+=(--require-scenario generated-templates)
-          node scripts/test-oracles/summarize-core-test-results.mjs "artifacts/ci-results/$CI_SCOPE" --scope "$CI_SCOPE" --aggregate "${args[@]}"
+          node scripts/test-oracles/summarize-core-test-results.mjs "artifacts/ci-results/$CI_SCOPE" --scope "$CI_SCOPE" --aggregate --component-layout --github-summary "${args[@]}"
       - name: Retain aggregate summary
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

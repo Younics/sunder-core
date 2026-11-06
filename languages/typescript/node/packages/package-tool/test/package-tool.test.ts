@@ -11,7 +11,7 @@ import { inflateRawSync } from "node:zlib";
 import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@sunder/sdk";
 import { currentRid, SUPPORTED_RIDS, SUPPORTED_WORKER_CAPABILITIES } from "../src/model";
 import { contractsCommand } from "../src/rpc-contracts";
-import { buildModuleTarget, smokeModuleTarget } from "../src/module";
+import { buildModuleTarget, buildModuleTargetForPreparedProject, smokeModuleTarget } from "../src/module";
 import { classifyBundlerVirtualPackage, resolveRolldownPackageJsonFromVite } from "../src/notices";
 import { targetLeafDiscoveryKey, withOutputLocks } from "../src/output";
 import {
@@ -23,6 +23,7 @@ import {
   aggregateAndPack,
   buildDevPackage,
   buildWebTarget,
+  buildWebTargetForPreparedProject,
   bundleProduction,
   prepareProject,
   writeTargetLeaf,
@@ -1657,8 +1658,9 @@ test("native asset authoring rejects RID ambiguity, payload collisions, and exec
 test("module builds are deterministic and RID-neutral across all six exact target records", async () => {
   const root = await createFixture();
   try {
-    const results = [];
-    for (const rid of SUPPORTED_RIDS) results.push(await buildModuleTarget({ projectPath: root, rid }));
+    const results = [await buildModuleTarget({ projectPath: root, rid: SUPPORTED_RIDS[0] })];
+    const project = await prepareProject(root);
+    for (const rid of SUPPORTED_RIDS.slice(1)) results.push(await buildModuleTargetForPreparedProject(project, rid));
     const moduleHashes = await Promise.all(results.map(async (result) => hashFile(result.modulePath)));
     assert.equal(new Set(moduleHashes).size, 1);
     for (const [index, result] of results.entries()) {
@@ -1668,11 +1670,21 @@ test("module builds are deterministic and RID-neutral across all six exact targe
       );
     }
 
-    const project = await prepareProject(root);
     const aggregate = await aggregateAndPack(root, results.map((result) => leafSource(project, result.leafPath)));
     const entries = zipEntryNames(await readFile(aggregate.archivePath));
     assert.equal(entries.filter((entry) => entry === "payload/runtime/shared/bin/worker.cjs").length, 1);
     assert.equal(entries.some((entry) => entry.endsWith(".exe") || entry.includes("sea-prep") || entry.includes("NODE_SEA")), false);
+
+    const sourcePath = resolve(root, "src/worker.ts");
+    const source = await readFile(sourcePath, "utf8");
+    await writeFile(sourcePath, source + "\n// Edited between target builds.\n");
+    await assert.rejects(buildModuleTargetForPreparedProject(project, SUPPORTED_RIDS[0]), /changed/);
+    assert.equal(await hashFile(results[0]!.modulePath), moduleHashes[0]);
+    await writeFile(sourcePath, source);
+    const configPath = resolve(root, "sunder.package.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    await writeFile(configPath, JSON.stringify({ ...config, version: "1.0.1" }));
+    await assert.rejects(buildWebTargetForPreparedProject(project, SUPPORTED_RIDS[0]), /changed/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

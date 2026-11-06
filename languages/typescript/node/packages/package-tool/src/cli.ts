@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { resolve } from "node:path";
-import { aggregateAndPack, assertRpcReleaseSupported, buildDevPackage, buildWebTarget, prepareProject } from "./package";
-import { buildModuleTarget, smokeModuleTarget } from "./module";
+import { aggregateAndPack, assertRpcReleaseSupported, buildDevPackage, buildWebTarget, buildWebTargetForPreparedProject, prepareProject, type PreparedProject } from "./package";
+import { buildModuleTarget, buildModuleTargetForPreparedProject, smokeModuleTarget } from "./module";
 import { SUPPORTED_RIDS, type SunderRid } from "./model";
 import { generateRpcBindings } from "./rpc-bindings";
 import { contractsCommand } from "./rpc-contracts";
@@ -11,7 +11,7 @@ import { collectContractCache } from "./rpc-contract-cache-gc";
 import { DEFAULT_CONTRACT_CACHE } from "./rpc-contract-cache";
 import { packageApiCommand, type PackageApiRequest } from "./rpc-package-commands";
 import { importContractPublication } from "./rpc-publication";
-import { consumerRoles } from "./rpc-contract-lock";
+import { consumerRoles, type RegistryOriginOptions } from "./rpc-contract-lock";
 import { editPrivateProjectMetadata, type PrivateMetadataEdit } from "./metadata-edit";
 
 async function main(): Promise<void> {
@@ -91,27 +91,24 @@ async function main(): Promise<void> {
     case "dev":
       await buildDevPackage({ ...registryOptions, projectPath, watch: options.watch });
       break;
-    case "build":
-      await buildModuleTarget({
-        ...registryOptions,
-        projectPath,
-        ...(options.rid === undefined ? {} : { rid: options.rid }),
-      });
-      await buildWebTarget(projectPath, options.rid, registryOptions);
+    case "build": {
+      const project = await prepareProject(projectPath, registryOptions);
+      await buildTargets(project, options.rid, registryOptions);
       break;
+    }
     case "smoke":
       await smokeModuleTarget(projectPath, registryOptions);
       break;
     case "package": {
-      assertRpcReleaseSupported(await prepareProject(projectPath, registryOptions));
+      const project = await prepareProject(projectPath, registryOptions);
+      assertRpcReleaseSupported(project);
       const discoveryRoot = options.discoveryRoot;
       if (options.leaves.length > 0 && discoveryRoot === undefined) {
         throw new Error("package --leaf requires an explicit --discovery-root shared with the leaf producer.");
       }
       if (discoveryRoot === undefined) {
         for (const rid of SUPPORTED_RIDS) {
-          await buildModuleTarget({ ...registryOptions, projectPath, rid });
-          await buildWebTarget(projectPath, rid, registryOptions);
+          await buildTargets(project, rid, registryOptions);
         }
       }
       await aggregateAndPack(projectPath, discoveryRoot === undefined
@@ -122,6 +119,18 @@ async function main(): Promise<void> {
     }
     default:
       throw new Error(`Unknown command '${command}'. Run sunder-package --help.`);
+  }
+}
+
+async function buildTargets(project: PreparedProject, rid: SunderRid | undefined, options: RegistryOriginOptions): Promise<void> {
+  // Owned analysis carries source/configuration freshness checks. Raw-entry
+  // packages have no such snapshot and retain their ordinary fresh loads.
+  if (project.ownedRpc) {
+    await buildModuleTargetForPreparedProject(project, rid);
+    await buildWebTargetForPreparedProject(project, rid);
+  } else {
+    await buildModuleTarget({ ...options, projectPath: project.root, ...(rid === undefined ? {} : { rid }) });
+    await buildWebTarget(project.root, rid, options);
   }
 }
 

@@ -39,17 +39,17 @@ executable, exact opt-in variable, file, and directory before reporting READY.
 A lane with no runnable declaration fails. A READY-selected result that is
 missing or skipped also fails.
 
-Component scopes are independent of those lanes. `sdk` owns the developer packages
-and Host/CLI consumers; `repository` owns App and repository-policy checks. Their
-union is `all`, with no overlap. `app`, `host` and `cli` support individual component
-releases. The same scope controls build roots, prerequisites, execution and report
-auditing. Package-side Avalonia and `Sunder.App.Bridge` contracts remain SDK-owned.
+Component scopes are independent of those lanes. The disjoint owners are `npm`,
+`dotnet`, `app`, `host`, `cli` and `repository` (CI/release tooling); their union is
+`all`. `sdk` is a validation bundle of npm/.NET libraries, Host/CLI consumers and
+repository checks. The same scope controls build roots, prerequisites, execution and report
+auditing. Package-side Avalonia and `Sunder.App.Bridge` contracts belong to .NET libraries.
 Desktop-dependent process/approval tests live in `Sunder.App.Integration.Tests`;
 Runtime tests have no project reference to the desktop App. Mixed architecture
 tests that inspect App source explicitly declare `[Trait("Component", "App")]`.
-Public npm artifact/entry-point checks, wire schemas, byte-preserving checkout and
-development toolchain contracts remain SDK-owned. Test-report infrastructure and
-workflow wiring belong to repository validation.
+Public package inventory, wire schemas, byte-preserving checkout, development
+toolchain and reporting/workflow contracts belong to repository validation, which
+is included in the SDK validation bundle and the complete main-push release gate.
 
 ```sh
 python3 -B scripts/ci/core_ci.py portable --scope sdk --list
@@ -218,16 +218,19 @@ outcomes and durations for diagnosis.
 
 Every attempted summary also writes `core-test-summary.json` with observed counts,
 failed cases, invalid reports, failed/incomplete command sidecars and missing coverage.
-Hosted steps append these diagnostics to the GitHub step summary. Restore/build
+Only explicit `--github-summary` calls append diagnostics to the GitHub step summary;
+reporter unit tests, including in-process and child-process fault injection, have
+no implicit hosted presentation side effects. Restore/build
 commands retain binlogs and execution sidecars even when tests have not started;
 profile sidecars begin incomplete so cancellation cannot imply successful execution.
 
 `.github/workflows/sunder-ci.yml` runs `all` for PR/merge-queue, scheduled and default
-manual validation. Main pushes run `repository`; `sunder-sdk-release.yml` owns the
-complementary `sdk` validation on main. Component releases pass their explicit scopes.
+manual validation. Main pushes enter `sunder-sdk-release.yml`, which runs that same
+complete component graph and then publishes selected independently versioned SDK
+packages. Component releases pass their explicit scopes.
 Every selection's `test-results` job runs with `always()`, downloads its available portable/native reports
-and runs `summarize-core-test-results.mjs <directory> --scope <scope> --aggregate`.
-CLI has no native test lane. Report paths and artifact names include the scope so
+and runs `summarize-core-test-results.mjs <directory> --scope <scope> --aggregate --component-layout --github-summary`.
+CLI has no native test lane. Report paths and artifact names include the bundle and component so
 App and Host calls in the same release cannot overwrite each other.
 This checks selected ordinary .NET declarations, required CI scenarios, script fixtures,
 Node source coverage and owning reports without rebuilding or rerunning suites.
@@ -252,9 +255,11 @@ Native/process and App packaging checks use the reusable
 evidence. The policy's `nativePartitions` assigns Package.Build's native methods to
 three shards. Sorted declaration identities are distributed round-robin before OS
 filtering, including methods in partial classes; each theory stays intact. `main`
-owns the remaining native projects and App/Windows side scenarios. Every partition
+owns that component's remaining native projects and App/Windows side scenarios.
+The shared matrix labels every row by component, RID and partition. Every partition
 runs in a separate checkout with its own result/artifact suffix; the matrix admits
-at most six concurrent jobs. Official-runtime validation waits for the complete matrix.
+at most six concurrent jobs. Official-runtime and unsigned-packaging validation
+share a subsequent six-runner matrix after platform jobs finish.
 
 ```sh
 node scripts/test-oracles/run-dotnet-tests-with-results.mjs --scope sdk --native-partition package-build-1 --list

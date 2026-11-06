@@ -8,6 +8,9 @@ import re
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
+COMPONENTS = {"ci": ("repository", "Repository"), "npm": ("npm", "npm libraries"),
+              "dotnet": ("dotnet", ".NET libraries"), "app": ("app", "App"),
+              "host": ("host", "Host"), "cli": ("cli", "CLI")}
 
 
 def platforms(root=ROOT, profile="native"):
@@ -67,19 +70,42 @@ def matrices(root=ROOT, scope="all"):
             "platform": {"include": [{**row, "partition": partition,
                                       "artifact_suffix": "" if partition == "main" else "-" + partition}
                                      for partition in partitions for row in platforms(root)["include"]]},
-            "platform_tests": any(owner in owners for owner in ("sdk", "host", "app")),
+            "platform_tests": any(owner in owners for owner in ("dotnet", "host", "app")),
             "official_tests": "host" in owners, "app_packaging": "app" in owners}
+
+
+def component_matrices(root=ROOT, scope="all"):
+    policy = json.loads((Path(root) / "eng/test-oracles/core-test-policy.json").read_text())
+    owners = policy["scopes"][scope]
+    components = [{"scope": COMPONENTS[owner][0], "name": COMPONENTS[owner][1]} for owner in owners]
+    native = []
+    for owner in owners:
+        if owner not in ("dotnet", "host", "app"):
+            continue
+        component, label = COMPONENTS[owner]
+        for row in matrices(root, component)["platform"]["include"]:
+            partition = row["partition"]
+            native.append({**row, "scope": component, "component": label,
+                           "label": "Process tests" if partition == "main" else "Package.Build " + partition.rsplit("-", 1)[1] + "/3"})
+    # Both second-phase native consumers share one capacity budget.
+    consumers = ([{**row, "scope": "host", "task": "official", "component": "Host", "label": "Official Node and .NET runtimes"}
+                  for row in platforms(root)["include"]] if "host" in owners else [])
+    consumers += ([{**row, "scope": "app", "task": "packaging", "component": "App", "label": "Unsigned packaging smoke"}
+                   for row in platforms(root, "packaging")["include"]] if "app" in owners else [])
+    return dict(components={"include": components}, platform={"include": native}, consumers={"include": consumers},
+                platform_tests=bool(native), consumer_tests=bool(consumers), interop=all(owner in owners for owner in ("dotnet", "host", "npm")),
+                component_scopes=[row["scope"] for row in components])
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("toolchains", "matrices"))
+    parser.add_argument("action", choices=("toolchains", "matrices", "components"))
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--packaging", action="store_true")
     parser.add_argument("--scope", default="all")
     args = parser.parse_args()
     emit(toolchains(args.root, args.packaging) if args.action == "toolchains" else
-         matrices(args.root, args.scope))
+         component_matrices(args.root, args.scope) if args.action == "components" else matrices(args.root, args.scope))
 
 
 if __name__ == "__main__":

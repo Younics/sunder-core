@@ -27,7 +27,7 @@ class CiMetadataTests(unittest.TestCase):
             raise RuntimeError("test failure")
         with patch.dict(os.environ, {}, clear=True), patch.object(core_ci, "run"), \
                 patch.object(core_ci, "execution_evidence", side_effect=lambda *args: nullcontext()), \
-                patch.object(core_ci, "selection", return_value={"components": ["sdk"]}), \
+                 patch.object(core_ci, "selection", return_value={"components": ["dotnet"]}), \
                 patch.object(core_ci, "templates", side_effect=templates), patch.object(core_ci, "dotnet_tests", side_effect=consume):
             with self.assertRaisesRegex(RuntimeError, "test failure"): core_ci.validate("candidate")
             self.assertNotIn("SUNDER_TEST_LOCAL_INPUT", os.environ)
@@ -52,7 +52,7 @@ class CiMetadataTests(unittest.TestCase):
         calls = []
         def record(name):
             return lambda *args, **kwargs: calls.append((name, args, kwargs))
-        for scope, scenarios in (("all", ["interop", "app-interop"]), ("sdk", ["interop"]), ("repository", ["app-interop"])):
+        for scope, scenarios in (("all", ["interop", "app-interop"]), ("sdk", ["interop"]), ("repository", [])):
             calls.clear()
             with self.subTest(scope=scope), patch.object(core_ci, "run", side_effect=record("run")), \
                     patch.object(core_ci, "execution_evidence", side_effect=lambda *args: nullcontext()), \
@@ -65,9 +65,9 @@ class CiMetadataTests(unittest.TestCase):
                 self.assertLess(fixtures[0], next(i for i, row in enumerate(calls) if row[1][0:1] == ("run-node-test-matrix-with-results",)))
                 self.assertLess(next(i for i, row in enumerate(calls) if row[1][0:1] == ("run-node-test-matrix-with-results",)),
                                 next(i for i, row in enumerate(calls) if row[0] == "source"))
-                self.assertEqual([("primary-lane", "dotnet-linux"), *[("scenario", name) for name in scenarios]],
+                self.assertEqual([*([("primary-lane", "dotnet-linux")] if scope != "repository" else []), *[("scenario", name) for name in scenarios]],
                                  [row[1] for row in calls if row[0] == "tests"])
-                self.assertEqual(scope != "repository", any(row[1][0:2] == ("npm", "ci") for row in calls))
+                self.assertTrue(any(row[1][0:2] == ("npm", "ci") for row in calls))
                 self.assertEqual(scope != "repository", any(row[0] == "module" for row in calls))
 
     def test_source_build_failure_retains_diagnostics_before_dotnet_tests_start(self):
@@ -77,7 +77,7 @@ class CiMetadataTests(unittest.TestCase):
             def run(*args, **kwargs):
                 calls.append(args)
                 if args[:2] == ("dotnet", "build"): raise subprocess.CalledProcessError(1, args)
-            with patch.object(core_ci, "ROOT", root), patch.object(core_ci, "selection", return_value={"scope": "cli", "components": ["cli"], "buildProjects": []}), \
+            with patch.object(core_ci, "ROOT", root), patch.object(core_ci, "selection", return_value={"scope": "cli", "components": ["cli"], "buildProjects": ["cli.csproj"]}), \
                     patch.object(core_ci, "run", side_effect=run):
                 with self.assertRaises(subprocess.CalledProcessError): core_ci.source("cli", root)
             diagnostics = root / "artifacts/test-results/cli/build"
@@ -122,7 +122,7 @@ class CiMetadataTests(unittest.TestCase):
             values = dict(line.split("=", 1) for line in output.read_text().splitlines())
             self.assertEqual(["true", "true", "false"], [values[name] for name in ("platform_tests", "official_tests", "app_packaging")])
             for scope, expected in (("all", (True, True, True)), ("app", (True, False, True)),
-                                    ("host", (True, True, False)), ("cli", (False, False, False)), ("repository", (True, False, True))):
+                                     ("host", (True, True, False)), ("cli", (False, False, False)), ("repository", (False, False, False))):
                 with self.subTest(scope=scope):
                     matrix = metadata.matrices(scope=scope)
                     self.assertEqual(expected, tuple(matrix[name] for name in ("platform_tests", "official_tests", "app_packaging")))
@@ -145,9 +145,22 @@ class CiMetadataTests(unittest.TestCase):
             for row in native:
                 self.assertEqual(expected, {item["partition"] for item in rows if item["rid"] == row["rid"]})
                 self.assertTrue(all(item["os"] == row["os"] for item in rows if item["rid"] == row["rid"]))
+        matrix = metadata.component_matrices()
+        self.assertEqual({"npm", "dotnet", "host", "app", "cli", "repository"}, set(matrix["component_scopes"]))
+        platform = matrix["platform"]["include"]
+        self.assertEqual(36, len(platform))
+        self.assertEqual(len(platform), len({(row["scope"], row["rid"], row["partition"]) for row in platform}))
+        consumers = matrix["consumers"]["include"]
+        self.assertEqual(6, sum(row["task"] == "official" for row in consumers))
+        self.assertEqual(2, sum(row["task"] == "packaging" for row in consumers))
+        for scope in ("app", "host", "cli", "repository"):
+            narrowed = metadata.component_matrices(scope=scope)
+            self.assertEqual([scope], narrowed["component_scopes"])
+            self.assertTrue(all(row["scope"] == scope for row in narrowed["platform"]["include"] + narrowed["consumers"]["include"]))
+            self.assertFalse(narrowed["interop"])
 
     def test_native_partition_preparation_routes_side_scenarios_to_main_and_cleans_environment(self):
-        selected = {"components": ["sdk", "host"], "nativePartitions": ["main", "package-build-1"]}
+        selected = {"components": ["dotnet", "host"], "nativePartitions": ["main", "package-build-1"]}
         for partition in selected["nativePartitions"]:
             calls = []
             with self.subTest(partition=partition), patch.object(core_ci, "selection", return_value=selected), \

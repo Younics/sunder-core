@@ -45,10 +45,10 @@ test("OS eligibility follows conditional attributes and every lane has a compati
 
 test("native method partitions cover each scoped OS exactly once and distribute partial classes", () => {
   const all = loadCoreTestModel();
-  for (const scope of ["all", "sdk", "repository", "host"]) {
+  for (const scope of ["all", "sdk", "dotnet", "npm", "app", "repository", "host"]) {
     const model = scopeModel(all, scope);
     const names = nativePartitionNames(model);
-    assert.equal(names.length, ["all", "sdk"].includes(scope) ? 4 : 1);
+    assert.equal(names.length, ["all", "sdk", "dotnet"].includes(scope) ? 4 : 1);
     for (const os of ["Windows", "Linux", "MacOS"]) {
       const expected = model.declarations.filter(test => test.framework === "dotnet"
         && test.primaryLane === "host-platform" && test.operatingSystems.includes(os)).map(test => test.id).sort();
@@ -63,6 +63,16 @@ test("native method partitions cover each scoped OS exactly once and distribute 
       }
     }
     assert.throws(() => selectNativePartition(model, "missing", "Linux"), /Unknown native partition/u);
+  }
+  for (const os of ["Windows", "Linux", "MacOS"]) {
+    for (const partition of nativePartitionNames(all)) {
+      const split = ["dotnet", "host", "app"].flatMap(scope => {
+        const component = scopeModel(all, scope);
+        return nativePartitionNames(component).includes(partition) ? selectNativePartition(component, partition, os) : [];
+      }).map(test => test.id);
+      assert.equal(new Set(split).size, split.length, "Component matrices must not duplicate native tests");
+      assert.deepEqual(split.sort(), selectNativePartition(all, partition, os).map(test => test.id).sort());
+    }
   }
   const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
   const preview = spawnSync(process.execPath, [runner, "--scope", "sdk", "--native-partition", "package-build-1", "--list"], { encoding: "utf8" });
@@ -95,9 +105,13 @@ test("component scopes partition the full inventory and cannot hide missing owne
   const all = loadCoreTestModel();
   const sdk = loadCoreTestModel(repositoryRoot, undefined, "sdk");
   const repository = loadCoreTestModel(repositoryRoot, undefined, "repository");
-  const sdkIds = new Set(sdk.declarations.map(test => test.id));
-  assert.ok(repository.declarations.every(test => !sdkIds.has(test.id)));
-  assert.deepEqual(new Set([...sdk.declarations, ...repository.declarations].map(test => test.id)), new Set(all.declarations.map(test => test.id)));
+  const app = loadCoreTestModel(repositoryRoot, undefined, "app");
+  const leaves = all.policy.scopes.all.map(owner => scopeModel(all, owner === "ci" ? "repository" : owner));
+  const ids = leaves.flatMap(model => model.declarations.map(test => test.id));
+  assert.equal(new Set(ids).size, ids.length, "Each declaration must have exactly one component owner");
+  assert.deepEqual(new Set(ids), new Set(all.declarations.map(test => test.id)));
+  assert.deepEqual(new Set([...sdk.declarations, ...app.declarations].map(test => test.id)), new Set(all.declarations.map(test => test.id)));
+  assert.ok(repository.declarations.every(test => test.component === "ci"));
   assert.ok(sdk.declarations.every(test => !test.project.startsWith("Sunder.App.")));
   for (const source of ["public-package-contracts", "policy-contracts", "toolchains", "checkout-bytes"]) {
     assert.ok(sdk.declarations.some(test => test.source === `scripts/test-oracles/${source}.test.mjs`),
@@ -105,11 +119,11 @@ test("component scopes partition the full inventory and cannot hide missing owne
   }
   for (const name of ["RuntimeHost_IsWorkerOnly", "App_RetainsAppModuleLoading"]) {
     assert.equal(sdk.declarations.some(test => test.name === name), name.startsWith("RuntimeHost"));
-    assert.equal(repository.declarations.some(test => test.name === name), name.startsWith("App_"));
+    assert.equal(app.declarations.some(test => test.name === name), name.startsWith("App_"));
   }
   assert.ok(selectScenario("interop", sdk.declarations).tests.length > 0);
   assert.throws(() => selectScenario("app-interop", sdk.declarations), /no declared tests/u);
-  assert.ok(selectScenario("app-interop", repository.declarations).tests.length > 0);
+  assert.ok(selectScenario("app-interop", app.declarations).tests.length > 0);
   const missing = { ...all, declarations: all.declarations.filter(test =>
     test.project !== "Sunder.Package.Build.Tests" || test.primaryLane !== "host-platform") };
   const narrowed = scopeModel(missing, "sdk");
@@ -670,7 +684,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
     const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner], { encoding: "utf8" });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const commands = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-    const toolReport = commands.findIndex(({ args }) => args[1] === "node-package-tool");
+    const toolReport = commands.findIndex(({ args }) => args.includes("node-package-tool"));
     assert.ok(toolReport >= 0);
     for (const workspace of ["@sunder/sdk", "@sunder/package-tool", "create-sunder-package"]) {
       const build = commands.findIndex(({ args }) => args.join(" ") === `run build --workspace ${workspace}`);
@@ -679,9 +693,26 @@ test("Node matrix builds every packed input before selecting all packed scenario
     }
     assert.equal(await readFile(resolve(nodeRoot, "packages/sdk/dist/previous.js"), "utf8"), "unchanged checkout output");
     assert.deepEqual(commands[toolReport].env, { packedClosure: "1", packedServices: "1" });
-    assert.ok(commands.some(({ args }) => args[1] === "node-sdk"));
-    assert.ok(commands.some(({ args }) => args[1] === "node-create-sunder-package"));
+    assert.ok(commands.some(({ args }) => args.includes("node-sdk")));
+    assert.ok(commands.some(({ args }) => args.includes("node-create-sunder-package")));
     assert.ok(commands.some(({ args }) => args.join(" ") === "run templates:typecheck"));
+    // Hosted steps must reuse one producer, preserve the complete packed closure,
+    // and test exactly the same package selection as the local all-in-one entry.
+    await writeFile(log, "");
+    const work = resolve(root, "staged-work");
+    for (const args of [["--action", "build"], ...["@sunder/sdk", "@sunder/package-tool", "create-sunder-package"]
+      .map(name => ["--action", "test", "--project", name]), ["--action", "templates"]]) {
+      const staged = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner, "--scope", "npm", "--work", work, ...args], { encoding: "utf8" });
+      assert.equal(staged.status, 0, staged.stdout + staged.stderr);
+    }
+    const staged = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+    const builds = staged.filter(({ args }) => args[0] === "run" && args[1] === "build");
+    assert.equal(builds.length, 3);
+    assert.equal(new Set(builds.map(row => row.cwd)).size, 1);
+    for (const report of ["node-sdk", "node-package-tool", "node-create-sunder-package"]) {
+      assert.equal(staged.filter(({ args }) => args.includes(report)).length, 1);
+    }
+    assert.deepEqual(staged.find(({ args }) => args.includes("node-package-tool")).env, commands[toolReport].env);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,4 +1,4 @@
-name: Sunder SDK Release
+name: Sunder Core — Main CI and SDK Release
 
 on:
   push:
@@ -11,6 +11,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   select:
+    name: SDK / Select independent package versions
     if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -41,16 +42,19 @@ jobs:
           retention-days: 90
 
   validation:
+    name: Validation
     needs: select
     if: needs.select.outputs.recover != 'true'
     uses: ./.github/workflows/sunder-ci.yml
     permissions:
       contents: read
+      actions: read
     with:
-      scope: sdk
+      scope: all
       release-packages: ${{ needs.select.outputs.selected_count != '0' }}
 
   stage:
+    name: SDK / Stage tested packages
     needs: [select, validation]
     if: always() && needs.select.result == 'success' && needs.select.outputs.selected_count != '0' && (needs.validation.result == 'success' || needs.select.outputs.recover == 'true')
     runs-on: ubuntu-24.04
@@ -83,6 +87,7 @@ jobs:
         run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
 
   publish-npm:
+    name: npm libraries / Publish
     needs: [select, stage]
     if: always() && needs.stage.result == 'success' && needs.select.outputs.npm_count != '0'
     runs-on: ubuntu-24.04
@@ -112,6 +117,7 @@ jobs:
         run: python3 -B scripts/release/sdk_release.py npm --directory artifacts/retained-packages
 
   publish-nuget:
+    name: .NET libraries / Publish NuGet
     needs: [select, stage, publish-npm]
     if: always() && needs.stage.result == 'success' && needs.select.outputs.nuget_count != '0' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped')
     runs-on: ubuntu-24.04
@@ -146,6 +152,7 @@ jobs:
         run: python3 -B scripts/release/sdk_release.py nuget --directory artifacts/retained-packages
 
   finalize:
+    name: SDK / Verify publication and finalize
     needs: [select, stage, publish-npm, publish-nuget]
     if: always() && needs.stage.result == 'success' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') && (needs.publish-nuget.result == 'success' || needs.publish-nuget.result == 'skipped')
     runs-on: ubuntu-24.04
@@ -167,3 +174,25 @@ jobs:
         run: |
           python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
           python3 -B scripts/release/sdk_release.py finalize --directory artifacts/retained-packages
+
+  summary:
+    name: Results / SDK release overview
+    if: always()
+    needs: [select, validation, stage, publish-npm, publish-nuget, finalize]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        if: needs.select.result == 'success'
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Summarize selected versions and publication outcomes
+        if: always()
+        env:
+          SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: python3 -B scripts/release/sdk_release.py summary

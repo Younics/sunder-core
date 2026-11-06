@@ -4,7 +4,6 @@ on:
   workflow_call:
     inputs:
       scope:
-        description: Explicit component scope from Core test ownership.
         type: string
         required: true
 
@@ -15,23 +14,22 @@ env:
 
 jobs:
   prepare:
+    name: Select native components and platforms
     runs-on: ubuntu-24.04
     outputs:
-      native: ${{ steps.platforms.outputs.native }}
       platform: ${{ steps.platforms.outputs.platform }}
-      packaging: ${{ steps.platforms.outputs.packaging }}
+      consumers: ${{ steps.platforms.outputs.consumers }}
       platform_tests: ${{ steps.platforms.outputs.platform_tests }}
-      official_tests: ${{ steps.platforms.outputs.official_tests }}
-      app_packaging: ${{ steps.platforms.outputs.app_packaging }}
+      consumer_tests: ${{ steps.platforms.outputs.consumer_tests }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - id: platforms
-        run: python3 -B scripts/ci/metadata.py matrices --scope "$CI_SCOPE"
+        run: python3 -B scripts/ci/metadata.py components --scope "$CI_SCOPE"
 
   platform:
-    name: Platform/process behavior (${{ matrix.rid }}, ${{ matrix.partition }})
+    name: ${{ matrix.component }} / ${{ matrix.label }} / ${{ matrix.rid }}
     needs: prepare
     if: needs.prepare.outputs.platform_tests == 'true'
     runs-on: ${{ matrix.os }}
@@ -40,6 +38,9 @@ jobs:
       fail-fast: false
       max-parallel: 6
       matrix: ${{ fromJSON(needs.prepare.outputs.platform) }}
+    env:
+      CI_COMPONENT: ${{ matrix.scope }}
+      NATIVE_PARTITION: ${{ matrix.partition }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -58,87 +59,73 @@ jobs:
         if: always() && steps.process_preflight.outcome != 'skipped' && steps.process_preflight.outcome != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-process-preflight-${{ inputs.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
+          name: sunder-process-preflight-${{ inputs.scope }}-${{ matrix.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
           path: artifacts/process-preflight
           if-no-files-found: error
           retention-days: 14
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
-      - name: Build and test native platform
+      - name: Build and test selected native component
         id: platform_tests
-        env:
-          NATIVE_PARTITION: ${{ matrix.partition }}
         shell: bash
-        run: python3 -B scripts/ci/core_ci.py platform --scope "$CI_SCOPE" --partition "$NATIVE_PARTITION"
+        run: python3 -B scripts/ci/core_ci.py platform --scope "$CI_COMPONENT" --partition "$NATIVE_PARTITION"
       - name: Retain platform test results
         if: always() && steps.platform_tests.outcome != 'skipped' && steps.platform_tests.outcome != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sunder-platform-${{ inputs.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
-          path: artifacts/test-results/${{ inputs.scope }}
+          name: sunder-results-${{ inputs.scope }}-platform-${{ matrix.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
+          path: artifacts/test-results/${{ matrix.scope }}
           if-no-files-found: error
           retention-days: 14
 
-  official-runtimes:
-    name: Official runtime native launch (${{ matrix.rid }})
-    # Reuse native capacity in successive phases instead of requesting a second
-    # six-RID matrix while platform/process jobs still occupy the same runners.
+  consumers:
+    name: ${{ matrix.component }} / ${{ matrix.label }} / ${{ matrix.rid }}
+    # Share capacity with platform tests; official launch and packaging together
+    # also stay within the six-runner budget.
     needs: [prepare, platform]
-    if: ${{ !cancelled() && needs.prepare.outputs.official_tests == 'true' }}
+    if: ${{ !cancelled() && needs.prepare.outputs.consumer_tests == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.native) }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - name: Build and test official runtimes
-        id: official_tests
-        env:
-          RID: ${{ matrix.rid }}
-        shell: bash
-        run: python3 -B scripts/ci/core_ci.py official --scope "$CI_SCOPE" --rid "$RID"
-      - name: Retain official runtime test results
-        if: always() && steps.official_tests.outcome != 'skipped' && steps.official_tests.outcome != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: official-runtime-${{ inputs.scope }}-${{ matrix.rid }}
-          path: artifacts/test-results/${{ inputs.scope }}
-          if-no-files-found: error
-          retention-days: 14
-
-  packaging:
-    name: Unsigned packaging smoke (${{ matrix.rid }})
-    needs: [prepare, platform]
-    if: ${{ !cancelled() && needs.prepare.outputs.app_packaging == 'true' }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.prepare.outputs.packaging) }}
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.prepare.outputs.consumers) }}
+    env:
+      CI_COMPONENT: ${{ matrix.scope }}
+      RID: ${{ matrix.rid }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
         with:
-          node: 'false'
-          packaging: 'true'
+          node: ${{ matrix.task == 'official' && 'true' || 'false' }}
+          packaging: ${{ matrix.task == 'packaging' && 'true' || 'false' }}
       - name: Install Linux packaging prerequisites
-        if: runner.os == 'Linux'
+        if: matrix.task == 'packaging' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --yes squashfs-tools
       - name: Install Velopack CLI
-        if: runner.os == 'Linux'
+        if: matrix.task == 'packaging' && runner.os == 'Linux'
         shell: pwsh
         run: ./scripts/release/install-velopack.ps1
-      - name: Exercise unsigned native packaging
+      - name: Build and test official runtimes
+        id: official_tests
+        if: matrix.task == 'official'
         shell: bash
-        env:
-          RID: ${{ matrix.rid }}
-        run: bash scripts/test/release/smoke-app-packaging.sh "$RID"
+        run: python3 -B scripts/ci/core_ci.py official --scope "$CI_COMPONENT" --rid "$RID"
+      - name: Exercise unsigned native packaging
+        id: packaging
+        if: matrix.task == 'packaging'
+        shell: bash
+        run: python3 -B scripts/ci/core_ci.py packaging --scope app --rid "$RID"
+      - name: Retain native consumer results
+        if: always() && (steps.official_tests.outcome == 'success' || steps.official_tests.outcome == 'failure' || steps.official_tests.outcome == 'cancelled' || steps.packaging.outcome == 'success' || steps.packaging.outcome == 'failure' || steps.packaging.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-${{ inputs.scope }}-${{ matrix.task }}-${{ matrix.scope }}-${{ matrix.rid }}
+          path: artifacts/test-results/${{ matrix.scope }}
+          if-no-files-found: error
+          retention-days: 14

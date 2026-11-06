@@ -1,4 +1,4 @@
-name: Sunder Runtime Host Release
+name: Sunder Host — Release
 
 on:
   push:
@@ -10,13 +10,16 @@ concurrency:
   cancel-in-progress: false
 jobs:
   validation:
+    name: Host / Validation
     uses: ./.github/workflows/sunder-ci.yml
     with:
       scope: host
     permissions:
       contents: read
+      actions: read
 
   prepare:
+    name: Host / Select version and platforms
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -33,6 +36,7 @@ jobs:
         run: python3 -B scripts/ci/metadata.py matrices
 
   package:
+    name: Host / Package and smoke / ${{ matrix.rid }}
     needs: [prepare, validation]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -61,6 +65,7 @@ jobs:
           if-no-files-found: error
 
   release:
+    name: Host / Publish verified archives
     needs: [prepare, package]
     runs-on: ubuntu-24.04
     timeout-minutes: 30

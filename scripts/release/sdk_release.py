@@ -169,13 +169,16 @@ def prepare(path):
     print(json.dumps(outputs))
 
 
-def pack(plan, directory):
+def pack(plan, directory, kind=None):
     import sdk_release_documentation as documentation
     directory.mkdir(parents=True, exist_ok=True)
     release = os.environ.get("GITHUB_WORKFLOW_REF") == f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main"
-    context = documentation.pack_context(ROOT, plan["artifactSourceCommit"]) if release else nullcontext()
+    rows = selected(plan, kind)
+    if not rows:
+        return
+    context = documentation.pack_context(ROOT, plan["artifactSourceCommit"], [row["name"] for row in rows]) if release else nullcontext()
     with context:
-        for row in selected(plan):
+        for row in rows:
             if row["kind"] == "nuget":
                 subprocess.run(["dotnet", "pack", row["project"], "-c", "Release", "--no-restore", "--no-build",
                     "-p:ContinuousIntegrationBuild=true", "-p:GeneratePackageOnBuild=false", "-o", str(directory)], cwd=ROOT, check=True)
@@ -195,8 +198,8 @@ def pack(plan, directory):
                     subprocess.run(["node", str(ROOT / "scripts/release/verify-node-package-artifacts.mjs"), row["version"],
                         manifest.get("dependencies", {}).get("@sunder/sdk", "-"), tool_manifest["dependencies"]["vite"], str(work), str(report_path), row["name"]], check=True)
                     shutil.copyfile(work / row["archive"], directory / row["archive"])
-    if release and selected(plan):
-        documentation.verify(ROOT, [directory], plan["artifactSourceCommit"], package_names=[row["name"] for row in selected(plan)])
+    if release:
+        documentation.verify(ROOT, [directory], plan["artifactSourceCommit"], package_names=[row["name"] for row in rows])
 
 
 def feed(plan, candidate, directory):
@@ -367,9 +370,35 @@ def finalize(plan, directory):
         store.verify(info["id"], assets.local_files(folder), draft=False)
 
 
+def summary(plan, jobs):
+    """Hosted presentation is explicit; library calls and fixtures never emit it."""
+    if not os.environ.get("GITHUB_STEP_SUMMARY"):
+        return
+    lines = ["## SDK release", "", "| Stage | Result |", "|---|---|"]
+    recovered = jobs.get("select", {}).get("outputs", {}).get("recover") == "true"
+    for name, row in jobs.items():
+        result = row.get("result", "missing")
+        if result == "skipped":
+            kind = {"publish-npm": "npm", "publish-nuget": "nuget"}.get(name)
+            if name == "validation" and recovered:
+                result = "Using retained tested candidate"
+            elif plan and not selected(plan, kind):
+                result = "No newer version selected"
+            else:
+                result = "Blocked by prerequisite"
+        lines.append(f"| {name} | {result} |")
+    if plan:
+        lines += ["", f"Source: `{plan['artifactSourceCommit']}`", "",
+                  "| Package | Version | Registry | Selection |", "|---|---|---|---|"]
+        for row in plan["packages"]:
+            lines.append(f"| {row['name']} | {row['version']} | {row['kind']} | {'Selected' if row['selected'] else 'Already published / no newer version'} |")
+    with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+        stream.write("\n".join(lines) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("metadata", "history", "select", "pack", "feed", "stage", "download", "npm", "nuget", "finalize"))
+    parser.add_argument("action", choices=("metadata", "history", "select", "pack", "feed", "stage", "download", "npm", "nuget", "finalize", "summary"))
     parser.add_argument("--name")
     parser.add_argument("--version")
     parser.add_argument("--kind", choices=("nuget", "npm"))
@@ -377,6 +406,9 @@ def main():
     parser.add_argument("--directory", type=Path, default=ROOT / "artifacts/packages")
     parser.add_argument("--candidate", type=Path, default=ROOT / "artifacts/packages")
     args = parser.parse_args()
+    if args.action == "summary":
+        summary(load(args.plan) if args.plan.exists() else None, json.loads(os.environ["SUNDER_CI_JOB_RESULTS"]))
+        return
     if args.action == "history":
         c.require(args.name and args.version and args.kind, "Package history needs kind/name/version")
         print(json.dumps(package_history(args.kind, args.name, args.version)))
@@ -389,7 +421,7 @@ def main():
         prepare(args.plan)
         return
     plan = load(args.plan)
-    if args.action == "pack": pack(plan, args.directory.resolve())
+    if args.action == "pack": pack(plan, args.directory.resolve(), args.kind)
     elif args.action == "feed": feed(plan, args.candidate.resolve(), args.directory.resolve())
     elif args.action == "stage": stage(plan, args.candidate.resolve(), args.directory.resolve())
     elif args.action == "download": download(plan, args.directory.resolve())
