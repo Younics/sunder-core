@@ -6,11 +6,11 @@ import { resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { build as esbuild } from "esbuild";
-import type { BrowserRpcProvider, SunderBrowserRpc } from "@sunder/sdk/browser";
+import type { BrowserRpcProvider, SunderBrowserRpc } from "@younics/sunder-sdk/browser";
 import Ajv2020 from "ajv/dist/2020";
 import { loadProject, currentRid } from "../src/model";
 import { generateRpcBindings } from "../src/rpc-bindings";
-import { assertServiceOptions } from "@sunder/sdk/generated";
+import { assertServiceOptions } from "@younics/sunder-sdk/generated";
 import { contractsCommand } from "../src/rpc-contracts";
 import { installFixtureSdk, liveCatalogWatch, writeSourceFile as writeFile } from "./service-fixtures";
 
@@ -22,7 +22,7 @@ async function receiptValidator() {
   const receipt = JSON.parse(await readFile(resolve(root, "authoring-receipt.schema.json"), "utf8"));
   return new Ajv2020({ strict: false }).addSchema(projection).compile(receipt);
 }
-const source = `import {defineService} from "@sunder/sdk";
+const source = `import {defineService} from "@younics/sunder-sdk";
 /** @typedef {{message:string}} Message */
 /*ts type Message = {message:string};*/
 export const messages=defineService({
@@ -68,8 +68,8 @@ test(`owned ${extension} ${exposure} App defaults and managed calls keep exact i
     assert.equal(validate(app), true, JSON.stringify(validate.errors));
     assert.equal(validate(runtime), true, JSON.stringify(validate.errors));
     const bundle = resolve(root, "browser-test.cjs");
-    await esbuild({ stdin: { contents: `export {Self} from ${JSON.stringify(resolve(root, ".sunder/generated/rpc/api.ts"))}; export {createApiContext,RpcError} from "@sunder/sdk/browser";`, resolveDir: root, loader: "ts" }, outfile: bundle, bundle: true, platform: "browser", format: "cjs",
-      alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
+    await esbuild({ stdin: { contents: `export {Self} from ${JSON.stringify(resolve(root, ".sunder/generated/rpc/api.ts"))}; export {createApiContext,RpcError} from "@younics/sunder-sdk/browser";`, resolveDir: root, loader: "ts" }, outfile: bundle, bundle: true, platform: "browser", format: "cjs",
+      alias: { "@younics/sunder-sdk/browser": require.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": require.resolve("@younics/sunder-sdk/generated") } });
     const browser = await readFile(bundle, "utf8");
     assert.doesNotMatch(browser, /node:fs|runWorker|owned-provider-bind/);
     const good: BrowserRpcProvider = { packageId: "example.app", packageVersion: "99.0.0", providerId: "example.app.messages.provider",
@@ -108,7 +108,7 @@ test(`owned ${extension} ${exposure} App defaults and managed calls keep exact i
     resetRequired = true; providers = [good];
     await assert.rejects(client.messages.send({ message: "request" }), error => {
       assert.ok(error instanceof RpcError);
-      const response = (error as import("@sunder/sdk").RpcError).error;
+      const response = (error as import("@younics/sunder-sdk").RpcError).error;
       assert.equal(response.kind,"unavailable"); assert.equal(response.code,"rpc.catalog.disconnected");
       assert.equal(response.dispatchState,"not-dispatched"); assert.equal(response.retrySafety,"safe"); return true;
     });
@@ -209,7 +209,7 @@ for (const extension of ["ts", "js"] as const) test(`${extension} public App def
     // which would otherwise silently recover the broader default action set.
     const bundle = resolve(root, "policy-test.cjs");
     await esbuild({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.js")], outfile: bundle,
-      bundle: true, platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
+      bundle: true, platform: "node", format: "cjs", alias: { "@younics/sunder-sdk": require.resolve("@younics/sunder-sdk"), "@younics/sunder-sdk/browser": require.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": require.resolve("@younics/sunder-sdk/generated") } });
     let bound = 0;
     const router = (policy: unknown) => ({ options: { exposure: "public", appUse: policy } });
     const bind = (value: unknown) => { assertServiceOptions(value as never, {exposure:"public",appUse:{actions:["discover"]}}); bound++; };
@@ -221,13 +221,13 @@ for (const extension of ["ts", "js"] as const) test(`${extension} public App def
 });
 
 for (const extension of ["ts", "js"] as const) test(`${extension} public declarations and multiple bindings add no implicit uses and retain declaration-owned policy`, async () => {
-  const declaration = `import {defineService} from "@sunder/sdk";
+  const declaration = `import {defineService} from "@younics/sunder-sdk";
 import {Self} from "#sunder/api";
 /** @typedef {{message:string}} Message */
 /*ts type Message={message:string};*/
 /** @typedef {{send:(request:Message)=>Message,watch:(request:Message)=>AsyncIterable<Message>}} Messaging */
 /*ts interface Messaging {send(request:Message):Message;watch(request:Message):AsyncIterable<Message>}*/
-/** @type {import("@sunder/sdk").ServiceDefinition<Messaging>} */
+/** @type {import("@younics/sunder-sdk").ServiceDefinition<Messaging>} */
 const messages=defineService/*<Messaging>*/(null,{declarationOnly:true,exposure:"public"});
 const handlers={
   /** @param {Message} request @returns {Message} */
@@ -235,8 +235,8 @@ const handlers={
   /** @param {Message} request @returns {AsyncIterable<Message>} */
   async *watch(request/*:Message*/)/*:AsyncIterable<Message>*/{yield request;}
 };
-/** @param {import("@sunder/sdk").WorkerContext} context */
-export function lookup(context/*:import("@sunder/sdk").WorkerContext*/){return context.api(Self).messages;}
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
+export function lookup(context/*:import("@younics/sunder-sdk").WorkerContext*/){return context.api(Self).messages;}
 `;
   const bindings = `export const first=defineService(handlers,{implements:messages,providerId:"example.first"});
 export const second=defineService(handlers,{implements:messages,providerId:"example.second"});
@@ -284,7 +284,7 @@ for (const field of ["appUse", "runtimeUse"] as const) test(`${field} rejects in
       await assert.rejects(generateRpcBindings(root), /rpc-authoring\./);
       assert.deepEqual(await readFile(receipt), before);
     }
-    const unaryOnly = `import {defineService} from "@sunder/sdk"; export const messages=defineService({send(){return "ok";}},{exposure:"package"});`;
+    const unaryOnly = `import {defineService} from "@younics/sunder-sdk"; export const messages=defineService({send(){return "ok";}},{exposure:"package"});`;
     await writeFile(resolve(root, "src/rpc.ts"), unaryOnly.replace('exposure:"package"', `exposure:"package",${field}:{actions:["subscribe"]}`));
     await assert.rejects(generateRpcBindings(root), /actions must be a nonempty applicable/);
     await writeFile(resolve(root, "src/rpc.ts"), source.replace('export const messages=', 'const policy={required:false}; policy.required=true; export const messages=')
@@ -330,7 +330,7 @@ for (const extension of ["ts", "js"] as const) for (const exposure of ["package"
       }
       const bundle = resolve(root, "runtime-policy-test.cjs");
       await esbuild({ entryPoints: [resolve(root, ".sunder/generated/rpc/adapter.js")], outfile: bundle, bundle: true,
-        platform: "node", format: "cjs", alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
+        platform: "node", format: "cjs", alias: { "@younics/sunder-sdk": require.resolve("@younics/sunder-sdk"), "@younics/sunder-sdk/browser": require.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": require.resolve("@younics/sunder-sdk/generated") } });
        let bound = 0;
        const router = (runtimeUse: unknown) => ({ options: { exposure, runtimeUse } });
        const bind = (value: unknown) => { assertServiceOptions(value as never, {exposure,runtimeUse:{actions:["subscribe"]}}); bound++; };

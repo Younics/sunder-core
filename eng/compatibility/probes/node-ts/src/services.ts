@@ -1,4 +1,4 @@
-import { defineService, type ServiceContext, type WorkerContext } from "@sunder/sdk";
+import { defineService, type ServiceContext, type WorkerContext } from "@younics/sunder-sdk";
 import { startProbe, cancelled } from "./probe.js";
 
 let worker: WorkerContext;

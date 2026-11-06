@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { inventoryBytes, parseContractLock } from "../src/rpc-contract-lock";
 import { publishContractCache } from "../src/rpc-contract-cache";
 import { currentRid, loadProjectWithOwnedFrame } from "../src/model";
@@ -22,7 +22,7 @@ import { importedProviderMethodNames } from "../src/service-source";
 const ROOT = resolve(__dirname, "../../../../../../../specs/rpc/v1");
 const exec = promisify(execFile); const cli = resolve(__dirname, "../src/cli.js");
 const source = (providers = 'export const extension=defineService({examplePing(request, context){context.signal.throwIfAborted(); return request;}},{implements:imported.extension});') =>
-  `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";\n${providers}`;
+  `import {defineService} from "@younics/sunder-sdk"; import {Implementations as imported} from "#sunder/api";\n${providers}`;
 async function fixture(extension = "ts", consumer = false, stream = false, additionalService = false, providerPresence: "required" | "optional" = "required") {
   const root = await mkdtemp(join(tmpdir(), "sunder-imported-providers-")); const cache = join(root, "cache"); await mkdir(join(root, "src"));
   await installFixtureSdk(root);
@@ -281,14 +281,14 @@ for (const extension of ["ts", "js"]) test(`mixed ${extension} owned/imported sh
     const text = (valid: boolean, reverse: boolean) => {
       const providers = ['export const localImpl=defineService(handlers,{implements:local});', 'export const extension=defineService({examplePing:handlers.ping},{implements:imported.extension});'];
       if (reverse) providers.reverse();
-      return `import {defineService} from "@sunder/sdk"; import {Implementations as imported} from "#sunder/api";
-/** @typedef {{ping(request:{},context:import("@sunder/sdk").ServiceContext):import("@sunder/sdk").JsonObject}} Local */
-/*ts type Local={ping(request:{},context:import("@sunder/sdk").ServiceContext):import("@sunder/sdk").JsonObject};*/
-/** @type {import("@sunder/sdk").ServiceDefinition<Local>} */
+      return `import {defineService} from "@younics/sunder-sdk"; import {Implementations as imported} from "#sunder/api";
+/** @typedef {{ping(request:{},context:import("@younics/sunder-sdk").ServiceContext):import("@younics/sunder-sdk").JsonObject}} Local */
+/*ts type Local={ping(request:{},context:import("@younics/sunder-sdk").ServiceContext):import("@younics/sunder-sdk").JsonObject};*/
+/** @type {import("@younics/sunder-sdk").ServiceDefinition<Local>} */
 export const local=defineService/*<Local>*/(null,{declarationOnly:true,exposure:"public",serviceId:"example",constraints:{"ping.result":{maxProperties:5}}});
 const handlers={
-/** @param {{}} request @param {import("@sunder/sdk").ServiceContext} context */
-ping(request/*: {}*/,context/*: import("@sunder/sdk").ServiceContext*/){context.signal.throwIfAborted(); return ${valid ? "{}" : "42"};}};
+/** @param {{}} request @param {import("@younics/sunder-sdk").ServiceContext} context */
+ping(request/*: {}*/,context/*: import("@younics/sunder-sdk").ServiceContext*/){context.signal.throwIfAborted(); return ${valid ? "{}" : "42"};}};
 ${providers.join("\n")}`;
     };
     for (const reverse of [false, true]) { await writeFile(c.sourcePath, text(false, reverse)); await assert.rejects(c.load(), /handler-incomplete/u); }

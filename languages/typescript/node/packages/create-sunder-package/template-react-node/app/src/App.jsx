@@ -1,6 +1,6 @@
 // @ts-check
 import { useEffect, useState } from "react";
-import { useApi } from "@sunder/sdk/react";
+import { useApi } from "@younics/sunder-sdk/react";
 import { Self } from "#sunder/api";
 const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
 

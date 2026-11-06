@@ -8,7 +8,7 @@ import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { installFixtureSdk } from "./service-fixtures";
 import { inflateRawSync } from "node:zlib";
-import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@sunder/sdk";
+import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@younics/sunder-sdk";
 import { currentRid, SUPPORTED_RIDS, SUPPORTED_WORKER_CAPABILITIES } from "../src/model";
 import { contractsCommand } from "../src/rpc-contracts";
 import { buildModuleTarget, buildModuleTargetForPreparedProject, smokeModuleTarget } from "../src/module";
@@ -71,7 +71,7 @@ test("dev output uses the canonical runtime-backed Node module shape without lau
       resolve(devRoot, "payload", "runtime", "shared", "THIRD-PARTY-NOTICES", "Bundled-Worker-Dependencies.txt"),
       "utf8",
     );
-    assert.ok(workerNotice.includes(`@sunder/sdk@${sdkPackage.version}`));
+    assert.ok(workerNotice.includes(`@younics/sunder-sdk@${sdkPackage.version}`));
     assert.match(workerNotice, /fixture-worker-dependency@4\.5\.6/u);
     assert.match(workerNotice, /nested worker fixture notice/u);
     assert.doesNotMatch(workerNotice, /worker-build-only-dependency/u);
@@ -598,12 +598,12 @@ test("public package tooling contains no embedded Node or SEA production surface
     assert.equal(await exists(resolve(packageRoot, "dist", `${moduleName}.js.map`)), false);
   }
   const createPackage = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", "package.json"), "utf8")) as PackageJson;
-  assert.equal(toolPackage.dependencies?.["@sunder/sdk"], ">=1.0.0 <2.0.0");
-  assert.equal(createPackage.dependencies?.["@sunder/sdk"], ">=1.0.0 <2.0.0");
+  assert.equal(toolPackage.dependencies?.["@younics/sunder-sdk"], ">=1.0.0 <2.0.0");
+  assert.equal(createPackage.dependencies?.["@younics/sunder-sdk"], ">=1.0.0 <2.0.0");
   for (const template of ["template", "template-react-node"]) {
     const value = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", template, "package.json"), "utf8")) as PackageJson;
-    assert.equal(value.dependencies?.["@sunder/sdk"], ">=1.0.0 <2.0.0");
-    assert.equal(value.devDependencies?.["@sunder/package-tool"], ">=1.0.0 <2.0.0");
+    assert.equal(value.dependencies?.["@younics/sunder-sdk"], ">=1.0.0 <2.0.0");
+    assert.equal(value.devDependencies?.["@younics/sunder-package-tool"], ">=1.0.0 <2.0.0");
     const config = JSON.parse(await readFile(resolve(packageRoot, "..", "create-sunder-package", template, "sunder.package.json"), "utf8")) as {
       readonly workerCapabilities: readonly string[];
     };
@@ -2519,7 +2519,7 @@ async function createFixture(): Promise<string> {
   await mkdir(resolve(root, "src"), { recursive: true });
   await mkdir(resolve(root, "contracts"), { recursive: true });
   await writeFile(resolve(root, "src", "worker.ts"), packageServiceSource(), "utf8");
-  await writeFile(workerNoticePath(root), "Sunder Bundled Worker Dependency Notices\n\n@sunder/sdk@1.0.0\n", "utf8");
+  await writeFile(workerNoticePath(root), "Sunder Bundled Worker Dependency Notices\n\n@younics/sunder-sdk@1.0.0\n", "utf8");
   await writeFile(resolve(root, "contracts", "example.rpc.json"), `${JSON.stringify(descriptor, null, 2)}\n`, "utf8");
   await writeFile(resolve(root, "sunder.package.json"), `${JSON.stringify({
     schemaVersion: 3,
@@ -2535,7 +2535,7 @@ async function createFixture(): Promise<string> {
 }
 
 function packageServiceSource(options = 'exposure:"package",providerId:"example.provider"', maximum = 128, title?: string): string {
-  return `import {defineService} from "@sunder/sdk";
+  return `import {defineService} from "@younics/sunder-sdk";
 type Request={message:string}; type Response={accepted:boolean};
 export const example=defineService({send(request:Request):Response{return {accepted:true};},async *watch(request:Request):AsyncIterable<Response>{yield {accepted:true};}},
 {contractId:"example.rpc",serviceId:"messages",${options},constraints:{"Request.message":{minLength:1,maxLength:${maximum}${title === undefined ? "" : `,title:${JSON.stringify(title)}`}}}});`;

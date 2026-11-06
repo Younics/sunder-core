@@ -21,7 +21,7 @@ export async function exercisePackedScaffolds(archives: readonly string[], creat
       const source = await readFile(resolve(root, `src/services.${language}`));
       const lock = await readFile(resolve(root, "sunder-contracts.lock.json"));
       await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], { cwd: root });
-      const sdkRoot = resolve(root, "node_modules/@sunder/sdk");
+      const sdkRoot = resolve(root, "node_modules/@younics/sunder-sdk");
       const sdk = JSON.parse(await readFile(resolve(sdkRoot, "package.json"), "utf8"));
       assert.equal(sdk.peerDependenciesMeta.react.optional, true);
       if (preset === "node") await assert.rejects(stat(resolve(root, "node_modules/react")), { code: "ENOENT" });
@@ -34,7 +34,7 @@ export async function exercisePackedScaffolds(archives: readonly string[], creat
       await exec("npm", ["test"], { cwd: root });
       // Check the emitted declaration closure with no Node ambient types and no
       // skipLibCheck; a browser facade must not leak the Worker SDK entry point.
-      await writeFile(resolve(root, "browser-declarations.ts"), 'import {Self} from "#sunder/api"; import {createBrowserContext} from "@sunder/sdk/browser"; const owner=createBrowserContext(Self); const result:Promise<string>=owner.api(Self).messages.send("browser"); void result; owner.dispose();\n');
+      await writeFile(resolve(root, "browser-declarations.ts"), 'import {Self} from "#sunder/api"; import {createBrowserContext} from "@younics/sunder-sdk/browser"; const owner=createBrowserContext(Self); const result:Promise<string>=owner.api(Self).messages.send("browser"); void result; owner.dispose();\n');
       await writeFile(resolve(root, "tsconfig.browser-declarations.json"), JSON.stringify({ compilerOptions: {
         target: "ES2023", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2023", "DOM", "DOM.Iterable"], types: [], strict: true, noEmit: true, skipLibCheck: false,
       }, files: ["browser-declarations.ts"] }));

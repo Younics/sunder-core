@@ -28,7 +28,7 @@ export function retainedDescriptor(contractId: string) {
  * All compiler, cache, generator, SDK and bundler implementations resolve from toolRoot. */
 export async function serviceApiFixture(toolRoot: string, extension: "ts" | "js", ids = ["example.dependency.first", "example.dependency.second"]) {
   const fromTool = createRequire(join(toolRoot, "index.js"));
-  const sdk: typeof import("@sunder/sdk") = fromTool("@sunder/sdk");
+  const sdk: typeof import("@younics/sunder-sdk") = fromTool("@younics/sunder-sdk");
   const lockTools: typeof import("../src/rpc-contract-lock") = fromTool("./rpc-contract-lock.js");
   const cacheTools: typeof import("../src/rpc-contract-cache") = fromTool("./rpc-contract-cache.js");
   const projectionTools: typeof import("../src/rpc-model-projection") = fromTool("./rpc-model-projection.js");
@@ -75,11 +75,11 @@ export async function serviceApiFixture(toolRoot: string, extension: "ts" | "js"
       workerCapabilities: [], services: { module: `src/services.${extension}` }, app: { root: "app", entryPoint: "index.html",
         views: [{ viewId: "example.owner.main", displayName: "Scopes", route: "/", defaultPlacement: "middle", showInHotbar: true }] } }));
     await writeFile(join(root, "app/index.html"), `<!doctype html><script type="module" src="./consumer.${extension}"></script>`);
-    const source = extension === "ts" ? `import {defineService, type WorkerContext} from "@sunder/sdk";
+    const source = extension === "ts" ? `import {defineService, type WorkerContext} from "@younics/sunder-sdk";
 export const messages = defineService({send(value: string): string {return value;}}, {serviceId:"messages", runtimeUse:{}});
 export const otherMessages = defineService({send(value: string): string {return value;}}, {serviceId:"messages", runtimeUse:{}});`
       : `// @ts-check
-import {defineService} from "@sunder/sdk";
+import {defineService} from "@younics/sunder-sdk";
 export const messages = defineService({
   /** @param {string} value @returns {string} */
   send(value) {return value;}
@@ -102,7 +102,7 @@ export async function exerciseServiceApiScopes(toolRoot: string, extension: "ts"
     // Both Worker source checking and ordinary browser tsc/checkJs consume tokens.
     await writeFile(join(c.root, `src/services.${extension}`), c.source + `
 import {Self, Dependency, Services} from "#sunder/api";
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) {
   const own = context.api(Self); const selected = context.api(Dependency);
   return {async onActivated() {
@@ -130,7 +130,7 @@ export function configure(context${extension === "ts" ? ": WorkerContext" : ""})
     }
     assert.deepEqual(await readFile(join(c.root, "sunder-contracts.lock.json")), c.lockBytes);
     await writeFile(join(c.root, `app/consumer.${extension}`), `import {Self, Dependency, Services} from "#sunder/api";
-import {createBrowserContext} from "@sunder/sdk/browser";
+import {createBrowserContext} from "@younics/sunder-sdk/browser";
 export function connect() {
   const owner = createBrowserContext(Self); const own = owner.api(Self); const selected = owner.api(Dependency);
   own.messages.send("one").then(value => value.toUpperCase()); own.otherMessages.send("two");
@@ -156,9 +156,9 @@ export function connect() {
     await checkServiceApiBrowser(c, extension);
     const esbuild: typeof import("esbuild") = c.fromTool("esbuild");
     const bundled = await esbuild.build({ stdin: { contents: `export {Self, Dependency, Services} from "#sunder/api";
-export {createApiContext, createBrowserContext} from "@sunder/sdk/browser";
+export {createApiContext, createBrowserContext} from "@younics/sunder-sdk/browser";
 export {connect} from "./app/consumer.${extension}";`, resolveDir: c.root, loader: "ts" }, bundle: true, platform: "browser", format: "cjs", write: false, metafile: true,
-      alias: { "@sunder/sdk/browser": c.fromTool.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": c.fromTool.resolve("@sunder/sdk/generated") } });
+      alias: { "@younics/sunder-sdk/browser": c.fromTool.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": c.fromTool.resolve("@younics/sunder-sdk/generated") } });
     assert.ok(Object.keys(bundled.metafile!.inputs).every(path => !/worker|node:/u.test(path)));
     assert.doesNotMatch(bundled.outputFiles[0]!.text, /runWorker|node:fs/u);
     const result = { exports: {} as any }; new Function("module", "exports", bundled.outputFiles[0]!.text)(result, result.exports);
@@ -214,9 +214,9 @@ export async function checkServiceApiBrowser(c: Pick<Awaited<ReturnType<typeof s
   await writeFile(join(c.root, "tsconfig.browser.json"), JSON.stringify({ compilerOptions: {
     target: "ES2023", module: "ESNext", moduleResolution: "Bundler", lib: ["ES2023", "DOM", "DOM.Iterable"], types: [], strict: true,
     allowJs: true, checkJs: true, noEmit: true, skipLibCheck: false,
-    paths: { "@sunder/sdk/browser": [c.fromTool.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
-      "@sunder/sdk/generated": [c.fromTool.resolve("@sunder/sdk/generated").replace(/\.js$/u, ".d.ts")],
-      "@sunder/sdk/core": [c.fromTool.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] },
+    paths: { "@younics/sunder-sdk/browser": [c.fromTool.resolve("@younics/sunder-sdk/browser").replace(/\.js$/u, ".d.ts")],
+      "@younics/sunder-sdk/generated": [c.fromTool.resolve("@younics/sunder-sdk/generated").replace(/\.js$/u, ".d.ts")],
+      "@younics/sunder-sdk/core": [c.fromTool.resolve("@younics/sunder-sdk/core").replace(/\.js$/u, ".d.ts")] },
   }, files: [`app/consumer.${extension}`] }));
   await promisify(execFile)(process.execPath, [c.fromTool.resolve("typescript/bin/tsc"), "-p", "tsconfig.browser.json"], { cwd: c.root });
 }

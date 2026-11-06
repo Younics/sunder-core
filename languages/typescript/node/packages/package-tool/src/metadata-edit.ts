@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import ts from "typescript";
-import { isPackageId } from "@sunder/sdk";
+import { isPackageId } from "@younics/sunder-sdk";
 import { loadProject } from "./model";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { assertBaselineFreeEvidence, captureBaseline, exists, withBaselineLease } from "./rpc-baseline-store";

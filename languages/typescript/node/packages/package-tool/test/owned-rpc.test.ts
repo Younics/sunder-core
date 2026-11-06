@@ -54,10 +54,10 @@ for(const extension of ["ts","js"]) test(`${extension} source identities, schema
   } finally {await rm(root,{recursive:true,force:true});}
 });
 for(const extension of ["ts","js"]) test(`${extension} inferred raw JSON object is explicit, not an untyped fallback`,async()=>{
-  const source=`import {defineService} from "@sunder/sdk";
+  const source=`import {defineService} from "@younics/sunder-sdk";
 export const echo=defineService({
-/** @param {import("@sunder/sdk").JsonObject} request @returns {import("@sunder/sdk").JsonObject} */
-run(request/*:import("@sunder/sdk").JsonObject*/)/*:import("@sunder/sdk").JsonObject*/{return request;}});`;
+/** @param {import("@younics/sunder-sdk").JsonObject} request @returns {import("@younics/sunder-sdk").JsonObject} */
+run(request/*:import("@younics/sunder-sdk").JsonObject*/)/*:import("@younics/sunder-sdk").JsonObject*/{return request;}});`;
   const root=await project(source,extension);
   try {
     await generateRpcBindings(root); const descriptor=(await loadProject(root)).contracts[0]!.descriptor;
@@ -217,7 +217,7 @@ for(const extension of ["ts","js"]) test(`${extension} generated Worker executes
   try{
     await run(root,"build");await exerciseOwnedWorker(root,false,"7.6.5");await run(root,"dev");await exerciseOwnedWorker(root,true,"7.6.5");
     const path=resolve(root,".sunder/generated/rpc/authoring-receipt.v1.json");const before=await readFile(path);const time=(await stat(path)).mtimeMs;await run(root,"generate");assert.equal((await stat(path)).mtimeMs,time);
-    const browser=await esbuild({entryPoints:[resolve(root,".sunder/generated/rpc/api.js")],bundle:true,platform:"browser",write:false,alias:{"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});assert.doesNotMatch(browser.outputFiles[0]!.text,/node:fs|runWorker/);
+    const browser=await esbuild({entryPoints:[resolve(root,".sunder/generated/rpc/api.js")],bundle:true,platform:"browser",write:false,alias:{"@younics/sunder-sdk/browser":require.resolve("@younics/sunder-sdk/browser"),"@younics/sunder-sdk/generated":require.resolve("@younics/sunder-sdk/generated")}});assert.doesNotMatch(browser.outputFiles[0]!.text,/node:fs|runWorker/);
     await writeFile(resolve(root,`src/services.${extension}`),echoSource.replace('return request;','return {...request,count:"wrong"};'));await assert.rejects(generateRpcBindings(root),/handler-incomplete/);assert.deepEqual(await readFile(path),before);
   }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -253,10 +253,10 @@ test("bounded source/semantic graphs reject byte, node, reference, service and p
   const root=await project();
   try{
     const variants=[numericSource+`/*${"x".repeat(4_194_304)}*/`,
-      `import {defineService} from "@sunder/sdk";\n${Array.from({length:66},(_,i)=>`const a${i}=${i?`a${i-1}`:'{maxLength:5}'};`).join("\n")}\nexport const echo=defineService({run(value:string){return value;}},{constraints:{"run.value":a65}});`,
+      `import {defineService} from "@younics/sunder-sdk";\n${Array.from({length:66},(_,i)=>`const a${i}=${i?`a${i-1}`:'{maxLength:5}'};`).join("\n")}\nexport const echo=defineService({run(value:string){return value;}},{constraints:{"run.value":a65}});`,
       numericSource+Array.from({length:24_000},(_,i)=>`const v${i}=${i};`).join("\n"),
-      `import {defineService} from "@sunder/sdk"; ${Array.from({length:129},(_,i)=>`export const s${i}=defineService({run(){return true;}});`).join("\n")}`,
-      `import {defineService} from "@sunder/sdk"; export const contract=defineService<{run():boolean}>(null,{declarationOnly:true}); ${Array.from({length:129},(_,i)=>`export const p${i}=defineService({run(){return true;}},{implements:contract,providerId:"example.p${i}"});`).join("\n")}`];
+      `import {defineService} from "@younics/sunder-sdk"; ${Array.from({length:129},(_,i)=>`export const s${i}=defineService({run(){return true;}});`).join("\n")}`,
+      `import {defineService} from "@younics/sunder-sdk"; export const contract=defineService<{run():boolean}>(null,{declarationOnly:true}); ${Array.from({length:129},(_,i)=>`export const p${i}=defineService({run(){return true;}},{implements:contract,providerId:"example.p${i}"});`).join("\n")}`];
     for(const source of variants){await writeFile(resolve(root,"src/services.ts"),source);await assert.rejects(generateRpcBindings(root),/source-limit-exceeded/);}
   }finally{await rm(root,{recursive:true,force:true});}
 });

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { JSDOM } from "jsdom";
-import type { JsonValue } from "@sunder/sdk";
+import type { JsonValue } from "@younics/sunder-sdk";
 import { currentRid } from "../src/model";
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
 import { liveCatalogWatch } from "./service-fixtures";
@@ -24,7 +24,7 @@ export async function exercisePackedPublicOwner(archives: readonly string[], cre
       await exec(process.execPath, [creator, root, "--preset", "react-node", "--language", language, "--package-id", `packed.public.${language}`, "--package-name", name]);
       await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], {cwd:root});
       const fromProject = createRequire(resolve(root, "package.json"));
-      const tool = resolve(root, "node_modules/@sunder/package-tool/dist/cli.js");
+      const tool = resolve(root, "node_modules/@younics/sunder-package-tool/dist/cli.js");
       const run = (...args:string[]) => exec(process.execPath, [tool, ...args, "--project", root], {maxBuffer:4_194_304});
       const typecheck = () => exec("npm", ["run", "typecheck"], {cwd:root,maxBuffer:4_194_304});
       const appPath = resolve(root, `app/src/App.${language === "ts" ? "tsx" : "jsx"}`); const appSource = await readFile(appPath);
@@ -56,8 +56,8 @@ export async function exercisePackedPublicOwner(archives: readonly string[], cre
         const bundled = await build({stdin:{contents:`
 import {createElement, StrictMode} from "react";
 import {createRoot} from "react-dom/client";
-import {createBrowserContext} from "@sunder/sdk/browser";
-import {ApiProvider} from "@sunder/sdk/react";
+import {createBrowserContext} from "@younics/sunder-sdk/browser";
+import {ApiProvider} from "@younics/sunder-sdk/react";
 import {Self} from "#sunder/api";
 import {App} from ${JSON.stringify(appPath)};
 const context=createBrowserContext(Self),root=createRoot(document.getElementById("root"));

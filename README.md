@@ -112,7 +112,7 @@ These are the public NuGet packages intended for package authors:
 
 `Sunder.Runtime.Contracts`, `Sunder.Package.Format`, and `Sunder.Registry.Contracts` are source projects used by Sunder, but they are not the public package-author SDK surface.
 
-For Node worker Runtime and web App authoring, use [`@sunder/sdk`](https://www.npmjs.com/package/@sunder/sdk), [`@sunder/package-tool`](https://www.npmjs.com/package/@sunder/package-tool), and [`create-sunder-package`](https://www.npmjs.com/package/create-sunder-package). The TypeScript SDK is a deliberate RPC/worker/browser subset, not a port of every managed `Sunder.Sdk` capability.
+For Node worker Runtime and web App authoring, use [`@younics/sunder-sdk`](https://www.npmjs.com/package/@younics/sunder-sdk), [`@younics/sunder-package-tool`](https://www.npmjs.com/package/@younics/sunder-package-tool), and [`@younics/create-sunder-package`](https://www.npmjs.com/package/@younics/create-sunder-package). The TypeScript SDK is a deliberate RPC/worker/browser subset, not a port of every managed `Sunder.Sdk` capability.
 
 ## Build From Source
 

@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import { parseContractLock } from "../src/rpc-contract-lock";
 import { publishContractCache, readContractCache } from "../src/rpc-contract-cache";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { createHash } from "node:crypto";
 import { prepareInitialApiSelection } from "../src/rpc-authoring";
 import { loadProjectConfiguration } from "../src/model";
@@ -50,7 +50,7 @@ for (const extension of ["ts", "js"]) test(`fresh complete ${extension} multi-pr
     await writeFile(c.lockPath, await readFile(join(ROOT, "minimal-contract-lock.json"))); await mkdir(join(c.root, "src"));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Multi Provider", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
-    const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; '
+    const source = 'import {defineService} from "@younics/sunder-sdk"; import {Implementations} from "#sunder/api"; '
       + 'export const stack=defineService({examplePing(request){return request;}},{implements:Implementations.stackContributor});'
       + 'export const extension=defineService({examplePing(request){return request;}},{implements:Implementations.extension});';
     const sourcePath = join(c.root, `src/rpc.${extension}`); await writeFile(sourcePath, source);
@@ -264,7 +264,7 @@ for (const extension of ["ts", "js"]) test(`offline ${extension} platform provid
     await writeFile(join(c.root, "sunder-contracts.owned.json"), await readFile(join(ROOT, "minimal-package-owned-baseline.json")));
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Platform", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
-    const source = 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const stack=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.stackContributor});';
+    const source = 'import {defineService} from "@younics/sunder-sdk"; import {Implementations} from "#sunder/api"; export const stack=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.stackContributor});';
     await writeFile(join(c.root, `src/rpc.${extension}`), source);
     const options = { contractCacheRoot: c.cache };
     const loaded = await loadProjectWithOwnedFrame(c.root, options); const analysis = loaded.ownedRpc!;
@@ -300,7 +300,7 @@ for (const local of [false, true]) test(`platform commands select from ${local ?
     await writeFile(join(c.root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Platform", version: "1.0.0",
       workerCapabilities: [], services: { module: "src/rpc.ts" } }));
     const owned = local ? 'export const owned=defineService<{ping():Promise<void>}>(null,{declarationOnly:true});' : '';
-    const empty = `import {defineService} from "@sunder/sdk"; ${owned}`;
+    const empty = `import {defineService} from "@younics/sunder-sdk"; ${owned}`;
     await writeFile(join(c.root, "src/rpc.ts"), empty);
     let requests = 0; let revoked = false;
     const fetchImplementation: typeof fetch = async input => {

@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { canonicalRpcDescriptorBytes, isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@younics/sunder-sdk";
 import { verifyPlatformContractCatalog, type PlatformContractPins, type VerifiedPlatformContractCatalog } from "./platform-catalog";
 import { cachePath, contractCacheFiles as files } from "./rpc-contract-cache";
 import { contractError, digest, parseContractWireJson, registryOrigin, type ArtifactContract, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";

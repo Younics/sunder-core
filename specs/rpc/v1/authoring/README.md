@@ -505,4 +505,4 @@ The architecture fixes the required information but leaves a few storage spellin
 - The platform payload has explicit `contractCount`; like `publicContractCount`, equality to collection length is a semantic check.
 - A package-public-inventory payload may be empty for a package with no public RPC API. Lock package artifacts are nonempty, package API add requires a nonempty package-authority projection, and the V1 platform baseline/catalog is nonempty and retains `sunder.stack.contributor`.
 - An owned-baseline entry may omit `current` only after acknowledged whole-contract removal; immutable nonempty history preserves issued identity and exposure.
-- Producer records use `Sunder.Package.Build` with `csharp`, or `@sunder/package-tool` with `typescript` or `javascript`. Logical names are path-free generated identifiers, not source or output paths.
+- Producer records use `Sunder.Package.Build` with `csharp`, or `@younics/sunder-package-tool` with `typescript` or `javascript`. Logical names are path-free generated identifiers, not source or output paths.

@@ -135,7 +135,7 @@ class PackageReleaseTests(unittest.TestCase):
     def test_subset_stage_download_publish_and_finalize_preserve_exact_tested_bytes(self):
         plan = sdk.select(self.packages, SOURCE, [], self.history(["1.1.0"]))
         for row in plan["packages"]:
-            row["selected"] = row["name"] in ("Sunder.Sdk.Worker", "@sunder/package-tool")
+            row["selected"] = row["name"] in ("Sunder.Sdk.Worker", "@younics/sunder-package-tool")
         stores = {}
         for row in sdk.selected(plan):
             store = MemoryRelease()
@@ -171,7 +171,7 @@ class PackageReleaseTests(unittest.TestCase):
                  patch.object(sdk, "store_for", side_effect=lambda row: stores[row["name"]]), patch.object(sdk.subprocess, "run") as publish:
                 sdk.download(plan, root / "recovered")
                 sdk.publish(plan, root / "recovered", "npm")
-                self.assertEqual("@sunder/package-tool", publish.call_args.args[0][3])
+                self.assertEqual("@younics/sunder-package-tool", publish.call_args.args[0][3])
                 sdk.finalize(plan, root / "recovered")
                 self.assertTrue(all(not store.value["draft"] for store in stores.values()))
                 self.assertEqual(original, {name: store.bytes for name, store in stores.items()})

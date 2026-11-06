@@ -1,5 +1,5 @@
 {
-  "name": "@sunder/sdk",
+  "name": "@younics/sunder-sdk",
   "version": "1.0.0",
   "description": "Zero-dependency TypeScript SDK for Sunder RPC V1 contracts and Worker V1 Runtime packages.",
   "license": "MIT",

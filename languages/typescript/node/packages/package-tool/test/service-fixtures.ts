@@ -1,5 +1,5 @@
 import { build } from "esbuild";
-import type { RpcProviderRegistration } from "@sunder/sdk";
+import type { RpcProviderRegistration } from "@younics/sunder-sdk";
 import { dirname, resolve } from "node:path";
 import { mkdir, symlink, writeFile } from "node:fs/promises";
 import { workerResolutionOptions } from "../src/rpc-runtime-inputs";
@@ -7,7 +7,7 @@ import { packageToolCompatibility, projectSdkCompatibility } from "../src/compat
 
 /** Provision the ordinary installed SDK selection used by a package fixture. */
 export async function installFixtureSdk(root: string, sdkRoot = packageToolCompatibility().sdkPackageRoot): Promise<void> {
-  const destination = resolve(root, "node_modules/@sunder/sdk");
+  const destination = resolve(root, "node_modules/@younics/sunder-sdk");
   await mkdir(dirname(destination), { recursive: true });
   await symlink(sdkRoot, destination, process.platform === "win32" ? "junction" : "dir");
 }
@@ -33,7 +33,7 @@ export async function generatedProviders(root: string): Promise<readonly RpcProv
   new Function("require", "module", "exports", result.outputFiles[0]!.text)(require, module, module.exports);
   return module.exports.providers;
 }
-export const invocation = () => ({ signal: new AbortController().signal }) as import("@sunder/sdk").RpcInvocationContext;
+export const invocation = () => ({ signal: new AbortController().signal }) as import("@younics/sunder-sdk").RpcInvocationContext;
 export const emptyLock = JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2) + "\n";
 export async function* liveCatalogWatch(_revision:number,_sequence:number,options?:{signal?:AbortSignal}):AsyncIterable<never>{
   const signal=options?.signal;if(!signal)throw new Error("Catalog test watches require cancellation.");

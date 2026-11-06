@@ -1,7 +1,7 @@
 // @ts-check
 // Copy this authored helper into each Node probe's src/ before its first build.
 // Retain that exact authored tree and its original dependency lock afterwards.
-import { RpcError } from "@sunder/sdk";
+import { RpcError } from "@younics/sunder-sdk";
 
 /** @param {AbortSignal} signal @returns {Promise<void>} */
 export function cancelled(signal) {
@@ -13,7 +13,7 @@ export function cancelled(signal) {
 /** @param {number} ms @returns {Promise<void>} */
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function startProbe(context) {
   const lifetime = new AbortController();
   /** @type {Promise<void> | undefined} */
@@ -28,7 +28,7 @@ export function startProbe(context) {
   };
 }
 
-/** @param {import("@sunder/sdk").WorkerContext} context @param {AbortSignal} lifetime */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context @param {AbortSignal} lifetime */
 async function execute(context, lifetime) {
   let nonce;
   while (!lifetime.aborted) {

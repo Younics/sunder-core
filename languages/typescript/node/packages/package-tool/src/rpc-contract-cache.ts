@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, realpath, rename, rmdir, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, parse, resolve, sep } from "node:path";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor, type RpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor, type RpcContractDescriptor } from "@younics/sunder-sdk";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { withOutputLeases } from "./output";
 import { fields, outerBytes, parseOuter } from "./rpc-baseline-json";

@@ -651,7 +651,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
     await mkdir(resolve(nodeRoot, "node_modules"), { recursive: true });
     await mkdir(resolve(root, "specs"));
     await mkdir(resolve(root, "languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Contracts"), { recursive: true });
-    for (const [directory, name] of [["sdk", "@sunder/sdk"], ["package-tool", "@sunder/package-tool"], ["create-sunder-package", "create-sunder-package"]]) {
+    for (const [directory, name] of [["sdk", "@younics/sunder-sdk"], ["package-tool", "@younics/sunder-package-tool"], ["create-sunder-package", "@younics/create-sunder-package"]]) {
       const path = resolve(nodeRoot, "packages", directory);
       await mkdir(resolve(path, "dist"), { recursive: true });
       await writeFile(resolve(path, "package.json"), JSON.stringify({ name }));
@@ -686,7 +686,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
     const commands = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
     const toolReport = commands.findIndex(({ args }) => args.includes("node-package-tool"));
     assert.ok(toolReport >= 0);
-    for (const workspace of ["@sunder/sdk", "@sunder/package-tool", "create-sunder-package"]) {
+    for (const workspace of ["@younics/sunder-sdk", "@younics/sunder-package-tool", "@younics/create-sunder-package"]) {
       const build = commands.findIndex(({ args }) => args.join(" ") === `run build --workspace ${workspace}`);
       assert.ok(build >= 0 && build < toolReport, `${workspace} must be built before packed package-tool tests`);
       assert.notEqual(commands[build].cwd, nodeRoot);
@@ -700,7 +700,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
     // and test exactly the same package selection as the local all-in-one entry.
     await writeFile(log, "");
     const work = resolve(root, "staged-work");
-    for (const args of [["--action", "build"], ...["@sunder/sdk", "@sunder/package-tool", "create-sunder-package"]
+    for (const args of [["--action", "build"], ...["@younics/sunder-sdk", "@younics/sunder-package-tool", "@younics/create-sunder-package"]
       .map(name => ["--action", "test", "--project", name]), ["--action", "templates"]]) {
       const staged = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner, "--scope", "npm", "--work", work, ...args], { encoding: "utf8" });
       assert.equal(staged.status, 0, staged.stdout + staged.stderr);
@@ -727,17 +727,17 @@ test("Node producers own workspace links and dependency writes", async () => {
     const contracts = "languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Contracts";
     const oracle = `${contracts}/example.rpc.json`;
     await mkdir(resolve(sdk, "dist"), { recursive: true });
-    await mkdir(resolve(source, "node_modules/@sunder"), { recursive: true });
+    await mkdir(resolve(source, "node_modules/@younics"), { recursive: true });
     await mkdir(resolve(source, "node_modules/dependency"));
     await mkdir(resolve(sdk, "node_modules/private-dependency/dist"), { recursive: true });
     await mkdir(resolve(checkout, "specs"));
     await mkdir(resolve(checkout, contracts), { recursive: true });
     await writeFile(resolve(checkout, oracle), "authored wire oracle");
-    await writeFile(resolve(sdk, "package.json"), JSON.stringify({ name: "@sunder/sdk", main: "dist/index.js" }));
+    await writeFile(resolve(sdk, "package.json"), JSON.stringify({ name: "@younics/sunder-sdk", main: "dist/index.js" }));
     await writeFile(resolve(sdk, "dist/index.js"), "checkout");
     await writeFile(resolve(source, "node_modules/dependency/value"), "locked dependency");
     await writeFile(resolve(sdk, "node_modules/private-dependency/dist/index.js"), "workspace dependency");
-    await symlink(sdk, resolve(source, "node_modules/@sunder/sdk"), process.platform === "win32" ? "junction" : "dir");
+    await symlink(sdk, resolve(source, "node_modules/@younics/sunder-sdk"), process.platform === "win32" ? "junction" : "dir");
     const producers = [createNodeTestWorkspace(checkout, root), createNodeTestWorkspace(checkout, root)];
     for (const [index, producer] of producers.entries()) {
       const output = resolve(producer.nodeRoot, "packages/sdk/dist");
@@ -745,7 +745,7 @@ test("Node producers own workspace links and dependency writes", async () => {
       await mkdir(output);
       await writeFile(resolve(output, "index.js"), `producer ${index}`);
       const require = createRequire(resolve(producer.nodeRoot, "consumer.cjs"));
-      assert.equal(await readFile(require.resolve("@sunder/sdk"), "utf8"), `producer ${index}`);
+      assert.equal(await readFile(require.resolve("@younics/sunder-sdk"), "utf8"), `producer ${index}`);
       assert.equal(await readFile(resolve(output, "../node_modules/private-dependency/dist/index.js"), "utf8"), "workspace dependency");
       assert.equal(await readFile(resolve(producer.root, oracle), "utf8"), "authored wire oracle");
     }

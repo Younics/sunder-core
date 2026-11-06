@@ -10,7 +10,7 @@ from package_metadata import version_key
 version_key(sys.argv[2])
 if '+' in sys.argv[2]: raise SystemExit('Publication versions cannot contain build metadata')
 PY
-case "$name" in @sunder/sdk|@sunder/package-tool|create-sunder-package) ;; *) printf 'Unknown public npm package\n' >&2; exit 2 ;; esac
+case "$name" in @younics/sunder-sdk|@younics/sunder-package-tool|@younics/create-sunder-package) ;; *) printf 'Unknown public npm package\n' >&2; exit 2 ;; esac
 : "${NODE_AUTH_TOKEN:?Set NPM_TOKEN in sunder-core-release}"
 : "${ACTIONS_ID_TOKEN_REQUEST_URL:?id-token write is required for npm provenance}"
 : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?id-token write is required for npm provenance}"

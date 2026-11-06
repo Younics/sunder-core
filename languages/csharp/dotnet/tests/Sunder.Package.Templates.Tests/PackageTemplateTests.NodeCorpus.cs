@@ -58,7 +58,7 @@ public sealed partial class PackageTemplateTests
                 Require(feed.TryAdd(Text(metadata, "name") + "/" + Text(metadata, "version"), (archive, directory)), "Duplicate retained npm identity.");
             }
             var candidate = new Dictionary<string, (string Archive, string Root)>(StringComparer.Ordinal);
-            foreach (var (asset, id) in new[] { ("sunder-sdk", "@sunder/sdk"), ("sunder-package-tool", "@sunder/package-tool") })
+            foreach (var (asset, id) in new[] { ("younics-sunder-sdk", "@younics/sunder-sdk"), ("younics-sunder-package-tool", "@younics/sunder-package-tool") })
             {
                 var record = input.Candidates.Single(x => Text(x, "assetName") == $"{asset}-{input.Version}.tgz");
                 var directory = Path.Combine(root, asset);
@@ -81,7 +81,7 @@ public sealed partial class PackageTemplateTests
                 SdkCorpusNpm.ExtractPackage(selected.Archive, destination);
                 resolved.Add(name);
             }
-            Require(candidate.Keys.All(resolved.Contains), "Original source must consume both @sunder/sdk and @sunder/package-tool.");
+            Require(candidate.Keys.All(resolved.Contains), "Original source must consume both @younics/sunder-sdk and @younics/sunder-package-tool.");
             foreach (var selected in candidate.Values)
             {
                 var metadata = ReadJson(Path.Combine(selected.Root, "package.json"));
@@ -112,7 +112,7 @@ public sealed partial class PackageTemplateTests
                 return await process.EnsureSuccessAsync(TimeSpan.FromMinutes(3));
             }
             await RunAsync("-e", "const [major,minor,patch]=process.versions.node.split('.').map(Number);if(major!==24||minor<18||minor===18&&patch<1)throw Error('Node >=24.18.1 <25 required');if(process.platform!==process.argv[1]||process.arch!==process.argv[2])throw Error('Node process RID differs from selected native context')", os, cpu);
-            var tool = Path.Combine(source, "node_modules/@sunder/package-tool/dist/cli.js");
+            var tool = Path.Combine(source, "node_modules/@younics/sunder-package-tool/dist/cli.js");
             await RunAsync(tool, "generate", "--project", source);
             var tsconfig = ReadJson(Path.Combine(source, "tsconfig.json"));
             Require(tsconfig.GetProperty("compilerOptions").GetProperty("strict").GetBoolean(), "Source compiler must be strict.");

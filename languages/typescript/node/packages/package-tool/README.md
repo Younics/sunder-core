@@ -1,4 +1,4 @@
-# @sunder/package-tool
+# @younics/sunder-package-tool
 
 The published tarball documents its release; this repository tracks current source.
 The tool builds thin Node 24 Worker V1 packages and optional Vite web App targets.
@@ -65,10 +65,10 @@ The tooling package, not the runtime SDK, owns descriptor-to-TypeScript emission
 sunder-rpc-gen descriptor.json bindings.ts
 ```
 
-`generateTypeScriptBindings` is also exported from `@sunder/package-tool` for tool
+`generateTypeScriptBindings` is also exported from `@younics/sunder-package-tool` for tool
 hosts. Normal service packages use `sunder-package generate` instead. Emitted code
 imports supported binding helpers through the explicit, browser-safe
-`@sunder/sdk/generated` runtime entry point; it does not load the generator at runtime.
+`@younics/sunder-sdk/generated` runtime entry point; it does not load the generator at runtime.
 That generated-code ABI remains a compatibility obligation, not an invitation to
 handwrite marshalling or import package-tool into a Worker or browser App.
 

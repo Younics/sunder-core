@@ -1,4 +1,4 @@
-import { defineService, defineServiceError, RpcDomainError, type ServiceContext, type WorkerContext } from "@sunder/sdk";
+import { defineService, defineServiceError, RpcDomainError, type ServiceContext, type WorkerContext } from "@younics/sunder-sdk";
 export { configure } from "./worker.js";
 
 type Request = { message: string };

@@ -3,7 +3,7 @@ import {
   isSemanticVersion,
   isVersionInRange,
   SEMANTIC_VERSION_MAXIMUM_LENGTH,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 
 export function validateDependencyVersionRange(range: string, label: string): void {
   if (!isPackageVersionRange(range) || range.includes("  ")) {

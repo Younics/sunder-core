@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { open, rename, unlink } from "node:fs/promises";
 import { join } from "node:path";
-import { isPackageId } from "@sunder/sdk";
+import { isPackageId } from "@younics/sunder-sdk";
 import { cachePath, contractCacheFiles, DEFAULT_CONTRACT_CACHE } from "./rpc-contract-cache";
 import { contractError, consumerRoles, parseContractLock, type ConsumerRole, type ContractLock, type RegistryOriginOptions } from "./rpc-contract-lock";
 import { ordered, outerBytes, outerKeys, parseOuter, type Outer, type OuterObject } from "./rpc-baseline-json";

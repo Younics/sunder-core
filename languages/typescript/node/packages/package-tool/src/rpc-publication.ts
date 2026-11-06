@@ -1,4 +1,4 @@
-import { isSemanticVersion } from "@sunder/sdk";
+import { isSemanticVersion } from "@younics/sunder-sdk";
 import { resolve } from "node:path";
 import { inspectContractCandidate, type InspectedOwnedContract } from "./rpc-contract-candidate";
 import { parseContractWireJson, registryOrigin, type RegistryOriginOptions } from "./rpc-contract-lock";

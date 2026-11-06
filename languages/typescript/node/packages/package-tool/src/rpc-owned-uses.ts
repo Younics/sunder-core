@@ -1,5 +1,5 @@
 import type { ContractUseConfig, LoadedContract, PackageRole, ProviderConfig } from "./model";
-import { isPackageId, isSemanticVersion, parseRpcContractDescriptor, canonicalRpcDescriptorBytes, canonicalRpcAbiProjectionBytes, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR } from "@sunder/sdk";
+import { isPackageId, isSemanticVersion, parseRpcContractDescriptor, canonicalRpcDescriptorBytes, canonicalRpcAbiProjectionBytes, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR } from "@younics/sunder-sdk";
 import { createHash } from "node:crypto";
 import { fields, object, outerBytes, type Outer, type OuterObject } from "./rpc-baseline-json";
 import { contractSymbol } from "./rpc-package-imports";

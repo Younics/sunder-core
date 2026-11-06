@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { FrameDecoder, encodeFrame, formatUtcTimestamp, type JsonValue } from "@sunder/sdk";
+import { FrameDecoder, encodeFrame, formatUtcTimestamp, type JsonValue } from "@younics/sunder-sdk";
 import { currentRid } from "../src/model";
 
 export async function exerciseOwnedWorker(root: string, dev = false, contractVersion = "1.0.0", scaffold?: { readonly packageName: string; readonly app: boolean }, runtimeModule?: string,

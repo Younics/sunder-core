@@ -6,7 +6,7 @@ import {
   isSemanticVersion,
   parseRpcContractDescriptor,
   type RpcContractDescriptor,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 
 const MAXIMUM_BYTES = 64 * 1024 * 1024;
 const MAXIMUM_DESCRIPTOR_BYTES = 4 * 1024 * 1024;

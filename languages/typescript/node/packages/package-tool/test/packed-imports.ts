@@ -15,7 +15,7 @@ export async function exercisePackedImports(tool: string, extension: string, nod
   await exerciseServiceApiScopes(dirname(tool), extension);
   const root = await mkdtemp(resolve(tmpdir(), "sunder-packed-imports-"));
   try {
-    await installFixtureSdk(root, resolve(dirname(tool), "../../sdk"));
+    await installFixtureSdk(root, resolve(dirname(tool), "../../sunder-sdk"));
     await mkdir(resolve(root, "src"));
     const corpus = resolve(nodeRoot, "../../../specs/rpc/v1");
     const value = JSON.parse(await readFile(resolve(corpus, "authoring/conformance/valid/package-api-contract-lock.json"), "utf8"));
@@ -25,13 +25,13 @@ export async function exercisePackedImports(tool: string, extension: string, nod
     await writeFile(resolve(root, "sunder-contracts.owned.json"), await readFile(resolve(corpus, "authoring/conformance/valid/minimal-package-owned-baseline.json")));
     await writeFile(resolve(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.owner", name: "Packed Imports", version: "1.0.0",
       workerCapabilities: [], services: { module: `src/rpc.${extension}` } }));
-    await writeFile(resolve(root, `src/rpc.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.extension});');
+    await writeFile(resolve(root, `src/rpc.${extension}`), 'import {defineService} from "@younics/sunder-sdk"; import {Implementations} from "#sunder/api"; export const implementation=defineService({examplePing(request,context){context.signal.throwIfAborted();return request;}},{implements:Implementations.extension});');
     const cache = resolve(root, "cache"); const toolRoot = dirname(tool);
     await exec(process.execPath, ["-e", `const fs=require("node:fs"),path=require("node:path");
       const {parseContractLock}=require(path.join(process.argv[1],"rpc-contract-lock.js"));
       const {publishContractCache}=require(path.join(process.argv[1],"rpc-contract-cache.js"));
       const {publishModelProjectionCache}=require(path.join(process.argv[1],"rpc-model-projection-cache.js"));
-      const sdk=require(path.join(process.argv[1],"../../sdk/dist/index.js"));
+      const sdk=require(path.join(process.argv[1],"../../sunder-sdk/dist/index.js"));
       (async()=>{const lock=parseContractLock(fs.readFileSync(process.argv[2]));const hash=[...lock.requirements.keys()][0];
       const bytes=Buffer.from(sdk.canonicalRpcDescriptorBytes(sdk.parseRpcContractDescriptor(fs.readFileSync(process.argv[3]))));
       const descriptors=new Map([[hash,bytes]]);await publishContractCache(process.argv[4],descriptors,lock.requirements);
@@ -44,7 +44,7 @@ export async function exercisePackedImports(tool: string, extension: string, nod
     assert.equal(manifest.usesContracts[0].required, false); assert.equal(manifest.providerImports[0].providerRefs.length, 1);
     const rid = `${process.platform === "darwin" ? "osx" : process.platform === "win32" ? "win" : "linux"}-${process.arch}`;
     const dispatched = await exec(process.execPath, ["-e", `const assert=require("node:assert/strict"),path=require("node:path"),{build}=require(path.join(process.argv[1],"../../../esbuild"));
-      (async()=>{const result=await build({entryPoints:[path.join(process.argv[2],".sunder/generated/rpc/adapter.js")],bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":path.join(process.argv[1],"../../sdk/dist/index.js"),"@sunder/sdk/browser":path.join(process.argv[1],"../../sdk/dist/browser.js"),"@sunder/sdk/generated":path.join(process.argv[1],"../../sdk/dist/generated.js"),"#sunder/api":path.join(process.argv[2],".sunder/generated/rpc/api.js")}});const module={exports:{}};new Function("require","module","exports",result.outputFiles[0].text)(require,module,module.exports); const provider=module.exports.providers[0];assert.deepEqual(await provider.handler.invokeUnary({signal:new AbortController().signal},"example","ping",{}),{});console.log("packed-import-dispatched");})().catch(e=>{console.error(e);process.exitCode=1;});`, toolRoot, root]);
+      (async()=>{const result=await build({entryPoints:[path.join(process.argv[2],".sunder/generated/rpc/adapter.js")],bundle:true,platform:"node",format:"cjs",write:false,alias:{"@younics/sunder-sdk":path.join(process.argv[1],"../../sunder-sdk/dist/index.js"),"@younics/sunder-sdk/browser":path.join(process.argv[1],"../../sunder-sdk/dist/browser.js"),"@younics/sunder-sdk/generated":path.join(process.argv[1],"../../sunder-sdk/dist/generated.js"),"#sunder/api":path.join(process.argv[2],".sunder/generated/rpc/api.js")}});const module={exports:{}};new Function("require","module","exports",result.outputFiles[0].text)(require,module,module.exports); const provider=module.exports.providers[0];assert.deepEqual(await provider.handler.invokeUnary({signal:new AbortController().signal},"example","ping",{}),{});console.log("packed-import-dispatched");})().catch(e=>{console.error(e);process.exitCode=1;});`, toolRoot, root]);
     assert.match(dispatched.stdout, /packed-import-dispatched/);
     assert.equal(await readFile(resolve(root, "sunder-contracts.lock.json"), "utf8"), locked);
     await assert.rejects(run("api", "unimplement", "example.dependency", "example.rpc.v1.minimal"), /remove-still-referenced/);

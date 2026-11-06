@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { basename, dirname, resolve } from "node:path";
-import { isPackageId, PACKAGE_ID_MAXIMUM_LENGTH } from "@sunder/sdk";
+import { isPackageId, PACKAGE_ID_MAXIMUM_LENGTH } from "@younics/sunder-sdk";
 
 const PROVIDER_ID_SUFFIX = ".messages.provider";
 const VIEW_ID_SUFFIX = ".main";

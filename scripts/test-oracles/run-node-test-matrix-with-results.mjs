@@ -23,9 +23,9 @@ const scripts = [...new Set(tests.filter(test => test.source.startsWith("scripts
 if (["all", "scripts"].includes(values.action) && scripts.length > 0) runNodeReport("node-core-oracles", scripts);
 
 const workspaces = [
-  ["@sunder/sdk", "packages/sdk", "node-sdk"],
-  ["@sunder/package-tool", "packages/package-tool", "node-package-tool"],
-  ["create-sunder-package", "packages/create-sunder-package", "node-create-sunder-package"],
+  ["@younics/sunder-sdk", "packages/sdk", "node-sdk"],
+  ["@younics/sunder-package-tool", "packages/package-tool", "node-package-tool"],
+  ["@younics/create-sunder-package", "packages/create-sunder-package", "node-create-sunder-package"],
 ].filter(([, project]) => selectedProjects.has(project.split("/").at(-1)));
 const statePath = values.work && resolve(values.work, "workspace.json");
 const workspace = values.action === "scripts" || workspaces.length === 0 ? undefined
@@ -63,7 +63,7 @@ function runWorkspace(workspace, project, report) {
     `${workspace} test compilation`,
   );
   runNodeReport(report, testFiles(resolve(nodeRoot, project, "dist-test/test"), ".test.js"),
-    workspace === "@sunder/package-tool"
+    workspace === "@younics/sunder-package-tool"
       ? { SUNDER_TEST_PACKED_CLOSURE: "1", SUNDER_TEST_PACKED_SERVICES: "1" }
       : {});
 }

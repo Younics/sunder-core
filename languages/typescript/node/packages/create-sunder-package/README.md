@@ -1,8 +1,8 @@
-# create-sunder-package
+# @younics/create-sunder-package
 
 > **Release/source channel:** The npm tarball README describes that published version. The repository copy tracks current source and may be ahead of npm; use the matching `sdk/v*` tag when auditing a release.
 
-Run `npm create sunder-package@latest` for a TypeScript Node service package. Add `-- --preset react-node` for React plus Node, and `--language js` for genuine checked JavaScript (including JSX in the React preset).
+Run `npm create @younics/sunder-package@latest` for a TypeScript Node service package. Add `-- --preset react-node` for React plus Node, and `--language js` for genuine checked JavaScript (including JSX in the React preset).
 
 Both presets configure one `src/services.ts` or `.js` module exporting `defineService` definitions. Sunder generates Worker bootstrap, registrations, descriptors and `#sunder/api` tokens/clients. React uses `ApiProvider` and `useApi(Self)`. TypeScript types and checked JS JSDoc use the same semantic compiler; JS sources are independently authored rather than transpiled TS samples.
 

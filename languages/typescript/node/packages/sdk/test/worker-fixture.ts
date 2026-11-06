@@ -4,7 +4,7 @@ import { workerV1ConformanceCorpus, type StorageMigrationRule } from "./worker-v
 import {RpcMarshallingContext} from "../src/resources";
 import {SunderContent} from "../src/content";
 // Test-only source generation belongs to the workspace's build tool, never the Worker SDK.
-import {generateTypeScriptBindings,authoringBindingModel} from "@sunder/package-tool";
+import {generateTypeScriptBindings,authoringBindingModel} from "@younics/sunder-package-tool";
 import type {RpcContractDescriptor,RpcProviderHandler} from "../src/types";
 import {bindApiContext} from "../src/api";
 

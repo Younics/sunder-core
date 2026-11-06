@@ -13,7 +13,7 @@ const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 export function sdkPackageNames(version) {
   return ["Sunder.Sdk", "Sunder.Sdk.Avalonia", "Sunder.Sdk.Stacks", "Sunder.Sdk.Worker", "Sunder.Package.Build", "Sunder.Package.Templates"]
     .map(name => `${name}.${version}.nupkg`)
-    .concat(["sunder-sdk", "sunder-package-tool", "create-sunder-package"].map(name => `${name}-${version}.tgz`));
+    .concat(["younics-sunder-sdk", "younics-sunder-package-tool", "younics-create-sunder-package"].map(name => `${name}-${version}.tgz`));
 }
 
 export function qualifySdkRelease({ currentBytes, baseBytes, currentRoot, qualificationRoot, candidateRoot, executionRoot,

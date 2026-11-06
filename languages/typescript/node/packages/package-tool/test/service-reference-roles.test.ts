@@ -21,23 +21,23 @@ const behaviorId = "example.roles.behavior", controlId = "example.roles.run.cont
 
 function source(language: "ts" | "js", intent: Intent = {}): string {
   const app = (actions: readonly Action[] | undefined) => actions ? `,appUse:{actions:${JSON.stringify(actions)}}` : "";
-  return fixtureSource(`import {defineService,defineServiceError} from "@sunder/sdk";
-/*ts import type {ServiceReference} from "@sunder/sdk";*/
-/** @typedef {{controls:Record<string,import("@sunder/sdk").ServiceReference<typeof runControl>>,next?:BehaviorRequest,children?:BehaviorRequest[]}} BehaviorRequest */
+  return fixtureSource(`import {defineService,defineServiceError} from "@younics/sunder-sdk";
+/*ts import type {ServiceReference} from "@younics/sunder-sdk";*/
+/** @typedef {{controls:Record<string,import("@younics/sunder-sdk").ServiceReference<typeof runControl>>,next?:BehaviorRequest,children?:BehaviorRequest[]}} BehaviorRequest */
 /*ts type BehaviorRequest={controls:Record<string,ServiceReference<typeof runControl>>;next?:BehaviorRequest;children?:BehaviorRequest[]};*/
-/** @typedef {{behaviors:Record<string,import("@sunder/sdk").ServiceReference<typeof behavior>>,next?:ControlRequest}} ControlRequest */
+/** @typedef {{behaviors:Record<string,import("@younics/sunder-sdk").ServiceReference<typeof behavior>>,next?:ControlRequest}} ControlRequest */
 /*ts type ControlRequest={behaviors:Record<string,ServiceReference<typeof behavior>>;next?:ControlRequest};*/
-/** @typedef {{control:import("@sunder/sdk").ServiceReference<typeof runControl>}} Failure */
+/** @typedef {{control:import("@younics/sunder-sdk").ServiceReference<typeof runControl>}} Failure */
 /*ts type Failure={control:ServiceReference<typeof runControl>};*/
 /** @typedef {{run:(request:BehaviorRequest)=>string,watch:()=>AsyncIterable<string>}} Behavior */
 /*ts interface Behavior {run(request:BehaviorRequest):string;watch():AsyncIterable<string>}*/
 /** @typedef {{step:()=>ControlRequest}} RunControl */
 /*ts interface RunControl {step():ControlRequest}*/
-/** @type {import("@sunder/sdk").ServiceDefinition<Behavior>} */
+/** @type {import("@younics/sunder-sdk").ServiceDefinition<Behavior>} */
 export const behavior=defineService/*<Behavior>*/(null,{declarationOnly:true,exposure:"public"${intent.runtimeBehavior === false ? "" : ',runtimeUse:{actions:["discover"]}'}${app(intent.behavior)},
- errors:{"example.failure":/** @type {import("@sunder/sdk").ServiceError<Failure>} */(defineServiceError/*<Failure>*/())},
+ errors:{"example.failure":/** @type {import("@younics/sunder-sdk").ServiceError<Failure>} */(defineServiceError/*<Failure>*/())},
  methods:{run:{timeoutSeconds:2100},watch:{errors:${JSON.stringify(intent.streamError ? ["example.failure"] : [])}}}});
-/** @type {import("@sunder/sdk").ServiceDefinition<RunControl>} */
+/** @type {import("@younics/sunder-sdk").ServiceDefinition<RunControl>} */
 export const runControl=defineService/*<RunControl>*/(null,{declarationOnly:true,exposure:"public",runtimeUse:{actions:["discover"]}${app(intent.control)}});
 export const behaviorProvider=defineService({
  /** @param {BehaviorRequest} request @returns {string} */
@@ -76,9 +76,9 @@ async function checkAppState(root: string, language: "ts" | "js", namespace = "S
   await writeFile(path, language === "ts" ? `export const state: {active?: ${model}} = {};` : `/** @type {{active?: ${model}}} */ export const state = {};`);
   const program = ts.createProgram([path], {target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.ESNext,moduleResolution:ts.ModuleResolutionKind.Bundler,
     strict:true,allowJs:true,checkJs:true,noEmit:true,types:[],skipLibCheck:false,paths:{
-     "@sunder/sdk/browser":[require.resolve("@sunder/sdk/browser").replace(/\.js$/u,".d.ts")],
-     "@sunder/sdk/generated":[require.resolve("@sunder/sdk/generated").replace(/\.js$/u,".d.ts")],
-      "@sunder/sdk/core":[require.resolve("@sunder/sdk/core").replace(/\.js$/u,".d.ts")],
+     "@younics/sunder-sdk/browser":[require.resolve("@younics/sunder-sdk/browser").replace(/\.js$/u,".d.ts")],
+     "@younics/sunder-sdk/generated":[require.resolve("@younics/sunder-sdk/generated").replace(/\.js$/u,".d.ts")],
+      "@younics/sunder-sdk/core":[require.resolve("@younics/sunder-sdk/core").replace(/\.js$/u,".d.ts")],
     }});
   assert.deepEqual(ts.getPreEmitDiagnostics(program).map(value=>ts.flattenDiagnosticMessageText(value.messageText,"\n")),[]);
 }
@@ -172,8 +172,8 @@ for (const language of ["ts", "js"] as const) test(`${language} imported referen
       assert.deepEqual(methodPoliciesBytes(entry.methodPolicies),methodPoliciesBytes(original.methodPolicies));
     }
     await writeFile(consumer.path, fixtureSource(`import {Library} from "#sunder/api";
-/*ts import type {WorkerContext} from "@sunder/sdk";*/
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/*ts import type {WorkerContext} from "@younics/sunder-sdk";*/
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context/*:WorkerContext*/) {return {async onActivated(){
   await context.api(Library).example_Roles_Run_Control.runControl.step({});
 }};}`,language));

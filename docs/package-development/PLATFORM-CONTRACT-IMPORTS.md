@@ -54,7 +54,7 @@ The default key for `sunder.stack.contributor` is `stackContributor`;
 
 C# generates `Sunder.Generated.Rpc.IStackContributorService`. Node exposes the
 lock-derived `Implementations.stackContributor` service contract from `#sunder/api`.
-Import `defineService` from `@sunder/sdk` and bind a complete ordinary method record
+Import `defineService` from `@younics/sunder-sdk` and bind a complete ordinary method record
 with `defineService(methods, { implements: Implementations.stackContributor })`.
 The generated types define every required method, request/result and invocation
 context; checked JavaScript uses the same contextual signatures. Multiple

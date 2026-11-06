@@ -93,7 +93,7 @@ test("project selection precedes release packaging without tag redispatch or man
   for (const scope of ["npm", "dotnet", "repository"]) assert.equal(requiresNodeDependencies({ scope }), true);
   assert.match(restore, /npm ci --prefix languages\/typescript\/node/u);
   const pack = component.indexOf('core_ci.py pack');
-  assert.ok(pack > component.indexOf("core_ci.py test") && pack > component.indexOf("Test create-sunder-package"));
+  assert.ok(pack > component.indexOf("core_ci.py test") && pack > component.indexOf("Test @younics/create-sunder-package"));
   const packStep = workflowStep(component, "Pack and verify selected package candidates");
   assert.match(packStep, /if: inputs.release-packages/u);
   assert.doesNotMatch(component, /dotnet pack|npm pack --prefix/u);

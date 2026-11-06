@@ -5,7 +5,7 @@ import { lstat, mkdtemp, open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
-import { isPackageId, isSemanticVersion } from "@sunder/sdk";
+import { isPackageId, isSemanticVersion } from "@younics/sunder-sdk";
 import { cachePath, contractCacheFiles, verifyCacheDescriptor } from "./rpc-contract-cache";
 import { contractError, digest, hashBytes, parseContractWireJson, readRequirement } from "./rpc-contract-lock";
 import type { OuterObject } from "./rpc-baseline-json";

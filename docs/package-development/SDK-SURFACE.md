@@ -12,8 +12,8 @@ changes require the compatibility/release gates in
 | --- | --- | --- |
 | Normal authoring | Template, ordinary service classes/models, generated `I<Service>`, content/references, settings/logging/storage and App services | Template, `defineService`, ordinary TS or checked JS, generated `Self` / `Services`, content/references, managed browser/React contexts |
 | Advanced integration | Low-level RPC, manual modules, Worker bootstrap, compatibility metadata | Descriptor utilities, `runWorker`, low-level RPC and explicit transport integration |
-| Generated runtime support | Public marshalling, exact-binding, resource lifetime and call helpers in `Sunder.Sdk` | Explicit browser-safe `@sunder/sdk/generated`; referenced by emitted code, not a normal authoring recipe |
-| Build tooling | `Sunder.Package.Build`, internal `Rpc/Generation`, editor generator, templates | `@sunder/package-tool` source analysis/emission and `sunder-rpc-gen`; `create-sunder-package` starters |
+| Generated runtime support | Public marshalling, exact-binding, resource lifetime and call helpers in `Sunder.Sdk` | Explicit browser-safe `@younics/sunder-sdk/generated`; referenced by emitted code, not a normal authoring recipe |
+| Build tooling | `Sunder.Package.Build`, internal `Rpc/Generation`, editor generator, templates | `@younics/sunder-package-tool` source analysis/emission and `sunder-rpc-gen`; `@younics/create-sunder-package` starters |
 
 Generated runtime support remains shipped and supported even when hidden from
 IntelliSense or marked `@internal` in source. Those markers are documentation,

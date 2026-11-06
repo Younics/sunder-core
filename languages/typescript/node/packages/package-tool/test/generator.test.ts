@@ -14,12 +14,12 @@ import {
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { canonicalizeDescriptor, generateTypeScriptBindings } from "../src/generator";
-import { parseRpcContractDescriptor } from "@sunder/sdk";
+import { parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import {
   SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 
 test("the tooling generator consumes validated V1 keyed descriptors", () => {
   const path = resolve(__dirname, "../../../../../../../specs/rpc/v1/conformance/valid/complete.rpc.json");
@@ -38,7 +38,7 @@ import type {
   RpcInvoker,
   RpcProviderHandler,
   RpcProviderRegistration,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 
 interface GeneratedBindingsModule {
   readonly CONTRACT_ID: string;
@@ -393,8 +393,8 @@ test("generated bindings compile for worker and browser clients and execute prov
   const second = generateTypeScriptBindings(compileDescriptor, hashes);
 
   assert.equal(first, second);
-  assert.match(first, /from "@sunder\/sdk\/core";/u);
-  assert.match(first, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/generated";/mu);
+  assert.match(first, /from "@younics\/sunder-sdk\/core";/u);
+  assert.match(first, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@younics\/sunder-sdk\/generated";/mu);
   assert.doesNotMatch(first, /from "node:/u);
   assert.match(first, /export const CONTRACT_ID = "example\.generator" as const;/u);
   assert.match(first, /export const CONTRACT_VERSION = "1\.0\.0" as const;/u);
@@ -580,7 +580,7 @@ test("V1 bindings compile and execute with canonical worker identity, logical wi
   assert.match(source, /export type Instant = string;/u);
   assert.match(source, /export type NullableText = null \| Text;/u);
   assert.match(source, /readonly optionalNote\?: NullableText;/u);
-  assert.match(source, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/generated";/mu);
+  assert.match(source, /^import \{ validateRpcInstance as \$validateRpcInstance \} from "@younics\/sunder-sdk\/generated";/mu);
   assert.doesNotMatch(source, /from "node:/u);
 
   const generated = compileGeneratedModule(source, `
@@ -599,8 +599,8 @@ import type {
   RpcContractIdentity,
   RpcInvocationContext,
   RpcProviderRegistration,
-} from "@sunder/sdk";
-import type { SunderBrowserRpc } from "@sunder/sdk/browser";
+} from "@younics/sunder-sdk";
+import type { SunderBrowserRpc } from "@younics/sunder-sdk/browser";
 
 const content: RpcContentReference = {
   id: "opaque-content-id",
@@ -748,7 +748,7 @@ test("value-profile bindings deterministically compile and convert exact domain 
   assert.match(first, /\$toWireBase64/u);
   assert.match(first, /\$fromWireBigInteger/u);
   assert.match(first, /readonly optionalNullable\?: NullableText;/u);
-  assert.match(first, /import \{ RpcDomainError, validateRpcInstance as \$validateRpcInstance \} from "@sunder\/sdk\/generated";/u);
+  assert.match(first, /import \{ RpcDomainError, validateRpcInstance as \$validateRpcInstance \} from "@younics\/sunder-sdk\/generated";/u);
   assert.match(first, /export function createExampleDetailsRpcError\(details: Decimal/u);
   assert.match(first, /export function tryGetExampleDetailsRpcErrorDetails\(error: unknown\): Decimal \| undefined/u);
 
@@ -760,8 +760,8 @@ import {
   type Event,
   type Values,
 } from "./bindings";
-import type { RpcClient } from "@sunder/sdk";
-import type { SunderBrowserRpc } from "@sunder/sdk/browser";
+import type { RpcClient } from "@younics/sunder-sdk";
+import type { SunderBrowserRpc } from "@younics/sunder-sdk/browser";
 
 const common: Values = {
   any: { nested: [true, 1.25] },
@@ -1222,8 +1222,8 @@ import type {
   RpcContractIdentity,
   RpcInvocationContext,
   RpcProviderHandler,
-} from "@sunder/sdk";
-import type { SunderBrowserRpc } from "@sunder/sdk/browser";
+} from "@younics/sunder-sdk";
+import type { SunderBrowserRpc } from "@younics/sunder-sdk/browser";
 
 const request: FooBar = {
   class: "request",

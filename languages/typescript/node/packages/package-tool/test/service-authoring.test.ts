@@ -21,14 +21,14 @@ async function project(source: string, extension: string) {
   await writeFile(join(root, "sunder-contracts.lock.json"), JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2) + "\n");
   return root;
 }
-const typescript = `import {defineService} from "@sunder/sdk";
+const typescript = `import {defineService} from "@younics/sunder-sdk";
 export const greeting = defineService({
  async greet(name: string): Promise<string> { return "Hello " + name; },
  async reset(): Promise<void> {},
  async *watch(name: string): AsyncIterable<string> { yield name; }
 });`;
 const javascript = `// @ts-check
-import {defineService} from "@sunder/sdk";
+import {defineService} from "@younics/sunder-sdk";
 export const greeting = defineService({
  /** @param {string} name @returns {Promise<string>} */
  async greet(name) { return "Hello " + name; },
@@ -76,11 +76,11 @@ test("ordinary public fixture source preserves its complete frozen descriptor an
   assert.equal(loaded.contracts[0]!.abiSha256, accepted.abiSha256);
   assert.deepEqual(loaded.contracts[0]!.appUse, {required:false,actions:["discover","invoke","subscribe"]});
   assert.deepEqual(loaded.config.usesContracts, [], "A Runtime-only fixture gets no App or implicit Runtime grant.");
-  assert.doesNotMatch(loaded.ownedRpc!.files.get("api.d.ts")!, /["']@sunder\/sdk["']/u);
+  assert.doesNotMatch(loaded.ownedRpc!.files.get("api.d.ts")!, /["']@younics\/sunder-sdk["']/u);
   assert.deepEqual(await readFile(join(root, "sunder-contracts.owned.json")), before);
 });
 test("ordinary record/list/map/nullable/recursive types reuse validating logical-value codecs", async () => {
-  const source = `import {defineService} from "@sunder/sdk";
+  const source = `import {defineService} from "@younics/sunder-sdk";
 type Item = { label: string; next?: Item };
 type Payload = { count: bigint; bytes: Uint8Array; enabled: boolean | null; note?: string | null; scores: Record<string, number>; items: readonly Item[] };
 function roundTrip(request: Payload): Payload {
@@ -92,7 +92,7 @@ export const echo = defineService({roundTrip});`;
   try {
     await generateRpcBindings(root);
     const built = await build({ entryPoints: [join(root, ".sunder/generated/rpc/adapter.ts")], platform: "node", format: "cjs", bundle: true, write: false,
-      alias: { "@sunder/sdk": require.resolve("@sunder/sdk"), "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") } });
+      alias: { "@younics/sunder-sdk": require.resolve("@younics/sunder-sdk"), "@younics/sunder-sdk/browser": require.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": require.resolve("@younics/sunder-sdk/generated") } });
     const loaded = { exports: {} as { providers?: Array<{ handler: { invokeUnary(context: unknown, service: string, method: string, request: unknown): Promise<unknown> } }> } };
     new Function("require", "module", "exports", built.outputFiles[0]!.text)(require, loaded, loaded.exports);
     const invoke = (value: unknown) => loaded.exports.providers![0]!.handler.invokeUnary({ signal: new AbortController().signal }, "echo", "round-trip", value);
@@ -107,8 +107,8 @@ test("declaration-only services bind multiple checked implementations through th
   for (const extension of ["ts", "js"]) {
     const declaration = extension === "ts"
       ? 'interface Greeting { greet(name: string): Promise<string> } export const greeting = defineService<Greeting>(null, {declarationOnly:true, exposure:"public"});'
-      : '/** @typedef {{greet: (name: string) => Promise<string>}} Greeting */\n/** @type {import("@sunder/sdk").ServiceDefinition<Greeting>} */\nexport const greeting = defineService(null, {declarationOnly:true, exposure:"public"});';
-    const source = `import {defineService} from "@sunder/sdk";\n${declaration}
+      : '/** @typedef {{greet: (name: string) => Promise<string>}} Greeting */\n/** @type {import("@younics/sunder-sdk").ServiceDefinition<Greeting>} */\nexport const greeting = defineService(null, {declarationOnly:true, exposure:"public"});';
+    const source = `import {defineService} from "@younics/sunder-sdk";\n${declaration}
 export const first = defineService({async greet(name){return "first " + name;}}, {implements:greeting, providerId:"example.first"});
 export const second = defineService({async greet(name){return "second " + name;}}, {implements:greeting, providerId:"example.second"});`;
     const root = await project(source, extension);

@@ -1,4 +1,4 @@
-import { canonicalizeDescriptor, canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isPackageId, isSemanticVersion, type JsonValue, type RpcContractDescriptor, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR } from "@sunder/sdk";
+import { canonicalizeDescriptor, canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isPackageId, isSemanticVersion, type JsonValue, type RpcContractDescriptor, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR } from "@younics/sunder-sdk";
 import { createHash } from "node:crypto";
 import { fields, object, ordered, outerBytes, outerKeys, parseOuter, type Outer, type OuterObject } from "./rpc-baseline-json";
 

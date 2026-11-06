@@ -1,10 +1,10 @@
 // @ts-check
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 import { startProbe, cancelled } from "./probe.js";
 
-/** @type {import("@sunder/sdk").WorkerContext} */
+/** @type {import("@younics/sunder-sdk").WorkerContext} */
 let worker;
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context) { worker = context; return startProbe(context); }
 
 export const probe = defineService({
@@ -12,7 +12,7 @@ export const probe = defineService({
   echo(value) { return "echo:" + value; },
   /** @param {string} value @returns {AsyncIterable<string>} */
   async *finite(value) { yield value + ":1"; yield value + ":2"; },
-  /** @param {string} value @param {import("@sunder/sdk").ServiceContext} context @returns {AsyncIterable<string>} */
+  /** @param {string} value @param {import("@younics/sunder-sdk").ServiceContext} context @returns {AsyncIterable<string>} */
   async *wait(value, context) {
     try { yield value + ":started"; await cancelled(context.signal); }
     finally {

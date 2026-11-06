@@ -50,9 +50,9 @@ export async function verifyNodePackageArtifacts({
   const directoryStat = await lstat(directory);
   assert(directoryStat.isDirectory() && !directoryStat.isSymbolicLink(), `npm artifact directory must be a real directory: ${directory}`);
   const allPackages = [
-    { name: "@sunder/sdk", archive: `sunder-sdk-${version}.tgz` },
-    { name: "@sunder/package-tool", archive: `sunder-package-tool-${version}.tgz` },
-    { name: "create-sunder-package", archive: `create-sunder-package-${version}.tgz` },
+    { name: "@younics/sunder-sdk", archive: `younics-sunder-sdk-${version}.tgz` },
+    { name: "@younics/sunder-package-tool", archive: `younics-sunder-package-tool-${version}.tgz` },
+    { name: "@younics/create-sunder-package", archive: `younics-create-sunder-package-${version}.tgz` },
   ];
   if (packageNames !== undefined) {
     assert(
@@ -148,14 +148,14 @@ export async function verifyNodePackageArtifacts({
     const archiveEntries = entries.map((entry) => entry.slice("package/".length));
     assertExactEntries(`${item.archive} archive`, archiveEntries, expectedEntries);
 
-    if (item.name === "create-sunder-package") {
+    if (item.name === "@younics/create-sunder-package") {
       for (const template of ["template", "template-react-node"]) {
         const templateManifest = readArchiveJson(archivePath, `package/${template}/package.json`);
         assert(templateManifest.engines?.node === REQUIRED_NODE_ENGINE,
           `${template} must require Node '${REQUIRED_NODE_ENGINE}'.`);
-        assert(templateManifest.dependencies?.["@sunder/sdk"] === npmVersionRange,
-          `${template} must depend on @sunder/sdk '${npmVersionRange}'.`);
-        assert(typeof templateManifest.devDependencies?.["@sunder/package-tool"] === "string",
+        assert(templateManifest.dependencies?.["@younics/sunder-sdk"] === npmVersionRange,
+          `${template} must depend on @younics/sunder-sdk '${npmVersionRange}'.`);
+        assert(typeof templateManifest.devDependencies?.["@younics/sunder-package-tool"] === "string",
           `${template} must declare its package-tool dependency independently.`);
         if (template === "template-react-node") {
           assert(templateManifest.devDependencies?.vite === `^${viteVersion}`,
@@ -191,12 +191,12 @@ export async function verifyNodePackageArtifacts({
     });
   }
 
-  for (const name of ["@sunder/package-tool", "create-sunder-package"]) {
-    if (manifests.has(name)) assert(manifests.get(name).dependencies?.["@sunder/sdk"] === npmVersionRange,
-      `${name} must depend on @sunder/sdk '${npmVersionRange}'.`);
+  for (const name of ["@younics/sunder-package-tool", "@younics/create-sunder-package"]) {
+    if (manifests.has(name)) assert(manifests.get(name).dependencies?.["@younics/sunder-sdk"] === npmVersionRange,
+      `${name} must depend on @younics/sunder-sdk '${npmVersionRange}'.`);
   }
-  if (manifests.has("@sunder/package-tool")) assert(manifests.get("@sunder/package-tool").dependencies?.vite === viteVersion,
-    `@sunder/package-tool must pin Vite '${viteVersion}'.`);
+  if (manifests.has("@younics/sunder-package-tool")) assert(manifests.get("@younics/sunder-package-tool").dependencies?.vite === viteVersion,
+    `@younics/sunder-package-tool must pin Vite '${viteVersion}'.`);
 
   return results;
 }

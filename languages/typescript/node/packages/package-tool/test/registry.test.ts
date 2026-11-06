@@ -6,7 +6,7 @@ import {
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
   type RpcContractDescriptor,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 import { fetchRegistryContract, fetchRegistryContractBindings } from "../src/registry";
 
 const CONTRACT_ID = "example.messages";

@@ -63,7 +63,7 @@ supported; traversal, links and case-colliding files fail.
 
 The owner materializes that tree directly from verified tarballs in disposable
 work. Original npm SHA-512 integrity records are checked before candidate
-replacement. Only `@sunder/sdk` and `@sunder/package-tool` come from the selected
+replacement. Only `@younics/sunder-sdk` and `@younics/sunder-package-tool` come from the selected
 candidate archives; their embedded name/version must match the candidate context.
 The disposable `package.json` gets those exact dependency versions. **The retained
 source archive and npm/contract locks are never rewritten.** The npm lock remains

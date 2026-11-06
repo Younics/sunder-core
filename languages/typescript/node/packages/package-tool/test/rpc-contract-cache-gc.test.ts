@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { collectContractCache } from "../src/rpc-contract-cache-gc";
 import { publishContractCache, readContractCache } from "../src/rpc-contract-cache";
 import { hashBytes, parseContractLock, type CacheRequirement } from "../src/rpc-contract-lock";

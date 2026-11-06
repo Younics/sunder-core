@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes } from "@younics/sunder-sdk";
 import { loadProject, currentRid } from "../src/model";
 import { contractsCommand } from "../src/rpc-contracts";
 import { aggregateAndPack } from "../src/package";

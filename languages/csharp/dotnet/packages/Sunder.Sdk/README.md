@@ -104,7 +104,7 @@ developer documentation is separate from runtime `.sunderpkg` content: packaging
 excludes generated XML companions and symbol files after publish-file computation,
 while retaining explicitly authored XML content.
 
-Node workers and web Apps use the coordinated npm packages; `@sunder/sdk` is a
+Node workers and web Apps use the coordinated npm packages; `@younics/sunder-sdk` is a
 service/worker/browser subset, not this .NET API surface.
 
 ## Package Shape

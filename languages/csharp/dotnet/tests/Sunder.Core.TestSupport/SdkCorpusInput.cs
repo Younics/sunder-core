@@ -42,7 +42,7 @@ public sealed class SdkCorpusInput
         Require(Inputs.Select(x => Text(x, "id")).Distinct(StringComparer.OrdinalIgnoreCase).Count() == Inputs.Length,
             "Duplicate input identity.");
         var names = NuGetIds.Select(x => $"{x}.{Version}.nupkg").Concat(new[] {
-            $"sunder-sdk-{Version}.tgz", $"sunder-package-tool-{Version}.tgz", $"create-sunder-package-{Version}.tgz" });
+            $"younics-sunder-sdk-{Version}.tgz", $"younics-sunder-package-tool-{Version}.tgz", $"younics-create-sunder-package-{Version}.tgz" });
         Require(names.Order().SequenceEqual(Candidates.Select(x => Text(x, "assetName")).Order()), "Candidate inventory/version differs.");
         Require(Candidates.Select(x => Text(x, "artifactId")).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 9,
             "Duplicate candidate identity.");

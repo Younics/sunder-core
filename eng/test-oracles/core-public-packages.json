@@ -100,7 +100,7 @@
   ],
   "npm": [
     {
-      "name": "@sunder/sdk",
+      "name": "@younics/sunder-sdk",
       "project": "languages/typescript/node/packages/sdk",
       "role": "contract-and-worker-library",
       "maximumBytes": 3145728,
@@ -180,7 +180,7 @@
       ]
     },
     {
-      "name": "@sunder/package-tool",
+      "name": "@younics/sunder-package-tool",
       "project": "languages/typescript/node/packages/package-tool",
       "role": "node-package-tool",
       "maximumBytes": 5242880,
@@ -338,7 +338,7 @@
       ]
     },
     {
-      "name": "create-sunder-package",
+      "name": "@younics/create-sunder-package",
       "project": "languages/typescript/node/packages/create-sunder-package",
       "role": "node-template-tool",
       "maximumBytes": 5242880,

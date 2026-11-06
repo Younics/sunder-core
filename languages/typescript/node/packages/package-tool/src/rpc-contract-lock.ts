@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@sunder/sdk";
+import { isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@younics/sunder-sdk";
 import { fields, object, outerKeys, parseOuter, string, type OuterObject } from "./rpc-baseline-json";
 
 export interface RegistryOriginOptions { readonly allowDevelopmentRegistryOrigin?: boolean }

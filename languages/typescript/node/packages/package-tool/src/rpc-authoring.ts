@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { dirname, resolve as nativeResolve } from "node:path";
 import ts from "typescript";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256 } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256 } from "@younics/sunder-sdk";
 import { authoringBindingModel, generateTypeScriptBindings } from "./generator";
 import type { ContractUseConfig, LoadedContract, LoadedProject, ProviderConfig, PackageRole } from "./model";
 import { readProjectDescriptorFile } from "./descriptor-files";
@@ -26,7 +26,7 @@ import { analyzeConsumerRequirements } from "./rpc-consumer-analysis";
 import { consumerRequirementsOuter, type ConsumerRequirements } from "./rpc-consumer-requirements";
 
 const resolve = (...paths: string[]): string => nativeResolve(...paths).replaceAll("\\", "/");
-const producer = captureRpcProducer([__filename, require.resolve("@sunder/sdk"), require.resolve("typescript"), ...["./toolchains.generated", "./rpc-model-projection", "./rpc-model-projection-cache", "./rpc-contract-acquisition", "./service-source", "./service-bindings", "./rpc-consumer-analysis", "./rpc-consumer-requirements", "./rpc-owned-uses", "./model", "./module", "./compatibility", "./package", "./rpc-bindings", "./rpc-authoring-plugin", "./rpc-owned-app", "./output", "./notices", "./rpc-runtime-inputs", "./rpc-baseline", "./rpc-baseline-json", "./rpc-baseline-store", "./rpc-evolution", "./rpc-contracts", "./rpc-contract-lock", "./rpc-contract-cache", "./rpc-contract-cache-gc", "./rpc-contract-candidate", "./rpc-contract-restore", "./rpc-package-imports", "./rpc-package-selection", "./rpc-package-commands", "./rpc-publication", "./rpc-platform-catalogs", "./platform-catalog", "./rpc-platform-cache", "./cli"].map(path => require.resolve(path)), require.resolve("@sunder/package-tool/package.json"), resolve(dirname(require.resolve("@sunder/sdk")), "../package.json"), require.resolve("typescript/package.json")]);
+const producer = captureRpcProducer([__filename, require.resolve("@younics/sunder-sdk"), require.resolve("typescript"), ...["./toolchains.generated", "./rpc-model-projection", "./rpc-model-projection-cache", "./rpc-contract-acquisition", "./service-source", "./service-bindings", "./rpc-consumer-analysis", "./rpc-consumer-requirements", "./rpc-owned-uses", "./model", "./module", "./compatibility", "./package", "./rpc-bindings", "./rpc-authoring-plugin", "./rpc-owned-app", "./output", "./notices", "./rpc-runtime-inputs", "./rpc-baseline", "./rpc-baseline-json", "./rpc-baseline-store", "./rpc-evolution", "./rpc-contracts", "./rpc-contract-lock", "./rpc-contract-cache", "./rpc-contract-cache-gc", "./rpc-contract-candidate", "./rpc-contract-restore", "./rpc-package-imports", "./rpc-package-selection", "./rpc-package-commands", "./rpc-publication", "./rpc-platform-catalogs", "./platform-catalog", "./rpc-platform-cache", "./cli"].map(path => require.resolve(path)), require.resolve("@younics/sunder-package-tool/package.json"), resolve(dirname(require.resolve("@younics/sunder-sdk")), "../package.json"), require.resolve("typescript/package.json")]);
 export interface OwnedRpcAnalysis {
   readonly imports: PackageImportAnalysis; readonly producerFiles: readonly string[];
   readonly baselineInput: BaselineInput; readonly baseline?: OwnedBaseline;
@@ -118,7 +118,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   for (const [name, text] of imports.sources) virtual.set(resolve(generated, name), text);
   virtual.set(resolve(generated, "catalogs.ts"), imports.facadeSource);
   virtual.set(resolve(generated, "api.ts"), serviceApiSource(project.config.id, imports.contracts, [], imports, project.config.version));
-  const program = ts.createProgram([modulePath, sdk.declarations["@sunder/sdk"]!, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
+  const program = ts.createProgram([modulePath, sdk.declarations["@younics/sunder-sdk"]!, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
   const file = program.getSourceFile(modulePath); if (!file) fail("unsupported-source", "Service module could not be parsed.");
   let nodes = 0; let bytes = 0;
   for (const input of program.getSourceFiles()) if (!input.isDeclarationFile && !input.fileName.startsWith(generated + "/")) {
@@ -153,7 +153,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   const reviewedUses=[...imports.uses,...(project.config.app?ownedAppUses(contracts):[]),...ownedRuntimeUses(contracts),...typedUses];
   validateServiceReferenceRoleUses(allContracts, reviewedUses, providers, presentRoles(project));
   for (const contract of contracts) virtual.set(resolve(generated, `owned/${contract.contractKey}.ts`), generateTypeScriptBindings(contract.descriptor, {
-    descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, moduleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core", valueModuleSpecifier: "@sunder/sdk/generated",
+    descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, moduleSpecifier: "@younics/sunder-sdk/browser", coreModuleSpecifier: "@younics/sunder-sdk/core", valueModuleSpecifier: "@younics/sunder-sdk/generated",
     resources:{content:contract.naturalContent===true,serviceReferences:contract.modelProjection.serviceReferences,optionalServiceReferenceMembers:contract.modelProjection.optionalServiceReferenceMembers},
     definitionTypes: {...serviceReferenceTypes(contract),...Object.fromEntries(Object.entries(contract.modelProjection.models).flatMap(([key, name]) => {
       const type = services.find(service => service.key === contract.contractKey)?.sourceModels.get(name); return type ? [[key, type]] : [];
@@ -173,7 +173,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
   validateModelProjectionSet(publicEvidence);
   files.set(MODEL_PROJECTION_PATH, projectionDocumentBytes(project.config.id, project.config.version, publicEvidence).toString());
   const runtime = await captureOwnedRuntimeInputs(project.root, resolve(generated, "worker.ts"), modulePath, "", source, files);
-  const checked = ts.createProgram([modulePath, sdk.declarations["@sunder/sdk"]!, ...runtime.sourceFiles, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
+  const checked = ts.createProgram([modulePath, sdk.declarations["@younics/sunder-sdk"]!, ...runtime.sourceFiles, ...virtual.keys()], frame.options, frame.host); frame.inputs.assertValid();
   const diagnostics = ts.getPreEmitDiagnostics(checked);
   if (diagnostics.length) fail("handler-incomplete", ts.formatDiagnostics(diagnostics, { getCanonicalFileName: path => path, getCurrentDirectory: () => project.root, getNewLine: () => "\n" }));
   const checkedServices = analyzeServices(checked, checked.getSourceFile(modulePath)!, sdk, project.config.id, project.config.version, baseline, imports.providerSurfaces, nodes, {root:generated,contracts:imports.contracts});
@@ -206,7 +206,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
     }
     virtual.set(resolve(generated, `owned/${contract.contractKey}.ts`), generateTypeScriptBindings(contract.descriptor, {
       descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, strictNames: true, definitionTypes,
-      moduleSpecifier: "@sunder/sdk/browser", coreModuleSpecifier: "@sunder/sdk/core", valueModuleSpecifier: "@sunder/sdk/generated",
+      moduleSpecifier: "@younics/sunder-sdk/browser", coreModuleSpecifier: "@younics/sunder-sdk/core", valueModuleSpecifier: "@younics/sunder-sdk/generated",
       resources:{content:contract.naturalContent===true,serviceReferences:contract.modelProjection.serviceReferences,optionalServiceReferenceMembers:contract.modelProjection.optionalServiceReferenceMembers},
     }));
   }
@@ -240,7 +240,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
     const selected = allContracts.filter(contract => !contract.imported || selectedImports.has(contract.descriptor.contractId));
     const selectedRequirements = (role === "runtime" ? requirements : appRequirements).filter(value => selectedImports.has(value.source.contractId));
     const uses = [...imports.uses.filter(use => use.role === role), ...(role === "app" ? appUses : runtimeUses)];
-    const receipt = { schemaVersion: 1, producer: { name: "@sunder/package-tool", version: toolVersion, language: modulePath.endsWith(".js") ? "javascript" : "typescript" },
+    const receipt = { schemaVersion: 1, producer: { name: "@younics/sunder-package-tool", version: toolVersion, language: modulePath.endsWith(".js") ? "javascript" : "typescript" },
       inputFingerprint: fingerprint, lockSha256: lock.sha256, packageId: project.config.id, packageVersion: project.config.version, ...(role === "app" ? { role } : {}),
       contracts: selected.map(contract => ({ contractKey: contract.contractKey!, contractId: contract.descriptor.contractId, contractVersion: contract.descriptor.version, exposure: contract.exposure,
         descriptorBytes: contract.canonicalBytes.length, canonicalDescriptor: contract.canonical, descriptorSha256: contract.descriptorSha256, abiSha256: contract.abiSha256, modelProjection: modelProjectionOuter(contract.modelProjection),
@@ -257,7 +257,7 @@ export async function analyzeOwnedRpc(project: LoadedProject, configBytes: Buffe
     files.set(role === "app" ? "app-authoring-receipt.v1.json" : "authoring-receipt.v1.json", text);
   }
   files.set("package-export.v1.json", outerBytes({ schemaVersion: 1,
-    producer: { name: "@sunder/package-tool", version: toolVersion, language: modulePath.endsWith(".js") ? "javascript" : "typescript" },
+    producer: { name: "@younics/sunder-package-tool", version: toolVersion, language: modulePath.endsWith(".js") ? "javascript" : "typescript" },
     projectIdentity: project.config.id, configuration: "Release", targetFramework: NODE_TARGET, inputFingerprint: fingerprint, lockSha256: lock.sha256,
     packageId: project.config.id, packageVersion: project.config.version,
     contracts: [...contracts].sort((a, b) => ordinal(a.contractKey!, b.contractKey!)).map(contract => ({ contractKey: contract.contractKey!, contractId: contract.descriptor.contractId,

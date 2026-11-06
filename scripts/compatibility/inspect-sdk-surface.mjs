@@ -80,7 +80,7 @@ for (const entry of [...entries, "package-tool"]) {
     const type = symbol.flags & ts.SymbolFlags.Value ? checker.getTypeOfSymbolAtLocation(symbol, declaration) : checker.getDeclaredTypeOfSymbol(symbol);
     return { name: exported.name, category, declaration: declarationPath, type: checker.typeToString(type, declaration, ts.TypeFormatFlags.NoTruncation) };
   }).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
-  npm.push({ entry: entry === "package-tool" ? "@sunder/package-tool" : entry === "index" ? "@sunder/sdk" : `@sunder/sdk/${entry}`,
+  npm.push({ entry: entry === "package-tool" ? "@younics/sunder-package-tool" : entry === "index" ? "@younics/sunder-sdk" : `@younics/sunder-sdk/${entry}`,
     input: pathOf(path), sha256: hash(await readFile(path)), exports });
 }
 const ledger = JSON.parse(await readFile(resolve(root, "eng/compatibility/supported-releases.json"), "utf8"));
@@ -89,5 +89,5 @@ console.log(JSON.stringify({
   classificationIsVisibility: false,
   note: "All public runtime and generated-support symbols remain compatibility obligations after a supported baseline; tooling internals are not runtime contracts. No release qualification is implied.",
   dotnet, npm,
-  tooling: { csharp: "Sunder.Package.Build/Rpc/Generation (internal)", node: "@sunder/package-tool", cli: "sunder-rpc-gen" },
+  tooling: { csharp: "Sunder.Package.Build/Rpc/Generation (internal)", node: "@younics/sunder-package-tool", cli: "sunder-rpc-gen" },
 }, null, 2));

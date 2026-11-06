@@ -269,7 +269,7 @@ public sealed class SdkCorpusInputTests
                 NuGet(path, id, "1.1.0");
                 candidates.Add(Candidate(path, id, name));
             }
-            foreach (var id in new[] { "sunder-sdk", "sunder-package-tool", "create-sunder-package" })
+            foreach (var id in new[] { "younics-sunder-sdk", "younics-sunder-package-tool", "younics-create-sunder-package" })
             {
                 var name = id + "-1.1.0.tgz";
                 var path = Work.WriteAllText($"inputs/candidate/{id}/{name}", "synthetic unused npm bytes");

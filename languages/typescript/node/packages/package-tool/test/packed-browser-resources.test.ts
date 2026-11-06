@@ -13,11 +13,11 @@ test("packed TS and genuine JS Models, Services and natural resources have Node-
   try {
     const tools = await packed.get();
     const installed = createRequire(tools.creator);
-    const toolRoot = dirname(installed.resolve("@sunder/package-tool"));
+    const toolRoot = dirname(installed.resolve("@younics/sunder-package-tool"));
     const ts: typeof import("typescript") = installed("typescript");
     const esbuild: typeof import("esbuild") = installed("esbuild");
-    assert.equal(typeof installed("@sunder/sdk").contentFromFile, "function");
-    const browserSdk = installed("@sunder/sdk/browser");
+    assert.equal(typeof installed("@younics/sunder-sdk").contentFromFile, "function");
+    const browserSdk = installed("@younics/sunder-sdk/browser");
     assert.equal(typeof browserSdk.SunderContent.fromBytes, "function");
     assert.equal(typeof browserSdk.ServiceReference, "function");
     assert.equal(Object.hasOwn(browserSdk, "contentFromFile"), false);
@@ -26,8 +26,8 @@ test("packed TS and genuine JS Models, Services and natural resources have Node-
       const fixture = await serviceApiFixture(toolRoot, language);
       try {
         const model = language === "ts"
-          ? 'type PackedResource = {body: import("@sunder/sdk").SunderContent; target: import("@sunder/sdk").ServiceReference<typeof otherMessages>};'
-          : '/** @typedef {{body: import("@sunder/sdk").SunderContent, target: import("@sunder/sdk").ServiceReference<typeof otherMessages>}} PackedResource */';
+          ? 'type PackedResource = {body: import("@younics/sunder-sdk").SunderContent; target: import("@younics/sunder-sdk").ServiceReference<typeof otherMessages>};'
+          : '/** @typedef {{body: import("@younics/sunder-sdk").SunderContent, target: import("@younics/sunder-sdk").ServiceReference<typeof otherMessages>}} PackedResource */';
         await writeFile(join(fixture.root, `src/services.${language}`), fixture.source + `
 ${model}
 export const assets = defineService({
@@ -39,9 +39,9 @@ export const assets = defineService({
         await fixture.generate(project);
         const consumer = join(fixture.root, `browser.${language}`);
         const resourceType = 'import("#sunder/api").SelfModels.PackedResource';
-        const referenceType = 'import("@sunder/sdk/browser").ServiceReference<typeof Services.Self.otherMessages>';
+        const referenceType = 'import("@younics/sunder-sdk/browser").ServiceReference<typeof Services.Self.otherMessages>';
         const source = `import {Self,Services} from "#sunder/api";
-import {createBrowserContext,SunderContent} from "@sunder/sdk/browser";
+import {createBrowserContext,SunderContent} from "@younics/sunder-sdk/browser";
 export {Services};
 export const localContent = () => SunderContent.fromBytes(new Uint8Array([1,2,3]));
 /** @param {${resourceType}} value @param {${referenceType}} reference */
@@ -64,9 +64,9 @@ export function connect() {
           moduleResolution: ts.ModuleResolutionKind.Bundler,
           strict: true, allowJs: true, checkJs: true, noEmit: true, skipLibCheck: false, types: [],
           paths: {
-             "@sunder/sdk/browser": [installed.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")],
-             "@sunder/sdk/generated": [installed.resolve("@sunder/sdk/generated").replace(/\.js$/u, ".d.ts")],
-            "@sunder/sdk/core": [installed.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")],
+             "@younics/sunder-sdk/browser": [installed.resolve("@younics/sunder-sdk/browser").replace(/\.js$/u, ".d.ts")],
+             "@younics/sunder-sdk/generated": [installed.resolve("@younics/sunder-sdk/generated").replace(/\.js$/u, ".d.ts")],
+            "@younics/sunder-sdk/core": [installed.resolve("@younics/sunder-sdk/core").replace(/\.js$/u, ".d.ts")],
           },
         });
         assert.deepEqual(ts.getPreEmitDiagnostics(program).map(diagnostic =>
@@ -79,7 +79,7 @@ export function connect() {
         }
         const bundled = await esbuild.build({
           entryPoints: [consumer], bundle: true, platform: "browser", format: "cjs", write: false, metafile: true,
-          alias: {"@sunder/sdk/browser": installed.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": installed.resolve("@sunder/sdk/generated")},
+          alias: {"@younics/sunder-sdk/browser": installed.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": installed.resolve("@younics/sunder-sdk/generated")},
         });
         for (const path of Object.keys(bundled.metafile!.inputs))
           assert.doesNotMatch(path, /node:|\/(?:content-node|worker|worker-types)\.js$|\/src\/services\.[jt]s$/u, path);

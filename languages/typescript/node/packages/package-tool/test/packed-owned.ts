@@ -15,7 +15,7 @@ import { exercisePackedPlatformCatalog } from "./packed-platform-catalog";
 export async function exercisePackedOwned(): Promise<void> {
   const exec=promisify(execFile);const nodeRoot=resolve(__dirname,"../../../..");const tarballs=await mkdtemp(resolve(tmpdir(),"sunder-packed-owned-"));
   try {
-    for(const name of ["@sunder/sdk","@sunder/package-tool"]) await exec("npm",["pack","--workspace",name,"--pack-destination",tarballs,"--ignore-scripts"],{cwd:nodeRoot});
+    for(const name of ["@younics/sunder-sdk","@younics/sunder-package-tool"]) await exec("npm",["pack","--workspace",name,"--pack-destination",tarballs,"--ignore-scripts"],{cwd:nodeRoot});
     const archives=(await readdir(tarballs)).filter(name=>name.endsWith(".tgz")).map(name=>resolve(tarballs,name));assert.equal(archives.length,2);
     for(const extension of ["ts","js"]) {
       const root=resolve(tarballs,extension);await mkdir(resolve(root,"src"),{recursive:true});
@@ -24,12 +24,12 @@ export async function exercisePackedOwned(): Promise<void> {
       await writeFile(resolve(root,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.owned",name:"Packed",version:"7.6.5",workerCapabilities:[],services:{module:`src/services.${extension}`}}));
       await writeFile(resolve(root,"package.json"),JSON.stringify({name:"packed-owned",version:"1.0.0",private:true,imports:{"#sunder/api":"./.sunder/generated/rpc/api.js"}}));
       await exec("npm",["install","--omit=dev","--ignore-scripts","--no-audit","--no-fund",...archives],{cwd:root});
-      const tool=resolve(root,"node_modules/@sunder/package-tool/dist/cli.js");const run=(...args:string[])=>exec(process.execPath,[tool,...args,"--project",root],{maxBuffer:4*1024*1024});
-      const sdk=JSON.parse(await readFile(resolve(root,"node_modules/@sunder/sdk/package.json"),"utf8"));assert.deepEqual(sdk.dependencies??{},{});
+      const tool=resolve(root,"node_modules/@younics/sunder-package-tool/dist/cli.js");const run=(...args:string[])=>exec(process.execPath,[tool,...args,"--project",root],{maxBuffer:4*1024*1024});
+      const sdk=JSON.parse(await readFile(resolve(root,"node_modules/@younics/sunder-sdk/package.json"),"utf8"));assert.deepEqual(sdk.dependencies??{},{});
       assert.equal(JSON.parse(await readFile(resolve(root,"node_modules/typescript/package.json"),"utf8")).version,"6.0.3");
       assert.equal(JSON.parse(await readFile(resolve(root,"node_modules/@types/node/package.json"),"utf8")).version,"24.13.3");
       await assert.rejects(stat(resolve(root,"node_modules/react")),{code:"ENOENT"});
-      await assert.rejects(stat(resolve(root,"node_modules/@sunder/sdk/dist/authoring.js")),{code:"ENOENT"});
+      await assert.rejects(stat(resolve(root,"node_modules/@younics/sunder-sdk/dist/authoring.js")),{code:"ENOENT"});
       await exercisePackedImports(tool,extension,nodeRoot);if(extension==="ts")await exercisePackedPlatformCatalog(tool,nodeRoot);
       await run("contracts","accept","echo","--next-version","2.0.0");await run("contracts","check");
       const baselinePath=resolve(root,"sunder-contracts.owned.json");const draft=await readFile(baselinePath);
@@ -50,12 +50,12 @@ export async function exercisePackedOwned(): Promise<void> {
       for(const reverse of [false,true]){await writeFile(resolve(review,`src/services.${extension}`),fixtureSource(sharedSource(extension,reverse,false),extension));await assert.rejects(reviewRun("contracts","accept"),/handler-incomplete/);}
       assert.deepEqual(await readFile(resolve(review,"sunder-contracts.owned.json")),before);
       if(extension==="ts") {
-        for(const implementation of ["@sunder/package-tool/dist/generator.js","@sunder/sdk/dist/services.js","@sunder/sdk/dist/api.js","typescript/lib/typescript.js",
-          ...["service-source","service-bindings","compatibility","rpc-compiler-inputs","rpc-baseline","rpc-baseline-json","rpc-baseline-store","rpc-evolution","rpc-contracts","rpc-contract-cache-gc","rpc-owned-app","rpc-owned-projection-review","rpc-package-imports","rpc-package-selection","rpc-package-commands","cli","output"].map(name=>`@sunder/package-tool/dist/${name}.js`)]) {
-          const result=await exec(process.execPath,["-e",`const tool=require(process.argv[1]),fs=require("node:fs");(async()=>{const p=process.argv[3],before=fs.readFileSync(p);try{fs.writeFileSync(p,Buffer.concat([before,Buffer.from("\\n// mutation\\n")]));await require("node:assert/strict").rejects(tool.loadProject(process.argv[2]),/producer implementation changed.*restart/);console.log("guard");}finally{fs.writeFileSync(p,before);}})().catch(e=>{console.error(e);process.exitCode=1;});`,resolve(root,"node_modules/@sunder/package-tool/dist/index.js"),root,resolve(root,"node_modules",implementation)]);
+        for(const implementation of ["@younics/sunder-package-tool/dist/generator.js","@younics/sunder-sdk/dist/services.js","@younics/sunder-sdk/dist/api.js","typescript/lib/typescript.js",
+          ...["service-source","service-bindings","compatibility","rpc-compiler-inputs","rpc-baseline","rpc-baseline-json","rpc-baseline-store","rpc-evolution","rpc-contracts","rpc-contract-cache-gc","rpc-owned-app","rpc-owned-projection-review","rpc-package-imports","rpc-package-selection","rpc-package-commands","cli","output"].map(name=>`@younics/sunder-package-tool/dist/${name}.js`)]) {
+          const result=await exec(process.execPath,["-e",`const tool=require(process.argv[1]),fs=require("node:fs");(async()=>{const p=process.argv[3],before=fs.readFileSync(p);try{fs.writeFileSync(p,Buffer.concat([before,Buffer.from("\\n// mutation\\n")]));await require("node:assert/strict").rejects(tool.loadProject(process.argv[2]),/producer implementation changed.*restart/);console.log("guard");}finally{fs.writeFileSync(p,before);}})().catch(e=>{console.error(e);process.exitCode=1;});`,resolve(root,"node_modules/@younics/sunder-package-tool/dist/index.js"),root,resolve(root,"node_modules",implementation)]);
           assert.equal(result.stdout.trim(),"guard");
         }
-        const result=await exec(process.execPath,["-e",`const tool=require(process.argv[1]),fs=require("node:fs"),path=require("node:path"),o=require(path.join(process.argv[1],"../output.js"));const file=path.join(process.argv[1],"../rpc-evolution.js"),before=fs.readFileSync(file),original=o.withOutputLeases;let changed=false;o.withOutputLeases=async(paths,fn,wait)=>{if(paths.some(p=>p.endsWith("sunder-contracts.owned.json"))){changed=true;fs.writeFileSync(file,Buffer.concat([before,Buffer.from("\\n// race\\n")]));}return original(paths,fn,wait);};(async()=>{try{await require("node:assert/strict").rejects(tool.aggregateAndPack(process.argv[2],[{path:process.argv[3],discoveryRoot:path.dirname(process.argv[3])}]),/producer implementation changed.*restart/);if(!changed)throw Error("no commit fence");console.log("guard");}finally{fs.writeFileSync(file,before);}})().catch(e=>{console.error(e);process.exitCode=1;});`,resolve(root,"node_modules/@sunder/package-tool/dist/index.js"),root,resolve(root,"dist/targets",currentRid())]);
+        const result=await exec(process.execPath,["-e",`const tool=require(process.argv[1]),fs=require("node:fs"),path=require("node:path"),o=require(path.join(process.argv[1],"../output.js"));const file=path.join(process.argv[1],"../rpc-evolution.js"),before=fs.readFileSync(file),original=o.withOutputLeases;let changed=false;o.withOutputLeases=async(paths,fn,wait)=>{if(paths.some(p=>p.endsWith("sunder-contracts.owned.json"))){changed=true;fs.writeFileSync(file,Buffer.concat([before,Buffer.from("\\n// race\\n")]));}return original(paths,fn,wait);};(async()=>{try{await require("node:assert/strict").rejects(tool.aggregateAndPack(process.argv[2],[{path:process.argv[3],discoveryRoot:path.dirname(process.argv[3])}]),/producer implementation changed.*restart/);if(!changed)throw Error("no commit fence");console.log("guard");}finally{fs.writeFileSync(file,before);}})().catch(e=>{console.error(e);process.exitCode=1;});`,resolve(root,"node_modules/@younics/sunder-package-tool/dist/index.js"),root,resolve(root,"dist/targets",currentRid())]);
         assert.equal(result.stdout.trim(),"guard");
       }
     }

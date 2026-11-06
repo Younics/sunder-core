@@ -29,13 +29,13 @@ export ACTIONS_ID_TOKEN_REQUEST_TOKEN=fixture-oidc-token
 export GITHUB_REPOSITORY=Younics/sunder-core
 export GITHUB_REF=refs/heads/main
 export GITHUB_WORKFLOW_REF=Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/heads/main
-archive="$fixture/sunder-sdk-1.2.3.tgz"
+archive="$fixture/younics-sunder-sdk-1.2.3.tgz"
 make_archive() {
-  jq -n --arg repository "$1" '{name:"@sunder/sdk",version:"1.2.3",license:"MIT",repository:{url:$repository},publishConfig:{access:"public",provenance:true}}' > "$fixture/package/package.json"
+  jq -n --arg repository "$1" '{name:"@younics/sunder-sdk",version:"1.2.3",license:"MIT",repository:{url:$repository},publishConfig:{access:"public",provenance:true}}' > "$fixture/package/package.json"
   tar -czf "$archive" -C "$fixture" package
 }
 make_archive git+https://github.com/Younics/sunder-core.git
-preflight() { bash "$helpers/preflight-npm-publishing.sh" '@sunder/sdk' "${TEST_VERSION:-1.2.3}" "$archive"; }
+preflight() { bash "$helpers/preflight-npm-publishing.sh" '@younics/sunder-sdk' "${TEST_VERSION:-1.2.3}" "$archive"; }
 reject_before_npm() {
   : > "$MOCK_NPM_LOG"
   if preflight > "$fixture/failure.log" 2>&1; then printf 'Invalid preflight succeeded\n' >&2; exit 1; fi

@@ -19,11 +19,11 @@ const cli = resolve(__dirname, "../src/cli.js");
 const lock = `${JSON.stringify({ lockVersion: 1, packageArtifacts: {}, packageImports: {}, providerImports: {}, platformImports: {} }, null, 2)}\n`;
 function source(limit = 10, title = "Input", exposure = "public", idle = true, reversed = false): string {
   const echo = `export const echo=defineService({
-/** @param {string} request @param {import("@sunder/sdk").ServiceContext} context @returns {string} */
-call(request/*: string*/,context/*: import("@sunder/sdk").ServiceContext*/)/*: string*/{context.signal.throwIfAborted(); return "ok";}
+/** @param {string} request @param {import("@younics/sunder-sdk").ServiceContext} context @returns {string} */
+call(request/*: string*/,context/*: import("@younics/sunder-sdk").ServiceContext*/)/*: string*/{context.signal.throwIfAborted(); return "ok";}
 },{exposure:"${exposure}", serviceId:"main", constraints:{"call.request":{maxLength:${limit},title:${JSON.stringify(title)}},"call.result":{maxLength:10}}});`;
-  const declaration = '/** @type {import("@sunder/sdk").ServiceDefinition<{run():Promise<void>}>} */\nexport const idle=defineService/*<{run():Promise<void>}>*/(null,{exposure:"public",declarationOnly:true,serviceId:"ping"});';
-  return `import {defineService} from "@sunder/sdk";\n${idle ? reversed ? declaration + "\n" + echo : echo + "\n" + declaration : echo}`;
+  const declaration = '/** @type {import("@younics/sunder-sdk").ServiceDefinition<{run():Promise<void>}>} */\nexport const idle=defineService/*<{run():Promise<void>}>*/(null,{exposure:"public",declarationOnly:true,serviceId:"ping"});';
+  return `import {defineService} from "@younics/sunder-sdk";\n${idle ? reversed ? declaration + "\n" + echo : echo + "\n" + declaration : echo}`;
 }
 async function project(extension = "ts", text = source()): Promise<string> {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-owned-lifecycle-")); await mkdir(resolve(root, "src"));

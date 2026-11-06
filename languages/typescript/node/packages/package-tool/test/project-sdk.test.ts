@@ -32,7 +32,7 @@ async function sdkFixture(root: string, version: string): Promise<string> {
   return destination;
 }
 async function selectSdk(project: string, sdk: string): Promise<void> {
-  const selected = join(project, "node_modules/@sunder/sdk");
+  const selected = join(project, "node_modules/@younics/sunder-sdk");
   await mkdir(dirname(selected), { recursive: true });
   await rm(selected, { recursive: true, force: true });
   await symlink(sdk, selected, process.platform === "win32" ? "junction" : "dir");
@@ -40,7 +40,7 @@ async function selectSdk(project: string, sdk: string): Promise<void> {
 async function projectFixture(root: string): Promise<void> {
   await mkdir(join(root, "src"), { recursive: true });
   await writeFile(join(root, "sunder-contracts.lock.json"), emptyLock);
-  await writeFile(join(root, "src/services.ts"), `import { defineService, sdkFixtureVersion } from "@sunder/sdk";
+  await writeFile(join(root, "src/services.ts"), `import { defineService, sdkFixtureVersion } from "@younics/sunder-sdk";
     export const echo = defineService({ run(request: { value: string }): { value: string } { return { value: request.value + sdkFixtureVersion }; } });`);
   await writeFile(join(root, "sunder.package.json"), JSON.stringify({ schemaVersion: 3, id: "example.sdk.selection", name: "SDK selection", version: "7.6.5", services: { module: "src/services.ts" }, workerCapabilities: [] }));
 }
@@ -68,7 +68,7 @@ test("nested projects compile and bundle their installed SDK, including separate
     await assert.rejects(revalidateOwnedRpc(loaded), /SDK selection changed/);
     assert.equal(projectSdkCompatibility(nested).sdkVersion, "1.3.4");
     const missing = join(root, "missing"); await projectFixture(missing);
-    await assert.rejects(prepareProject(missing), /must install @sunder\/sdk/);
+    await assert.rejects(prepareProject(missing), /must install @younics\/sunder-sdk/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

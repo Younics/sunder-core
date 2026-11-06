@@ -95,7 +95,7 @@ def verified(root, record):
 
 def package_names(version):
     return [f"{name}.{version}.nupkg" for name in ("Sunder.Sdk", "Sunder.Sdk.Avalonia", "Sunder.Sdk.Stacks", "Sunder.Sdk.Worker", "Sunder.Package.Build", "Sunder.Package.Templates")] + [
-        f"{name}-{version}.tgz" for name in ("sunder-sdk", "sunder-package-tool", "create-sunder-package")]
+        f"{name}-{version}.tgz" for name in ("younics-sunder-sdk", "younics-sunder-package-tool", "younics-create-sunder-package")]
 
 
 def recipe_path(reference, corpus):

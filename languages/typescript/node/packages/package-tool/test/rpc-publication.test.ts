@@ -3,7 +3,7 @@ import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
-import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { atVersion, emptyBaseline, parseBaseline, sha256, writeBaseline, type OwnedSnapshot } from "../src/rpc-baseline";
 import { ordered } from "../src/rpc-baseline-json";
 import { importContractPublication, planPublication } from "../src/rpc-publication";

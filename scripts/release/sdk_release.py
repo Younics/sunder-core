@@ -196,7 +196,7 @@ def pack(plan, directory, kind=None):
                     manifest = c.decode(c.read(ROOT / row["project"] / "package.json"))
                     tool_manifest = c.decode(c.read(ROOT / "languages/typescript/node/packages/package-tool/package.json"))
                     subprocess.run(["node", str(ROOT / "scripts/release/verify-node-package-artifacts.mjs"), row["version"],
-                        manifest.get("dependencies", {}).get("@sunder/sdk", "-"), tool_manifest["dependencies"]["vite"], str(work), str(report_path), row["name"]], check=True)
+                        manifest.get("dependencies", {}).get("@younics/sunder-sdk", "-"), tool_manifest["dependencies"]["vite"], str(work), str(report_path), row["name"]], check=True)
                     shutil.copyfile(work / row["archive"], directory / row["archive"])
     if release:
         documentation.verify(ROOT, [directory], plan["artifactSourceCommit"], package_names=[row["name"] for row in rows])

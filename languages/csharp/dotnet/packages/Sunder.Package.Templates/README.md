@@ -4,7 +4,7 @@
 
 `dotnet new sunder-package` creates one authored .NET project with ordinary services
 and optional Avalonia views. Sunder generates typed APIs, composition and isolated
-Worker/App outputs. Node/React presets use `npm create sunder-package@latest` and the
+Worker/App outputs. Node/React presets use `npm create @younics/sunder-package@latest` and the
 same package/runtime model.
 
 Repository contributors: tokenized project, C# and XAML inputs under `templates/`

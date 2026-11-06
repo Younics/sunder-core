@@ -1,4 +1,4 @@
-import { RpcError, type WorkerContext, type WorkerOptions } from "@sunder/sdk";
+import { RpcError, type WorkerContext, type WorkerOptions } from "@younics/sunder-sdk";
 // This is the advanced native interoperability fixture, not normal client bootstrap.
 import * as Messages from "../.sunder/generated/rpc/owned/messages.js";
 import { initializePackageState } from "./services.js";

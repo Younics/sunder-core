@@ -13,11 +13,11 @@ const VITE = "8.2.0";
 const NODE_ENGINE = ">=24.18.1 <25.0.0";
 const commonEntries = ["package.json", "README.md", "LICENSE", "NOTICE"];
 const packageDefinitions = [
-  { name: "@sunder/sdk", archive: `sunder-sdk-${VERSION}.tgz`, maximumBytes: 1024 * 1024, requiredEntries: ["dist/index.js"] },
-  { name: "@sunder/package-tool", archive: `sunder-package-tool-${VERSION}.tgz`, maximumBytes: 1024 * 1024, requiredEntries: ["dist/cli.js"] },
+  { name: "@younics/sunder-sdk", archive: `younics-sunder-sdk-${VERSION}.tgz`, maximumBytes: 1024 * 1024, requiredEntries: ["dist/index.js"] },
+  { name: "@younics/sunder-package-tool", archive: `younics-sunder-package-tool-${VERSION}.tgz`, maximumBytes: 1024 * 1024, requiredEntries: ["dist/cli.js"] },
   {
-    name: "create-sunder-package",
-    archive: `create-sunder-package-${VERSION}.tgz`,
+    name: "@younics/create-sunder-package",
+    archive: `younics-create-sunder-package-${VERSION}.tgz`,
     maximumBytes: 1024 * 1024,
     requiredEntries: ["dist/cli.js", "template/package.json", "template-react-node/package.json"],
   },
@@ -48,8 +48,8 @@ async function createFixture() {
       engines: { node: NODE_ENGINE },
       publishConfig: { access: "public", provenance: true },
     };
-    if (item.name === "@sunder/package-tool") manifest.dependencies = { "@sunder/sdk": RANGE, vite: VITE };
-    if (item.name === "create-sunder-package") manifest.dependencies = { "@sunder/sdk": RANGE };
+    if (item.name === "@younics/sunder-package-tool") manifest.dependencies = { "@younics/sunder-sdk": RANGE, vite: VITE };
+    if (item.name === "@younics/create-sunder-package") manifest.dependencies = { "@younics/sunder-sdk": RANGE };
     for (const entry of item.requiredEntries) {
       const path = join(staging, entry);
       await mkdir(dirname(path), { recursive: true });
@@ -57,15 +57,15 @@ async function createFixture() {
     }
     await writeFile(join(staging, "package.json"), `${JSON.stringify(manifest)}\n`);
     for (const file of ["LICENSE", "NOTICE", "README.md"]) await writeFile(join(staging, file), `${file} fixture\n`);
-    if (item.name === "create-sunder-package") {
+    if (item.name === "@younics/create-sunder-package") {
       for (const template of ["template", "template-react-node"]) {
         const templateDirectory = join(staging, template);
         await mkdir(templateDirectory, { recursive: true });
         await writeFile(join(templateDirectory, "package.json"), `${JSON.stringify({
           engines: { node: NODE_ENGINE },
-          dependencies: { "@sunder/sdk": RANGE },
+          dependencies: { "@younics/sunder-sdk": RANGE },
           devDependencies: {
-            "@sunder/package-tool": RANGE,
+            "@younics/sunder-package-tool": RANGE,
             ...(template === "template-react-node" ? { vite: `^${VITE}` } : {}),
           },
         })}\n`);
@@ -117,7 +117,7 @@ test("selected npm verification rejects skipped archives without weakening the d
   try {
     const options = { version: VERSION, npmVersionRange: RANGE, viteVersion: VITE,
       artifactDirectory: fixture.artifacts, packReportPath: fixture.reportPath, packageInventoryPath: fixture.inventoryPath };
-    const packageNames = ["@sunder/package-tool"];
+    const packageNames = ["@younics/sunder-package-tool"];
     await assert.rejects(verifyNodePackageArtifacts({ ...options, packageNames }), /artifact paths/u);
     for (const item of packageDefinitions.filter((item) => !packageNames.includes(item.name))) {
       await rm(join(fixture.artifacts, item.archive));
@@ -149,7 +149,7 @@ test("rejects an expected filename containing another package identity", async (
       publishConfig: { access: "public", provenance: true },
     })}\n`);
     for (const file of ["LICENSE", "NOTICE", "README.md"]) await writeFile(join(staging, file), `${file}\n`);
-    writeArchive(join(fixture.artifacts, `sunder-sdk-${VERSION}.tgz`), staging, commonEntries);
+    writeArchive(join(fixture.artifacts, `younics-sunder-sdk-${VERSION}.tgz`), staging, commonEntries);
 
     await assert.rejects(
       verifyNodePackageArtifacts({
@@ -172,8 +172,8 @@ test("rejects a coordinated tarball outside its exact top-level path", async () 
   try {
     await mkdir(join(fixture.artifacts, "nested"));
     await rename(
-      join(fixture.artifacts, `sunder-sdk-${VERSION}.tgz`),
-      join(fixture.artifacts, "nested", `sunder-sdk-${VERSION}.tgz`),
+      join(fixture.artifacts, `younics-sunder-sdk-${VERSION}.tgz`),
+      join(fixture.artifacts, "nested", `younics-sunder-sdk-${VERSION}.tgz`),
     );
 
     await assert.rejects(

@@ -1,4 +1,4 @@
-import { defineService, type ServiceContext } from "@sunder/sdk";
+import { defineService, type ServiceContext } from "@younics/sunder-sdk";
 const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
 
 export const messages = defineService({

@@ -7,7 +7,7 @@ import {
   isSemanticVersion,
   parseRpcContractDescriptor,
   type RpcContractDescriptor,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 import { generateTypeScriptBindings, type TypeScriptGeneratorOptions } from "./generator";
 
 const MAXIMUM_DESCRIPTOR_BYTES = 4 * 1024 * 1024;

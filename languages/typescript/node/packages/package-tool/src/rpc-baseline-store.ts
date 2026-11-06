@@ -4,7 +4,7 @@ import { dirname, parse, resolve, sep } from "node:path";
 import { readProjectDescriptorFile } from "./descriptor-files";
 import { parseBaseline, writeBaseline, validateImmutableProjectionReviews, type OwnedBaseline } from "./rpc-baseline";
 import { MAX_BASELINE_BYTES, object, parseOuter } from "./rpc-baseline-json";
-import { isPackageId, isSemanticVersion } from "@sunder/sdk";
+import { isPackageId, isSemanticVersion } from "@younics/sunder-sdk";
 import { markerPath, withOutputLeases } from "./output";
 import { validateRoleUseEvidence } from "./rpc-owned-uses";
 

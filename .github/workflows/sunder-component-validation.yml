@@ -42,18 +42,18 @@ jobs:
         id: npm_build
         if: inputs.scope == 'npm'
         run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action build --work "$RUNNER_TEMP/npm-tests"
-      - name: Test @sunder/sdk
+      - name: Test @younics/sunder-sdk
         id: npm_sdk_test
         if: inputs.scope == 'npm'
-        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @sunder/sdk --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
-      - name: Test @sunder/package-tool
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @younics/sunder-sdk --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Test @younics/sunder-package-tool
         id: npm_tool_test
         if: inputs.scope == 'npm'
-        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @sunder/package-tool --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
-      - name: Test create-sunder-package
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @younics/sunder-package-tool --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Test @younics/create-sunder-package
         id: npm_creator_test
         if: inputs.scope == 'npm'
-        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project create-sunder-package --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @younics/create-sunder-package --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
       - name: Typecheck generated npm templates
         id: npm_templates_test
         if: inputs.scope == 'npm'

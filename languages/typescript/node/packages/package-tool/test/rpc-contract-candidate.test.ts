@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { crc32, deflateRawSync } from "node:zlib";
 import test, { type TestContext } from "node:test";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { inspectContractCandidate } from "../src/rpc-contract-candidate";
 import { MODEL_PROJECTION_FILE, projectionDocumentBytes } from "../src/rpc-model-projection";
 

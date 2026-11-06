@@ -34,8 +34,8 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
             dict(packageId="Sunder.Package.Templates", project=CSHARP + "Sunder.Package.Templates/Sunder.Package.Templates.csproj",
                  maximumBytes=1024 * 1024, requiredEntries=["content/sample/README.md"]),
         ], npm=[
-            dict(name="@sunder/sdk", project=NODE + "sdk", maximumBytes=1024 * 1024, requiredEntries=[]),
-            dict(name="create-sunder-package", project=NODE + "create-sunder-package", maximumBytes=1024 * 1024,
+            dict(name="@younics/sunder-sdk", project=NODE + "sdk", maximumBytes=1024 * 1024, requiredEntries=[]),
+            dict(name="@younics/create-sunder-package", project=NODE + "create-sunder-package", maximumBytes=1024 * 1024,
                  requiredEntries=["template/README.md", "template-react-node/README.md"]),
         ])
         self.files = {d.INVENTORY: json.dumps(inventory).encode(), "docs/policy.md": b"# Policy\n"}
@@ -239,7 +239,7 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         self.create_archives()
         before = {path.name: path.read_bytes() for path in (self.root / "artifacts").iterdir()}
         d.verify(self.root, [self.root / "artifacts"], COMMIT)
-        d.verify(self.root, [self.root / "artifacts"], COMMIT, package_names=["Sunder.Sdk", "@sunder/sdk"])
+        d.verify(self.root, [self.root / "artifacts"], COMMIT, package_names=["Sunder.Sdk", "@younics/sunder-sdk"])
         for invalid in ([], ["Other.Package"], ["Sunder.Sdk", "Sunder.Sdk"]):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "public package selection"):
                 d.verify(self.root, [self.root / "artifacts"], COMMIT, package_names=invalid)

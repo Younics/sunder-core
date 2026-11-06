@@ -3,6 +3,6 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "dependencies": { "@sunder/sdk": "1.0.0" },
-  "devDependencies": { "@sunder/package-tool": "1.0.0" }
+  "dependencies": { "@younics/sunder-sdk": "1.0.0" },
+  "devDependencies": { "@younics/sunder-package-tool": "1.0.0" }
 }

@@ -1,13 +1,13 @@
-import type { JsonValue, RpcContractDescriptor, RpcErrorDescriptorV1, RpcMethodKind, RpcSchemaReference } from "@sunder/sdk";
-import { canonicalizeDescriptor, validateRpcContractDescriptor } from "@sunder/sdk";
+import type { JsonValue, RpcContractDescriptor, RpcErrorDescriptorV1, RpcMethodKind, RpcSchemaReference } from "@younics/sunder-sdk";
+import { canonicalizeDescriptor, validateRpcContractDescriptor } from "@younics/sunder-sdk";
 import {
   SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR,
   canonicalRpcAbiProjectionBytes,
   canonicalRpcDescriptorBytes,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 import { createHash } from "node:crypto";
 
-export { canonicalizeDescriptor } from "@sunder/sdk";
+export { canonicalizeDescriptor } from "@younics/sunder-sdk";
 
 function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -98,11 +98,11 @@ export function generateTypeScriptBindings(
 ): string {
   validateRpcContractDescriptor(descriptor);
   validateGeneratorOptions(descriptor, options);
-  const moduleSpecifier = options.moduleSpecifier ?? "@sunder/sdk";
+  const moduleSpecifier = options.moduleSpecifier ?? "@younics/sunder-sdk";
   const coreModuleSpecifier = options.coreModuleSpecifier
-    ?? (options.moduleSpecifier === undefined ? "@sunder/sdk/core" : moduleSpecifier);
+    ?? (options.moduleSpecifier === undefined ? "@younics/sunder-sdk/core" : moduleSpecifier);
   const valueModuleSpecifier = options.valueModuleSpecifier
-    ?? (options.moduleSpecifier === undefined ? "@sunder/sdk/generated" : moduleSpecifier);
+    ?? (options.moduleSpecifier === undefined ? "@younics/sunder-sdk/generated" : moduleSpecifier);
   const emitsContractIdentity = options.descriptorSha256 !== undefined;
   const emitsProviderRegistration = emitsContractIdentity;
   const baseModel = buildModel(descriptor, emitsContractIdentity, emitsProviderRegistration, options.strictNames);

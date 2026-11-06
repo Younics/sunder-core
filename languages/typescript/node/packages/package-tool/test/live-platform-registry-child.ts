@@ -65,7 +65,7 @@ async function main(): Promise<void> {
     assert.deepEqual(Buffer.from(catalog.getCanonicalUtf8()), await readFile(join(input.csharpOutput, "catalog.json")));
     if (phase === "revoked") continue;
     await writeFile(join(project, `src/rpc.${extension}`), `
-      import {defineService,RpcError} from '@sunder/sdk'; import {Implementations} from '#sunder/api';
+      import {defineService,RpcError} from '@younics/sunder-sdk'; import {Implementations} from '#sunder/api';
       export const stack=defineService({
         stackContributorMetadata(request,context){context.signal.throwIfAborted();return {contributorId:'node-stack',displayName:'Node Stack',supportsExport:true,supportsImport:false,supportsImportApplied:false};},
         stackContributorListExportItems(request,context){context.signal.throwIfAborted();return {items:[{itemId:'item',displayName:'Item',kind:'sample',defaultSelected:true}]};},

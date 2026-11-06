@@ -16,7 +16,7 @@
 Each developer package owns its version: `<Version>` in its `.csproj`, or `version`
 in its npm `package.json`. The public inventory lists identities/paths, not a second
 version ledger. Examples are `nuget-sunder-sdk/v1.2.0`,
-`nuget-sunder-sdk-worker/v1.1.1` and `npm-sunder-package-tool/v2.0.0`.
+`nuget-sunder-sdk-worker/v1.1.1` and `npm-younics-sunder-package-tool/v2.0.0`.
 Historical combined `sdk/v*` releases remain recognizable by their package assets;
 new publication does not create coordinated SDK tags.
 
@@ -26,12 +26,13 @@ prerelease announcements use `make_latest=false`. npm consumer channels are
 
 ## Existing workflow checks
 
-`sunder-sdk-release.yml` owns protected-main pushes and manual dispatch on `main`.
-It selects versions, calls the reusable `sunder-ci.yml` with `scope: sdk`, stages tested archives,
-publishes selected packages and finalizes their project releases in the same run.
-There is no tag redispatch, separate approval workflow or per-release configuration.
-On main, `sunder-ci.yml` runs complementary `repository` checks for the App and CI
-policy. PRs, merge queues, weekly schedules and default manual validation use `all`.
+`sunder-sdk-release.yml` (**Sunder Core — Main CI and SDK Release**) owns
+protected-main pushes and manual dispatch on `main`. It selects versions, calls
+the reusable `sunder-ci.yml` with `scope: all`, stages tested archives, publishes
+selected npm packages before NuGet packages, and finalizes their project releases
+in the same run. There is no tag redispatch, separate approval workflow or
+per-release configuration. PRs, merge queues, weekly schedules and default manual
+validation also use `all`.
 Desktop build, test and installer failures therefore belong to App validation, while
 SDK validation retains package-side Avalonia/bridge contracts and Host/CLI consumers.
 
@@ -111,7 +112,7 @@ Only HTTP 404 means absent. Authentication, rate-limit and service failures stop
 
 The six public NuGets are `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`,
 `Sunder.Sdk.Worker`, `Sunder.Package.Build` and `Sunder.Package.Templates`.
-The npm packages are `@sunder/sdk`, `@sunder/package-tool` and `create-sunder-package`.
+The npm packages are `@younics/sunder-sdk`, `@younics/sunder-package-tool` and `@younics/create-sunder-package`.
 Pins remain owned by [the toolchain policy](package-toolchains.md).
 
 ### Tested-byte handoff
@@ -174,8 +175,8 @@ exchange or production publication.
 #### npm token authentication
 
 Store `NPM_TOKEN` in `sunder-core-release` (or the existing repository secret).
-The npm account needs publishing rights to `@sunder` and the unscoped
-`create-sunder-package` name. Use a granular token with package write permission
+The npm account needs publishing rights to all three packages in the `@younics`
+organization scope. Use a granular token with package write permission
 and 2FA bypass for unattended CI. Initial package creation may require broader
 package access; restrict it to the three exact names after successful bootstrap.
 Do not grant organization-management permissions. Rotate before expiry.
@@ -207,6 +208,15 @@ and use a new authored version where necessary.
 
 Historical releases/tags are not automatically deleted. Cleanup follows successful
 replacement publication and explicit confirmation of the deletion scope.
+
+If an initial publication fails because its npm scope is unavailable, a rename
+requires freshly built and tested archives. Retained plans, archives and provenance
+must not be relabeled. The unchanged NuGet versions can still collide with the old
+batch's drafts/tags: selection rejects recovery from a different source commit.
+Before restarting those unpublished versions, retain the failed batch's assets and
+digests, verify absence in both registries, and explicitly approve removal of the
+conflicting unpublished drafts/tags. Any already-published version keeps its original
+bytes and source; use a new authored version for changed payloads.
 
 ## Publish App, CLI or standalone Host
 

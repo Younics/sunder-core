@@ -181,12 +181,12 @@ def templates(work, feed=None, package_output=None):
         run("dotnet", cli, "dev", "package", "validate", one(output.glob("*.sunderpkg")))
         if name == "headless": host_inputs["SUNDER_DOTNET_TEMPLATE_DEV_PATH"] = str(output / "sunder-dev")
     bootstrap = work / "node-template-bootstrap"
-    run("npm", "install", "--prefix", bootstrap, "--no-audit", "--no-fund", archive("@sunder/sdk"), archive("create-sunder-package"))
-    creator = bootstrap / "node_modules/create-sunder-package/dist/cli.js"
+    run("npm", "install", "--prefix", bootstrap, "--no-audit", "--no-fund", archive("@younics/sunder-sdk"), archive("@younics/create-sunder-package"))
+    creator = bootstrap / "node_modules/@younics/create-sunder-package/dist/cli.js"
     for preset in variants["node"]:
         sample = work / ("node-template-" + preset)
         run("node", creator, "--preset", preset, "--package-id", "smoke." + preset.replace("-", ""), "--package-name", "Smoke " + preset, "--output", sample)
-        run("npm", "install", "--prefix", sample, "--no-audit", "--no-fund", archive("@sunder/sdk"), archive("@sunder/package-tool"))
+        run("npm", "install", "--prefix", sample, "--no-audit", "--no-fund", archive("@younics/sunder-sdk"), archive("@younics/sunder-package-tool"))
         for command in ("contracts:check", "typecheck", "test", "sunder:dev:once", "build", "package"):
             run("npm", "--prefix", sample, "run", command)
         if preset == "node": host_inputs["SUNDER_NODE_TEMPLATE_DEV_PATH"] = str(sample / "dist/sunder-dev")

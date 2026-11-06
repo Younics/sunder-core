@@ -109,7 +109,7 @@ async function fixture(extension: "ts" | "js"): Promise<string> {
     app: { root: "app", views: [{ viewId: "test.watch.main", displayName: "Watch", route: "/", defaultPlacement: "middle", showInHotbar: true }] },
   }));
   await writeFile(resolve(root, "app/shared-types.d.ts"), "export type Value = string;\n");
-  await writeFile(resolve(root, `src/services.${extension}`), fixtureSource(`import {defineService} from "@sunder/sdk";
+  await writeFile(resolve(root, `src/services.${extension}`), fixtureSource(`import {defineService} from "@younics/sunder-sdk";
 import {worker} from "./worker.js";import {shared} from "../shared.js";
 export const first=defineService({
 /** @param {import("../app/shared-types.js").Value} value */

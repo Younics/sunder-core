@@ -1,4 +1,4 @@
-import { isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@sunder/sdk";
+import { isPackageId, isPackageVersionRange, isSemanticVersion, isVersionInRange } from "@younics/sunder-sdk";
 import { contractError, inventoryBytes, parseContractLock, parseContractWireJson, registryOrigin, type PackageArtifact, type RegistryOriginOptions } from "./rpc-contract-lock";
 import { ordered, outerBytes, type Outer, type OuterObject } from "./rpc-baseline-json";
 import { inspectContractCandidate, type InspectedContractCandidate } from "./rpc-contract-candidate";

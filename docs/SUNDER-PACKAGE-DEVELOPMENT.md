@@ -49,10 +49,10 @@ The table is not a closed capability list. Future Python, Rust, Go, and other wo
 | Avalonia views/settings | Add `Sunder.Sdk.Avalonia` only to the App leaf that uses Avalonia |
 | Stack contribution | Add `Sunder.Sdk.Stacks` to the Worker leaf that implements the contributor |
 | New managed canonical package | Install `Sunder.Package.Templates`; it is a scaffold tool, not a runtime dependency |
-| Node worker services | `defineService` from `@sunder/sdk`, `services.module` and `@sunder/package-tool`; consume through generated `#sunder/api` tokens |
-| Browser code in a web App | Generated `#sunder/api` plus `createBrowserContext` from `@sunder/sdk/browser`; choose any web framework |
-| React components | Optional `@sunder/sdk/react`: root `ApiProvider`, component `useApi`, effect/event-handler calls |
-| Node/React starter | `npm create sunder-package@latest` with `--language ts` or `js`; React is one preset, not a web requirement |
+| Node worker services | `defineService` from `@younics/sunder-sdk`, `services.module` and `@younics/sunder-package-tool`; consume through generated `#sunder/api` tokens |
+| Browser code in a web App | Generated `#sunder/api` plus `createBrowserContext` from `@younics/sunder-sdk/browser`; choose any web framework |
+| React components | Optional `@younics/sunder-sdk/react`: root `ApiProvider`, component `useApi`, effect/event-handler calls |
+| Node/React starter | `npm create @younics/sunder-package@latest` with `--language ts` or `js`; React is one preset, not a web requirement |
 | Shared descriptor-only package | Bundle at least one RPC descriptor and emit no executable target |
 | Custom Python/Rust/Go worker or UI toolchain | Emit the canonical format and a Host-supported target kind/protocol; no managed SDK dependency is inherently required |
 
@@ -99,7 +99,7 @@ capability; the Host then selects `sunder.worker.v1` before launch. Use only the
 `worker` target per framework-dependent module leaf. `dotnet`, `process`, Worker V3, and generic Runtime RIDs are invalid.
 
 The Node SDK uses Worker V1 and strict keyed RPC descriptor V1 beneath ordinary
-service authoring. `@sunder/package-tool` emits thin CommonJS modules whose exact-RID
+service authoring. `@younics/sunder-package-tool` emits thin CommonJS modules whose exact-RID
 target records bind `sunder.runtime.node` 24.x and `sunder.node-worker-module.v1`;
 Node executable bytes remain in separately trusted execution-runtime artifacts.
 Its surface remains intentionally narrower than the coordinated .NET SDK family.

@@ -74,7 +74,7 @@ test("react-node template scaffolds a namespaced web view with the browser-only 
     const app = await readFile(resolve(output, "app", "src", "App.tsx"), "utf8");
     assert.match(
       app,
-      /from "@sunder\/sdk\/react"/u,
+      /from "@younics\/sunder-sdk\/react"/u,
     );
     assert.match(app, /useApi\(Self\)/u);
     assert.match(app, /api\.messages\.send/u);

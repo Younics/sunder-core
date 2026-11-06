@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { isSemanticVersion, isVersionInRange, SEMANTIC_VERSION_MAXIMUM_LENGTH } from "@sunder/sdk";
+import { isSemanticVersion, isVersionInRange, SEMANTIC_VERSION_MAXIMUM_LENGTH } from "@younics/sunder-sdk";
 import { validateDependencyVersionRange } from "../src/dependency-range";
 
 // Mirrors Sunder.Package.Format.Tests/PackageDependencyRangeValidationTests.cs without changing SDK range semantics.

@@ -9,7 +9,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { build } from "esbuild";
-import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { authoringBindingModel } from "../src/generator";
 import { inventoryBytes, parseContractLock } from "../src/rpc-contract-lock";
 import { publishContractCache } from "../src/rpc-contract-cache";
@@ -78,7 +78,7 @@ test("generated discovery accepts admitted schemas but keeps exact activation tu
     const project = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache }); await generateRpcBindingsForLoadedProject(project);
     const bundled = join(c.root, "apis.cjs");
     await build({ entryPoints: [join(c.root, ".sunder/generated/rpc/catalogs.ts")], bundle: true, platform: "browser", format: "cjs", outfile: bundled,
-      alias: { "@sunder/sdk/browser": require.resolve("@sunder/sdk/browser"), "@sunder/sdk/generated": require.resolve("@sunder/sdk/generated") }, logLevel: "silent" });
+      alias: { "@younics/sunder-sdk/browser": require.resolve("@younics/sunder-sdk/browser"), "@younics/sunder-sdk/generated": require.resolve("@younics/sunder-sdk/generated") }, logLevel: "silent" });
     const { packageApis } = createRequire(__filename)(bundled);
     const raw = { packageId: "example.dependency", packageVersion: "1.9.9+new.content", providerId: "example.implementation", contractId: c.requirement.contractId,
       contractVersion: c.requirement.contractVersion, descriptorSha256: c.requirement.descriptorSha256, abiSha256: c.requirement.abiSha256,
@@ -192,7 +192,7 @@ test("TS and JS imported service implementations derive only provider grants fro
       const lock = JSON.parse(c.original.toString()); lock.packageImports = {};
       lock.providerImports.extension = { packageId: "example.dependency", contractId: c.requirement.contractId };
       await writeFile(c.lockPath, JSON.stringify(lock, null, 2) + "\n");
-      await writeFile(join(c.root, `src/services.${extension}`), 'import {defineService} from "@sunder/sdk"; import {Implementations} from "#sunder/api"; export const implementation = defineService({ examplePing(request,context){context.signal.throwIfAborted();return request;} },{implements:Implementations.extension});');
+      await writeFile(join(c.root, `src/services.${extension}`), 'import {defineService} from "@younics/sunder-sdk"; import {Implementations} from "#sunder/api"; export const implementation = defineService({ examplePing(request,context){context.signal.throwIfAborted();return request;} },{implements:Implementations.extension});');
       const loaded = await loadProjectWithOwnedFrame(c.root, { contractCacheRoot: c.cache });
       assert.equal(loaded.contracts[0]!.descriptorSha256, c.requirement.descriptorSha256);
       assert.equal(loaded.ownedRpc!.importedProviders.length, 1); assert.equal(loaded.config.usesContracts!.length, 0);
@@ -278,7 +278,7 @@ test("fresh API selection defers source diagnostics to Accept and refuses delete
     await writeFile(c.lockPath, empty); await rm(join(c.root, "sunder-contracts.owned.json"));
     const command = () => packageApiCommand(c.root, { operation: "add", packageId: "example.dependency", versionRange: ">=1.0.0 <2.0.0",
       registryOrigin: "https://registry.example/", cacheRoot: c.cache, fetchImplementation: (input, init) => registryResponse(c, String(input), init) });
-    await writeFile(join(c.root, "src/services.ts"), 'import {defineService} from "@sunder/sdk"; export * from "./worker.js"; export const greeting=defineService({async greet(name:string):Promise<string>{return name;}},{exposure:"public"});');
+    await writeFile(join(c.root, "src/services.ts"), 'import {defineService} from "@younics/sunder-sdk"; export * from "./worker.js"; export const greeting=defineService({async greet(name:string):Promise<string>{return name;}},{exposure:"public"});');
     await writeFile(join(c.root, "src/worker.ts"), 'import {Catalogs} from "#sunder/api"; export const broken=Catalogs.missing;');
     assert.equal((await command()).changed, true);
     await assert.rejects(c.run("contracts", "accept"), /handler-incomplete/u);
@@ -348,7 +348,7 @@ test("explicit update refuses removal of required inventory members before cache
   const c = await fixture();
   try {
     const producer=join(c.root,"replacement-producer");await mkdir(join(producer,"src"),{recursive:true});
-    await writeFile(join(producer,"src/services.ts"),'import {defineService} from "@sunder/sdk"; export const replacement=defineService({ping():string{return "replacement";}},{exposure:"public"});');
+    await writeFile(join(producer,"src/services.ts"),'import {defineService} from "@younics/sunder-sdk"; export const replacement=defineService({ping():string{return "replacement";}},{exposure:"public"});');
     await writeFile(join(producer,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.dependency",name:"Replacement",version:"1.9.0",workerCapabilities:[],services:{module:"src/services.ts"}}));
     await writeFile(join(producer,"sunder-contracts.lock.json"),await readFile(join(ROOT,"authoring/conformance/valid/minimal-contract-lock.json")));
     const contract=(await loadProjectWithOwnedFrame(producer,{allowDrift:true})).contracts[0]!;

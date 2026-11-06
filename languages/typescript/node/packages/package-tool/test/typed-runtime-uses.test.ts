@@ -18,16 +18,16 @@ import {parseOuter} from "../src/rpc-baseline-json";
 import {canonicalCandidateFixture,installFixtureInspector} from "./model-projection-fixtures";
 import {emptyLock,fixtureSource,installFixtureSdk} from "./service-fixtures";
 
-const producerSource=`import {defineService} from "@sunder/sdk";
-/*ts import type {ServiceReference} from "@sunder/sdk";*/
+const producerSource=`import {defineService} from "@younics/sunder-sdk";
+/*ts import type {ServiceReference} from "@younics/sunder-sdk";*/
 export const leaf=defineService({ready(){return true;}},{exposure:"public",runtimeUse:{actions:["discover"]}});
-/** @typedef {{leaf:import("@sunder/sdk").ServiceReference<typeof leaf>,next?:TargetContext}} TargetContext */
+/** @typedef {{leaf:import("@younics/sunder-sdk").ServiceReference<typeof leaf>,next?:TargetContext}} TargetContext */
 /*ts type TargetContext={leaf:ServiceReference<typeof leaf>;next?:TargetContext};*/
 export const target=defineService({
  /** @param {TargetContext} request */
  run(request/*:TargetContext*/){return true;}
 },{exposure:"public",runtimeUse:{actions:["discover"]}});
-/** @typedef {{target:import("@sunder/sdk").ServiceReference<typeof target>}} HolderContext */
+/** @typedef {{target:import("@younics/sunder-sdk").ServiceReference<typeof target>}} HolderContext */
 /*ts type HolderContext={target:ServiceReference<typeof target>};*/
 export const holder=defineService({
  /** @param {HolderContext} request */
@@ -36,7 +36,7 @@ export const holder=defineService({
 export const unrelated=defineService({ping(){return "unused";}},{exposure:"public"});`;
 const targetToken="Services.Contracts.CExample_Typed_Target.target";
 const leafToken="Services.Contracts.CExample_Typed_Leaf.leaf";
-const consumerSource=(intent:string)=>`import {defineService} from "@sunder/sdk";import {Implementations,Services} from "#sunder/api";
+const consumerSource=(intent:string)=>`import {defineService} from "@younics/sunder-sdk";import {Implementations,Services} from "#sunder/api";
 export const provider=defineService({holderHandle(request){return true;}},{implements:Implementations.holder,providerId:"example.consumer.holder"${intent}});`;
 
 async function setup(language:"ts"|"js"){
@@ -87,7 +87,7 @@ for(const language of ["ts","js"] as const)test(`${language} provider-only Updat
       const contract=c.project.contracts.find(value=>value.descriptorSha256===hash)!;
       assert.equal((await readFile(join(c.cache,hash+".receipt.json"))).toString(),JSON.stringify({schemaVersion:1,contractId:contract.descriptor.contractId,contractVersion:contract.descriptor.version,descriptorBytes:bytes.length,descriptorSha256:hash,abiSha256:contract.abiSha256},null,2)+"\n");
     }
-    const bundle=await build({entryPoints:[join(c.consumer,".sunder/generated/rpc/adapter.js")],bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated"),"#sunder/api":join(c.consumer,".sunder/generated/rpc/api.js")}});
+    const bundle=await build({entryPoints:[join(c.consumer,".sunder/generated/rpc/adapter.js")],bundle:true,platform:"node",format:"cjs",write:false,alias:{"@younics/sunder-sdk":require.resolve("@younics/sunder-sdk"),"@younics/sunder-sdk/browser":require.resolve("@younics/sunder-sdk/browser"),"@younics/sunder-sdk/generated":require.resolve("@younics/sunder-sdk/generated"),"#sunder/api":join(c.consumer,".sunder/generated/rpc/api.js")}});
     const module={exports:{} as {providers:readonly unknown[]}};new Function("require","module","exports",bundle.outputFiles[0]!.text)(require,module,module.exports);assert.equal(module.exports.providers.length,1);
     if(language==="ts"){
       const modulePath=join(c.consumer,"dist/work/worker.cjs"),rid=currentRid();const notice=await bundleProduction(loaded,rid,modulePath);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { atVersion, emptyBaseline, parseBaseline, planAcceptance, planFreeze, sha256, validateBaselineSource, validateImmutableProjectionReviews, writeBaseline, type AcceptOptions, type OwnedBaseline } from "../src/rpc-baseline";
 import { object, outerBytes, parseOuter } from "../src/rpc-baseline-json";
 import { classify } from "../src/rpc-evolution";

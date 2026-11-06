@@ -1,8 +1,8 @@
 // @ts-check
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserContext } from "@sunder/sdk/browser";
-import { ApiProvider } from "@sunder/sdk/react";
+import { createBrowserContext } from "@younics/sunder-sdk/browser";
+import { ApiProvider } from "@younics/sunder-sdk/react";
 import { Self } from "#sunder/api";
 import { App } from "./App.jsx";
 import "./styles.css";

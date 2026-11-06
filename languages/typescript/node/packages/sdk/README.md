@@ -1,4 +1,4 @@
-# @sunder/sdk
+# @younics/sunder-sdk
 
 > **SDK status: UNFROZEN / UNRELEASED.** This README describes the current source
 > candidate, not a supported release. The supported-release ledger contains no releases.
@@ -6,7 +6,7 @@
 Sunder packages author ordinary services in TypeScript or checked JavaScript. The
 package tool derives their portable contracts and generates registration, Worker
 bootstrap, validated value conversion and package-local clients. The main SDK has
-no runtime dependencies. React is an optional peer used only by `@sunder/sdk/react`.
+no runtime dependencies. React is an optional peer used only by `@younics/sunder-sdk/react`.
 
 After the first supported release, compatible fixes and additions remain allowed
 while supported source, runtime ABI and behavioral contracts must be preserved. See
@@ -48,7 +48,7 @@ The scaffold configures one `services.module` in `sunder.package.json`. Export
 ordinary `defineService` definitions from that module:
 
 ```ts
-import { defineService, type ServiceContext } from "@sunder/sdk";
+import { defineService, type ServiceContext } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   async greet(name: string, context: ServiceContext): Promise<string> {
@@ -65,12 +65,12 @@ JavaScript uses exactly the same definition with checked JSDoc:
 
 ```js
 // @ts-check
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   /**
    * @param {string} name
-   * @param {import("@sunder/sdk").ServiceContext} context
+   * @param {import("@younics/sunder-sdk").ServiceContext} context
    * @returns {Promise<string>}
    */
   async greet(name, context) {
@@ -155,11 +155,11 @@ Tokens grant no authority. In particular, providing a service does not grant Run
 broker use: declare `runtimeUse` explicitly when needed.
 
 Framework-neutral browser owners use `createBrowserContext(Self)` from
-`@sunder/sdk/browser` and call `context.api(Self)`. Dispose the context when its root
+`@younics/sunder-sdk/browser` and call `context.api(Self)`. Dispose the context when its root
 is removed. It waits for the immutable document's `sunder:ready` event and respects
 the existing bridge lifetime signal; it does not poll or introduce a new protocol.
 
-React roots provide that context through `ApiProvider` from `@sunder/sdk/react`.
+React roots provide that context through `ApiProvider` from `@younics/sunder-sdk/react`.
 Components use `useApi(Self)`. Each hook's effect owns only that component's calls;
 StrictMode cleanup/remount creates a fresh child owner. Call services in effects or
 event handlers, not during render. The browser SDK and generated declarations do not
@@ -174,15 +174,15 @@ deliberate low-level integrations.
 
 ## Entry points and generation ownership
 
-- Node service authors use `@sunder/sdk`; browser authors use `@sunder/sdk/browser`.
-- Optional React integration uses `@sunder/sdk/react`.
+- Node service authors use `@younics/sunder-sdk`; browser authors use `@younics/sunder-sdk/browser`.
+- Optional React integration uses `@younics/sunder-sdk/react`.
 - Normal service calls and model imports come from the generated `#sunder/api`.
-- `@sunder/sdk/generated` is the supported, browser-safe **generated-runtime ABI**.
+- `@younics/sunder-sdk/generated` is the supported, browser-safe **generated-runtime ABI**.
   Its exported signatures and referenced types are compatibility commitments after
   release, not unprotected implementation details. It is for generated code, not an
   ordinary author import or a replacement for `#sunder/api`.
 
-TypeScript source/binding generation belongs to `@sunder/package-tool`, not the
+TypeScript source/binding generation belongs to `@younics/sunder-package-tool`, not the
 runtime SDK. Normal projects use its `sunder-package generate` workflow through the
 scaffolded scripts. Low-level descriptor generation is also owned by that tooling;
 the SDK entry points contain runtime contracts and support, not a build-time generator.
@@ -190,7 +190,7 @@ the SDK entry points contain runtime contracts and support, not a build-time gen
 ## Natural content and provider references
 
 ```ts
-import { defineService, SunderContent, type ServiceReference } from "@sunder/sdk";
+import { defineService, SunderContent, type ServiceReference } from "@younics/sunder-sdk";
 import { Self, Services } from "#sunder/api";
 
 export const files = defineService({
@@ -218,7 +218,7 @@ position once, and owns the source unless `leaveOpen: true`. Dispose stream cont
 even if it was never opened. Node's `contentFromFile(path, options)` convenience is
 lazy and locally repeatable and never deletes the source file. It is exported only
 from the Node entry point. Browser authors import `SunderContent` from
-`@sunder/sdk/browser`.
+`@younics/sunder-sdk/browser`.
 
 Generated visitors register nested/optional/union/list/map resources asynchronously
 and coalesce aliases per value. A returned content object retains its call scope
@@ -251,14 +251,14 @@ Use `ServiceReference<typeof sourceDefinition>` for owned declarations and
 (the `Services` tree follows the same package/contract/service scopes as `api`).
 The canonical token path is `Services.Contracts.CExample_Weather.forecast`;
 `Services.Self` keeps the source-shaped owned service keys.
-JSDoc uses the identical types through `import("@sunder/sdk")` or the browser entry.
+JSDoc uses the identical types through `import("@younics/sunder-sdk")` or the browser entry.
 `SelfModels` and selected `<Token>Models` remain type-only namespaces.
 
 Checked JavaScript uses ordinary implementation inference for content returns and
 JSDoc for service-reference identity; it requires no authored schemas or codecs:
 
 ```js
-import { defineService, SunderContent } from "@sunder/sdk";
+import { defineService, SunderContent } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   /** @param {string} name */
@@ -267,7 +267,7 @@ export const greeting = defineService({
 
 export const documents = defineService({
   download() { return SunderContent.fromBytes(new Uint8Array([1, 2, 3])); },
-  /** @param {import("@sunder/sdk").ServiceReference<typeof greeting>} reference */
+  /** @param {import("@younics/sunder-sdk").ServiceReference<typeof greeting>} reference */
   greetThrough(reference) { return reference.Service.greet("Sunder"); },
 });
 ```
@@ -342,7 +342,7 @@ canonical generated `service: ServiceToken<TService>` and optional `required`
 and `actions` policy:
 
 ```ts
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 import { Implementations, Services } from "#sunder/api";
 
 export const holder = defineService({
@@ -384,7 +384,7 @@ errors and unexpected exceptions become sanitized provider faults.
 After selecting an extension with `api implement` or `platform implement`, use:
 
 ```ts
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 import { Implementations } from "#sunder/api";
 
 export const extension = defineService({
@@ -416,7 +416,7 @@ Declare raw/dynamic calls with literal method wire IDs. An optional explicit vie
 describes a deliberately narrow raw output model, not a generated full model:
 
 ```ts
-import { declareRpcUse, declareRpcView } from "@sunder/sdk";
+import { declareRpcUse, declareRpcView } from "@younics/sunder-sdk";
 import { Services } from "#sunder/api";
 
 const people = Services.Dependency.example_Directory.people;
@@ -427,7 +427,7 @@ declareRpcView(people, "Person", ["name"]);
 These functions do not perform RPC or grant access. Raw output definitions are
 exact by default. A view cannot narrow a definition also required by typed calls
 or a service-reference protocol value. Browser sources import these functions
-from `@sunder/sdk/browser` and pass `"app"` as the final argument. The default role
+from `@younics/sunder-sdk/browser` and pass `"app"` as the final argument. The default role
 is `"runtime"`. Tooling stamps `rpc.consumer-requirements.v1` so older Hosts reject
 unsupported targets before activation. See the
 [compatibility policy](../../../../../docs/SUNDER-SDK-COMPATIBILITY.md#imported-api-compatibility).
@@ -464,7 +464,7 @@ References are strict by default, including nullable references. To preserve
 expected absence at one record property, use a type-only marker:
 
 ```ts
-import type { OptionalServiceReference } from "@sunder/sdk";
+import type { OptionalServiceReference } from "@younics/sunder-sdk";
 
 export type ExecutionContext = {
   executionTarget: OptionalServiceReference<typeof executionService> | null;
@@ -474,7 +474,7 @@ export type ExecutionContext = {
 Checked JavaScript uses the same type in JSDoc:
 
 ```js
-/** @typedef {{executionTarget: import("@sunder/sdk").OptionalServiceReference<typeof executionService> | null}} ExecutionContext */
+/** @typedef {{executionTarget: import("@younics/sunder-sdk").OptionalServiceReference<typeof executionService> | null}} ExecutionContext */
 ```
 
 The marker is assignable from an ordinary `ServiceReference`; it creates no

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
-import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, parseRpcContractDescriptor, RpcDescriptorError } from "@sunder/sdk";
+import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, parseRpcContractDescriptor, RpcDescriptorError } from "@younics/sunder-sdk";
 import { classify, minimumVersion, minimumOwnedVersion, ordinal, satisfies, validateVersion, type ChangeKind } from "../src/rpc-evolution";
 import { consumerRequirements } from "../src/rpc-consumer-requirements";
 

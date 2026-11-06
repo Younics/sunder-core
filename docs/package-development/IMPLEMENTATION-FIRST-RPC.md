@@ -163,7 +163,7 @@ typed dictionary/closed record. It can be combined with explicit property bounds
 and rejects non-raw-JSON targets. Node uses the SDK's ordinary `JsonObject` type
 for this boundary and `JsonValue` for arbitrary JSON, including arrays and scalars.
 Explicit `constraints` can add property-count bounds. These are source types from
-`@sunder/sdk`, not schema constructors; normal wire/resource validation still applies.
+`@younics/sunder-sdk`, not schema constructors; normal wire/resource validation still applies.
 
 `AllowedStrings` retains a plain string's closed inline enumeration when the wire
 contract uses `{"type":"string","enum":[...]}` directly at that value. It accepts
@@ -340,12 +340,12 @@ this is codec parity, not a descriptor or ABI change.
 
 ## TypeScript And JavaScript Surface
 
-`@sunder/sdk` exports `defineService(methods, optionalSemanticOptions)`. Configure
+`@younics/sunder-sdk` exports `defineService(methods, optionalSemanticOptions)`. Configure
 one `services.module` and export ordinary method records from it. For example,
 `src/services.ts` can contain:
 
 ```ts
-import { defineService, type ServiceContext } from "@sunder/sdk";
+import { defineService, type ServiceContext } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   async greet(name: string, context: ServiceContext): Promise<string> {
@@ -362,12 +362,12 @@ Alternatively, configure `src/services.js` and author genuine checked JavaScript
 
 ```js
 // @ts-check
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   /**
    * @param {string} name
-   * @param {import("@sunder/sdk").ServiceContext} context
+   * @param {import("@younics/sunder-sdk").ServiceContext} context
    * @returns {Promise<string>}
    */
   async greet(name, context) {
@@ -412,7 +412,7 @@ direct request shape. Authors maintain domain types, not wrapper DTOs for every 
 elements with `[]`. For example:
 
 ```ts
-import { defineService, type JsonObject } from "@sunder/sdk";
+import { defineService, type JsonObject } from "@younics/sunder-sdk";
 
 type Envelope = {
   language: "en" | "fr";
@@ -447,7 +447,7 @@ definition key from its exported model name. It uses the same bounded literal
 options as other service metadata in TypeScript and checked JavaScript:
 
 ```ts
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 
 type InternalGreeting = { message: string };
 export const greeting = defineService({
@@ -514,7 +514,7 @@ cannot redeclare the imported contract or acquire consumer grants by providing i
 Worker code uses its existing `WorkerContext`; for the greeting service above:
 
 ```ts
-import type { WorkerContext } from "@sunder/sdk";
+import type { WorkerContext } from "@younics/sunder-sdk";
 import { Self } from "#sunder/api";
 
 export function greetFromWorker(context: WorkerContext, signal: AbortSignal) {
@@ -530,7 +530,7 @@ contract-ID camel-case scopes. For the retained two-contract fixture with
 `messages.send` with an empty request object:
 
 ```ts
-import type { WorkerContext } from "@sunder/sdk";
+import type { WorkerContext } from "@younics/sunder-sdk";
 import { Dependency } from "#sunder/api";
 
 export async function readBoth(context: WorkerContext) {
@@ -1688,7 +1688,7 @@ Implementation stays with these owners rather than author-facing SDKs or descrip
   synchronization, cached-policy consistency/lease enforcement, endpoint withdrawal,
   process supervision, readiness evaluation, and exact use/action authorization.
 - `Sunder.Package.Build` and
-  `@sunder/package-tool` own baseline commands, exact lock/restore behavior,
+  `@younics/sunder-package-tool` own baseline commands, exact lock/restore behavior,
   independent catalog verification, and generated provider/use records. They
   consume Registry decisions but never become contract authority.
 - Agent consumes the reviewed bootstrap inventory; it cannot define a second

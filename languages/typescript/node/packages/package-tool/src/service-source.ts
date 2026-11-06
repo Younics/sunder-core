@@ -1,7 +1,7 @@
 import ts from "typescript";
 import type { PackageToolCompatibility } from "./compatibility";
 import { createHash } from "node:crypto";
-import { isPackageId, parseRpcContractDescriptor, type RpcContractDescriptor } from "@sunder/sdk";
+import { isPackageId, parseRpcContractDescriptor, type RpcContractDescriptor } from "@younics/sunder-sdk";
 import { authoringBindingModel } from "./generator";
 import type { LoadedContract } from "./model";
 import type { OwnedBaseline } from "./rpc-baseline";
@@ -62,7 +62,7 @@ export function analyzeServices(program: ts.Program, file: ts.SourceFile, select
   // structural type comparison can never establish source-model identity.
   const modelSymbols = new Map<ts.Symbol, { name: string; location: ts.Node; type: ts.Type; use: ts.Node }>();
   const modelNames = new Map<string, { symbol: ts.Symbol; location: ts.Node }>();
-  const authoring = program.getSourceFile(selectedSdk.declarations["@sunder/sdk"]!);
+  const authoring = program.getSourceFile(selectedSdk.declarations["@younics/sunder-sdk"]!);
   const sdk = authoring && checker.getSymbolAtLocation(authoring);
   const sdkExport = (name: string): ts.Symbol | undefined => {
     const symbol = sdk && checker.getExportsOfModule(sdk).find(candidate => candidate.name === name);

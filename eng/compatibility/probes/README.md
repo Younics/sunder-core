@@ -44,10 +44,10 @@ the actual local candidate SDK/tool tarballs in one install operation:
 
 ```sh
 npm install --ignore-scripts --no-audit --no-fund --save-exact "$SDK_TGZ" "$TOOL_TGZ"
-node node_modules/@sunder/package-tool/dist/cli.js generate --project .
+node node_modules/@younics/sunder-package-tool/dist/cli.js generate --project .
 node node_modules/typescript/bin/tsc --project tsconfig.json --noEmit
-node node_modules/@sunder/package-tool/dist/cli.js build --project . --rid "$RID"
-node node_modules/@sunder/package-tool/dist/cli.js package --project . --discovery-root dist/targets
+node node_modules/@younics/sunder-package-tool/dist/cli.js build --project . --rid "$RID"
+node node_modules/@younics/sunder-package-tool/dist/cli.js package --project . --discovery-root dist/targets
 ```
 
 Retain `package.json`, **the resulting original npm lock v3**, all authored files

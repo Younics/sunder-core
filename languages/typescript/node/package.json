@@ -10,11 +10,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace @sunder/sdk && npm run build --workspace @sunder/package-tool && npm run build --workspace create-sunder-package",
+    "build": "npm run build --workspace @younics/sunder-sdk && npm run build --workspace @younics/sunder-package-tool && npm run build --workspace @younics/create-sunder-package",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "templates:generate": "node packages/package-tool/dist/cli.js generate --project packages/create-sunder-package/template && node packages/package-tool/dist/cli.js generate --project packages/create-sunder-package/template-react-node",
     "templates:typecheck": "npm run templates:generate && tsc -p packages/create-sunder-package/template/tsconfig.json && tsc -p packages/create-sunder-package/template-react-node/tsconfig.worker.json && tsc -p packages/create-sunder-package/template-react-node/tsconfig.browser.json",
-    "test": "node --test ../../../scripts/test/release/*.test.mjs ../../../scripts/test-oracles/*.test.mjs && npm run test --workspace @sunder/sdk && npm run test --workspace @sunder/package-tool && npm run test --workspace create-sunder-package && npm run templates:typecheck",
+    "test": "node --test ../../../scripts/test/release/*.test.mjs ../../../scripts/test-oracles/*.test.mjs && npm run test --workspace @younics/sunder-sdk && npm run test --workspace @younics/sunder-package-tool && npm run test --workspace @younics/create-sunder-package && npm run templates:typecheck",
     "test:oracles": "node --test ../../../scripts/test-oracles/*.test.mjs",
     "module:build": "node packages/package-tool/dist/cli.js build --project fixtures/runtime-backed-worker",
     "module:smoke": "node packages/package-tool/dist/cli.js smoke --project fixtures/runtime-backed-worker",

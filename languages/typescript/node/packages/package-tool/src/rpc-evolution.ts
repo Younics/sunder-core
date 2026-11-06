@@ -1,4 +1,4 @@
-import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isSemanticVersion, isVersionInRange, type RpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isSemanticVersion, isVersionInRange, type RpcContractDescriptor } from "@younics/sunder-sdk";
 import { consumerProjection, type ConsumerRequirements } from "./rpc-consumer-requirements";
 
 // Private port of Format/SunderRpcContractCompatibility. Admission, authority and

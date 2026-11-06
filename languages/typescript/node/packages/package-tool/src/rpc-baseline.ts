@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isPackageId, isSemanticVersion, parseRpcContractDescriptor, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, type RpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcAbiProjectionBytes, canonicalRpcDescriptorBytes, isPackageId, isSemanticVersion, parseRpcContractDescriptor, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, type RpcContractDescriptor } from "@younics/sunder-sdk";
 import type { LoadedContract } from "./model";
 import { classify, compareVersions, minimumOwnedVersion, ordinal, validateVersion, versionParts, type ChangeKind } from "./rpc-evolution";
 import { fields, invalid, object, ordered, outerBytes, outerKeys, parseOuter, string, type Outer, type OuterObject } from "./rpc-baseline-json";

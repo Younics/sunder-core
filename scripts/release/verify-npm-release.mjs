@@ -34,9 +34,9 @@ const archivePath = resolve(archiveArgument);
 const artifactDirectory = resolve(archivePath, "..");
 const registry = "https://registry.npmjs.org";
 const publicPackages = [
-  { name: "@sunder/sdk", archive: `sunder-sdk-${version}.tgz` },
-  { name: "@sunder/package-tool", archive: `sunder-package-tool-${version}.tgz` },
-  { name: "create-sunder-package", archive: `create-sunder-package-${version}.tgz` },
+  { name: "@younics/sunder-sdk", archive: `younics-sunder-sdk-${version}.tgz` },
+  { name: "@younics/sunder-package-tool", archive: `younics-sunder-package-tool-${version}.tgz` },
+  { name: "@younics/create-sunder-package", archive: `younics-create-sunder-package-${version}.tgz` },
 ];
 const packages = publicPackages.filter(item => item.name === packageName);
 if (packages.length !== 1 || basename(archivePath) !== packages[0].archive) {

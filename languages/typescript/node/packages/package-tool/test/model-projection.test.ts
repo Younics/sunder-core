@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import ts from "typescript";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { currentRid, loadProjectWithOwnedFrame, type LoadedProject } from "../src/model";
 import { aggregateAndPack, bundleProduction, writeTargetLeaf } from "../src/package";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
@@ -25,14 +25,14 @@ import { rebindFixtureProjection } from "./model-projection-fixtures";
 async function fixture(extension: "ts" | "js", source?: string) {
   const root = await mkdtemp(join(tmpdir(), "sunder-projection-")); await mkdir(join(root, "src"));
   await installFixtureSdk(root);
-  const types = extension === "ts" ? `import type {RpcContentReference} from "@sunder/sdk";
+  const types = extension === "ts" ? `import type {RpcContentReference} from "@younics/sunder-sdk";
 export type Attachment = RpcContentReference;
 export type Label = string;
 export type Status = "ready" | "busy";
 export type Detail = { count: bigint };
 export type Item = { name: Label; status?: Status | null; detail: Detail; attachment?: Attachment; next?: Item };
 export type Secret = { token: string };`
-    : `/** @typedef {import("@sunder/sdk").RpcContentReference} Attachment */
+    : `/** @typedef {import("@younics/sunder-sdk").RpcContentReference} Attachment */
 /** @typedef {string} Label */
 /** @typedef {"ready" | "busy"} Status */
 /** @typedef {{count: bigint}} Detail */
@@ -40,13 +40,13 @@ export type Secret = { token: string };`
 /** @typedef {{token: string}} Secret */
 export {};`;
   await writeFile(join(root, `src/models.${extension}`), types);
-  await writeFile(join(root, `src/services.${extension}`), source ?? (extension === "ts" ? `import {defineService} from "@sunder/sdk";
+  await writeFile(join(root, `src/services.${extension}`), source ?? (extension === "ts" ? `import {defineService} from "@younics/sunder-sdk";
 import type {Item, Secret} from "./models.js";
 export const first = defineService({ echo(value: Item): Item { return value; } }, {exposure:"public"});
 export const second = defineService({ echo(value: Item): Item { return value; } }, {exposure:"public"});
 export const privateService = defineService({ echo(value: Secret): Secret { return value; } });`
     : `// @ts-check
-import {defineService} from "@sunder/sdk";
+import {defineService} from "@younics/sunder-sdk";
 export const first = defineService({
 /** @param {import("./models.js").Item} value @returns {import("./models.js").Item} */
 echo(value) {return value;}}, {exposure:"public"});
@@ -117,19 +117,19 @@ test("TS/checkJs source-wide models, transparent aliases and recursive closures 
       await writeFile(consumer, extension === "ts" ? `import type {SelfModels} from "#sunder/api"; export const value: SelfModels.Item = {name:"ok",status:"ready",detail:{count:1n}};`
         : `/** @type {import("#sunder/api").SelfModels.Item} */ export const value = {name:"ok",status:"ready",detail:{count:1n}};`);
       const program = ts.createProgram([consumer], { target: ts.ScriptTarget.ES2023, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler, strict: true, allowJs: true, checkJs: true, noEmit: true,
-        types: [], skipLibCheck: false, paths: { "@sunder/sdk/browser": [require.resolve("@sunder/sdk/browser").replace(/\.js$/u, ".d.ts")], "@sunder/sdk/generated": [require.resolve("@sunder/sdk/generated").replace(/\.js$/u, ".d.ts")], "@sunder/sdk/core": [require.resolve("@sunder/sdk/core").replace(/\.js$/u, ".d.ts")] } });
+        types: [], skipLibCheck: false, paths: { "@younics/sunder-sdk/browser": [require.resolve("@younics/sunder-sdk/browser").replace(/\.js$/u, ".d.ts")], "@younics/sunder-sdk/generated": [require.resolve("@younics/sunder-sdk/generated").replace(/\.js$/u, ".d.ts")], "@younics/sunder-sdk/core": [require.resolve("@younics/sunder-sdk/core").replace(/\.js$/u, ".d.ts")] } });
       assert.deepEqual(ts.getPreEmitDiagnostics(program).map(value => `${value.file?.fileName}: ${ts.flattenDiagnosticMessageText(value.messageText, "\n")}`), [], program.getSourceFiles().filter(file => file.fileName.startsWith(c.root)).map(file => file.fileName).join("\n"));
     } finally { await c.dispose(); }
   }
 });
 
 test("distinct equal-shaped declarations collide by portable source name across contracts, never merge by schema", async () => {
-  const c = await fixture("ts", `import {defineService} from "@sunder/sdk"; import type {Item as A} from "./a.js"; import type {Item as B} from "./b.js";
+  const c = await fixture("ts", `import {defineService} from "@younics/sunder-sdk"; import type {Item as A} from "./a.js"; import type {Item as B} from "./b.js";
 export const first = defineService({echo(value:A):A{return value;}}); export const second = defineService({echo(value:B):B{return value;}});`);
   try {
     for (const name of ["a", "b"]) await writeFile(join(c.root, `src/${name}.ts`), "export type Item = {value:string};");
     await assert.rejects(c.load(), /identity-collision:.*Model 'Item'.*a\.ts/s);
-    const generic = `import {defineService} from "@sunder/sdk"; interface Box<T>{value:T}
+    const generic = `import {defineService} from "@younics/sunder-sdk"; interface Box<T>{value:T}
 export const first=defineService({echo(value:Box<string>):Box<string>{return value;}});
 export const second=defineService({echo(value:Box<string>):Box<string>{return value;}});`;
     await writeFile(join(c.root,"src/services.ts"),generic);
@@ -141,7 +141,7 @@ export const second=defineService({echo(value:Box<string>):Box<string>{return va
 });
 
 function publicNameSource(extension: "ts" | "js", sourceName: string, names: {name?: string; publicName?: string}) {
-  return `import {defineService} from "@sunder/sdk";
+  return `import {defineService} from "@younics/sunder-sdk";
 ${extension === "ts" ? `export type ${sourceName} = {message:string};` : `/** @typedef {{message:string}} ${sourceName} */`}
 export const echo = defineService({
 /** @param {${sourceName}} value @returns {${sourceName}} */
@@ -206,7 +206,7 @@ test("explicit public model names reject duplicate, inconsistent, ambiguous and 
     try {
       for (const publicName of ["SharedValue", "sharedvalue"]) {
         const second = publicNameSource(extension, "SecondValue", {name:"SecondWire", publicName})
-          .replace('import {defineService} from "@sunder/sdk";', "").replace("export const echo", "export const second");
+          .replace('import {defineService} from "@younics/sunder-sdk";', "").replace("export const echo", "export const second");
         await writeFile(join(c.root, `src/services.${extension}`), first + second);
         await assert.rejects(c.load(), /identity-collision:.*Model '.*'.*distinct source declaration.*services\.[jt]s/s);
       }
@@ -222,7 +222,7 @@ echo(value${extension === "ts" ? ":FirstValue" : ""}) {return value;}
       await assert.rejects(c.load(), /value-invalid:.*wire definition name/);
       for (const file of ["a", "b"]) await writeFile(join(c.root, `src/${file}.${extension}`), extension === "ts"
         ? "export type Value = {message:string};" : "/** @typedef {{message:string}} Value */\nexport {};");
-      await writeFile(join(c.root, `src/services.${extension}`), `import {defineService} from "@sunder/sdk";
+      await writeFile(join(c.root, `src/services.${extension}`), `import {defineService} from "@younics/sunder-sdk";
 ${extension === "ts" ? 'import type {Value as A} from "./a.js"; import type {Value as B} from "./b.js";' : ""}
 export const echo = defineService({
 /** @param {import("./a.js").Value} value */
@@ -265,7 +265,7 @@ test("strict sidecars reject tampering, numeric-key reordering, stale linkage an
 });
 
 test("Format parity permits repeated exact model identities only with equal normalized closures and rejects backend keywords", async () => {
-  const c = await fixture("ts",`import {defineService} from "@sunder/sdk";
+  const c = await fixture("ts",`import {defineService} from "@younics/sunder-sdk";
 type First = {name:string}; type Second = {name:string}; type Root = {first:First;second:Second};
 export const echo=defineService({echo(value:Root):Root{return value;}},{exposure:"public"});`);
   try {
@@ -332,7 +332,7 @@ test("selected projection cache requires full pins and descriptors, offline rest
 });
 
 test("private-only packages publish a complete empty public projection document", async () => {
-  const c = await fixture("ts", `import {defineService} from "@sunder/sdk"; type PrivateModel = {secret:string}; export const secret = defineService({echo(value:PrivateModel):PrivateModel{return value;}});`);
+  const c = await fixture("ts", `import {defineService} from "@younics/sunder-sdk"; type PrivateModel = {secret:string}; export const secret = defineService({echo(value:PrivateModel):PrivateModel{return value;}});`);
   try {
     const project = await c.load(); const bytes = Buffer.from(project.ownedRpc!.files.get(MODEL_PROJECTION_PATH)!);
     assert.deepEqual(bytes, projectionDocumentBytes(project.config.id, project.config.version, []));
@@ -348,8 +348,8 @@ test("imported TS/checkJs models share ultimate-authority types and reexport the
     await publishModelProjectionCache(cache,new Map([[original.config.id,selection.body]]),selection.lock.packageArtifacts,selection.descriptors);
     for (const extension of ["ts","js"] as const) {
       const consumer = await fixture(extension,`import {Dependency} from "#sunder/api";
-${extension === "ts" ? 'import type {WorkerContext} from "@sunder/sdk";' : ''}
-/** @param {import("@sunder/sdk").WorkerContext} context */
+${extension === "ts" ? 'import type {WorkerContext} from "@younics/sunder-sdk";' : ''}
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context${extension === "ts" ? ':WorkerContext' : ''}) {
   /** @type {import("#sunder/api").DependencyModels.Item} */
   const value${extension === "ts" ? ':import("#sunder/api").DependencyModels.Item' : ''}={name:"ok",detail:{count:1n}};
@@ -382,12 +382,12 @@ test("owned TS/checkJs signatures resolve selected model aliases by nominal meta
   const descriptor=parseRpcContractDescriptor(await readFile(join(corpus,"../../../conformance/valid/minimal.rpc.json")));
   const bytes=Buffer.from(canonicalRpcDescriptorBytes(descriptor));const hash=hashBytes(bytes);
   for(const extension of ["ts","js"] as const){
-    const source=extension==="ts"?`import {defineService} from "@sunder/sdk";import type {DepModels,ForwardModels} from "#sunder/api";
+    const source=extension==="ts"?`import {defineService} from "@younics/sunder-sdk";import type {DepModels,ForwardModels} from "#sunder/api";
 type Holder={nested:DepModels.SharedValue};
 export const first=defineService({echo(value:DepModels.SharedValue):DepModels.SharedValue{return value;}});
 export const second=defineService({echo(value:ForwardModels.SharedValue):ForwardModels.SharedValue{return value;}});
 export const holder=defineService({echo(value:Holder):Holder{return value;}});`
-      :`import {defineService} from "@sunder/sdk";
+      :`import {defineService} from "@younics/sunder-sdk";
 /** @typedef {{nested:import("#sunder/api").DepModels.SharedValue}} Holder */
 export const first=defineService({
 /** @param {import("#sunder/api").DepModels.SharedValue} value @returns {import("#sunder/api").DepModels.SharedValue} */
@@ -422,7 +422,7 @@ echo(value){return value;}});`;
 });
 
 test("projection archive composition indexes shared bytes once and rejects reindexed sidecar or authored shadows", async () => {
-  const c = await fixture("ts", `import {defineService} from "@sunder/sdk"; type Item = {text:string}; export const echo = defineService({echo(value:Item):Item{return value;}},{methods:{echo:{timeoutSeconds:2100}}});`);
+  const c = await fixture("ts", `import {defineService} from "@younics/sunder-sdk"; type Item = {text:string}; export const echo = defineService({echo(value:Item):Item{return value;}},{methods:{echo:{timeoutSeconds:2100}}});`);
   try {
     const project = await c.load(); const modulePath = join(c.root, "dist/work/worker.cjs");
     const workerNoticePath = await bundleProduction(project, currentRid(), modulePath);

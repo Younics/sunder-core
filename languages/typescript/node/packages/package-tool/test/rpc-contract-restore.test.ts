@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { parseContractLock, inventoryBytes, parseContractWireJson } from "../src/rpc-contract-lock";
 import { publishContractCache, readContractCache, receiptBytes } from "../src/rpc-contract-cache";
 import { restoreContracts } from "../src/rpc-contract-restore";

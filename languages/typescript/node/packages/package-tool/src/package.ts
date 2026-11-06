@@ -28,7 +28,7 @@ import {
   isPackageId,
   isSemanticVersion,
   parseRpcContractDescriptor,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 import type { BuildOptions, Metafile } from "esbuild";
 import { build as buildEsbuild, context, type BuildContext } from "esbuild";
 import type { Plugin as VitePlugin } from "vite" with { "resolution-mode": "import" };
@@ -494,8 +494,8 @@ async function watchDevPackage(projectRoot: string, rid: SunderRid, options: Reg
     // node_modules/.vite-temp is available (for example a raw Worker fixture).
     if (/(?:^|\/)vite\.config\.[cm]?[jt]s\.timestamp-\d+-[a-f0-9]+\.mjs$/u.test(relativeName)) return;
     const segments = relativeName.split("/");
-    if (relativeName === "node_modules" || relativeName === "node_modules/@sunder" || relativeName === "node_modules/@sunder/sdk"
-      || relativeName.startsWith("node_modules/@sunder/sdk/")) { scheduleOperation(); return; }
+    if (relativeName === "node_modules" || relativeName === "node_modules/@younics" || relativeName === "node_modules/@younics/sunder-sdk"
+      || relativeName.startsWith("node_modules/@younics/sunder-sdk/")) { scheduleOperation(); return; }
     if (segments.some((segment) => segment === "node_modules"
       || segment === ".vite-temp"
       || segment === ".git"

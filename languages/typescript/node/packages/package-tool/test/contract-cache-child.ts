@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { parseContractLock } from "../src/rpc-contract-lock";
 import { publishContractCache, readContractCache } from "../src/rpc-contract-cache";
 import { collectContractCache } from "../src/rpc-contract-cache-gc";

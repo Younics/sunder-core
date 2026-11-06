@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalRpcDescriptorBytes, canonicalRpcAbiProjectionBytes, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, type RpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, canonicalRpcAbiProjectionBytes, SUNDER_RPC_V1_ABI_DOMAIN_SEPARATOR, type RpcContractDescriptor } from "@younics/sunder-sdk";
 import type { LoadedContract } from "./model";
 import type { OwnedBaseline, OwnedSnapshot } from "./rpc-baseline";
 import { fields, ordered, outerBytes, parseOuter, string, type Outer, type OuterObject } from "./rpc-baseline-json";

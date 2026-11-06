@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import test from "node:test";
-import { canonicalizeDescriptor, type JsonObject } from "@sunder/sdk";
+import { canonicalizeDescriptor, type JsonObject } from "@younics/sunder-sdk";
 import { prepareProject } from "../src/package";
 import { parseBaseline, planAcceptance, planFreeze, validateBaselineSource } from "../src/rpc-baseline";
 import { sameReviewedProjection } from "../src/rpc-owned-projection-review";

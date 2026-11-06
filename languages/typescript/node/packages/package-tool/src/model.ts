@@ -7,7 +7,7 @@ import {
   isSemanticVersion,
   type JsonValue,
   type RpcContractDescriptor,
-} from "@sunder/sdk";
+} from "@younics/sunder-sdk";
 import { validateDependencyVersionRange } from "./dependency-range";
 import { analyzeOwnedRpc, type OwnedRpcAnalysis, type OwnedAnalysisOptions } from "./rpc-authoring";
 import { BASELINE_FILE, exists } from "./rpc-baseline-store";

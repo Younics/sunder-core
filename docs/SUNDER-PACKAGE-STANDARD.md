@@ -313,7 +313,7 @@ without rewriting it. Qualified prebuilt fan-in uses `SunderPackageUsePrebuiltLe
 `BuildProjectReferences=false` and exact reviewed role-input selection without a
 restore/build/generation fallback. See [prebuilt inputs](package-development/PREBUILT-ROLE-INPUTS.md).
 
-TypeScript Worker V1 packages use bundled CommonJS modules with `.cjs` entry points; `--template react-node` adds a Vite/React web App target. `@sunder/package-tool` emits exact-RID Manifest V1 target records bound to the separately trusted Node 24 execution runtime, then factors byte-identical module payloads into the shared Runtime layer during aggregation.
+TypeScript Worker V1 packages use bundled CommonJS modules with `.cjs` entry points; `--template react-node` adds a Vite/React web App target. `@younics/sunder-package-tool` emits exact-RID Manifest V1 target records bound to the separately trusted Node 24 execution runtime, then factors byte-identical module payloads into the shared Runtime layer during aggregation.
 
 Node ordinary services and reviewed package/provider/platform selections produce the
 same canonical authority/import groups, including explicit optional dependency intent.

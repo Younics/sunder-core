@@ -13,7 +13,7 @@ for(const extension of ["ts","js"] as const)test(`${extension} semantic timeouts
     await installFixtureSdk(root);
     await mkdir(join(root,"src"));await writeFile(join(root,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.policies",name:"Policies",version:"1.0.0",workerCapabilities:[],services:{module:`src/services.${extension}`}}));
     await writeFile(join(root,"sunder-contracts.lock.json"),emptyLock);
-    const source=(timeout:string)=>`import {defineService} from "@sunder/sdk";export const tasks=defineService({run(){return "ok";}},{exposure:"public",runtimeUse:{},methods:{run:{name:"execute",timeoutSeconds:${timeout}}}});`;
+    const source=(timeout:string)=>`import {defineService} from "@younics/sunder-sdk";export const tasks=defineService({run(){return "ok";}},{exposure:"public",runtimeUse:{},methods:{run:{name:"execute",timeoutSeconds:${timeout}}}});`;
     const path=join(root,`src/services.${extension}`);await writeFile(path,source("0"));
     const before=await loadProjectWithOwnedFrame(root,{allowDrift:true});assert.equal(before.contracts[0]!.methodPolicies,undefined);assert.equal(before.config.workerCapabilities.includes("rpc.extended-deadline.v1"),false);
     for(const text of before.ownedRpc!.files.values())if(text.startsWith("{\n")&&text.includes('"modelProjection"'))assert.doesNotMatch(text,/"methodPolicies"/);

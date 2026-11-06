@@ -56,12 +56,12 @@ for (const extension of ["ts", "js"] as const) test(`${extension} App and Worker
   try {
     await writeFile(join(c.root, `src/services.${extension}`), c.source + `
 import {Dependency} from "#sunder/api";
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) {
   return {async onActivated() { await context.api(Dependency).example_Dependency_First.messages.send({}); }};
 }`);
     await writeFile(join(c.root, `app/consumer.${extension}`), `import {Self, Dependency} from "#sunder/api";
-import {createBrowserContext} from "@sunder/sdk/browser";
+import {createBrowserContext} from "@younics/sunder-sdk/browser";
 export function connect() {return createBrowserContext(Self).api(Dependency).example_Dependency_Second.messages.send({});}`);
     const loaded = await c.load();
     assert.deepEqual(loaded.ownedRpc!.consumerRequirements.map(value => [value.source.contractId, value.methods.length]),
@@ -84,7 +84,7 @@ for (const extension of ["ts", "js"] as const) test(`${extension} existing Worke
     const workerPath = join(c.root, `src/services.${extension}`); const browserPath = join(c.root, `app/consumer.${extension}`);
     const worker = c.source + `
 import {Dependency, Services} from "#sunder/api";
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) {
   const api = context.api(Dependency);
   const token = Services.Dependency.example_Dependency_First.messages;
@@ -94,7 +94,7 @@ export function configure(context${extension === "ts" ? ": WorkerContext" : ""})
   return {async onActivated() { const value = await send({}); value.message.toUpperCase(); }};
 }`;
     const browser = `import {Self, Dependency, Services} from "#sunder/api";
-import {createBrowserContext} from "@sunder/sdk/browser";
+import {createBrowserContext} from "@younics/sunder-sdk/browser";
 export function connect() {
   const owner = createBrowserContext(Self);
   const service = owner.api(Dependency).example_Dependency_First.messages;
@@ -132,7 +132,7 @@ export function connect() {
 test("wire-compatible Self renaming changes the token generation without changing contract hashes", async () => {
   const c = await serviceApiFixture(toolRoot, "ts", ["example.dependency.first"]);
   try {
-    const source = `import {defineService} from "@sunder/sdk";
+    const source = `import {defineService} from "@younics/sunder-sdk";
 type Message = {text:string};
 export const messages=defineService({send(request:Message):Message{return request;}},{contractId:"example.owner.messages",serviceId:"messages"});`;
     const path = join(c.root, "src/services.ts"); await writeFile(path, source);
@@ -157,7 +157,7 @@ for (const extension of ["ts", "js"] as const) test(`${extension} explicit raw m
   try {
     const path = join(c.root, `src/services.${extension}`);
     const declared = c.source + `
-import {declareRpcUse, declareRpcView} from "@sunder/sdk";
+import {declareRpcUse, declareRpcView} from "@younics/sunder-sdk";
 import {Services} from "#sunder/api";
 declareRpcUse(Services.Dependency.example_Dependency_First.messages, ["send"]);
 declareRpcView(Services.Dependency.example_Dependency_First.messages, "Response", ["message"]);`;
@@ -169,7 +169,7 @@ declareRpcView(Services.Dependency.example_Dependency_First.messages, "Response"
     await assert.rejects(c.load(), /consumer-requirements-invalid/);
     await writeFile(path, declared + `
 import {Dependency} from "#sunder/api";
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context${extension === "ts" ? ": WorkerContext" : ""}) { return {async onActivated() { await context.api(Dependency).example_Dependency_First.messages.send({}); }}; }`);
     await assert.rejects(c.load(), /consumer-view-invalid/);
   } finally { await c.dispose(); }

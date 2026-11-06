@@ -32,7 +32,7 @@ async function packServiceTools(): Promise<PackedServiceTools> {
     }
     const creator = join(root, "creator"); await mkdir(creator);
     await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], { cwd: creator });
-    return Object.freeze({ archives: Object.freeze(archives.slice(0, 2)), creator: join(creator, "node_modules/create-sunder-package/dist/cli.js"), dispose });
+    return Object.freeze({ archives: Object.freeze(archives.slice(0, 2)), creator: join(creator, "node_modules/@younics/create-sunder-package/dist/cli.js"), dispose });
   } catch (error) {
     await dispose();
     throw error;

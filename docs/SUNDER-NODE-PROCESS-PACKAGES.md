@@ -2,7 +2,7 @@
 
 > **Source channel:** This page tracks current source and may be ahead of npm. For a release, use the page from the matching `sdk/v*` tag and the README embedded in each npm tarball.
 
-`npm create sunder-package@latest` scaffolds a runtime-backed service package. Choose
+`npm create @younics/sunder-package@latest` scaffolds a runtime-backed service package. Choose
 `--language ts` (the default) or `--language js` for independently authored checked
 JavaScript. The `node` preset supplies a Worker; `react-node` adds a hosted React/Vite
 web App to the same universal package. Service source uses `defineService`; tooling
@@ -18,11 +18,11 @@ These are authoring presets, not a closed package model. The canonical format pe
 
 | Package | Included subset |
 | --- | --- |
-| `@sunder/sdk` | `defineService`, source-typed semantic options, managed `context.api(token)`, Worker V1 package APIs and advanced descriptor/wire APIs. Browser ownership is in `/browser`; the optional `/react` adapter supplies `ApiProvider`/`useApi`. |
-| `@sunder/package-tool` | TS/checked-JS service analysis, generated `#sunder/api` runtime/types, public lifecycle and exact imports, development output, exact-RID Worker/web leaves, managed smoke and package aggregation. |
-| `create-sunder-package` | `node` and `react-node` presets in TS or genuine JS/JSX. |
+| `@younics/sunder-sdk` | `defineService`, source-typed semantic options, managed `context.api(token)`, Worker V1 package APIs and advanced descriptor/wire APIs. Browser ownership is in `/browser`; the optional `/react` adapter supplies `ApiProvider`/`useApi`. |
+| `@younics/sunder-package-tool` | TS/checked-JS service analysis, generated `#sunder/api` runtime/types, public lifecycle and exact imports, development output, exact-RID Worker/web leaves, managed smoke and package aggregation. |
+| `@younics/create-sunder-package` | `node` and `react-node` presets in TS or genuine JS/JSX. |
 
-The Node SDK intentionally has a narrower surface than the coordinated .NET SDK family. Worker code receives Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code uses `#sunder/api` with `@sunder/sdk/browser` and, optionally, `@sunder/sdk/react`; the main export is for Node and build contexts. React is an optional peer, not a dependency of headless Workers.
+The Node SDK intentionally has a narrower surface than the coordinated .NET SDK family. Worker code receives Host-mediated settings, state, files, secrets, role-local workspace, storage migrations, structured logging, callbacks, auth, RPC, and staged lifecycle callbacks. It does not expose App modules, managed Stack adapters, Avalonia, Registry clients, or package install/update APIs. Browser code uses `#sunder/api` with `@younics/sunder-sdk/browser` and, optionally, `@younics/sunder-sdk/react`; the main export is for Node and build contexts. React is an optional peer, not a dependency of headless Workers.
 
 ## Author Ordinary Services
 
@@ -42,7 +42,7 @@ Configure the source module in `sunder.package.json`:
 For TypeScript, `src/services.ts` can contain:
 
 ```ts
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   greet(name: string): string { return `Hello, ${name}!`; },
@@ -55,7 +55,7 @@ For JavaScript, configure `src/services.js` and write checked JSDoc directly:
 
 ```js
 // @ts-check
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 
 export const greeting = defineService({
   /** @param {string} name @returns {string} */
@@ -219,7 +219,7 @@ These leaves are also accepted by `AggregateSunderPackageTask`. In a primary .NE
 Create a combined package with:
 
 ```bash
-npm create sunder-package@latest my-package -- --preset react-node --language js --package-id my.company.package --package-name "My Package"
+npm create @younics/sunder-package@latest my-package -- --preset react-node --language js --package-id my.company.package --package-name "My Package"
 cd my-package
 npm install
 npm test
@@ -245,7 +245,7 @@ These examples consume the `greeting` service above. A plain DOM view owns one
 browser context and returns a teardown function to its UI/root owner:
 
 ```ts
-import { createBrowserContext } from "@sunder/sdk/browser";
+import { createBrowserContext } from "@younics/sunder-sdk/browser";
 import { Self } from "#sunder/api";
 
 export function mountGreeting(button: HTMLButtonElement, output: HTMLElement) {
@@ -276,8 +276,8 @@ the optional hook adapter. This JSX is ordinary JavaScript:
 // @ts-check
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserContext } from "@sunder/sdk/browser";
-import { ApiProvider, useApi } from "@sunder/sdk/react";
+import { createBrowserContext } from "@younics/sunder-sdk/browser";
+import { ApiProvider, useApi } from "@younics/sunder-sdk/react";
 import { Self } from "#sunder/api";
 
 function Greeting() {
@@ -328,4 +328,4 @@ the [SDK content-scope guidance](../languages/typescript/node/packages/sdk/READM
 These advanced wire APIs do not restore schema-constructor authoring or add a
 browser content/session protocol.
 
-The Sunder CLI remains a thin Runtime/Registry client and does not scaffold packages. Node and web authoring use `npm create sunder-package@latest` and `@sunder/package-tool`; managed .NET/Avalonia authoring uses `dotnet new sunder-package`.
+The Sunder CLI remains a thin Runtime/Registry client and does not scaffold packages. Node and web authoring use `npm create @younics/sunder-package@latest` and `@younics/sunder-package-tool`; managed .NET/Avalonia authoring uses `dotnet new sunder-package`.

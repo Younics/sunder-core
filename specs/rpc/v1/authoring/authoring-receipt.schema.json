@@ -394,7 +394,7 @@
         "name": {
           "enum": [
             "Sunder.Package.Build",
-            "@sunder/package-tool"
+            "@younics/sunder-package-tool"
           ]
         },
         "version": {

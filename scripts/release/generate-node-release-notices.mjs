@@ -12,9 +12,9 @@ const lockPath = resolve(lockArgument);
 const jsRoot = dirname(lockPath);
 const outputDirectory = resolve(outputArgument);
 const releasePackages = [
-  { name: "@sunder/sdk", directory: "packages/sdk" },
-  { name: "@sunder/package-tool", directory: "packages/package-tool" },
-  { name: "create-sunder-package", directory: "packages/create-sunder-package" },
+  { name: "@younics/sunder-sdk", directory: "packages/sdk" },
+  { name: "@younics/sunder-package-tool", directory: "packages/package-tool" },
+  { name: "@younics/create-sunder-package", directory: "packages/create-sunder-package" },
 ];
 
 const licenses = await Promise.all(releasePackages.map((item) => readFile(resolve(jsRoot, item.directory, "LICENSE"), "utf8")));

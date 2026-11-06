@@ -1,11 +1,11 @@
 // @ts-check
-import { defineService } from "@sunder/sdk";
+import { defineService } from "@younics/sunder-sdk";
 const packageName = "__SUNDER_PACKAGE_NAME_JSON__";
 
 export const messages = defineService({
   /**
    * @param {string} message
-   * @param {import("@sunder/sdk").ServiceContext} context
+   * @param {import("@younics/sunder-sdk").ServiceContext} context
    * @returns {Promise<string>}
    */
   async send(message, context) {
@@ -14,7 +14,7 @@ export const messages = defineService({
   },
   /**
    * @param {string} message
-   * @param {import("@sunder/sdk").ServiceContext} context
+   * @param {import("@younics/sunder-sdk").ServiceContext} context
    * @returns {AsyncIterable<string>}
    */
   async *watch(message, context) {

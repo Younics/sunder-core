@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { inventoryBytes, parseContractLock, registryOrigin } from "../src/rpc-contract-lock";
 import { restoreContracts } from "../src/rpc-contract-restore";
 import { selectPackageArtifact } from "../src/rpc-package-selection";

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, mkdir, rm, open, readdir, stat, symlink }
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
-import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@sunder/sdk";
+import { canonicalRpcDescriptorBytes, computeRpcAbiSha256, parseRpcContractDescriptor } from "@younics/sunder-sdk";
 import { atVersion, emptyBaseline, parseBaseline, planAcceptance, planFreeze, sha256, validateBaselineSource, writeBaseline } from "../src/rpc-baseline";
 import { fields, MAX_BASELINE_BYTES, ordered, outerBytes, parseOuter } from "../src/rpc-baseline-json";
 import { captureBaseline, commitBaseline } from "../src/rpc-baseline-store";

@@ -7,7 +7,7 @@ import { build } from "esbuild";
 import ts from "typescript";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import {computeRpcDescriptorSha256,computeRpcAbiSha256} from "@sunder/sdk";
+import {computeRpcDescriptorSha256,computeRpcAbiSha256} from "@younics/sunder-sdk";
 import { loadProjectWithOwnedFrame } from "../src/model";
 import { generateRpcBindingsForLoadedProject } from "../src/rpc-bindings";
 import { emptyLock,fixtureSource,catalogFeed,installFixtureSdk } from "./service-fixtures";
@@ -17,12 +17,12 @@ import { parseContractLock } from "../src/rpc-contract-lock";
 import { publishContractCache } from "../src/rpc-contract-cache";
 import { publishModelProjectionCache } from "../src/rpc-model-projection-cache";
 
-const authored=`import {defineService,SunderContent} from "@sunder/sdk";
-/*ts import type {ServiceReference,OptionalServiceReference,WorkerContext,ServiceContext} from "@sunder/sdk";*/
+const authored=`import {defineService,SunderContent} from "@younics/sunder-sdk";
+/*ts import type {ServiceReference,OptionalServiceReference,WorkerContext,ServiceContext} from "@younics/sunder-sdk";*/
 import {Self} from "#sunder/api";
-/** @type {import("@sunder/sdk").WorkerContext} */
+/** @type {import("@younics/sunder-sdk").WorkerContext} */
 let worker/*: WorkerContext*/;
-/** @param {import("@sunder/sdk").WorkerContext} context */
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context/*: WorkerContext*/){worker=context;return {};}
 /** @type {{signal?:AbortSignal,targetInvoked:boolean}} */
 export const pending/*:{signal?:AbortSignal;targetInvoked:boolean}*/={targetInvoked:false};
@@ -32,9 +32,9 @@ run(name/*:string*/)/*:string*/{return "run:"+name;},
 /** @param {string} name */
 async *watch(name/*:string*/){yield "run:"+name;}
 },{exposure:"public",runtimeUse:{}});
-/** @typedef {{kind:"content",value:import("@sunder/sdk").SunderContent}|{kind:"service",value:import("@sunder/sdk").ServiceReference<typeof runner>}} ResourceChoice */
+/** @typedef {{kind:"content",value:import("@younics/sunder-sdk").SunderContent}|{kind:"service",value:import("@younics/sunder-sdk").ServiceReference<typeof runner>}} ResourceChoice */
 /*ts export type ResourceChoice={kind:"content";value:SunderContent}|{kind:"service";value:ServiceReference<typeof runner>};*/
-/** @typedef {{text:string, content:import("@sunder/sdk").SunderContent[], copies:Record<string,import("@sunder/sdk").SunderContent>, runner:import("@sunder/sdk").ServiceReference<typeof runner>, maybe:import("@sunder/sdk").OptionalServiceReference<typeof runner>|null, optional?:import("@sunder/sdk").SunderContent|null, variant?:ResourceChoice}} Reply */
+/** @typedef {{text:string, content:import("@younics/sunder-sdk").SunderContent[], copies:Record<string,import("@younics/sunder-sdk").SunderContent>, runner:import("@younics/sunder-sdk").ServiceReference<typeof runner>, maybe:import("@younics/sunder-sdk").OptionalServiceReference<typeof runner>|null, optional?:import("@younics/sunder-sdk").SunderContent|null, variant?:ResourceChoice}} Reply */
 /*ts export type Reply={text:string;content:SunderContent[];copies:Record<string,SunderContent>;runner:ServiceReference<typeof runner>;maybe:OptionalServiceReference<typeof runner>|null;optional?:SunderContent|null;variant?:ResourceChoice};*/
 /** @returns {Promise<Reply>} */
 async function make()/*:Promise<Reply>*/{
@@ -47,25 +47,25 @@ export const documents=defineService({
  // Return values are inferred by the TS/checkJs source checker, including the
  // resource class. No transport schema, codec or return annotation is authored.
  download(){return SunderContent.fromBytes(new Uint8Array([8,9]),{fileName:"inferred.bin"});},
- /** @param {import("@sunder/sdk").SunderContent} content */
+ /** @param {import("@younics/sunder-sdk").SunderContent} content */
  echoContent(content/*:SunderContent*/){return content;},
- /** @param {import("@sunder/sdk").ServiceReference<typeof runner>} reference */
+ /** @param {import("@younics/sunder-sdk").ServiceReference<typeof runner>} reference */
  useReference(reference/*:ServiceReference<typeof runner>*/){return reference.Service.run("inferred");},
- /** @param {import("@sunder/sdk").ServiceReference<typeof runner>} reference */
+ /** @param {import("@younics/sunder-sdk").ServiceReference<typeof runner>} reference */
  watchReference(reference/*:ServiceReference<typeof runner>*/){return reference.Service.watch("inferred-stream");},
- /** @param {import("@sunder/sdk").ServiceReference<typeof runner>} reference @param {import("@sunder/sdk").ServiceContext} context @returns {Promise<string>} */
+ /** @param {import("@younics/sunder-sdk").ServiceReference<typeof runner>} reference @param {import("@younics/sunder-sdk").ServiceContext} context @returns {Promise<string>} */
  async waitForTarget(reference/*:ServiceReference<typeof runner>*/,context/*:ServiceContext*/)/*:Promise<string>*/{
    pending.signal=context.signal;
    await new Promise((_resolve,reject)=>{const cancelled=()=>reject(context.signal.reason);context.signal.addEventListener("abort",cancelled,{once:true});if(context.signal.aborted)cancelled();});
    pending.targetInvoked=true;return reference.Service.run("too-late");
  },
- /** @param {import("@sunder/sdk").ServiceReference<typeof runner>} reference @param {import("@sunder/sdk").ServiceContext} context */
+ /** @param {import("@younics/sunder-sdk").ServiceReference<typeof runner>} reference @param {import("@younics/sunder-sdk").ServiceContext} context */
  async *watchTarget(reference/*:ServiceReference<typeof runner>*/,context/*:ServiceContext*/){
    pending.signal=context.signal;
    await new Promise((_resolve,reject)=>{const cancelled=()=>reject(context.signal.reason);context.signal.addEventListener("abort",cancelled,{once:true});if(context.signal.aborted)cancelled();});
    pending.targetInvoked=true;yield await reference.Service.run("too-late");
  },
- /** @param {Reply} request @param {import("@sunder/sdk").ServiceContext} context @returns {Promise<Reply>} */
+ /** @param {Reply} request @param {import("@younics/sunder-sdk").ServiceContext} context @returns {Promise<Reply>} */
  async forward(request/*:Reply*/,context/*:ServiceContext*/)/*:Promise<Reply>*/{context.signal.throwIfAborted();await request.runner.Service.run("provider");return request;},
  /** @returns {AsyncIterable<Reply>} */
  async *watch()/*:AsyncIterable<Reply>*/{yield await make();yield await make();}
@@ -82,13 +82,13 @@ async function fixture(extension:"ts"|"js"){
 }
 for(const extension of ["ts","js"] as const)test(`${extension} response retirement is provider-local, fingerprinted, and restricted to natural-content streams`,async()=>{
   const c=await fixture(extension);
-  const source=`import {defineService,SunderContent} from "@sunder/sdk";
+  const source=`import {defineService,SunderContent} from "@younics/sunder-sdk";
 export const documents=defineService({async *watch(){yield SunderContent.fromBytes(new Uint8Array([1]),{fileName:"one.bin"});yield SunderContent.fromBytes(new Uint8Array([2]),{fileName:"two.bin"});}}, {methods:{watch:{completeOnResponseContentRetirement:true}}});`;
   const put=(value:string)=>writeFile(join(c.root,`src/services.${extension}`),fixtureSource(value,extension));
   try{
     await put(source);const opted=await c.load();
     await generateRpcBindingsForLoadedProject(opted);
-    const bundle=await build({stdin:{contents:'export {providers} from "./.sunder/generated/rpc/adapter.js";export {RpcError} from "@sunder/sdk";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"node",format:"cjs",write:false,alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});
+    const bundle=await build({stdin:{contents:'export {providers} from "./.sunder/generated/rpc/adapter.js";export {RpcError} from "@younics/sunder-sdk";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"node",format:"cjs",write:false,alias:{"@younics/sunder-sdk":require.resolve("@younics/sunder-sdk"),"@younics/sunder-sdk/browser":require.resolve("@younics/sunder-sdk/browser"),"@younics/sunder-sdk/generated":require.resolve("@younics/sunder-sdk/generated")}});
     const module={exports:{} as any};new Function("require","module","exports",bundle.outputFiles[0]!.text)(require,module,module.exports);
     const {providers,RpcError}=module.exports;
     let registrations=0;const proof=new WeakMap<object,AbortSignal>();
@@ -118,10 +118,10 @@ export const documents=defineService({async *watch(){yield SunderContent.fromByt
 });
 for(const extension of ["ts","js"] as const)test(`${extension} optional reference marker emits occurrence-only canonical evidence without changing nullable wire contracts`,async()=>{
   const c=await fixture(extension);
-  const source=`import {defineService} from "@sunder/sdk";
-/*ts import type {OptionalServiceReference,ServiceReference} from "@sunder/sdk";*/
+  const source=`import {defineService} from "@younics/sunder-sdk";
+/*ts import type {OptionalServiceReference,ServiceReference} from "@younics/sunder-sdk";*/
 export const runner=defineService({run(){return "ready";}},{exposure:"public",runtimeUse:{}});
-/** @typedef {{executionTarget:import("@sunder/sdk").OptionalServiceReference<typeof runner>|null}} Input */
+/** @typedef {{executionTarget:import("@younics/sunder-sdk").OptionalServiceReference<typeof runner>|null}} Input */
 /*ts export type Input={executionTarget:OptionalServiceReference<typeof runner>|null};*/
 export const documents=defineService({
 /** @param {Input} request @returns {Input} */
@@ -153,8 +153,8 @@ roundtrip(request/*:Input*/)/*:Input*/{return request;}
 for(const extension of ["ts","js"] as const)test(`${extension} default natural content executes the generated provider over the actual Worker protocol`,async()=>{
   const c=await fixture(extension);
   try{
-    const source=`import {defineService,SunderContent} from "@sunder/sdk";
-/** @typedef {{revision:number,observedAt:string,content:import("@sunder/sdk").SunderContent}} Reply */
+    const source=`import {defineService,SunderContent} from "@younics/sunder-sdk";
+/** @typedef {{revision:number,observedAt:string,content:import("@younics/sunder-sdk").SunderContent}} Reply */
 /*ts export type Reply={revision:number;observedAt:string;content:SunderContent};*/
 export const messages=defineService({
 /** @param {string} observedAt @returns {Reply} */
@@ -172,10 +172,10 @@ async echo(request/*:Reply*/)/*:Promise<Reply>*/{
     await writeFile(join(c.root,`src/services.${extension}`),fixtureSource(source,extension));
     const project=await c.load();await generateRpcBindingsForLoadedProject(project);
     const bundle=join(c.root,"natural-provider.cjs");
-    await build({entryPoints:[join(c.root,".sunder/generated/rpc/adapter.ts")],outfile:bundle,bundle:true,platform:"node",format:"cjs",alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});
+    await build({entryPoints:[join(c.root,".sunder/generated/rpc/adapter.ts")],outfile:bundle,bundle:true,platform:"node",format:"cjs",alias:{"@younics/sunder-sdk":require.resolve("@younics/sunder-sdk"),"@younics/sunder-sdk/browser":require.resolve("@younics/sunder-sdk/browser"),"@younics/sunder-sdk/generated":require.resolve("@younics/sunder-sdk/generated")}});
     // Reuse the strict framed Worker harness, including its hostile Host cases.
     // SDK test compilation is a prerequisite (the workspace test order builds it first).
-    const harness=join(require.resolve("@sunder/sdk"),"../../dist-test/test/worker.test.js");
+    const harness=join(require.resolve("@younics/sunder-sdk"),"../../dist-test/test/worker.test.js");
     const env:NodeJS.ProcessEnv={...process.env,SUNDER_TEST_NATURAL_PROVIDER:bundle};delete env.NODE_TEST_CONTEXT;
     const result=spawnSync(process.execPath,["--test","--test-reporter=tap","--test-name-pattern=^natural content transport",harness],{env,encoding:"utf8",timeout:90_000});
     assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/pass 2/);
@@ -184,30 +184,30 @@ async echo(request/*:Reply*/)/*:Promise<Reply>*/{
 for(const extension of ["ts","js"] as const)test(`${extension} optional reference occurrences execute actual generated datatype code over framed Worker calls`,async()=>{
   const c=await fixture(extension);
   try{
-    const source=`import {defineService,RpcError} from "@sunder/sdk";import {Self} from "#sunder/api";
-/*ts import type {OptionalServiceReference,ServiceReference,WorkerContext,ServiceContext} from "@sunder/sdk";*/
-/** @type {import("@sunder/sdk").WorkerContext} */ let worker/*:WorkerContext*/;
-/** @param {import("@sunder/sdk").WorkerContext} context */
+    const source=`import {defineService,RpcError} from "@younics/sunder-sdk";import {Self} from "#sunder/api";
+/*ts import type {OptionalServiceReference,ServiceReference,WorkerContext,ServiceContext} from "@younics/sunder-sdk";*/
+/** @type {import("@younics/sunder-sdk").WorkerContext} */ let worker/*:WorkerContext*/;
+/** @param {import("@younics/sunder-sdk").WorkerContext} context */
 export function configure(context/*:WorkerContext*/){worker=context;return {};}
 export const runner=defineService({run(){return "ready";}},{runtimeUse:{}});
-/** @typedef {{executionTarget:import("@sunder/sdk").OptionalServiceReference<typeof runner>|null}} OptionalInput */
+/** @typedef {{executionTarget:import("@younics/sunder-sdk").OptionalServiceReference<typeof runner>|null}} OptionalInput */
 /*ts export type OptionalInput={executionTarget:OptionalServiceReference<typeof runner>|null};*/
-/** @typedef {{executionTarget:import("@sunder/sdk").ServiceReference<typeof runner>|null}} RequiredInput */
+/** @typedef {{executionTarget:import("@younics/sunder-sdk").ServiceReference<typeof runner>|null}} RequiredInput */
 /*ts export type RequiredInput={executionTarget:ServiceReference<typeof runner>|null};*/
-/** @typedef {{aOptional:import("@sunder/sdk").OptionalServiceReference<typeof runner>|null,zRequired:import("@sunder/sdk").ServiceReference<typeof runner>|null}} MixedInput */
+/** @typedef {{aOptional:import("@younics/sunder-sdk").OptionalServiceReference<typeof runner>|null,zRequired:import("@younics/sunder-sdk").ServiceReference<typeof runner>|null}} MixedInput */
 /*ts export type MixedInput={aOptional:OptionalServiceReference<typeof runner>|null;zRequired:ServiceReference<typeof runner>|null};*/
-/** @param {import("@sunder/sdk").ServiceReference<typeof runner>|null} reference @param {import("@sunder/sdk").ServiceContext} context @returns {Promise<string>} */
+/** @param {import("@younics/sunder-sdk").ServiceReference<typeof runner>|null} reference @param {import("@younics/sunder-sdk").ServiceContext} context @returns {Promise<string>} */
 async function call(reference/*:ServiceReference<typeof runner>|null*/,context/*:ServiceContext*/)/*:Promise<string>*/{
  if(reference===null)return "absent";
  try{return await reference.Service.run({signal:context.signal});}
  catch(error){if(error instanceof RpcError)return "failure:"+error.error.kind+":"+error.error.dispatchState+":"+error.error.retrySafety;throw error;}
 }
 export const messages=defineService({
-/** @param {OptionalInput} request @param {import("@sunder/sdk").ServiceContext} context */
+/** @param {OptionalInput} request @param {import("@younics/sunder-sdk").ServiceContext} context */
 inspect(request/*:OptionalInput*/,context/*:ServiceContext*/){return call(request.executionTarget,context);},
-/** @param {RequiredInput} request @param {import("@sunder/sdk").ServiceContext} context */
+/** @param {RequiredInput} request @param {import("@younics/sunder-sdk").ServiceContext} context */
 required(request/*:RequiredInput*/,context/*:ServiceContext*/){return call(request.executionTarget,context);},
-/** @param {MixedInput} request @param {import("@sunder/sdk").ServiceContext} context */
+/** @param {MixedInput} request @param {import("@younics/sunder-sdk").ServiceContext} context */
 mixed(request/*:MixedInput*/,context/*:ServiceContext*/){return call(request.aOptional,context);},
 /** @returns {Promise<OptionalInput>} */
 async output()/*:Promise<OptionalInput>*/{const provider=await worker.api(Self).runner.Providers.resolve();return {executionTarget:provider.Reference};},
@@ -220,10 +220,10 @@ async outputMixed()/*:Promise<MixedInput>*/{const provider=await worker.api(Self
     const config=JSON.parse(await readFile(join(c.root,"sunder.package.json"),"utf8"));config.id="example.package";await writeFile(join(c.root,"sunder.package.json"),JSON.stringify(config));
     const project=await c.load();await generateRpcBindingsForLoadedProject(project);
     const bundle=join(c.root,"optional-provider.cjs");
-    const sdk=join(require.resolve("@sunder/sdk"),"../../dist-test/src/index.js"),browser=join(sdk,"../browser.js"),generated=join(sdk,"../generated.js");
-    await build({stdin:{contents:`export * from "./.sunder/generated/rpc/adapter.js";export {Self} from "./.sunder/generated/rpc/api.js";export {configure} from "./src/services.${extension}";`,resolveDir:c.root,loader:"ts"},outfile:bundle,bundle:true,platform:"node",format:"cjs",external:[sdk,browser,generated],alias:{"@sunder/sdk":sdk,"@sunder/sdk/browser":browser,"@sunder/sdk/generated":generated,"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
+    const sdk=join(require.resolve("@younics/sunder-sdk"),"../../dist-test/src/index.js"),browser=join(sdk,"../browser.js"),generated=join(sdk,"../generated.js");
+    await build({stdin:{contents:`export * from "./.sunder/generated/rpc/adapter.js";export {Self} from "./.sunder/generated/rpc/api.js";export {configure} from "./src/services.${extension}";`,resolveDir:c.root,loader:"ts"},outfile:bundle,bundle:true,platform:"node",format:"cjs",external:[sdk,browser,generated],alias:{"@younics/sunder-sdk":sdk,"@younics/sunder-sdk/browser":browser,"@younics/sunder-sdk/generated":generated,"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
     const env:NodeJS.ProcessEnv={...process.env,SUNDER_TEST_OPTIONAL_PROVIDER:bundle};delete env.NODE_TEST_CONTEXT;
-    const harness=join(require.resolve("@sunder/sdk"),"../../dist-test/test/worker.test.js");
+    const harness=join(require.resolve("@younics/sunder-sdk"),"../../dist-test/test/worker.test.js");
     const result=spawnSync(process.execPath,["--test","--test-reporter=tap","--test-name-pattern=^source optional references",harness],{env,encoding:"utf8",timeout:90_000});
     assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/pass 1/);
     assert.match(result.stdout,/\btests 1\r?\n/);assert.match(result.stdout,/\bskipped 0(?:\r?\n|$)/);
@@ -247,13 +247,13 @@ for(const extension of ["ts","js"] as const)test(`${extension} natural resources
     const binding=project.ownedRpc!.files.get("owned/documents.ts")!;assert.match(binding,/registerContent/);assert.match(binding,/prepareServiceReference/);assert.doesNotMatch(binding,/Object\.entries\(value\)/);
     await generateRpcBindingsForLoadedProject(project);
     const consumer=join(c.root,`consumer.${extension}`);const consumerSource=fixtureSource(`import {Self,Services} from "#sunder/api";
-/*ts import type {SelfModels} from "#sunder/api"; import type {ApiContext,ServiceReference} from "@sunder/sdk/browser";*/
+/*ts import type {SelfModels} from "#sunder/api"; import type {ApiContext,ServiceReference} from "@younics/sunder-sdk/browser";*/
 /** @param {import("#sunder/api").SelfModels.Reply} value */
 export async function read(value/*:SelfModels.Reply*/){const stream=await value.content[0].openRead();await value.runner.Service.run("browser");await value.content[0].dispose();return stream;}
-/** @param {import("@sunder/sdk/browser").ApiContext} owner @param {AbortSignal} caller @param {AbortSignal} enumeration */
+/** @param {import("@younics/sunder-sdk/browser").ApiContext} owner @param {AbortSignal} caller @param {AbortSignal} enumeration */
 export async function consume(owner/*:ApiContext*/,caller/*:AbortSignal*/,enumeration/*:AbortSignal*/){
  const api=owner.api(Self);const readyProvider=await api.runner.Providers.resolve();
- /** @type {import("@sunder/sdk/browser").ServiceReference<typeof Services.Self.runner>} */
+ /** @type {import("@younics/sunder-sdk/browser").ServiceReference<typeof Services.Self.runner>} */
  const reference/*:ServiceReference<typeof Services.Self.runner>*/=readyProvider.Reference;
  await readyProvider.Service.run("direct");
  for await(const text of reference.Service.watch("typed",{signal:caller}).withCancellation(enumeration))text.toUpperCase();
@@ -262,14 +262,14 @@ export async function consume(owner/*:ApiContext*/,caller/*:AbortSignal*/,enumer
 }`,extension);
     await writeFile(consumer,consumerSource);
     const compilerOptions:ts.CompilerOptions={target:ts.ScriptTarget.ES2023,module:ts.ModuleKind.ESNext,moduleResolution:ts.ModuleResolutionKind.Bundler,strict:true,allowJs:true,checkJs:true,noEmit:true,types:[],skipLibCheck:false,
-       paths:{"@sunder/sdk/browser":[require.resolve("@sunder/sdk/browser").replace(/\.js$/u,".d.ts")],"@sunder/sdk/generated":[require.resolve("@sunder/sdk/generated").replace(/\.js$/u,".d.ts")],"@sunder/sdk/core":[require.resolve("@sunder/sdk/core").replace(/\.js$/u,".d.ts")]}};
+       paths:{"@younics/sunder-sdk/browser":[require.resolve("@younics/sunder-sdk/browser").replace(/\.js$/u,".d.ts")],"@younics/sunder-sdk/generated":[require.resolve("@younics/sunder-sdk/generated").replace(/\.js$/u,".d.ts")],"@younics/sunder-sdk/core":[require.resolve("@younics/sunder-sdk/core").replace(/\.js$/u,".d.ts")]}};
     const program=ts.createProgram([consumer],compilerOptions);
     assert.deepEqual(ts.getPreEmitDiagnostics(program).map(value=>`${value.file?.fileName}:${value.start}: ${ts.flattenDiagnosticMessageText(value.messageText,"\n")}`),[]);
     await writeFile(consumer,consumerSource.replace('run("browser")','run(42)').replace(".openRead()",'.openRead("not-a-signal")'));
     const invalid=ts.createProgram([consumer],compilerOptions);
     assert.deepEqual(ts.getPreEmitDiagnostics(invalid).map(value=>value.code),[2345,2345],"Both TS and genuine checkJs consumers must reject wrongly typed natural resource calls.");
-    const browser=await build({stdin:{contents:'export {Self,Services} from "#sunder/api";export {SunderContent,createBrowserContext} from "@sunder/sdk/browser";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"browser",format:"cjs",write:false,metafile:true,
-       alias:{"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated")}});
+    const browser=await build({stdin:{contents:'export {Self,Services} from "#sunder/api";export {SunderContent,createBrowserContext} from "@younics/sunder-sdk/browser";',resolveDir:c.root,loader:"ts"},bundle:true,platform:"browser",format:"cjs",write:false,metafile:true,
+       alias:{"@younics/sunder-sdk/browser":require.resolve("@younics/sunder-sdk/browser"),"@younics/sunder-sdk/generated":require.resolve("@younics/sunder-sdk/generated")}});
     assert.ok(Object.keys(browser.metafile!.inputs).every(path=>!/(?:node:|\/worker\.|\/content-node\.)/u.test(path)));assert.doesNotMatch(browser.outputFiles[0]!.text,/node:fs|SelfModels/);
   }finally{await c.dispose();}
 });
@@ -279,10 +279,10 @@ async function runtime(c:Awaited<ReturnType<typeof fixture>>,project:Awaited<Ret
 export {createProviders} from "./.sunder/generated/rpc/adapter.js";
 export {configure} from ${JSON.stringify("./"+project.config.services!.module.replace(/\.[jt]s$/u,".js"))};
 export * as Authored from ${JSON.stringify("./"+project.config.services!.module.replace(/\.[jt]s$/u,".js"))};
-export {createApiContext,SunderContent,RpcError} from "@sunder/sdk";
-export {bindApiContext} from "@sunder/sdk/generated";
+export {createApiContext,SunderContent,RpcError} from "@younics/sunder-sdk";
+export {bindApiContext} from "@younics/sunder-sdk/generated";
 ${consumerRoot?`export * as Consumer from ${JSON.stringify(join(consumerRoot,".sunder/generated/rpc/api.js"))};`:""}`,resolveDir:c.root,loader:"ts"},bundle:true,platform:"node",format:"cjs",write:false,
-    alias:{"@sunder/sdk":require.resolve("@sunder/sdk"),"@sunder/sdk/browser":require.resolve("@sunder/sdk/browser"),"@sunder/sdk/generated":require.resolve("@sunder/sdk/generated"),"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
+    alias:{"@younics/sunder-sdk":require.resolve("@younics/sunder-sdk"),"@younics/sunder-sdk/browser":require.resolve("@younics/sunder-sdk/browser"),"@younics/sunder-sdk/generated":require.resolve("@younics/sunder-sdk/generated"),"#sunder/api":join(c.root,".sunder/generated/rpc/api.js")}});
   const module={exports:{} as any};new Function("require","module","exports",bundle.outputFiles[0]!.text)(require,module,module.exports);const api=module.exports;
   let sequence=0;let allowed=true;let endpointFailure:unknown;let endpointQueries=0;const watchSignals:AbortSignal[]=[];const snapshots=project.config.providers.map(provider=>{const contract=project.contracts.find(contract=>contract.descriptor.contractId===provider.contractId)!;
     return {...provider,packageId:project.config.id,packageVersion:project.config.version,descriptorSha256:contract.descriptorSha256,abiSha256:contract.abiSha256,
@@ -438,12 +438,12 @@ for(const extension of ["ts","js"] as const)test(`${extension} selected public b
     const lock=parseContractLock(Buffer.from(JSON.stringify({lockVersion:1,packageArtifacts:{[project.config.id]:candidate.artifact},packageImports:{[project.config.id]:{localName:"library",presence:"required",requiredContracts:[],consumerRoles:["runtime"]}},providerImports:{},platformImports:{}},null,2)+"\n"));
     const cache=join(consumer.root,"cache");await publishContractCache(cache,descriptors,lock.requirements);await publishModelProjectionCache(cache,new Map([[project.config.id,candidate.projection]]),lock.packageArtifacts,descriptors);
     const config=JSON.parse(await readFile(join(consumer.root,"sunder.package.json"),"utf8"));config.id="example.consumer";await writeFile(join(consumer.root,"sunder.package.json"),JSON.stringify(config));await writeFile(join(consumer.root,"sunder-contracts.lock.json"),lock.exactBytes);
-    const source=`import {defineService} from "@sunder/sdk";import {Services} from "#sunder/api";
-/*ts import type {ServiceReference} from "@sunder/sdk";import type {LibraryModels} from "#sunder/api";*/
+    const source=`import {defineService} from "@younics/sunder-sdk";import {Services} from "#sunder/api";
+/*ts import type {ServiceReference} from "@younics/sunder-sdk";import type {LibraryModels} from "#sunder/api";*/
 export const relay=defineService({
 /** @param {import("#sunder/api").LibraryModels.Reply} request @returns {import("#sunder/api").LibraryModels.Reply} */
 roundtrip(request/*:LibraryModels.Reply*/)/*:LibraryModels.Reply*/{return request;},
-/** @param {import("@sunder/sdk").ServiceReference<typeof Services.Library.example_Resources_Runner.runner>} reference @returns {Promise<string>} */
+/** @param {import("@younics/sunder-sdk").ServiceReference<typeof Services.Library.example_Resources_Runner.runner>} reference @returns {Promise<string>} */
 async run(reference/*:ServiceReference<typeof Services.Library.example_Resources_Runner.runner>*/)/*:Promise<string>*/{return await reference.Service.run({name:"relay"});}
 });`;
     await writeFile(join(consumer.root,`src/services.${extension}`),fixtureSource(source,extension));
@@ -461,16 +461,16 @@ async run(reference/*:ServiceReference<typeof Services.Library.example_Resources
 
 for(const extension of ["ts","js"] as const)test(`${extension} generated domain errors marshal natural details and retain their content for the receiving owner`,async()=>{
   const c=await fixture(extension);let host:Awaited<ReturnType<typeof runtime>>|undefined;try{
-    const source=`import {defineService,defineServiceError,SunderContent} from "@sunder/sdk";import {Errors} from "#sunder/api";
-/** @typedef {{body:import("@sunder/sdk").SunderContent}} Failure */
+    const source=`import {defineService,defineServiceError,SunderContent} from "@younics/sunder-sdk";import {Errors} from "#sunder/api";
+/** @typedef {{body:import("@younics/sunder-sdk").SunderContent}} Failure */
 /*ts type Failure={body:SunderContent};*/
 export function configure(){return {};}
 export const documents=defineService({
 /** @returns {Promise<string>} */
 async fail()/*:Promise<string>*/{throw Errors.documents["example.failure"]({body:SunderContent.fromBytes(new Uint8Array([7,8,9]))});}
-},{exposure:"public",runtimeUse:{},errors:{"example.failure":/** @type {import("@sunder/sdk").ServiceError<Failure>} */(defineServiceError/*<Failure>*/())},methods:{fail:{errors:["example.failure"]}}});`;
+},{exposure:"public",runtimeUse:{},errors:{"example.failure":/** @type {import("@younics/sunder-sdk").ServiceError<Failure>} */(defineServiceError/*<Failure>*/())},methods:{fail:{errors:["example.failure"]}}});`;
     await writeFile(join(c.root,`src/services.${extension}`),fixtureSource(source,extension));const project=await c.load();await generateRpcBindingsForLoadedProject(project);host=await runtime(c,project);
-    assert.doesNotMatch(project.ownedRpc!.files.get("api.d.ts")!,/["']@sunder\/sdk["']/u,"Natural error factories must retain browser-safe declaration types.");
+    assert.doesNotMatch(project.ownedRpc!.files.get("api.d.ts")!,/["']@younics\/sunder-sdk["']/u,"Natural error factories must retain browser-safe declaration types.");
     let failure:unknown;try{await host.client.documents.fail();assert.fail("Expected declared domain failure");}catch(error){failure=error;}
     const details=host.api.Errors.documents["example.failure"].details(failure);assert.ok(details);assert.deepEqual(await bytes(details.body),[7,8,9]);
     assert.equal(host.scopes.filter(value=>!value.closed).length,1);await details.body.dispose();assert.ok(host.scopes.every(value=>value.closed));
