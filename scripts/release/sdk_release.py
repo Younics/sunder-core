@@ -123,15 +123,23 @@ def selected(plan, kind=None):
     return [row for row in plan["packages"] if row["selected"] and (kind is None or row["kind"] == kind)]
 
 
-def source_guard(plan):
+def source_guard(plan, *, retained=False):
+    source = c.sha(os.environ["GITHUB_SHA"], 40)
     c.require(os.environ.get("GITHUB_REPOSITORY") == c.REPOSITORY and os.environ.get("GITHUB_REF") == "refs/heads/main"
               and os.environ.get("GITHUB_EVENT_NAME") in ("push", "workflow_dispatch")
               and os.environ.get("GITHUB_REF_PROTECTED") == "true"
-              and os.environ.get("GITHUB_WORKFLOW_SHA") == plan["artifactSourceCommit"] == os.environ.get("GITHUB_SHA")
+              and os.environ.get("GITHUB_WORKFLOW_SHA") == source
               and os.environ.get("GITHUB_WORKFLOW_REF") == f"{c.REPOSITORY}/{c.SDK_WORKFLOW}@refs/heads/main",
-              "Publication requires the exact protected-main workflow source")
-    c.require(c.command("git", "rev-parse", "HEAD", cwd=ROOT).decode().strip() == plan["artifactSourceCommit"], "Release checkout differs")
+              "Publication requires the protected-main workflow source")
+    c.require(c.command("git", "rev-parse", "HEAD", cwd=ROOT).decode().strip() == source, "Release checkout differs")
     c.require(not c.command("git", "status", "--porcelain", "--untracked-files=all", cwd=ROOT).strip(), "Release source must be clean")
+    original = c.sha(plan["artifactSourceCommit"], 40)
+    if original != source:
+        c.require(retained, "New package artifacts must use the current workflow source")
+        try:
+            c.command("git", "merge-base", "--is-ancestor", original, source, cwd=ROOT)
+        except subprocess.CalledProcessError as error:
+            raise ValueError("Retained package source must be an ancestor of the protected-main workflow source") from error
 
 
 def store_for(row):
@@ -146,18 +154,20 @@ def prepare(path):
     recover = bool(drafts)
     if recover:
         first = drafts[0]
-        c.require(first["target_commitish"] == source, "An unfinished release belongs to another source; rerun its original failed jobs")
         store = assets.GitHubRelease(c.REPOSITORY, first["tag_name"])
         item = assets.asset(first, PLAN)
         store.download(item, path)
         plan = load(path)
-        source_guard(plan)
+        source_guard(plan, retained=True)
+        c.require({release["tag_name"] for release in drafts} <= {row["tag"] for row in selected(plan)},
+                  "Conflicting unfinished package release plans")
         by_tag = {release["tag_name"]: release for release in releases}
         for row in selected(plan):
             release = by_tag.get(row["tag"])
-            c.require(release and release["target_commitish"] == source
+            c.require(release and release["target_commitish"] == plan["artifactSourceCommit"]
                       and {row["archive"], PLAN, *assets.EVIDENCE} <= {asset["name"] for asset in release["assets"]},
                       "Staging was interrupted; rerun the original failed job with its retained tested artifacts")
+        print(f"Recovering retained packages from {plan['artifactSourceCommit']} using workflow {source}; no rebuild.")
     else:
         plan = select(packages, source, releases)
         source_guard(plan)
@@ -330,7 +340,7 @@ def stage(plan, candidate, directory):
 
 
 def download(plan, directory):
-    source_guard(plan)
+    source_guard(plan, retained=True)
     for row in selected(plan):
         store = store_for(row)
         info = store.resolve()
@@ -344,24 +354,27 @@ def download(plan, directory):
 
 
 def publish(plan, directory, kind):
-    source_guard(plan)
+    source_guard(plan, retained=True)
     for row in selected(plan, kind):
         folder = release_directory(directory, row)
         info = store_for(row).resolve()
         verify_retained(store_for(row), info, folder, plan, row)
+        if not info["draft"]:
+            print(f"Skipping finalized {row['name']}@{row['version']}.", flush=True)
+            continue
         subprocess.run(["bash", str(ROOT / "scripts/release/publish-sdk.sh"), kind, row["name"], row["version"],
-                        str(folder / row["archive"])], check=True)
+                        str(folder / row["archive"]), plan["artifactSourceCommit"]], check=True)
 
 
 def finalize(plan, directory):
-    source_guard(plan)
+    # The workflow requires successful publishing jobs. Registry acceptance is the
+    # completion boundary; registry indexing/download availability is not a gate.
+    source_guard(plan, retained=True)
     for row in selected(plan):
         store = store_for(row)
         info = store.resolve()
         folder = release_directory(directory, row)
         verify_retained(store, info, folder, plan, row)
-        subprocess.run(["bash", str(ROOT / "scripts/release/publish-sdk.sh"), "verify-" + row["kind"], row["name"],
-                        row["version"], str(folder / row["archive"])], check=True)
         if info["draft"]:
             try:
                 store.api("releases/" + str(info["id"]), "PATCH", dict(draft=False, make_latest="false"))
@@ -388,10 +401,12 @@ def summary(plan, jobs):
                 result = "Blocked by prerequisite"
         lines.append(f"| {name} | {result} |")
     if plan:
-        lines += ["", f"Source: `{plan['artifactSourceCommit']}`", "",
+        lines += ["", f"Artifact source: `{plan['artifactSourceCommit']}`",
+                  f"Workflow source: `{os.environ.get('GITHUB_SHA', plan['artifactSourceCommit'])}`", "",
                   "| Package | Version | Registry | Selection |", "|---|---|---|---|"]
         for row in plan["packages"]:
-            lines.append(f"| {row['name']} | {row['version']} | {row['kind']} | {'Selected' if row['selected'] else 'Already published / no newer version'} |")
+            selection = ("Retained tested archive" if recovered else "Selected") if row["selected"] else "Already published / no newer version"
+            lines.append(f"| {row['name']} | {row['version']} | {row['kind']} | {selection} |")
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
         stream.write("\n".join(lines) + "\n")
 

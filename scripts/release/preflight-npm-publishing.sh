@@ -23,4 +23,6 @@ tar -xOf "$archive" package/package.json | jq -e --arg name "$name" --arg versio
    .publishConfig.access == "public" and .publishConfig.provenance == true' >/dev/null \
   || { printf 'Unexpected local npm publication identity\n' >&2; exit 1; }
 npm whoami --registry=https://registry.npmjs.org >/dev/null
-npm publish "$archive" --dry-run --ignore-scripts --access public --tag "accept-v$version" --registry=https://registry.npmjs.org --provenance >/dev/null
+channel=latest
+[[ "$version" != *-* ]] || channel=next
+npm publish "$archive" --dry-run --ignore-scripts --access public --tag "$channel" --registry=https://registry.npmjs.org --provenance >/dev/null

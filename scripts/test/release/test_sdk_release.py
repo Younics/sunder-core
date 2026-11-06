@@ -130,7 +130,29 @@ class PackageReleaseTests(unittest.TestCase):
         with patch.dict(os.environ, env, clear=True), patch.object(sdk.c, "command", side_effect=lambda *args, **kwargs: SOURCE.encode() if args[1] == "rev-parse" else b""):
             sdk.source_guard(plan)
             for name, value in (("GITHUB_REF", "refs/pull/1/merge"), ("GITHUB_WORKFLOW_SHA", "b" * 40), ("GITHUB_REF_PROTECTED", "false")):
-                with patch.dict(os.environ, {name: value}), self.assertRaises(ValueError): sdk.source_guard(plan)
+                for retained in (False, True):
+                    with self.subTest(name=name, retained=retained), patch.dict(os.environ, {name: value}), self.assertRaises(ValueError):
+                        sdk.source_guard(plan, retained=retained)
+
+    def test_later_workflow_can_only_recover_retained_artifacts_from_its_ancestor(self):
+        plan = sdk.select(self.packages, SOURCE, [], lambda _: None)
+        current = "b" * 40
+        env = dict(GITHUB_REPOSITORY=sdk.c.REPOSITORY, GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="push",
+            GITHUB_REF_PROTECTED="true", GITHUB_SHA=current, GITHUB_WORKFLOW_SHA=current,
+            GITHUB_WORKFLOW_REF=f"{sdk.c.REPOSITORY}/{sdk.c.SDK_WORKFLOW}@refs/heads/main")
+        def command(*args, **kwargs):
+            return current.encode() if args[1] == "rev-parse" else b""
+        with patch.dict(os.environ, env, clear=True), patch.object(sdk.c, "command", side_effect=command) as git:
+            with self.assertRaisesRegex(ValueError, "New package artifacts"):
+                sdk.source_guard(plan)
+            sdk.source_guard(plan, retained=True)
+            git.assert_called_with("git", "merge-base", "--is-ancestor", SOURCE, current, cwd=sdk.ROOT)
+            def nonancestor(*args, **kwargs):
+                if args[1] == "merge-base": raise subprocess.CalledProcessError(1, args)
+                return command(*args, **kwargs)
+            git.side_effect = nonancestor
+            with self.assertRaisesRegex(ValueError, "must be an ancestor"):
+                sdk.source_guard(plan, retained=True)
 
     def test_subset_stage_download_publish_and_finalize_preserve_exact_tested_bytes(self):
         plan = sdk.select(self.packages, SOURCE, [], self.history(["1.1.0"]))
@@ -167,14 +189,51 @@ class PackageReleaseTests(unittest.TestCase):
                  patch.object(MemoryRelease, "upload", upload), patch.object(sdk.subprocess, "run", side_effect=evidence):
                 sdk.stage(plan, candidate, root / "staged")
             original = {name: copy.deepcopy(store.bytes) for name, store in stores.items()}
+            # A publishing-tool fix on later main consumes the complete original plan;
+            # it must not select/repack current-source replacements under these tags.
+            with patch.dict(os.environ, GITHUB_SHA="b" * 40, GITHUB_OUTPUT=str(root / "outputs")), \
+                 patch.object(sdk, "source_guard") as guard, patch.object(metadata, "packages", return_value=self.packages), \
+                 patch.object(sdk, "store_for", return_value=next(iter(stores.values()))), \
+                 patch.object(sdk, "github_releases", return_value=[copy.deepcopy(store.value) for store in stores.values()]), \
+                 patch.object(sdk.assets, "GitHubRelease", side_effect=lambda repository, tag: next(store for store in stores.values() if store.tag == tag)), \
+                 patch.object(sdk, "select", side_effect=AssertionError("Recovery must not reselect current-source candidates")):
+                sdk.prepare(root / sdk.PLAN)
+                self.assertEqual(plan, sdk.load(root / sdk.PLAN))
+                guard.assert_called_once_with(plan, retained=True)
+                self.assertIn("recover=true", (root / "outputs").read_text())
             with patch.object(sdk, "source_guard"), patch.object(sdk.c, "remote_tag"), \
-                 patch.object(sdk, "store_for", side_effect=lambda row: stores[row["name"]]), patch.object(sdk.subprocess, "run") as publish:
+                 patch.object(sdk, "store_for", side_effect=lambda row: stores[row["name"]]), patch.object(sdk.subprocess, "run") as publish, \
+                 patch.object(sdk, "registry_json", side_effect=AssertionError("Finalization must not query registries")):
                 sdk.download(plan, root / "recovered")
                 sdk.publish(plan, root / "recovered", "npm")
                 self.assertEqual("@younics/sunder-package-tool", publish.call_args.args[0][3])
+                self.assertEqual(SOURCE, publish.call_args.args[0][-1])
                 sdk.finalize(plan, root / "recovered")
+                sdk.finalize(plan, root / "recovered")
+                sdk.publish(plan, root / "recovered", "npm")
+                sdk.publish(plan, root / "recovered", "nuget")
+                publish.assert_called_once()
                 self.assertTrue(all(not store.value["draft"] for store in stores.values()))
                 self.assertEqual(original, {name: store.bytes for name, store in stores.items()})
+
+    def test_recovery_rejects_incomplete_or_mixed_source_staging_before_publication(self):
+        plan = sdk.select(self.packages, SOURCE, [], lambda _: None)
+        for corruption in ("missing archive", "different source", "conflicting plan"):
+            with self.subTest(corruption=corruption), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                releases = [dict(tag_name=row["tag"], target_commitish=SOURCE, draft=True,
+                    assets=[dict(name=name) for name in (row["archive"], sdk.PLAN, *sdk.assets.EVIDENCE)]) for row in self.packages]
+                retained = copy.deepcopy(plan)
+                if corruption == "missing archive": releases[-1]["assets"] = [dict(name=sdk.PLAN)]
+                if corruption == "different source": releases[-1]["target_commitish"] = "c" * 40
+                if corruption == "conflicting plan": retained["packages"][-1]["selected"] = False
+                def download(item, path): path.write_bytes(sdk.c.canonical(retained))
+                with patch.dict(os.environ, GITHUB_SHA="b" * 40), patch.object(sdk, "source_guard"), \
+                     patch.object(metadata, "packages", return_value=self.packages), \
+                     patch.object(sdk, "github_releases", return_value=releases), \
+                     patch.object(sdk.assets.GitHubRelease, "download", side_effect=download), \
+                     self.assertRaisesRegex(ValueError, "Staging was interrupted|Conflicting unfinished"):
+                    sdk.prepare(root / sdk.PLAN)
 
 
 if __name__ == "__main__":

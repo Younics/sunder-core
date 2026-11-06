@@ -26,6 +26,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0 # Recovery validates the original artifact source's ancestry.
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
@@ -65,6 +66,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: ./.github/actions/setup
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -99,6 +101,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: ./.github/actions/setup
         with:
           dotnet: 'false'
@@ -110,7 +113,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
-      - name: Publish selected npm packages and advance their channels
+      - name: Publish missing npm versions to their consumer channels
         env:
           GH_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -129,6 +132,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           global-json-file: global.json
@@ -145,14 +149,14 @@ jobs:
         uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
         with:
           user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
-      - name: Publish selected NuGet packages
+      - name: Publish missing NuGet versions
         env:
           GH_TOKEN: ${{ github.token }}
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: python3 -B scripts/release/sdk_release.py nuget --directory artifacts/retained-packages
 
   finalize:
-    name: SDK / Verify publication and finalize
+    name: SDK / Finalize accepted package releases
     needs: [select, stage, publish-npm, publish-nuget]
     if: always() && needs.stage.result == 'success' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') && (needs.publish-nuget.result == 'success' || needs.publish-nuget.result == 'skipped')
     runs-on: ubuntu-24.04
@@ -163,12 +167,13 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: ./.github/actions/setup
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: core-release-selection
           path: artifacts
-      - name: Recheck public bytes and finalize the same project releases
+      - name: Finalize retained releases after successful publication
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

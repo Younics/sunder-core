@@ -167,10 +167,11 @@ email address or organization name. The workflow prefers the variable.
 
 After downloading retained bytes, the pinned official `NuGet/login` action exchanges
 GitHub OIDC (`id-token: write`) for a short-lived key passed only to the publish step.
-There is no stored-key fallback. Readback permits only valid NuGet repository-signature
-changes, using trust learned from pinned NuGet.org endpoints. Revoke any old long-lived
-publishing key only after a successful replacement. Local tests do not prove OIDC
-exchange or production publication.
+There is no stored-key fallback. A successful `dotnet nuget push` completes the
+publication step; NuGet validation, signing and indexing continue asynchronously.
+The pipeline does not wait for registry downloads or perform post-publish readback.
+Revoke any old long-lived publishing key only after a successful replacement.
+Local tests do not prove OIDC exchange or production publication.
 
 #### npm token authentication
 
@@ -181,17 +182,25 @@ and 2FA bypass for unattended CI. Initial package creation may require broader
 package access; restrict it to the three exact names after successful bootstrap.
 Do not grant organization-management permissions. Rotate before expiry.
 
-The token is passed as `NODE_AUTH_TOKEN` only to npm publication/channel promotion.
+The token is passed as `NODE_AUTH_TOKEN` only to npm publication.
 `id-token: write` supplies Sigstore provenance, not npm authentication. No npm
 trusted-publisher setup or placeholder publication is required.
 
 For a missing selected version, preflight validates the archive, protected-main
 workflow and provenance context, authenticates with `npm whoami`, then performs
 `npm publish --dry-run` with scripts disabled. Actual publication uses public access,
-provenance and `accept-v<version>`. Exact bytes, metadata, digests, signatures and
-attestations must verify before advancing its consumer channel. Existing uploads
-are verified, not overwritten. A newer channel is never moved backwards.
-Signed provenance must name this repository, main workflow and exact source commit.
+provenance and the final consumer channel: `latest` for stable versions, `next` for
+prereleases. A successful publish completes the step without registry polling,
+reinstallation, signature/attestation readback or a separate channel-promotion phase.
+A pre-publish version-history lookup skips existing versions and refuses to backfill
+below a newer publication. Publishing failures propagate immediately.
+Automatic npm provenance names this repository, main workflow and its source commit.
+
+The finalization job requires successful publishing jobs (or no selected packages
+for that registry), then publishes the retained GitHub drafts. It checks their
+original artifact evidence and tags, without querying npm or NuGet again. A green
+release means the registries accepted the uploads; package availability can follow
+later as each registry finishes processing.
 
 ### Recovery and historical cleanup
 
@@ -201,10 +210,29 @@ staged draft batch from retained releases, skipping builds. Incomplete staging
 requires the original failed job and its tested Actions artifact; missing/conflicting
 bytes never permit a rebuild under the same published version.
 
+A later protected-main commit can also recover a complete staged batch when its
+package identities/versions still match the retained plan and the original source
+is an ancestor of the workflow commit. This lets a publishing-tool fix resume an
+interrupted release. The workflow fetches full history, reuses the original plan,
+archives, tags and evidence, and reports both artifact and workflow source commits.
+It does not pack or stage replacement artifacts. Versions already in the registry
+are skipped; finalized GitHub releases are also skipped even if registry indexing
+has not caught up. Remaining NuGets are uploaded from the retained archives.
+
+Unpublished npm archives still require their original source workflow: npm's
+automatic provenance binds the publishing workflow commit. Later-source recovery
+can skip already-published npm versions, but cannot sign an older tarball as if it
+were built from the new workflow source. For a batch whose npm publication already
+succeeded, the corrected workflow can finish the outstanding NuGets and drafts.
+
 npm and NuGet are not a cross-registry transaction. A failure can leave a published
-prefix and private GitHub drafts. Lost acknowledgements reconcile by exact readback.
-Do not move a tag or clobber an asset to recover. Investigate irrecoverable conflicts
-and use a new authored version where necessary.
+prefix and private GitHub drafts. On retry, a pre-publish metadata lookup skips
+versions already present; NuGet also accepts an exact-version duplicate push via
+`--skip-duplicate`. An unsuccessful command fails the run, including an ambiguous
+lost acknowledgement; retry after the registry has processed the upload. There is
+no registry-availability waiting loop. Do not move a tag or clobber an asset to
+recover. Investigate irrecoverable conflicts and use a new authored version where
+necessary.
 
 Historical releases/tags are not automatically deleted. Cleanup follows successful
 replacement publication and explicit confirmation of the deletion scope.
@@ -212,7 +240,8 @@ replacement publication and explicit confirmation of the deletion scope.
 If an initial publication fails because its npm scope is unavailable, a rename
 requires freshly built and tested archives. Retained plans, archives and provenance
 must not be relabeled. The unchanged NuGet versions can still collide with the old
-batch's drafts/tags: selection rejects recovery from a different source commit.
+batch's drafts/tags: recovery requires matching package metadata and a complete
+retained batch from an ancestor of the workflow source.
 Before restarting those unpublished versions, retain the failed batch's assets and
 digests, verify absence in both registries, and explicitly approve removal of the
 conflicting unpublished drafts/tags. Any already-published version keeps its original

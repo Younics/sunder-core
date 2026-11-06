@@ -16,7 +16,7 @@ case "$1" in
   publish)
     # A malformed preflight must never turn this fixture into a real write.
     [[ "$*" == *' --dry-run '* && "$*" == *' --ignore-scripts '* && "$*" == *' --access public '* \
-      && "$*" == *' --tag accept-v1.2.3 '* && "$*" == *' --registry=https://registry.npmjs.org '* \
+      && "$*" == *' --tag latest '* && "$*" == *' --registry=https://registry.npmjs.org '* \
       && "$*" == *' --provenance' && "${MOCK_DRY_RUN_FAILURE:-}" != true ]] ;;
   *) exit 64 ;;
 esac
@@ -42,8 +42,8 @@ reject_before_npm() {
   [[ ! -s "$MOCK_NPM_LOG" ]]
 }
 TEST_VERSION=1.2.3-01 reject_before_npm
-NODE_AUTH_TOKEN= reject_before_npm
-ACTIONS_ID_TOKEN_REQUEST_TOKEN= reject_before_npm
+NODE_AUTH_TOKEN='' reject_before_npm
+ACTIONS_ID_TOKEN_REQUEST_TOKEN='' reject_before_npm
 GITHUB_REF=refs/tags/sdk/v1.2.3 reject_before_npm
 GITHUB_WORKFLOW_REF=other/workflow@main reject_before_npm
 make_archive git+https://github.com/other/project.git

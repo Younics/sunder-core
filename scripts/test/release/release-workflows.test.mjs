@@ -148,6 +148,12 @@ test("SDK publication consumes tested packages and keeps registry credentials in
   assert.doesNotMatch(source, /NPM_DIST_TAG_TOKEN|preflight-npm-trusted-publishing/u);
   assert.match(finalize, /sdk_release\.py download[\s\S]+sdk_release\.py finalize/u);
   assert.doesNotMatch(finalize, /id-token: write|NUGET_API_KEY|NPM_TOKEN|NODE_AUTH_TOKEN/u);
+  for (const job of ["select", "stage", "publish-npm", "publish-nuget", "finalize"]) {
+    const start = source.indexOf(`\n  ${job}:`);
+    const next = /\n  [\w-]+:/u.exec(source.slice(start + 3));
+    const definition = source.slice(start, next ? start + 3 + next.index : undefined);
+    assert.match(definition, /fetch-depth: 0\b/u, `${job} needs full history to validate retained-source ancestry.`);
+  }
 });
 
 test("NuGet-only and npm-only publication can skip the other registry without skipping finalization", async () => {
@@ -158,6 +164,14 @@ test("NuGet-only and npm-only publication can skip the other registry without sk
   const finalize = source.slice(source.indexOf("\n  finalize:"));
   requiresJobs(finalize, ["select", "stage", "publish-npm", "publish-nuget"]);
   assert.match(finalize, /always\(\)[^\n]+needs.publish-npm.result == 'skipped'[^\n]+needs.publish-nuget.result == 'skipped'/u);
+  const condition = /\n\s+if: ([^\n]+)/u.exec(finalize)[1].replaceAll(/needs\.([\w-]+)/gu, 'needs["$1"]');
+  const mayFinalize = new Function("always", "needs", `return (${condition});`);
+  for (const npm of ["success", "skipped", "failure", "cancelled"]) {
+    for (const nuget of ["success", "skipped", "failure", "cancelled"]) {
+      assert.equal(mayFinalize(() => true, { stage: { result: "success" }, "publish-npm": { result: npm }, "publish-nuget": { result: nuget } }),
+        ["success", "skipped"].includes(npm) && ["success", "skipped"].includes(nuget));
+    }
+  }
 });
 
 test("release reuses ordinary native validation and source-derived catalog export", async () => {
