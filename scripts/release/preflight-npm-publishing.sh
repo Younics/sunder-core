@@ -18,7 +18,7 @@ case "$name" in @younics/sunder-sdk|@younics/sunder-package-tool|@younics/create
   && "$GITHUB_WORKFLOW_REF" == Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/heads/main ]] \
   || { printf 'npm publication requires the protected-main release workflow\n' >&2; exit 1; }
 tar -xOf "$archive" package/package.json | jq -e --arg name "$name" --arg version "$version" \
-  '.name == $name and .version == $version and .private != true and .license == "MIT" and
+  '.name == $name and .version == $version and .private != true and .license == "GPL-3.0-only" and
    .repository.url == "git+https://github.com/Younics/sunder-core.git" and
    .publishConfig.access == "public" and .publishConfig.provenance == true' >/dev/null \
   || { printf 'Unexpected local npm publication identity\n' >&2; exit 1; }

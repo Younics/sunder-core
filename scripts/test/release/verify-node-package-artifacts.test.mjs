@@ -5,12 +5,16 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { verifyNodePackageArtifacts } from "../../release/verify-node-package-artifacts.mjs";
 
 const VERSION = "1.2.3";
 const RANGE = ">=1.2.0 <1.3.0";
 const VITE = "8.2.0";
 const NODE_ENGINE = ">=24.18.1 <25.0.0";
+const LICENSE = await readFile(new URL("../../../LICENSE", import.meta.url), "utf8");
+const NOTICE = "Licensed under the GNU General Public License v3.0 (GPL-3.0-only). See LICENSE.\n";
+const README = "Licensed under [GPL-3.0](LICENSE).\n";
 const commonEntries = ["package.json", "README.md", "LICENSE", "NOTICE"];
 const packageDefinitions = [
   { name: "@younics/sunder-sdk", archive: `younics-sunder-sdk-${VERSION}.tgz`, maximumBytes: 1024 * 1024, requiredEntries: ["dist/index.js"] },
@@ -43,7 +47,7 @@ async function createFixture() {
     const manifest = {
       name: item.name,
       version: VERSION,
-      license: "MIT",
+      license: "GPL-3.0-only",
       repository: { url: "git+https://github.com/Younics/sunder-core.git" },
       engines: { node: NODE_ENGINE },
       publishConfig: { access: "public", provenance: true },
@@ -56,7 +60,9 @@ async function createFixture() {
       await writeFile(path, `${entry} fixture\n`);
     }
     await writeFile(join(staging, "package.json"), `${JSON.stringify(manifest)}\n`);
-    for (const file of ["LICENSE", "NOTICE", "README.md"]) await writeFile(join(staging, file), `${file} fixture\n`);
+    for (const [file, text] of [["LICENSE", LICENSE], ["NOTICE", NOTICE], ["README.md", README]]) {
+      await writeFile(join(staging, file), text);
+    }
     if (item.name === "@younics/create-sunder-package") {
       for (const template of ["template", "template-react-node"]) {
         const templateDirectory = join(staging, template);
@@ -143,7 +149,7 @@ test("rejects an expected filename containing another package identity", async (
     await writeFile(join(staging, "package.json"), `${JSON.stringify({
       name: "@other/sdk",
       version: VERSION,
-      license: "MIT",
+      license: "GPL-3.0-only",
       repository: { url: "git+https://github.com/Younics/sunder-core.git" },
       engines: { node: NODE_ENGINE },
       publishConfig: { access: "public", provenance: true },
@@ -165,6 +171,57 @@ test("rejects an expected filename containing another package identity", async (
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
   }
+});
+
+test("rejects inconsistent license metadata, canonical text, notices, and documentation", async () => {
+  const fixture = await createFixture();
+  try {
+    const item = packageDefinitions[0];
+    const staging = fixture.stagingByName.get(item.name);
+    const manifest = JSON.parse(await readFile(join(staging, "package.json"), "utf8"));
+    for (const [file, contents, reason] of [
+      ["package.json", JSON.stringify({ ...manifest, license: "MIT" }), /must declare the GPL-3.0-only license/u],
+      ["LICENSE", "MIT License\n", /canonical GPL-3.0 LICENSE text/u],
+      ["LICENSE", LICENSE.slice(0, -100), /canonical GPL-3.0 LICENSE text/u],
+      ["NOTICE", "Licensed under the MIT License. See LICENSE.\n", /NOTICE must identify/u],
+      ["README.md", "Licensed under [MIT](LICENSE).\n", /README must identify/u],
+    ]) {
+      const path = join(staging, file);
+      const original = await readFile(path);
+      await writeFile(path, contents);
+      writeArchive(join(fixture.artifacts, item.archive), staging, expectedEntries(item));
+      await assert.rejects(verifyNodePackageArtifacts({
+        version: VERSION, npmVersionRange: RANGE, viteVersion: VITE,
+        artifactDirectory: fixture.artifacts, packReportPath: fixture.reportPath, packageInventoryPath: fixture.inventoryPath,
+      }), reason);
+      await writeFile(path, original);
+    }
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("release notices preserve third-party licenses and reject uniformly wrong first-party licenses", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "sunder-node-notices-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const directories = ["sdk", "package-tool", "create-sunder-package"].map((name) => join(root, "packages", name));
+  for (const directory of directories) {
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "LICENSE"), LICENSE);
+    await writeFile(join(directory, "NOTICE"), NOTICE);
+  }
+  const lockPath = join(root, "package-lock.json");
+  await writeFile(lockPath, JSON.stringify({ lockfileVersion: 3, packages: {
+    "node_modules/third-party": { version: "1.0.0", license: "MIT" },
+  } }));
+  const output = join(root, "notices");
+  const script = new URL("../../release/generate-node-release-notices.mjs", import.meta.url);
+  const generate = () => execFileSync(process.execPath, [fileURLToPath(script), lockPath, output], { encoding: "utf8", stdio: "pipe" });
+  generate();
+  assert.equal(await readFile(join(output, "npm-GPL-3.0-LICENSE.txt"), "utf8"), LICENSE);
+  assert.equal(JSON.parse(await readFile(join(output, "node-dependency-notices.json"), "utf8")).dependencies[0].license, "MIT");
+  for (const directory of directories) await writeFile(join(directory, "LICENSE"), "MIT License\n");
+  assert.throws(generate, (error) => error.stderr.includes("canonical GPL-3.0 LICENSE text"));
 });
 
 test("rejects a coordinated tarball outside its exact top-level path", async () => {

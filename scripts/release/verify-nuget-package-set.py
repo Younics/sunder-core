@@ -26,6 +26,7 @@ SEMVER = re.compile(
 )
 GIT_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 REPOSITORY_URL = "https://github.com/Younics/sunder-core"
+CANONICAL_LICENSE = (Path(__file__).resolve().parents[2] / "LICENSE").read_bytes()
 
 
 def fail(message: str) -> None:
@@ -118,6 +119,10 @@ def verify_archive(
             for required_name in ("LICENSE", "README.md"):
                 if names.count(required_name) != 1:
                     fail(f"NuGet artifact must contain root '{required_name}': {path.name}")
+            if archive.read("LICENSE") != CANONICAL_LICENSE:
+                fail(f"NuGet artifact must include the canonical GPL-3.0 LICENSE text: {path.name}")
+            if re.search(rb"Licensed under \[GPL-3\.0\]\([^)]+\)\.", archive.read("README.md")) is None:
+                fail(f"NuGet artifact README must identify the GPL-3.0 license: {path.name}")
 
             try:
                 root = ET.fromstring(archive.read(expected_nuspec))
@@ -139,6 +144,11 @@ def verify_archive(
                 fail(f"NuGet artifact version is '{actual_version}', expected '{version}': {path.name}")
             if authors != "Younics":
                 fail(f"NuGet artifact authors are '{authors}', expected 'Younics': {path.name}")
+
+            licenses = [child for child in metadata[0] if child.tag.rsplit("}", 1)[-1] == "license"]
+            if (len(licenses) != 1 or licenses[0].get("type") != "expression"
+                    or licenses[0].text != "GPL-3.0-only"):
+                fail(f"NuGet artifact must declare the GPL-3.0-only license expression: {path.name}")
 
             repositories = [
                 child

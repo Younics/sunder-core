@@ -50,7 +50,7 @@ exit "\${MOCK_PUBLISH_STATUS:-0}"`);
   if (kind === "npm") {
     await mkdir(join(root, "package"));
     await writeFile(join(root, "package/package.json"), JSON.stringify({
-      name, version, license: "MIT", repository: { url: "git+https://github.com/Younics/sunder-core.git" },
+      name, version, license: "GPL-3.0-only", repository: { url: "git+https://github.com/Younics/sunder-core.git" },
       publishConfig: { access: "public", provenance: true },
     }));
     execFileSync("tar", ["-czf", archive, "-C", root, "package"]);

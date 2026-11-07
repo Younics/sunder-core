@@ -3,7 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <PackageType>Template</PackageType>
     <PackageId>Sunder.Package.Templates</PackageId>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Description>Create Sunder extensions with dotnet new: C# services, optional Avalonia desktop views, Stack support, and ready-to-use build and packaging configuration.</Description>
     <PackageTags>sunder;package;plugin;sdk;dotnet-new;template</PackageTags>
@@ -18,7 +18,7 @@
     <PackageIcon>icon.png</PackageIcon>
     <RepositoryUrl>https://github.com/Younics/sunder-core</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
   </PropertyGroup>
   <ItemGroup>
     <None Include="icon.png;README.md;LICENSE" Pack="true" PackagePath="" />

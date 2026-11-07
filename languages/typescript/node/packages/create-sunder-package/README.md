@@ -169,4 +169,4 @@ lives in `sunder.package.json`; it is independent of the initializer's npm versi
 - [Node development guide](../../../../../docs/SUNDER-NODE-PROCESS-PACKAGES.md)
 - [Report an issue](https://github.com/Younics/sunder-core/issues)
 
-Licensed under [MIT](LICENSE).
+Licensed under [GPL-3.0](LICENSE).

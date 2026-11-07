@@ -80,14 +80,14 @@ for (const item of packages) {
     { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] },
   ));
   assert(localManifest.name === item.name && localManifest.version === version, `Local npm artifact identity mismatch for ${item.archive}.`);
-  assert(localManifest.license === "MIT", `${item.archive} does not declare the MIT license.`);
+  assert(localManifest.license === "GPL-3.0-only", `${item.archive} does not declare the GPL-3.0-only license.`);
   assert(localManifest.repository?.url === "git+https://github.com/Younics/sunder-core.git", `${item.archive} has unexpected repository metadata.`);
   assert(localManifest.publishConfig?.access === "public" && localManifest.publishConfig?.provenance === true, `${item.archive} has unexpected publish configuration.`);
   const escapedName = encodeURIComponent(item.name);
   const metadata = await fetchJson(`${registry}/${escapedName}/${encodeURIComponent(version)}`);
   const packument = await fetchJson(`${registry}/${escapedName}`);
   assert(metadata.name === item.name && metadata.version === version, `npm metadata identity mismatch for ${item.name}@${version}.`);
-  assert(metadata.license === "MIT", `${item.name}@${version} does not report the MIT license.`);
+  assert(metadata.license === "GPL-3.0-only", `${item.name}@${version} does not report the GPL-3.0-only license.`);
   assert(metadata.repository?.url === "git+https://github.com/Younics/sunder-core.git", `${item.name}@${version} has unexpected repository metadata.`);
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies", "engines"]) {
     assert(isDeepStrictEqual(metadata[field] ?? {}, localManifest[field] ?? {}), `${item.name}@${version} registry ${field} differs from its archive.`);

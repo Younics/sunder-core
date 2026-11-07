@@ -159,4 +159,4 @@ have an explicit contract-evolution workflow; see the
 - [Prefer TypeScript or JavaScript?](../../../../typescript/node/packages/create-sunder-package/README.md)
 - [Report an issue](https://github.com/Younics/sunder-core/issues)
 
-Licensed under [MIT](LICENSE).
+Licensed under [GPL-3.0](LICENSE).

@@ -1,9 +1,9 @@
 {
   "name": "@younics/sunder-sdk",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Build Sunder extensions with TypeScript or JavaScript services, generated typed APIs, and optional browser or React UI.",
   "keywords": ["sunder", "sdk", "typescript", "javascript", "extensions", "react"],
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Younics/sunder-core.git",

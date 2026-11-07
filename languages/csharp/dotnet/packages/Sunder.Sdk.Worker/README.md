@@ -176,4 +176,4 @@ bootstrap, see the [Worker integration reference](../../../../../docs/package-de
 - [Data and logging](../../../../../docs/package-development/DATA-AND-LOGGING.md)
 - [Report an issue](https://github.com/Younics/sunder-core/issues)
 
-Licensed under [MIT](../Sunder.Sdk/LICENSE).
+Licensed under [GPL-3.0](../Sunder.Sdk/LICENSE).

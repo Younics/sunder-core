@@ -25,7 +25,7 @@ dotnet add package Sunder.Sdk.Avalonia
 Keep the reference scoped to the generated App role, as the template does:
 
 ```xml
-<PackageReference Include="Sunder.Sdk.Avalonia" Version="1.0.1" SunderPackageAssetRole="app" />
+<PackageReference Include="Sunder.Sdk.Avalonia" Version="1.0.2" SunderPackageAssetRole="app" />
 ```
 
 ## Tutorial: a themed greeting panel
@@ -152,4 +152,4 @@ Sunder loads the resources; your package consumes them.
 - [C# service tutorial](../Sunder.Sdk/README.md)
 - [Report an issue](https://github.com/Younics/sunder-core/issues)
 
-Licensed under [MIT](../Sunder.Sdk/LICENSE).
+Licensed under [GPL-3.0](../Sunder.Sdk/LICENSE).

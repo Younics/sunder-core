@@ -11,7 +11,7 @@
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificContentInPackage>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Title>Sunder.Package.Build</Title>
     <Description>Build and distribute Sunder extensions with MSBuild: generate typed service APIs, worker and UI output, development packages, and .sunderpkg archives.</Description>
@@ -21,7 +21,7 @@
     <PackageIcon>icon.png</PackageIcon>
     <RepositoryUrl>https://github.com/Younics/sunder-core</RepositoryUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
     <SunderPackageBuildTaskSourceLockOwner>true</SunderPackageBuildTaskSourceLockOwner>
     <!-- The editor analyzer runs in the consumer's compiler, including the 10.0.100
          SDK floor (Roslyn 5.0). These are compile-only contracts,

@@ -18,8 +18,9 @@ const releasePackages = [
 ];
 
 const licenses = await Promise.all(releasePackages.map((item) => readFile(resolve(jsRoot, item.directory, "LICENSE"), "utf8")));
-if (licenses.some((license) => license !== licenses[0])) {
-  throw new Error("The three npm packages must ship the same MIT LICENSE text.");
+const canonicalLicense = await readFile(new URL("../../LICENSE", import.meta.url), "utf8");
+if (licenses.some((license) => license !== canonicalLicense)) {
+  throw new Error("The three npm packages must ship the canonical GPL-3.0 LICENSE text.");
 }
 
 const notices = await Promise.all(releasePackages.map(async (item) => ({
@@ -45,7 +46,7 @@ const dependencies = Object.entries(lock.packages)
   .sort((left, right) => left.name.localeCompare(right.name) || left.version.localeCompare(right.version));
 
 await mkdir(outputDirectory, { recursive: true });
-await writeFile(resolve(outputDirectory, "npm-MIT-LICENSE.txt"), licenses[0], "utf8");
+await writeFile(resolve(outputDirectory, "npm-GPL-3.0-LICENSE.txt"), canonicalLicense, "utf8");
 await writeFile(
   resolve(outputDirectory, "npm-NOTICES.txt"),
   `${notices.map((notice) => `===== ${notice.package} =====\n${notice.text}`).join("\n\n")}\n`,

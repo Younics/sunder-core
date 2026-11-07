@@ -32,8 +32,8 @@ generated package uses:
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.1" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.0.1" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.0.2" PrivateAssets="all" />
 </ItemGroup>
 ```
 
@@ -168,4 +168,4 @@ accept/check/freeze workflow described in the
 - [Troubleshooting guide](../../../../../docs/package-development/TROUBLESHOOTING.md)
 - [Report an issue](https://github.com/Younics/sunder-core/issues)
 
-Licensed under [MIT](LICENSE).
+Licensed under [GPL-3.0](LICENSE).

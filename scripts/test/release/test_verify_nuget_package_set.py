@@ -16,6 +16,7 @@ SPEC = importlib.util.spec_from_file_location("verify_nuget_package_set", SCRIPT
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+LICENSE = (SCRIPT_PATH.parents[2] / "LICENSE").read_bytes()
 
 
 class VerifyNuGetPackageSetTests(unittest.TestCase):
@@ -36,6 +37,9 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
         include_documentation: bool = True,
         documentation_assembly: Optional[str] = None,
         documentation: Optional[bytes] = None,
+        license_metadata: str = '<license type="expression">GPL-3.0-only</license>',
+        license_contents: bytes = LICENSE,
+        readme: str = "Licensed under [GPL-3.0](LICENSE).\n",
     ) -> None:
         nuspec = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
@@ -43,6 +47,7 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
     <id>{manifest_id}</id>
     <version>{version}</version>
     <authors>Younics</authors>
+    {license_metadata}
     <repository type="git" url="https://github.com/Younics/sunder-core" commit="{commit}" />
   </metadata>
 </package>
@@ -50,8 +55,8 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
         path = root / f"{file_id}.{version}.nupkg"
         with zipfile.ZipFile(path, "w") as archive:
             archive.writestr(f"{file_id}.nuspec", nuspec)
-            archive.writestr("LICENSE", "MIT fixture\n")
-            archive.writestr("README.md", "Fixture\n")
+            archive.writestr("LICENSE", license_contents)
+            archive.writestr("README.md", readme)
             archive.writestr("[Content_Types].xml", "<Types />\n")
             if file_id in MODULE.DOCUMENTED_SDK_IDS:
                 archive.writestr(f"lib/net10.0/{file_id}.dll", b"assembly fixture")
@@ -86,6 +91,24 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
             for invalid in ([], ["Other.Package"], selected * 2):
                 with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "public package selection"):
                     MODULE.verify_package_set(self.version, root, self.commit, invalid)
+
+    def test_rejects_inconsistent_license_metadata_contents_and_documentation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.create_set(root)
+            for override, reason in [
+                ({"license_metadata": ""}, "license expression"),
+                ({"license_metadata": '<license type="expression">MIT</license>'}, "license expression"),
+                ({"license_metadata": '<license type="file">GPL-3.0-only</license>'}, "license expression"),
+                ({"license_metadata": '<license type="expression">GPL-3.0-only</license>' * 2}, "license expression"),
+                ({"license_contents": b"MIT License\n"}, "canonical GPL-3.0 LICENSE text"),
+                ({"license_contents": LICENSE[:-100]}, "canonical GPL-3.0 LICENSE text"),
+                ({"readme": "Licensed under [MIT](LICENSE).\n"}, "README must identify"),
+            ]:
+                with self.subTest(override=next(iter(override)), reason=reason):
+                    self.create_package(root, "Sunder.Sdk", "Sunder.Sdk", self.version, **override)
+                    with self.assertRaisesRegex(ValueError, reason):
+                        MODULE.verify_package_set(self.version, root, self.commit)
 
     def test_rejects_filename_that_does_not_match_exact_path(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

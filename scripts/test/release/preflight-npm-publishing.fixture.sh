@@ -31,7 +31,7 @@ export GITHUB_REF=refs/heads/main
 export GITHUB_WORKFLOW_REF=Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/heads/main
 archive="$fixture/younics-sunder-sdk-1.2.3.tgz"
 make_archive() {
-  jq -n --arg repository "$1" '{name:"@younics/sunder-sdk",version:"1.2.3",license:"MIT",repository:{url:$repository},publishConfig:{access:"public",provenance:true}}' > "$fixture/package/package.json"
+  jq -n --arg repository "$1" '{name:"@younics/sunder-sdk",version:"1.2.3",license:"GPL-3.0-only",repository:{url:$repository},publishConfig:{access:"public",provenance:true}}' > "$fixture/package/package.json"
   tar -czf "$archive" -C "$fixture" package
 }
 make_archive git+https://github.com/Younics/sunder-core.git

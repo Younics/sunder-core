@@ -1,9 +1,9 @@
 {
   "name": "@younics/create-sunder-package",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Create a Sunder extension with Node services, optional React UI, TypeScript or JavaScript, and ready-to-use build scripts and tests.",
   "keywords": ["sunder", "create", "scaffold", "typescript", "javascript", "react"],
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Younics/sunder-core.git",

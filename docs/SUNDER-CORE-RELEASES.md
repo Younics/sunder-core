@@ -62,7 +62,8 @@ Validation retains:
 
 - locked restore, ordinary parallel Release build, portable .NET/public API tests;
 - Node SDK/tooling/artifact tests, then rebuilt outputs for .NET interop;
-- exact selected NuGet/npm archive identity, contents and digest checks;
+- exact selected NuGet/npm archive identity, contents and digest checks, including
+  GPL-3.0-only metadata, the canonical repository `LICENSE`, and matching documentation/notices;
 - generated .NET and Node/React template builds and Host lifecycle tests;
 - universal six-RID modules and cross-language Host integration;
 - supported-surface comparisons against the protected PR/pre-push Git base;

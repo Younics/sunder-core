@@ -167,4 +167,4 @@ For vulnerability reports, use the private process in [`SECURITY.md`](SECURITY.m
 
 ## License
 
-Sunder Core is distributed under the [GNU General Public License v3.0](LICENSE). The three published Node authoring packages carry their own MIT `LICENSE` and `NOTICE` files.
+Sunder Core and its published .NET and Node developer packages are distributed under the [GNU General Public License v3.0](LICENSE). Every developer package includes the same GPL-3.0 license text; Node packages also include a `NOTICE` file.

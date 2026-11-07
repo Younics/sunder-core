@@ -12,6 +12,7 @@ const PUBLIC_PACKAGE_INVENTORY = resolve(
   "../../eng/test-oracles/core-public-packages.json",
 );
 const COMMON_PACKAGE_ENTRIES = ["package.json", "README.md", "LICENSE", "NOTICE"];
+const CANONICAL_LICENSE = await readFile(new URL("../../LICENSE", import.meta.url), "utf8");
 const REQUIRED_NODE_ENGINE = JSON.parse(await readFile(new URL("../../languages/typescript/node/package.json", import.meta.url), "utf8")).engines.node;
 const PRERELEASE_IDENTIFIER = "(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)";
 const SEMVER = new RegExp(`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-${PRERELEASE_IDENTIFIER}(?:\\.${PRERELEASE_IDENTIFIER})*)?$`, "u");
@@ -136,7 +137,7 @@ export async function verifyNodePackageArtifacts({
     const manifest = readArchiveJson(archivePath, "package/package.json");
     assert(manifest.name === item.name, `${item.archive} package identity is '${manifest.name}', expected '${item.name}'.`);
     assert(manifest.version === version, `${item.archive} package version is '${manifest.version}', expected '${version}'.`);
-    assert(manifest.license === "MIT", `${item.archive} must declare the MIT license.`);
+    assert(manifest.license === "GPL-3.0-only", `${item.archive} must declare the GPL-3.0-only license.`);
     assert(manifest.repository?.url === REPOSITORY_URL, `${item.archive} has an unexpected repository identity.`);
     assert(manifest.engines?.node === REQUIRED_NODE_ENGINE, `${item.archive} must require Node '${REQUIRED_NODE_ENGINE}'.`);
     assert(manifest.publishConfig?.access === "public", `${item.archive} must publish with public access.`);
@@ -147,6 +148,13 @@ export async function verifyNodePackageArtifacts({
     assert(new Set(expectedEntries).size === expectedEntries.length, `${item.name} public package inventory contains duplicate entries.`);
     const archiveEntries = entries.map((entry) => entry.slice("package/".length));
     assertExactEntries(`${item.archive} archive`, archiveEntries, expectedEntries);
+    assert(readArchiveText(archivePath, "package/LICENSE") === CANONICAL_LICENSE,
+      `${item.archive} must include the canonical GPL-3.0 LICENSE text.`);
+    assert(
+      readArchiveText(archivePath, "package/NOTICE").includes("Licensed under the GNU General Public License v3.0 (GPL-3.0-only). See LICENSE."),
+      `${item.archive} NOTICE must identify the GPL-3.0-only license.`);
+    assert(/Licensed under \[GPL-3\.0\]\([^)]+\)\./u.test(readArchiveText(archivePath, "package/README.md")),
+      `${item.archive} README must identify the GPL-3.0 license.`);
 
     if (item.name === "@younics/create-sunder-package") {
       for (const template of ["template", "template-react-node"]) {

@@ -1,9 +1,9 @@
 {
   "name": "@younics/sunder-package-tool",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Generate typed APIs, build Node services and web views, watch source changes, and package Sunder extensions for distribution.",
   "keywords": ["sunder", "build", "tooling", "typescript", "javascript", "extensions"],
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Younics/sunder-core.git",

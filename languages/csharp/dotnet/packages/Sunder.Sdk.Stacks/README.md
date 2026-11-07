@@ -23,7 +23,7 @@ dotnet add package Sunder.Sdk.Stacks
 For generated single-project packages, use the same reference shape as the template:
 
 ```xml
-<PackageReference Include="Sunder.Sdk.Stacks" Version="1.0.1" ExcludeAssets="buildTransitive" SunderPackageAssetRole="worker" />
+<PackageReference Include="Sunder.Sdk.Stacks" Version="1.0.2" ExcludeAssets="buildTransitive" SunderPackageAssetRole="worker" />
 ```
 
 The explicit platform selection supplies the contract used by generated registration.
@@ -191,4 +191,4 @@ non-secret configuration in exported JSON; request credentials at import using
 - [Package storage](../../../../../docs/package-development/DATA-AND-LOGGING.md)
 - [Report an issue](https://github.com/Younics/sunder-core/issues)
 
-Licensed under [MIT](../Sunder.Sdk/LICENSE).
+Licensed under [GPL-3.0](../Sunder.Sdk/LICENSE).

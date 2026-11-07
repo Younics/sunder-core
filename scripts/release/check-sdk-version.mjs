@@ -19,7 +19,7 @@ for (const kind of ["nuget", "npm"]) {
     const version = source?.version ?? /<Version>([^<]+)<\/Version>/u.exec(await readFile(resolve(root, item.project), "utf8"))?.[1];
     const match = typeof version === "string" && versionPattern.exec(version);
     if (!match || match[4]?.split(".").some(value => /^0\d+$/u.test(value))) throw new Error(`Invalid authored version: ${item.project}`);
-    if (source && (source.name !== name || source.private === true || source.license !== "MIT"
+    if (source && (source.name !== name || source.private === true || source.license !== "GPL-3.0-only"
       || source.repository?.url !== "git+https://github.com/Younics/sunder-core.git"
       || source.publishConfig?.access !== "public" || source.publishConfig?.provenance !== true)) {
       throw new Error(`Unexpected npm publication metadata: ${item.project}`);
@@ -32,6 +32,7 @@ for (const item of packages.filter(item => item.kind === "npm")) {
   const relative = item.project.replace("languages/typescript/node/", "");
   const source = await json(`${item.project}/package.json`);
   if (lock.packages?.[relative]?.version !== item.version
+    || lock.packages[relative].license !== source.license
     || !isDeepStrictEqual(lock.packages[relative].dependencies, source.dependencies)) {
     throw new Error(`npm lockfile differs from ${item.project}/package.json`);
   }
