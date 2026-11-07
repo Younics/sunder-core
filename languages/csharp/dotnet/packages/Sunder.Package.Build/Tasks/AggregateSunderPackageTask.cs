@@ -21,6 +21,7 @@ public sealed class AggregateSunderPackageTask : Microsoft.Build.Utilities.Task
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
+        NewLine = "\n",
     };
 
     [Required]

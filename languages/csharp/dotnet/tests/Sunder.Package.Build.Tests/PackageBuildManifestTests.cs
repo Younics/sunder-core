@@ -32,6 +32,7 @@ public sealed class PackageBuildManifestTests
         var success = task.Execute();
 
         Assert.True(success, string.Join(Environment.NewLine, buildEngine.Errors));
+        Assert.DoesNotContain((byte)'\r', File.ReadAllBytes(manifestPath));
         using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
         var root = document.RootElement;
         Assert.Equal(1, root.GetProperty("archiveFormatVersion").GetInt32());
@@ -90,6 +91,33 @@ public sealed class PackageBuildManifestTests
             SunderSdkCapabilities.StacksRpcV1,
             SunderSdkCapabilities.ThemingV1,
         }.Order(StringComparer.OrdinalIgnoreCase), capabilities.Order(StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void RuntimeMetadata_NormalizesWindowsWhitespaceWithoutChangingValuesOrRewritingStableFiles()
+    {
+        var root = CreateTempDirectory();
+        var expected = "{\n  \"value\": \"escaped\\r\\n — UTF-8\"\n}"u8.ToArray();
+        var paths = new[] { "worker.deps.json", "worker.runtimeconfig.json" }
+            .Select(name => Path.Combine(root, name)).ToArray();
+        foreach (var path in paths)
+            File.WriteAllText(path, System.Text.Encoding.UTF8.GetString(expected).Replace("\n", "\r\n", StringComparison.Ordinal));
+        var engine = new TestBuildEngine();
+        var task = new NormalizeSunderRuntimeMetadataTask
+        {
+            BuildEngine = engine,
+            Files = paths.Select(path => new MSBuildTaskItem(path)).ToArray(),
+        };
+
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, engine.Errors));
+        foreach (var path in paths)
+        {
+            Assert.Equal(expected, File.ReadAllBytes(path));
+            File.SetLastWriteTimeUtc(path, new DateTime(2020, 1, 2, 3, 4, 5, DateTimeKind.Utc));
+        }
+        var timestamps = paths.Select(File.GetLastWriteTimeUtc).ToArray();
+        Assert.True(task.Execute(), string.Join(Environment.NewLine, engine.Errors));
+        Assert.Equal(timestamps, paths.Select(File.GetLastWriteTimeUtc));
     }
 
     [Fact]

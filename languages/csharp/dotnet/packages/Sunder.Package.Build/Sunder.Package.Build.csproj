@@ -11,7 +11,7 @@
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificContentInPackage>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Title>Sunder.Package.Build</Title>
     <Description>Build and distribute Sunder extensions with MSBuild: generate typed service APIs, worker and UI output, development packages, and .sunderpkg archives.</Description>
@@ -43,6 +43,8 @@
           PackagePath="buildTransitive\Sunder.Package.Build.SourceLock.targets" />
     <None Include="build\Sunder.Package.Build.Authoring.targets" Pack="true"
           PackagePath="buildTransitive\Sunder.Package.Build.Authoring.targets" />
+    <None Include="build\Sunder.Package.Build.Worker.manifest" Pack="true"
+          PackagePath="buildTransitive\Sunder.Package.Build.Worker.manifest" />
     <None Include="build\Sunder.Package.Build.Authoring.Outer.targets" Pack="true"
           PackagePath="buildTransitive\Sunder.Package.Build.Authoring.Outer.targets" />
     <None Include="build\Sunder.Package.Build.Authoring.Dispatch.targets" Pack="true"

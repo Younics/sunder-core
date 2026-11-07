@@ -15,6 +15,7 @@ public sealed class GenerateSunderPackageManifestTask : Microsoft.Build.Utilitie
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
+        NewLine = "\n",
     };
 
     [Required] public string TargetAssemblyPath { get; set; } = string.Empty;
