@@ -190,7 +190,12 @@ def launch(plan):
     c.require(current["artifactSourceCommit"] == plan["artifactSourceCommit"], "App tag source changed after selection")
     if current["action"] == "none": return current
     if current["action"] == "rerun":
-        api(f"actions/runs/{c.number(current['runId'])}/rerun-failed-jobs", "POST")
+        route = f"actions/runs/{c.number(current['runId'])}"
+        # Startup/policy rejection can complete before GitHub creates any jobs.
+        # A failed-job retry then has nothing to schedule. Keep the original run
+        # and its immutable tag; packaging still reuses any retained artifacts.
+        retry = "rerun-failed-jobs" if pages(route + "/jobs", "jobs") else "rerun"
+        api(route + "/" + retry, "POST")
         current["reason"] = "Original App run resumption requested"
         return current
     if tag_source(current["tag"]) is None:
