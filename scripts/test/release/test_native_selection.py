@@ -35,6 +35,34 @@ def store_for(component="app"):
 
 
 class NativeSelectionTests(unittest.TestCase):
+    def test_release_tag_fixture_owns_its_history_in_a_shallow_checkout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, checkout = root / "source", root / "checkout"
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+            for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                         "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"):
+                env.pop(name, None)
+            def git(*args, cwd=source):
+                result = subprocess.run(["git", *args], cwd=cwd, env=env, capture_output=True, text=True)
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                return result.stdout.strip()
+            git("init", "--quiet", "--initial-branch=main", "--template=", str(source), cwd=root)
+            git("config", "user.name", "Sunder fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            for message in ("ancestor", "workflow"):
+                git("-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", message)
+            git("clone", "--quiet", "--depth=1", source.as_uri(), str(checkout), cwd=root)
+            head = git("rev-parse", "HEAD", cwd=checkout)
+            self.assertEqual("true", git("rev-parse", "--is-shallow-repository", cwd=checkout))
+            result = subprocess.run(["bash", str(native.ROOT / "scripts/test/release/verify-release-tag.fixture.sh")],
+                                    cwd=checkout, env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn("Release tag fixture passed", result.stdout)
+            self.assertEqual(head, git("rev-parse", "HEAD", cwd=checkout))
+            self.assertEqual("true", git("rev-parse", "--is-shallow-repository", cwd=checkout))
+            self.assertEqual("", git("status", "--porcelain", cwd=checkout))
+
     def test_versions_are_explicit_and_evaluation_does_not_receive_publication_credentials(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -167,7 +195,8 @@ class NativeSelectionTests(unittest.TestCase):
                 (root / native.PLAN).write_text(json.dumps(plan(component)))
                 store = store_for(component)
                 with patch.object(native, "guard"), patch.object(native.assets, "GitHubRelease", return_value=store), \
-                     patch.object(store, "api", return_value=dict(artifacts=[])) as api:
+                     patch.object(store, "api", return_value=dict(artifacts=[])) as api, \
+                     patch.dict(os.environ, GITHUB_OUTPUT=str(root / "outputs")):
                     self.assertFalse(native.retained(component, "win-x64", root / native.PLAN))
                     api.assert_called_with("actions/runs/123/artifacts?per_page=100&page=1")
                     api.return_value = dict(artifacts=[dict(name=native.artifact_name(component, "win-x64"), expired=False)])
@@ -176,6 +205,7 @@ class NativeSelectionTests(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "expired"): native.retained(component, "win-x64", root / native.PLAN)
                     api.return_value["artifacts"] *= 2
                     with self.assertRaisesRegex(ValueError, "Ambiguous"): native.retained(component, "win-x64", root / native.PLAN)
+                    self.assertEqual(["reuse=false", "reuse=true"], (root / "outputs").read_text().splitlines())
 
     def test_native_recovery_downloads_complete_original_bytes_and_rejects_tampering(self):
         with tempfile.TemporaryDirectory() as temporary:

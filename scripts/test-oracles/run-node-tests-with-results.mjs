@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { testProcessEnvironment } from "./test-process-environment.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const { values, positionals: [reportName, ...testFiles] } = parseArgs({
@@ -26,6 +27,6 @@ const result = spawnSync(process.execPath, [
   "--test-reporter-destination=stdout",
   `--test-reporter-destination=${outputPath}`,
   ...testFiles,
-], { stdio: "inherit" });
+], { stdio: "inherit", env: testProcessEnvironment() });
 if (result.error !== undefined) throw result.error;
 process.exitCode = result.status ?? 1;

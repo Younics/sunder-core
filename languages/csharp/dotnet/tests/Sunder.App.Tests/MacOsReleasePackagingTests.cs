@@ -40,7 +40,7 @@ public sealed class MacOsReleasePackagingTests
     {
         var root = LocateRepositoryRoot();
         var packager = File.ReadAllText(Path.Combine(root, "scripts", "release", "package-sunder.sh"));
-        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "sunder-app-release.yml"));
+        var workflow = File.ReadAllText(Path.Combine(root, ".github", "workflows", "sunder-sdk-release.yml"));
         var publisher = File.ReadAllText(Path.Combine(root, "scripts", "release", "github_release.py"));
         var installer = File.ReadAllText(Path.Combine(root, "scripts", "install", "install.sh"));
 
@@ -49,8 +49,8 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("map(select(.RelativeFileName != $portable", packager, StringComparison.Ordinal);
         Assert.Contains(".Type == \"Full\" or .Type == \"Delta\"", packager, StringComparison.Ordinal);
         Assert.DoesNotContain("portable_entry=", packager, StringComparison.Ordinal);
-        Assert.Contains("scripts/ci/metadata.py matrices", workflow, StringComparison.Ordinal);
-        Assert.Contains("fromJSON(needs.prepare.outputs.matrix)", workflow, StringComparison.Ordinal);
+        Assert.Contains("scripts/release/select_releases.py select", workflow, StringComparison.Ordinal);
+        Assert.Contains("fromJSON(needs.select.outputs.app_matrix)", workflow, StringComparison.Ordinal);
         using var platforms = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "eng", "ci", "platforms.json")));
         var rids = platforms.RootElement.GetProperty("platforms").EnumerateArray().Select(row => row.GetProperty("rid").GetString()).ToArray();
         Assert.Contains("osx-x64", rids);
@@ -64,7 +64,7 @@ public sealed class MacOsReleasePackagingTests
         Assert.Contains("set(files) - EVIDENCE == expected", publisher, StringComparison.Ordinal);
         Assert.DoesNotContain("-Setup.pkg", publisher, StringComparison.Ordinal);
         Assert.DoesNotContain("-Portable.zip", publisher, StringComparison.Ordinal);
-        Assert.Contains("scripts/release/generate-app-feeds.py artifacts/app-release-assets", workflow, StringComparison.Ordinal);
+        Assert.Contains("scripts/release/generate-app-feeds.py artifacts/native-assets", workflow, StringComparison.Ordinal);
         Assert.DoesNotContain("vpk upload github", workflow, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-x64-stable.dmg", installer, StringComparison.Ordinal);
         Assert.Contains("Sunder-app-osx-arm64-stable.dmg", installer, StringComparison.Ordinal);

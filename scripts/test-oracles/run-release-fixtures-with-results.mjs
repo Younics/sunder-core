@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
+import { testProcessEnvironment } from "./test-process-environment.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
@@ -35,7 +36,7 @@ for (const group of groups.values()) {
     cwd: repositoryRoot,
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...testProcessEnvironment(), NO_COLOR: "1" },
   });
   const durationSeconds = Number(process.hrtime.bigint() - started) / 1_000_000_000;
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;

@@ -409,8 +409,8 @@ public sealed class RuntimeArchitectureRatchetTests
             root, "scripts", "release", "package-sunder.ps1"));
         var unixPackager = File.ReadAllText(Path.Combine(
             root, "scripts", "release", "package-sunder.sh"));
-        var hostWorkflow = File.ReadAllText(Path.Combine(
-            root, ".github", "workflows", "sunder-host-release.yml"));
+        var releaseWorkflow = File.ReadAllText(Path.Combine(
+            root, ".github", "workflows", "sunder-sdk-release.yml"));
         var componentPackager = File.ReadAllText(Path.Combine(
             root, "scripts", "release", "package-component.ps1"));
 
@@ -418,7 +418,9 @@ public sealed class RuntimeArchitectureRatchetTests
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", supervisorProject, StringComparison.Ordinal);
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", windowsPackager, StringComparison.Ordinal);
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", unixPackager, StringComparison.Ordinal);
-        Assert.Contains("./scripts/release/package-component.ps1 -Component host", hostWorkflow, StringComparison.Ordinal);
+        Assert.Contains("fromJSON(needs.select.outputs.binary_matrix)", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains("COMPONENT: ${{ matrix.component }}", releaseWorkflow, StringComparison.Ordinal);
+        Assert.Contains("./scripts/release/package-component.ps1 -Component $env:COMPONENT -Version $env:VERSION -Rid $env:RID", releaseWorkflow, StringComparison.Ordinal);
         Assert.Contains("IncludeSourceRevisionInInformationalVersion=false", componentPackager, StringComparison.Ordinal);
     }
 

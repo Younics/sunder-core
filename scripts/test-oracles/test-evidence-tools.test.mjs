@@ -417,6 +417,79 @@ test("Node reporter keeps failed preflight evidence and removes successful proce
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("script reporters isolate Actions command files and retain failed fixture evidence", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-reporter-environment-"));
+  const commandFiles = ["GITHUB_OUTPUT", "GITHUB_ENV", "GITHUB_PATH", "GITHUB_STEP_SUMMARY", "GITHUB_STATE"];
+  try {
+    const scripts = resolve(root, "scripts/test-oracles");
+    await mkdir(scripts, { recursive: true });
+    for (const name of ["run-node-tests-with-results.mjs", "run-release-fixtures-with-results.mjs",
+      "run-python-fixture.py", "test-process-environment.mjs"]) {
+      await writeFile(resolve(scripts, name), await readFile(resolve(repositoryRoot, "scripts/test-oracles", name)));
+    }
+    const declarations = [
+      { framework: "python", source: "fixture.py", name: "test_environment", runnerSelector: "ReporterFixture.test_environment" },
+      { framework: "shell", source: "fixture.sh", name: "shell environment" },
+    ];
+    await writeFile(resolve(scripts, "core-test-policy.mjs"), `export const loadCoreTestModel = () => (${JSON.stringify({
+      policy: { reports: { releaseFixtures: "release-fixtures.junit.xml" } }, declarations,
+    })});`);
+    await writeFile(resolve(root, "fixture.py"), `import os, unittest
+from pathlib import Path
+class ReporterFixture(unittest.TestCase):
+    def test_environment(self):
+        for name in ${JSON.stringify(commandFiles)}:
+            if os.environ.get(name):
+                with Path(os.environ[name]).open("a") as stream: stream.write("leaked Python output\\n")
+        self.assertEqual("preserved", os.environ.get("SUNDER_REPORTER_CONTEXT"))
+        self.assertEqual("fixture-toolchain", os.environ.get("DOTNET_ROOT"))
+        self.assertNotEqual("1", os.environ.get("SUNDER_REPORTER_FAIL"), "seeded Python failure")
+`);
+    await writeFile(resolve(root, "fixture.sh"), `set -euo pipefail
+for name in ${commandFiles.join(" ")}; do
+  if [[ -n "\${!name:-}" ]]; then printf 'leaked shell output\\n' >> "\${!name}"; fi
+done
+[[ "$SUNDER_REPORTER_CONTEXT" == preserved && "$DOTNET_ROOT" == fixture-toolchain ]]
+if [[ "$SUNDER_REPORTER_FAIL" == 1 ]]; then printf 'seeded shell failure\\n' >&2; exit 1; fi
+`);
+    await writeFile(resolve(root, "fixture.test.mjs"), `import { test as fixture } from "node:test";
+import assert from "node:assert/strict";
+import { appendFileSync } from "node:fs";
+fixture("Node environment", () => {
+  for (const name of ${JSON.stringify(commandFiles)}) {
+    if (process.env[name]) appendFileSync(process.env[name], "leaked Node output\\n");
+  }
+  assert.equal(process.env.SUNDER_REPORTER_CONTEXT, "preserved");
+  assert.equal(process.env.DOTNET_ROOT, "fixture-toolchain");
+  assert.notEqual(process.env.SUNDER_REPORTER_FAIL, "1", "seeded Node failure");
+});`);
+    const env = { ...process.env, SUNDER_REPORTER_CONTEXT: "preserved", DOTNET_ROOT: "fixture-toolchain" };
+    delete env.NODE_TEST_CONTEXT;
+    delete env.SUNDER_NODE_TEST_NAME_PATTERN;
+    for (const name of commandFiles) {
+      env[name] = resolve(root, name);
+      await writeFile(env[name], "parent command file\n");
+    }
+    for (const fail of [false, true]) {
+      env.SUNDER_REPORTER_FAIL = fail ? "1" : "0";
+      for (const framework of ["release", "node"]) {
+        const output = resolve(root, `${framework}-${fail}`);
+        const args = framework === "release"
+          ? ["--scope", "repository", "--results-directory", output]
+          : ["--results-directory", output, "node-fixture", resolve(root, "fixture.test.mjs")];
+        const runner = framework === "release" ? "run-release-fixtures-with-results.mjs" : "run-node-tests-with-results.mjs";
+        const result = spawnSync(process.execPath, [resolve(scripts, runner), ...args], { cwd: root, env, encoding: "utf8", timeout: 30_000 });
+        assert.equal(result.status, fail ? 1 : 0, result.stdout + result.stderr);
+        const report = await readFile(resolve(output, framework === "release" ? "release-fixtures.junit.xml" : "node-fixture.junit.xml"), "utf8");
+        if (fail) {
+          for (const name of framework === "release" ? ["Python", "shell"] : ["Node"]) assert.match(report, new RegExp(`seeded ${name} failure`, "u"));
+        } else assert.doesNotMatch(report, /<failure\b/u);
+        for (const name of commandFiles) assert.equal(await readFile(env[name], "utf8"), "parent command file\n", `${framework}/${name}`);
+      }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("lane entry includes the IPC publisher regression on every OS and fails closed on missing release inputs", () => {
   const model = loadCoreTestModel();
   const declaration = model.declarations.find((item) => item.framework === "node"

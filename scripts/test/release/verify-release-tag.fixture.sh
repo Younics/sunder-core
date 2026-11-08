@@ -12,7 +12,7 @@ done
 
 temp_root="${TMPDIR:-/tmp}"
 fixture_dir="$(mktemp -d "${temp_root%/}/sunder-release-tag-fixture.XXXXXX")"
-trap 'rm -rf "$fixture_dir"' EXIT
+trap 'cd "$script_dir"; rm -rf "$fixture_dir"' EXIT
 mock_bin="$fixture_dir/mock-bin"
 mkdir -p "$mock_bin"
 
@@ -32,6 +32,24 @@ case "$endpoint" in
 esac
 EOF
 chmod +x "$mock_bin/gh"
+
+# The caller may be a depth-one Actions checkout. Own the complete graph used
+# by the verifier, including an unrelated source for the ancestry rejection.
+unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+  GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
+export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+git init --quiet --initial-branch=main --template= "$fixture_dir/repository"
+cd "$fixture_dir/repository"
+git config user.name 'Sunder fixture'
+git config user.email 'fixture@example.invalid'
+git config commit.gpgsign false
+git commit --quiet --allow-empty -m 'Retained ancestor'
+ancestor="$(git rev-parse HEAD)"
+git commit --quiet --allow-empty -m 'Workflow source'
+git checkout --quiet --orphan unrelated
+git commit --quiet --allow-empty -m 'Unrelated source'
+unrelated="$(git rev-parse HEAD)"
+git checkout --quiet main
 
 export GH_REPO='Younics/sunder-core'
 export GITHUB_REF='refs/tags/sdk/v1.2.3'
@@ -65,8 +83,13 @@ export GITHUB_REF=refs/heads/main GITHUB_REF_PROTECTED=true GITHUB_EVENT_NAME=pu
 export GITHUB_WORKFLOW_SHA="$GITHUB_SHA"
 export GITHUB_WORKFLOW_REF="$GH_REPO/.github/workflows/sunder-sdk-release.yml@refs/heads/main"
 PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$GITHUB_SHA"
-ancestor="$(git rev-parse HEAD^)"
 MOCK_COMMIT_SHA="$ancestor" PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$ancestor"
+if MOCK_COMMIT_SHA="$unrelated" PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$unrelated" \
+    > "$fixture_dir/unrelated-source.log" 2>&1; then
+  printf 'Release tag verifier accepted an unrelated artifact source.\n' >&2
+  exit 1
+fi
+grep -Fq 'must be an ancestor' "$fixture_dir/unrelated-source.log"
 for invalid in GITHUB_REF_PROTECTED=false GITHUB_EVENT_NAME=pull_request GITHUB_WORKFLOW_REF=foreign/workflow GITHUB_WORKFLOW_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; do
   if env "$invalid" PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$GITHUB_SHA" > "$fixture_dir/main-guard.log" 2>&1; then
     printf 'Release tag verifier accepted invalid main publication context: %s\n' "$invalid" >&2
@@ -78,5 +101,6 @@ if PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$ancestor" > "$fixture_
   printf 'Release tag verifier accepted a retained source differing from its remote tag.\n' >&2
   exit 1
 fi
+grep -Fq 'not workflow commit/artifact source' "$fixture_dir/retained-tag.log"
 
 printf 'Release tag fixture passed: historical tags and protected-main retained sources are enforced.\n'
