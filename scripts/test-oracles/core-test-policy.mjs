@@ -81,7 +81,10 @@ export function validateWorkflowTestSelections(workflows, declarations) {
       if (!ids.has(id)) throw new Error(`${source}: required workflow test '${id}' is not declared.`);
     }
     for (const match of content.matchAll(/--(?:require-)?scenario(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s\\()]+))/gu)) {
-      selectScenario(match[1] ?? match[2] ?? match[3], declarations);
+      const name = match[1] ?? match[2] ?? match[3];
+      // Matrix scenarios are validated by the selection policy and the runner's
+      // explicit CLI choices. Static workflow selections must still resolve here.
+      if (!/^\$[A-Z_][A-Z0-9_]*$/u.test(name)) selectScenario(name, declarations);
     }
   }
 }

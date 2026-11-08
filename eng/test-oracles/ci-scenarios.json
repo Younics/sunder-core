@@ -16,6 +16,9 @@
       "SUNDER_REQUIRE_NODE24_HOST_INTEGRATION": "1", "SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP": "1"
     }
   },
+  "cli-clients": {
+    "selectors": ["Sunder.Host.Client.Tests.", "Sunder.Runtime.Client.Tests."]
+  },
   "app-interop": {
     "component": "app", "profile": "portable",
     "selectors": ["Sunder.App.Tests.AppWebBridgeTests.BootstrapJavaScriptCrossLanguageVm_"],

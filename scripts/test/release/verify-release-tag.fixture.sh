@@ -61,4 +61,22 @@ if GH_REPO='Other/sunder-core' PATH="$mock_bin:$PATH" \
   exit 1
 fi
 
-printf 'Release tag fixture passed: repository identity and annotated remote tag resolution are enforced.\n'
+export GITHUB_REF=refs/heads/main GITHUB_REF_PROTECTED=true GITHUB_EVENT_NAME=push
+export GITHUB_WORKFLOW_SHA="$GITHUB_SHA"
+export GITHUB_WORKFLOW_REF="$GH_REPO/.github/workflows/sunder-sdk-release.yml@refs/heads/main"
+PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$GITHUB_SHA"
+ancestor="$(git rev-parse HEAD^)"
+MOCK_COMMIT_SHA="$ancestor" PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$ancestor"
+for invalid in GITHUB_REF_PROTECTED=false GITHUB_EVENT_NAME=pull_request GITHUB_WORKFLOW_REF=foreign/workflow GITHUB_WORKFLOW_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; do
+  if env "$invalid" PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$GITHUB_SHA" > "$fixture_dir/main-guard.log" 2>&1; then
+    printf 'Release tag verifier accepted invalid main publication context: %s\n' "$invalid" >&2
+    exit 1
+  fi
+  grep -Fq 'protected-main workflow' "$fixture_dir/main-guard.log"
+done
+if PATH="$mock_bin:$PATH" bash "$verifier" 'app/v1.2.3' "$ancestor" > "$fixture_dir/retained-tag.log" 2>&1; then
+  printf 'Release tag verifier accepted a retained source differing from its remote tag.\n' >&2
+  exit 1
+fi
+
+printf 'Release tag fixture passed: historical tags and protected-main retained sources are enforced.\n'

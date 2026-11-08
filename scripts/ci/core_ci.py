@@ -92,7 +92,9 @@ def source(scope="all", work=None, stage=None, scenario=None, prepare_node=True)
     if scenario:
         preview = json.loads(run("node", ROOT / "scripts/test-oracles/run-dotnet-tests-with-results.mjs",
                                  "--scope", scope, "--scenario", scenario, "--list", capture=True))
-        names = [row["project"] for row in preview["projects"]] + ["Sunder.Cli", "Sunder.ExecutionRuntime.Build"]
+        names = [row["project"] for row in preview["projects"]]
+        if scenario in ("interop", "generated-templates"):
+            names += ["Sunder.Cli", "Sunder.ExecutionRuntime.Build"]
         selected["buildProjects"] = sorted({str(project(name).relative_to(ROOT)) for name in names})
     if not selected["buildProjects"]:
         return
@@ -375,16 +377,19 @@ def component_stage(action, scope, *, scenario=None, rid=None):
                 with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
                     stream.write(f"package_count={len(rows)}\n")
             sdk_release.pack(plan, ROOT / "artifacts/packages", kind)
-        elif action in ("interop", "template-consumers"):
+        elif action in ("interop", "template-consumers", "scenario"):
             with tempfile.TemporaryDirectory(prefix="sunder-consumers-", dir=os.environ.get("RUNNER_TEMP")) as temporary:
                 work = Path(temporary)
                 if action == "interop":
                     module_inputs(work)
                     dotnet_tests("scenario", "interop", scope=scope)
-                else:
+                elif action == "template-consumers":
                     run(sys.executable, "-B", ROOT / "scripts/release/sdk_release.py", "feed", "--directory", "artifacts/test-feed")
                     templates(work)
                     dotnet_tests("scenario", "generated-templates", scope=scope)
+                else:
+                    if scenario != "cli-clients": raise ValueError("Unknown standalone consumer scenario")
+                    dotnet_tests("scenario", scenario, scope=scope)
         elif action == "packaging":
             if rid not in [row["rid"] for row in platforms(profile="packaging")["include"]]:
                 raise ValueError("Unsupported packaging smoke RID")
@@ -396,18 +401,18 @@ def component_stage(action, scope, *, scenario=None, rid=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("source", "node-inputs", "templates", "module", "official-inputs", "portable", "platform", "official", "candidate", "rehearse",
-                                          "restore", "build", "fixtures", "script-tests", "test", "pack", "interop", "template-consumers", "step-results", "packaging"))
+                                          "restore", "build", "fixtures", "script-tests", "test", "pack", "interop", "template-consumers", "scenario", "step-results", "packaging"))
     parser.add_argument("--work", type=Path)
     parser.add_argument("--rid", choices=[row["rid"] for row in platforms()["include"]])
     parser.add_argument("--scope", choices=tuple(json.loads((ROOT / "eng/test-oracles/core-test-policy.json").read_text())["scopes"]), default="all")
     parser.add_argument("--partition", help="Native method partition (main or a policy-owned project shard)")
-    parser.add_argument("--scenario", choices=("interop", "generated-templates"), help="Build only the selected consumer roots")
+    parser.add_argument("--scenario", choices=("interop", "generated-templates", "cli-clients"), help="Build only the selected consumer roots")
     parser.add_argument("--no-restore", action="store_true", help="Node inputs only: use the already restored workspace")
     parser.add_argument("--list", action="store_true", help="Print scope ownership and build roots without changing outputs")
     args = parser.parse_args()
     if args.list:
         print(json.dumps(selection(args.scope), indent=2))
-    elif args.action in ("restore", "build", "fixtures", "script-tests", "test", "pack", "interop", "template-consumers", "step-results", "packaging"):
+    elif args.action in ("restore", "build", "fixtures", "script-tests", "test", "pack", "interop", "template-consumers", "scenario", "step-results", "packaging"):
         component_stage(args.action, args.scope, scenario=args.scenario, rid=args.rid)
     elif args.action in ("portable", "platform", "official", "candidate"):
         validate(args.action, rid=args.rid, scope=args.scope, partition=args.partition)

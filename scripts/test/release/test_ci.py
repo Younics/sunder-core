@@ -186,9 +186,10 @@ class CiMetadataTests(unittest.TestCase):
 
     def test_job_labels_follow_actual_tasks_and_policy_partition_counts(self):
         ordinary = metadata.component_matrices()
-        self.assertTrue(all("pack selected" not in row["job_name"] for row in ordinary["components"]["include"]))
+        self.assertEqual({"Test Node packages", "Test .NET packages", "Test Host", "Test CLI", "Test App", "Check release tooling"},
+                         {row["job_name"] for row in ordinary["components"]["include"]})
         release = metadata.component_matrices(release_packages=True)
-        self.assertEqual({"npm", "dotnet"}, {row["scope"] for row in release["components"]["include"] if "pack selected" in row["job_name"]})
+        self.assertEqual(ordinary, release)
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for name in ("eng/ci/platforms.json", "eng/test-oracles/core-test-policy.json"):
@@ -201,7 +202,7 @@ class CiMetadataTests(unittest.TestCase):
             path.write_text(json.dumps(policy))
             rows = metadata.component_matrices(root)["platform"]["include"]
             self.assertEqual(len(rows), len({row["job_name"] for row in rows}))
-            self.assertEqual(6, sum("Package.Build tests" in row["job_name"] and row["job_name"].endswith("5/5") for row in rows))
+            self.assertEqual(6, sum("Test package builds" in row["job_name"] and row["job_name"].endswith("shard 5/5") for row in rows))
             self.assertFalse(any(row["job_name"].endswith("/3") for row in rows))
 
     def test_paginated_job_links_keep_attempt_and_duration_without_slurp_jq_conflict(self):

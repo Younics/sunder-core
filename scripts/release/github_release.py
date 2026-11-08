@@ -237,17 +237,18 @@ def verify_evidence(files, release_id, repository, tag, source, run_id=None):
     value = c.decode(c.read(files["release-provenance.json"]))
     invocation = value["invocation"]
     package_release = repository == c.REPOSITORY and tag.startswith(("nuget-", "npm-"))
-    expected_ref = "refs/heads/main" if package_release else "refs/tags/" + tag
+    main_workflow = repository == c.REPOSITORY and invocation["ref"] == "refs/heads/main"
+    expected_ref = "refs/heads/main" if package_release or main_workflow else "refs/tags/" + tag
     c.require(value["schemaVersion"] == 1 and value["buildType"] == "https://sunderapp.io/provenance/github-actions/v1"
               and invocation["repository"] == repository and invocation["releaseId"] == int(release_id)
               and invocation["sha"] == source and invocation["ref"] == expected_ref
-              and invocation["refName"] == ("main" if package_release else tag)
+              and invocation["refName"] == ("main" if package_release or main_workflow else tag)
               and (run_id is None or invocation["runId"] == run_id), "Provenance source/run/release mismatch")
     if repository == c.REPOSITORY:
         component = tag.split("/", 1)[0]
         package_release = component.startswith(("nuget-", "npm-"))
         c.require(value["sources"] == [{"name": "sunder-core", "sha": source}]
-                  and invocation["workflowRef"] == (f"{repository}/{c.SDK_WORKFLOW}@refs/heads/main" if package_release else
+                   and invocation["workflowRef"] == (f"{repository}/{c.SDK_WORKFLOW}@refs/heads/main" if package_release or main_workflow else
                       f"{repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{tag}"),
                   "Provenance workflow/material mismatch")
     c.number(invocation["runId"]); c.number(invocation["runAttempt"])
@@ -271,18 +272,16 @@ def verify_evidence(files, release_id, repository, tag, source, run_id=None):
 def core_stage(store, directory, component, channel, finalize=False):
     c.require(store.repository == c.REPOSITORY, "Core publication requires the Core repository")
     c.require(component in ("app", "cli", "host"), "SDK packages release individually from the main workflow")
-    source = c.sha(os.environ["GITHUB_SHA"], 40)
-    c.require(os.environ["GITHUB_EVENT_NAME"] in (("push", "workflow_dispatch") if component == "app" else ("push",))
-              and os.environ["GITHUB_REF"] == "refs/tags/" + store.tag,
-              "Component publication requires its tag workflow")
-    c.require(os.environ["GITHUB_WORKFLOW_REF"] == f"{store.repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{store.tag}", "Unexpected component workflow")
-    c.require(os.environ["GITHUB_WORKFLOW_SHA"] == source, "Workflow/source mismatch")
-    if component == "app":
-        import app_release
-        app_release.tag_guard(store.tag)
-    subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag], check=True, cwd=ROOT)
+    import native_release
+    files = local_files(directory)
+    c.require(native_release.PLAN in files, "Native publication requires its reserved release plan")
+    plan = native_release.read_plan(files[native_release.PLAN])
+    c.require(plan["component"] == component and plan["tag"] == store.tag, "Native reservation differs from publication")
+    native_release.guard(plan, retained=finalize)
+    source = plan["artifactSourceCommit"]
+    subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag, source], check=True, cwd=ROOT)
     version = store.tag.split("/v", 1)[1]
-    expected = core_names(component, version, channel)
+    expected = core_names(component, version, channel) | {native_release.PLAN}
     release = store.resolve() if finalize else store.create(source, f"Sunder {component.title()} {version}")
     c.require(release is not None and release["target_commitish"] == source
               and release["prerelease"] is ("-" in version), "Missing source-bound release")
@@ -312,8 +311,10 @@ def core_stage(store, directory, component, channel, finalize=False):
                         output.write(c.read(Path(temporary) / name))
         files = local_files(directory)
     c.require(set(files) == expected | EVIDENCE, "Incomplete component/evidence inventory")
-    evidence = verify_evidence(files, release_id, store.repository, store.tag, source, os.environ["GITHUB_RUN_ID"])
-    c.require(int(evidence["invocation"]["runAttempt"]) <= int(os.environ["GITHUB_RUN_ATTEMPT"]), "Future publication attempt")
+    evidence = verify_evidence(files, release_id, store.repository, store.tag, source, plan["runId"])
+    c.require(evidence["invocation"]["workflowRef"] == native_release.WORKFLOW_REF, "Native publication requires its protected-main evidence")
+    c.require(plan["runId"] != os.environ["GITHUB_RUN_ID"] or int(evidence["invocation"]["runAttempt"]) <= int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "Future publication attempt")
     if component == "app":
         for rid in RIDS:
             manifest = c.decode(c.read(files[f"releases.app-{rid}-{channel}.json"]))
@@ -324,7 +325,7 @@ def core_stage(store, directory, component, channel, finalize=False):
         store.upload(release_id, list(files.values()))
     verified = store.verify(release_id, files)
     if finalize and release["draft"]:
-        subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag], check=True, cwd=ROOT)
+        subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag, source], check=True, cwd=ROOT)
         before = store.get(release_id, draft=True)
         c.require(before["assets"] == verified["assets"] and before["target_commitish"] == source
                   and before["prerelease"] is ("-" in version), "Release changed after byte verification")
@@ -333,7 +334,7 @@ def core_stage(store, directory, component, channel, finalize=False):
             # Maintenance-major releases must not replace a newer stable App as
             # GitHub's latest release. The App promotion job serializes this check.
             import sdk_release
-            latest = app_release.history(version, sdk_release.github_releases(store))["make_latest"]
+            latest = native_release.history("app", version, sdk_release.github_releases(store))["make_latest"]
         try:
             store.api("releases/" + str(release_id), "PATCH", {"draft": False, "make_latest": str(latest).lower()})
         except (ValueError, subprocess.TimeoutExpired):
@@ -385,10 +386,13 @@ def main():
     elif args.action == "verify":
         files = local_files(args.directory)
         if store.repository == c.REPOSITORY:
-            source = c.sha(os.environ["GITHUB_SHA"], 40)
+            import native_release
+            plan = native_release.read_plan(files[native_release.PLAN])
+            native_release.guard(plan, retained=True)
+            source = plan["artifactSourceCommit"]
             component, version = store.tag.split("/v", 1)
-            c.require(set(files) == core_names(component, version, args.channel) | EVIDENCE, "Incomplete component inventory")
-            verify_evidence(files, args.release_id, store.repository, store.tag, source, os.environ["GITHUB_RUN_ID"])
+            c.require(plan["tag"] == store.tag and set(files) == core_names(component, version, args.channel) | EVIDENCE | {native_release.PLAN}, "Incomplete component inventory")
+            verify_evidence(files, args.release_id, store.repository, store.tag, source, plan["runId"])
             value = store.get(args.release_id)
             c.require(value["target_commitish"] == source and value["prerelease"] is ("-" in version), "Release source/version changed")
         store.verify(args.release_id, files)

@@ -172,8 +172,8 @@ export function auditCoreTestReports(reports, model = loadCoreTestModel(), requi
     item.framework === "dotnet" && item.externalEnvironment === undefined), results));
   check(() => requireFixtureDeclarations(model.declarations.filter((item) => ["python", "shell"].includes(item.framework)), results));
   check(() => requireNodeSources(model.declarations, results));
-  const components = model.policy.scopes?.[model.scope ?? "all"];
-  const scenarios = components === undefined ? [] : ["portable", "official"].flatMap(profile => ciScenarios(components, profile));
+  const components = model.componentScopes?.flatMap(scope => model.policy.scopes[scope]) ?? model.policy.scopes?.[model.scope ?? "all"];
+  const scenarios = [...(model.selectedScenarios ?? []), ...(components === undefined ? [] : ["portable", "official"].flatMap(profile => ciScenarios(components, profile)))];
   check(() => requireSelectedTests([...requiredTests, ...scenarios.flatMap(name => selectScenario(name, model.declarations).tests.map(test => test.id))], model, results));
   return counts(results);
 }
@@ -388,16 +388,27 @@ export function materializeExpectedSkip(result, policy, operatingSystem) {
 
 function main() {
   const arguments_ = process.argv.slice(2);
+  const selectionIndex = arguments_.indexOf("--selection");
+  let selection;
+  if (selectionIndex >= 0) {
+    if (!arguments_[selectionIndex + 1] || arguments_[selectionIndex + 1].startsWith("--")
+        || arguments_.indexOf("--selection", selectionIndex + 1) >= 0 || arguments_.includes("--scope")) {
+      throw new Error("Use one --selection file or --scope.");
+    }
+    selection = JSON.parse(readFileSync(arguments_.splice(selectionIndex, 2)[1], "utf8"));
+  }
   const scopeIndex = arguments_.indexOf("--scope");
   if (scopeIndex >= 0 && (!arguments_[scopeIndex + 1] || arguments_[scopeIndex + 1].startsWith("--")
       || arguments_.indexOf("--scope", scopeIndex + 1) >= 0)) {
     throw new Error("--scope must be specified once with one value.");
   }
   const scope = scopeIndex < 0 ? "all" : arguments_.splice(scopeIndex, 2)[1];
-  const model = loadCoreTestModel(repositoryRoot, undefined, scope);
+  const full = loadCoreTestModel(repositoryRoot, undefined, scope);
+  const model = selection === undefined ? full : selectedModel(full, selection);
   const aggregateIndex = arguments_.indexOf("--aggregate");
   const aggregate = aggregateIndex >= 0;
   if (aggregate) arguments_.splice(aggregateIndex, 1);
+  if (selection !== undefined && !aggregate) throw new Error("A workflow selection requires --aggregate.");
   const allowPartialIndex = arguments_.indexOf("--allow-partial");
   const allowPartial = allowPartialIndex >= 0;
   if (allowPartial) arguments_.splice(allowPartialIndex, 1);
@@ -439,14 +450,19 @@ export function summarizeResults(directory, model, options = {}) {
   if (options.aggregate && process.env.SUNDER_CI_JOB_RESULTS !== undefined) {
     try {
       const results = JSON.parse(process.env.SUNDER_CI_JOB_RESULTS);
-      const owners = model.policy.scopes[model.scope];
+      const owners = model.componentScopes?.flatMap(scope => model.policy.scopes[scope]) ?? model.policy.scopes[model.scope];
       const nativeRequired = owners.some(owner => ["dotnet", "host", "app"].includes(owner));
       const optional = new Set([
         ...(!nativeRequired ? ["native"] : []),
         ...(!["dotnet", "host", "npm"].every(owner => owners.includes(owner)) ? ["cross-language"] : []),
         ...(!(options.requiredTests ?? []).some(id => id.includes("GeneratedTemplateRuntimeHostSmokeTests")) ? ["templates"] : []),
       ]);
-      for (const name of options.componentLayout ? ["preflight", "components", "cross-language", "templates", "native"] : ["build-test-pack", "native"]) {
+      const required = model.componentScopes === undefined
+        ? options.componentLayout ? ["preflight", "components", "cross-language", "templates", "native"] : ["build-test-pack", "native"]
+        : ["preflight", "components", ...(nativeRequired ? ["platform"] : []),
+          ...(owners.some(owner => ["host", "app"].includes(owner)) ? ["native-consumers"] : []),
+          ...(model.selectedScenarios.length ? ["package-consumers"] : [])];
+      for (const name of required) {
         const result = results[name]?.result ?? "missing";
         jobs.push({ job: name, result });
         if (result !== "success" && !(optional.has(name) && result === "skipped")) {
@@ -483,7 +499,7 @@ export function summarizeResults(directory, model, options = {}) {
   const native = options.aggregate ? (options.componentLayout ? componentModels(model) : [model]).flatMap(component =>
     auditNativeEvidence(directory, component, platforms, issues, reports, { ...options, bundle: model.scope })) : [];
   const components = options.componentLayout ? auditComponentStages(directory, model, reports, issues) : [];
-  if (options.componentLayout && model.policy.scopes[model.scope].includes("app")) {
+  if (options.componentLayout && (model.componentScopes ?? model.policy.scopes[model.scope]).includes("app")) {
     for (const { rid } of platforms.filter(row => row.packagingSmoke)) {
       const receipt = resolve(directory, `sunder-results-${model.scope}-packaging-app-${rid}`, "packaging.process.json");
       if (!existsSync(receipt)) issues.push(`Missing required App packaging result: ${rid}.`);
@@ -509,8 +525,30 @@ export function summarizeResults(directory, model, options = {}) {
   return summary;
 }
 
+export function selectedModel(model, selection) {
+  const allowed = ["npm", "dotnet", "host", "cli", "app", "repository"];
+  if (selection.schemaVersion !== 1 || Object.keys(selection).sort().join(",") !== "candidatePackages,components,scenarios,schemaVersion"
+      || !Array.isArray(selection.components) || selection.components.length === 0
+      || new Set(selection.components).size !== selection.components.length || selection.components.some(scope => !allowed.includes(scope))
+      || !Array.isArray(selection.scenarios) || new Set(selection.scenarios).size !== selection.scenarios.length
+      || selection.scenarios.some(name => !["interop", "generated-templates", "cli-clients"].includes(name))
+      || typeof selection.candidatePackages !== "boolean" || selection.candidatePackages !== selection.scenarios.includes("generated-templates")) {
+    throw new Error("Invalid workflow validation selection.");
+  }
+  const owners = new Set(selection.components.flatMap(scope => model.policy.scopes[scope]));
+  const scenarios = selection.scenarios.flatMap(name => selectScenario(name, model.declarations).tests);
+  const scenarioIds = new Set(scenarios.map(test => test.id));
+  const declarations = model.declarations.filter(test => owners.has(test.component) || scenarioIds.has(test.id));
+  // Scenario consumers may belong to a component whose entire suite is not selected.
+  // They contribute their exact required declarations, not that component's other jobs.
+  const scopes = { ...model.policy.scopes, selected: [...new Set(declarations.map(test => test.component))] };
+  return { ...model, scope: "selected", declarations, policy: { ...model.policy, scopes },
+    componentScopes: selection.components, selectedScenarios: selection.scenarios };
+}
+
 function componentModels(model) {
-  return model.policy.scopes[model.scope].map(owner => scopeModel(model, owner === "ci" ? "repository" : owner));
+  const scopes = model.componentScopes ?? model.policy.scopes[model.scope].map(owner => owner === "ci" ? "repository" : owner);
+  return scopes.map(scope => scopeModel(model, scope));
 }
 
 function auditComponentStages(directory, model, reports, issues) {
@@ -521,7 +559,7 @@ function auditComponentStages(directory, model, reports, issues) {
     const value = JSON.parse(readFileSync(jobsPath, "utf8"));
     if (Array.isArray(value)) hosted = value.filter(job => typeof job?.name === "string" && typeof job.html_url === "string");
   } catch { /* An unavailable Actions API must not hide the actual audit. */ }
-  const labels = { npm: "npm libraries", dotnet: ".NET libraries", repository: "Repository", app: "App", host: "Host", cli: "CLI" };
+  const labels = { npm: "Node packages", dotnet: ".NET packages", repository: "Release tooling", app: "App", host: "Host", cli: "CLI" };
   return componentModels(model).map(component => {
     const prefix = `sunder-results-${model.scope}-component-${component.scope}/`;
     const path = resolve(directory, prefix, "steps.json");

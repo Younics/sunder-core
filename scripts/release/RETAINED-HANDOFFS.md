@@ -46,6 +46,15 @@ rewritten into a publication or compatibility claim.
 
 ## Native and compatibility scope
 
+`select_releases.py` selects independent versions and their existing validation
+owners before toolchain setup. `native_release.py` reserves each App/Host/CLI tag
+and draft after validation, retaining `native-release-plan.json` before packaging.
+The plan pins component, version, source, protected-main workflow and original run.
+Same-run retries reuse completed platform artifacts. Incomplete reservations require
+the original run; complete drafts can recover from a later descendant on protected
+`main`, with unchanged authored versions and verified original bytes and evidence.
+Native staging/finalization uses the same immutable transport as developer packages.
+
 App/Host/CLI native checks and Agent's six-RID role capture/no-rebuild fan-in retain
 their owning gates. Official Microsoft .NET and Node archives flow through Host,
 not Sunder release assets; see [official runtime handoffs](../../docs/OFFICIAL-RUNTIME-HANDOFF.md).

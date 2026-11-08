@@ -49,28 +49,25 @@ artifacts and `rehearsal.json`; publication uses the hosted selected-release flo
 
 ## Hosted navigation
 
-- **Sunder Core — CI** runs the complete graph for PRs, merge queues, scheduled
-  checks and manual validation.
-- **Sunder Core — Main CI and Releases** is the main-push entry point. It calls
-  the same complete graph, then stages and publishes the tested selected packages.
-  Its workflow path remains `sunder-sdk-release.yml`, preserving publication identity.
-- App selection independently compares its authored project version with published
-  `app/v*` releases and starts/resumes the exact-tag App workflow. SDK recovery or
-  an empty SDK selection does not suppress it. The main overview links to the App
-  run and distinguishes launch from completed publication.
-- App, Host and CLI retain independent tag releases with named validation,
-  platform packaging/signing, and publication jobs. App tags are created and
-  explicitly dispatched by main; manual tag pushes also remain supported.
+- **Release** at `sunder-sdk-release.yml` is the single entry point, preserving
+  publisher identity. Main pushes and manual release runs select independent SDK,
+  App, Host and CLI versions before installing toolchains.
+- PR/merge-queue validation compares authored versions with the base commit and
+  uses read-only jobs. Weekly schedules validate `all`; manual `mode: validate`
+  accepts a scope. The policy maps releases to existing components and consumers.
+- No new versions means no component tests, builds, packaging, signing or publication.
+  Tooling/configuration changes can select repository checks independently.
+- Native releases reserve tags, drafts and their original run before packaging.
+  Completed platform uploads are reused on retry; complete drafts recover using
+  original bytes. SDK and native publication finish in this same run.
 
-Reusable **child jobs** carry `component — task — platform — partition` names.
-Examples are `Host — Process tests — linux-arm64` and
-`.NET libraries — Package.Build tests — win-x64 — 2/3`. Partition totals come
-from the test policy. Packaging labels distinguish signed Windows installers,
-signed/notarized macOS DMGs and unsigned Linux AppImages. Component names mention
-candidate packing only when release candidates are requested.
+Jobs use concise names such as `Test Host · Linux ARM64`,
+`Test package builds · Windows x64 · shard 2/3` and `Package App · macOS ARM64`.
+Package.Build retains three round-robin method shards per RID, selected only with
+.NET package validation. Partition totals come from the test policy.
 
-The preflight summary lists selected tasks and explains native matrix counts and
-the six-runner capacity limit. Each producer summarizes its execution/results and
+The selection summary lists versions, decisions and required owners/consumers.
+Each producer summarizes its execution/results and
 links its diagnostic artifacts. Final overviews include job links and durations
 from the current run attempt. Pagination is decoded separately from `gh api`;
 an unavailable navigation API cannot hide or replace required test results.
@@ -88,28 +85,30 @@ python3 -B scripts/ci/core_ci.py build --scope cli
 python3 -B scripts/ci/core_ci.py test --scope cli
 ```
 
-**Cross-language compatibility — .NET ↔ Node** prepares an isolated producer and
+**Test .NET ↔ Node** prepares an isolated producer and
 tests archive validation, RPC in both directions and shared output locking.
-**Package templates — Generate, build, package, run** consumes the exact candidate
+**Test package consumers** consumes the exact candidate
 archives from npm/.NET producers, assembles the existing mixed-version feed,
 generates projects and launches them through Host. Successful consumer validation
 hands the same archives to staging; publication and recovery use retained bytes.
-No-new-version runs still validate source; npm-only and NuGet-only selections use
-published dependencies for the other ecosystem.
+npm-only and NuGet-only selections use published dependencies for the other ecosystem.
+**Test CLI clients** runs exact Host/Runtime client contracts when Host's full suite
+is not selected.
 
 Documentation preflight renders the real committed README/template inventory
 before builds. Inline/fenced code is excluded from relative-link parsing; actual
 repository links remain source-commit bound. General link checking uses
 `check-markdown-links.py --tracked` so retained producer workspaces are not source inputs.
 
-The final **Results — Required validation gate** audits all owning reports using
-`--aggregate --component-layout`. Its overview links to component jobs and shows
+**Verify tests** audits selected owning reports using
+`--selection artifacts/validation-selection.json --aggregate --component-layout`.
+Its overview links to component jobs and shows
 stage outcomes, counts, native completeness and missing evidence. Only the explicit
 `--github-summary` option writes hosted summaries, keeping reporter fault injection
-isolated. The SDK release overview separately shows selected versions and publish
-outcomes. Report names include both validation bundle and component, so App and Host
-validation can coexist in the same tag run. Required-check rules should target
-`Results — Required validation gate` (including the caller prefix when applicable).
+isolated. **Summary** records validation and publication outcomes. Report names
+include the selection, component and partition. Required-check rules should target
+`Select checks` and `Verify tests` for PR/merge-queue validation; `Verify tests` is
+intentionally skipped when selection finds no checks.
 
 High-level commands keep prepared environment values in their process and clean
 temporary template/runtime workspaces on success or failure. Low-level `templates`

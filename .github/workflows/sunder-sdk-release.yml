@@ -1,92 +1,518 @@
-name: Sunder Core — Main CI and Releases
+name: Release
 
 on:
   push:
     branches: [main]
+  pull_request:
+  merge_group:
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Release newer versions or validate a scope
+        type: choice
+        default: release
+        options: [release, validate]
+      scope:
+        description: Scope for manual validation
+        type: choice
+        default: all
+        options: [all, sdk, npm, dotnet, app, host, cli, repository]
 
 permissions: {}
 concurrency:
-  group: sunder-core-package-release
-  cancel-in-progress: false
+  group: ${{ (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'release')) && 'release-main' || format('validation-{0}', github.event.pull_request.number || github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   select:
-    name: SDK — Select independent package versions
-    if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main'
+    name: Select releases
+    if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.mode == 'release'))
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
-      # Draft discovery requires push access; evaluation receives no token.
-      contents: write
+      contents: write # Reading private release drafts requires push access.
     outputs:
+      work: ${{ steps.selection.outputs.work }}
+      components: ${{ steps.selection.outputs.components }}
+      platform: ${{ steps.selection.outputs.platform }}
+      consumers: ${{ steps.selection.outputs.consumers }}
+      scenarios: ${{ steps.selection.outputs.scenarios }}
+      platform_tests: ${{ steps.selection.outputs.platform_tests }}
+      consumer_tests: ${{ steps.selection.outputs.consumer_tests }}
+      scenario_tests: ${{ steps.selection.outputs.scenario_tests }}
+      candidate_packages: ${{ steps.selection.outputs.candidate_packages }}
+      compatibility_base: ${{ steps.selection.outputs.compatibility_base }}
       selected_count: ${{ steps.selection.outputs.selected_count }}
       nuget_count: ${{ steps.selection.outputs.nuget_count }}
       npm_count: ${{ steps.selection.outputs.npm_count }}
       recover: ${{ steps.selection.outputs.recover }}
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-          fetch-depth: 0 # Recovery validates the original artifact source's ancestry.
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          global-json-file: global.json
-      - name: Select only newer authored package versions
-        id: selection
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 -B scripts/release/sdk_release.py select
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: core-release-selection
-          path: artifacts/release-plan.json
-          if-no-files-found: error
-          retention-days: 90
-
-  select-app:
-    name: App — Compare authored and published versions
-    if: github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write # Draft discovery; project evaluation receives no token.
-      actions: read
-    outputs:
-      version: ${{ steps.selection.outputs.version }}
-      action: ${{ steps.selection.outputs.action }}
-      reason: ${{ steps.selection.outputs.reason }}
-      run_url: ${{ steps.selection.outputs.run_url }}
+      native_count: ${{ steps.selection.outputs.native_count }}
+      native_build_count: ${{ steps.selection.outputs.native_build_count }}
+      app_packages: ${{ steps.selection.outputs.app_packages }}
+      app_matrix: ${{ steps.selection.outputs.app_matrix }}
+      binary_packages: ${{ steps.selection.outputs.binary_packages }}
+      binary_matrix: ${{ steps.selection.outputs.binary_matrix }}
+      native_matrix: ${{ steps.selection.outputs.native_matrix }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
-        with:
-          global-json-file: global.json
-      - name: Select App independently of SDK publication and recovery
+      - name: Compare authored and published versions
         id: selection
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -B scripts/release/app_release.py select
+        run: python3 -B scripts/release/select_releases.py select
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: core-app-release-selection
-          path: artifacts/app-release-plan.json
+          name: core-release-selection
+          path: |
+            artifacts/release-plan.json
+            artifacts/native-release-selection.json
+            artifacts/validation-selection.json
           if-no-files-found: error
           retention-days: 90
 
-  release-app:
-    name: App ${{ needs.select-app.outputs.version }} — Start or resume tagged release
-    needs: select-app
-    if: needs.select-app.outputs.action == 'dispatch' || needs.select-app.outputs.action == 'rerun'
+  # Validation entry points execute source with a read-only token, including PRs
+  # originating in this repository. Only one selection job runs for an event.
+  select-checks:
+    name: Select checks
+    if: github.event_name != 'push' && !(github.event_name == 'workflow_dispatch' && inputs.mode == 'release' && github.repository == 'Younics/sunder-core' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      work: ${{ steps.selection.outputs.work }}
+      components: ${{ steps.selection.outputs.components }}
+      platform: ${{ steps.selection.outputs.platform }}
+      consumers: ${{ steps.selection.outputs.consumers }}
+      scenarios: ${{ steps.selection.outputs.scenarios }}
+      platform_tests: ${{ steps.selection.outputs.platform_tests }}
+      consumer_tests: ${{ steps.selection.outputs.consumer_tests }}
+      scenario_tests: ${{ steps.selection.outputs.scenario_tests }}
+      candidate_packages: ${{ steps.selection.outputs.candidate_packages }}
+      compatibility_base: ${{ steps.selection.outputs.compatibility_base }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Select version changes or requested validation
+        id: selection
+        env:
+          MODE: ${{ inputs.mode || 'validate' }}
+          SCOPE: ${{ inputs.scope || 'all' }}
+        run: python3 -B scripts/release/select_releases.py select --mode "$MODE" --scope "$SCOPE"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-release-selection
+          path: |
+            artifacts/release-plan.json
+            artifacts/native-release-selection.json
+            artifacts/validation-selection.json
+          if-no-files-found: error
+
+  preflight:
+    name: Check policies
+    needs: [select, select-checks]
+    if: ${{ !cancelled() && (needs.select.result == 'success' || needs.select-checks.result == 'success') && (needs.select.outputs.work == 'true' || needs.select-checks.outputs.work == 'true') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      components: ${{ needs.select.outputs.components || needs.select-checks.outputs.components }}
+      platform: ${{ needs.select.outputs.platform || needs.select-checks.outputs.platform }}
+      consumers: ${{ needs.select.outputs.consumers || needs.select-checks.outputs.consumers }}
+      scenarios: ${{ needs.select.outputs.scenarios || needs.select-checks.outputs.scenarios }}
+      platform_tests: ${{ needs.select.outputs.platform_tests || needs.select-checks.outputs.platform_tests }}
+      consumer_tests: ${{ needs.select.outputs.consumer_tests || needs.select-checks.outputs.consumer_tests }}
+      scenario_tests: ${{ needs.select.outputs.scenario_tests || needs.select-checks.outputs.scenario_tests }}
+      candidate_packages: ${{ needs.select.outputs.candidate_packages || needs.select-checks.outputs.candidate_packages }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          dotnet: 'false'
+      - name: Check test ownership, toolchains and documentation
+        run: |
+          node scripts/test-oracles/check-core-test-policy.mjs
+          node scripts/toolchains.mjs
+          node scripts/release/check-sdk-version.mjs
+          python3 -B scripts/test/check-markdown-links.py --tracked .
+          python3 -B scripts/release/sdk_release_documentation.py check
+      - name: Check supported release history
+        env:
+          COMPATIBILITY_BASE: ${{ needs.select.outputs.compatibility_base || needs.select-checks.outputs.compatibility_base }}
+        run: |
+          base="$COMPATIBILITY_BASE"
+          if [[ -z "$base" ]]; then base="$(git rev-parse HEAD^)"; fi
+          node scripts/compatibility/check-supported-releases.mjs --base-ref "$base"
+
+  components:
+    name: ${{ matrix.job_name }}
+    needs: preflight
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.components) }}
+    env:
+      CI_COMPONENT: ${{ matrix.scope }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Download candidate selection
+        if: needs.preflight.outputs.candidate_packages == 'true' && (matrix.scope == 'npm' || matrix.scope == 'dotnet')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Restore npm dependencies
+        id: npm_restore
+        if: matrix.scope == 'npm' || matrix.scope == 'dotnet' || matrix.scope == 'repository'
+        run: npm ci --prefix languages/typescript/node
+      - name: Build and typecheck npm libraries
+        id: npm_build
+        if: matrix.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action build --work "$RUNNER_TEMP/npm-tests"
+      - name: Test Node SDK
+        id: npm_sdk_test
+        if: matrix.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @younics/sunder-sdk --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Test Node package tooling
+        id: npm_tool_test
+        if: matrix.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @younics/sunder-package-tool --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Test Node project creation
+        id: npm_creator_test
+        if: matrix.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action test --project @younics/create-sunder-package --work "$RUNNER_TEMP/npm-tests" --results-directory artifacts/test-results/npm/node
+      - name: Typecheck generated Node templates
+        id: npm_templates_test
+        if: matrix.scope == 'npm'
+        run: node scripts/test-oracles/run-node-test-matrix-with-results.mjs --scope npm --action templates --work "$RUNNER_TEMP/npm-tests"
+      - name: Audit Node test results
+        id: npm_evidence_test
+        if: always() && matrix.scope == 'npm' && steps.npm_build.outcome == 'success'
+        run: node scripts/test-oracles/summarize-core-test-results.mjs artifacts/test-results/npm/node --scope npm --allow-partial --require-primary-lane node
+      - name: Build Node inputs for .NET generators
+        id: node_inputs_build
+        if: matrix.scope == 'dotnet'
+        run: python3 -B scripts/ci/core_ci.py node-inputs --no-restore
+      - name: Restore .NET projects
+        id: dotnet_restore
+        if: matrix.scope != 'npm' && matrix.scope != 'repository'
+        run: python3 -B scripts/ci/core_ci.py restore --scope "$CI_COMPONENT"
+      - name: Build .NET projects
+        id: dotnet_build
+        if: matrix.scope != 'npm' && matrix.scope != 'repository'
+        run: python3 -B scripts/ci/core_ci.py build --scope "$CI_COMPONENT"
+      - name: Test .NET projects
+        id: dotnet_test
+        if: matrix.scope != 'npm' && matrix.scope != 'repository'
+        run: python3 -B scripts/ci/core_ci.py test --scope "$CI_COMPONENT"
+      - name: Test release and packaging scripts
+        id: fixtures_test
+        if: matrix.scope == 'repository' || matrix.scope == 'app'
+        run: python3 -B scripts/ci/core_ci.py fixtures --scope "$CI_COMPONENT"
+      - name: Test repository tooling
+        id: tooling_test
+        if: matrix.scope == 'repository'
+        run: python3 -B scripts/ci/core_ci.py script-tests --scope "$CI_COMPONENT"
+      - name: Build npm distribution inputs after artifact tests
+        id: npm_distribution_build
+        if: needs.preflight.outputs.candidate_packages == 'true' && matrix.scope == 'npm'
+        run: npm run build --prefix languages/typescript/node
+      - name: Pack and verify selected package candidates
+        id: pack
+        if: needs.preflight.outputs.candidate_packages == 'true' && (matrix.scope == 'npm' || matrix.scope == 'dotnet')
+        run: python3 -B scripts/ci/core_ci.py pack --scope "$CI_COMPONENT"
+      - name: Retain candidate packages
+        if: steps.pack.outputs.package_count != '' && steps.pack.outputs.package_count != '0'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-candidate-${{ matrix.scope }}
+          path: artifacts/packages/*
+          if-no-files-found: error
+      - name: Record stage outcomes
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/core_ci.py step-results --scope "$CI_COMPONENT"
+      - name: Retain component reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-selected-component-${{ matrix.scope }}
+          path: artifacts/test-results/${{ matrix.scope }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize component results
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-selected-component-${{ matrix.scope }}
+        run: python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
+
+  platform:
+    name: ${{ matrix.job_name }}
+    needs: [preflight, components]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.components.result == 'success' && needs.preflight.outputs.platform_tests == 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.preflight.outputs.platform) }}
+    env:
+      CI_COMPONENT: ${{ matrix.scope }}
+      NATIVE_PARTITION: ${{ matrix.partition }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          dotnet: 'false'
+      - name: Verify owned test process cleanup on the native OS
+        id: process_preflight
+        env:
+          SUNDER_TEST_PROCESS_DIAGNOSTICS_DIRECTORY: ${{ github.workspace }}/artifacts/process-preflight
+        run: >-
+          node scripts/test-oracles/run-node-tests-with-results.mjs --results-directory artifacts/process-preflight
+          node-process-preflight scripts/test-oracles/owned-test-process.test.mjs
+      - name: Retain process preflight diagnostics
+        if: always() && steps.process_preflight.outcome != 'skipped' && steps.process_preflight.outcome != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-process-preflight-${{ matrix.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
+          path: artifacts/process-preflight
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          global-json-file: global.json
+      - name: Build and test selected native component
+        id: platform_tests
+        shell: bash
+        run: python3 -B scripts/ci/core_ci.py platform --scope "$CI_COMPONENT" --partition "$NATIVE_PARTITION"
+      - name: Retain platform test results
+        if: always() && steps.platform_tests.outcome != 'skipped' && steps.platform_tests.outcome != ''
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-selected-platform-${{ matrix.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
+          path: artifacts/test-results/${{ matrix.scope }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize native execution
+        if: always()
+        shell: bash
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-selected-platform-${{ matrix.scope }}-${{ matrix.rid }}${{ matrix.artifact_suffix }}
+        run: python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
+
+  native-consumers:
+    name: ${{ matrix.job_name }}
+    needs: [preflight, platform]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.platform.result == 'success' && needs.preflight.outputs.consumer_tests == 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.preflight.outputs.consumers) }}
+    env:
+      CI_COMPONENT: ${{ matrix.scope }}
+      RID: ${{ matrix.rid }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          node: ${{ matrix.task == 'official' && 'true' || 'false' }}
+          packaging: ${{ matrix.task == 'packaging' && 'true' || 'false' }}
+      - name: Install Linux packaging prerequisites
+        if: matrix.task == 'packaging' && runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes squashfs-tools
+      - name: Install Velopack CLI
+        if: matrix.task == 'packaging' && runner.os == 'Linux'
+        shell: pwsh
+        run: ./scripts/release/install-velopack.ps1
+      - name: Test official runtimes
+        id: official_tests
+        if: matrix.task == 'official'
+        shell: bash
+        run: python3 -B scripts/ci/core_ci.py official --scope "$CI_COMPONENT" --rid "$RID"
+      - name: Exercise unsigned native packaging
+        id: packaging
+        if: matrix.task == 'packaging'
+        shell: bash
+        run: python3 -B scripts/ci/core_ci.py packaging --scope app --rid "$RID"
+      - name: Retain native consumer results
+        if: always() && (steps.official_tests.outcome == 'success' || steps.official_tests.outcome == 'failure' || steps.official_tests.outcome == 'cancelled' || steps.packaging.outcome == 'success' || steps.packaging.outcome == 'failure' || steps.packaging.outcome == 'cancelled')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-selected-${{ matrix.task }}-${{ matrix.scope }}-${{ matrix.rid }}
+          path: artifacts/test-results/${{ matrix.scope }}
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize native consumers
+        if: always()
+        shell: bash
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-selected-${{ matrix.task }}-${{ matrix.scope }}-${{ matrix.rid }}
+        run: python3 -B scripts/ci/report.py job --directory "artifacts/test-results/$CI_COMPONENT"
+
+  package-consumers:
+    name: ${{ matrix.job_name }}
+    needs: [preflight, components]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.components.result == 'success' && needs.preflight.outputs.scenario_tests == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.preflight.outputs.scenarios) }}
+    env:
+      SCENARIO: ${{ matrix.scenario }}
+      CI_COMPONENT: ${{ matrix.scenario }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - name: Prepare Node producer inputs
+        if: matrix.scenario != 'cli-clients'
+        run: python3 -B scripts/ci/core_ci.py node-inputs
+      - name: Restore consumer projects
+        run: python3 -B scripts/ci/core_ci.py restore --scope sdk --scenario "$SCENARIO"
+      - name: Build consumer projects
+        run: python3 -B scripts/ci/core_ci.py build --scope sdk --scenario "$SCENARIO"
+      - name: Download candidate selection
+        if: matrix.scenario == 'generated-templates'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Download candidate archives
+        if: matrix.scenario == 'generated-templates'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sunder-candidate-*
+          merge-multiple: true
+          path: artifacts/packages
+      - name: Test .NET and Node interoperability
+        id: interop_test
+        if: matrix.scenario == 'interop'
+        run: python3 -B scripts/ci/core_ci.py interop --scope sdk
+      - name: Test candidate templates
+        id: templates_test
+        if: matrix.scenario == 'generated-templates'
+        run: python3 -B scripts/ci/core_ci.py template-consumers --scope sdk
+      - name: Test CLI client contracts
+        id: clients_test
+        if: matrix.scenario == 'cli-clients'
+        run: python3 -B scripts/ci/core_ci.py scenario --scope sdk --scenario cli-clients
+      - name: Retain tested candidate archives
+        if: matrix.scenario == 'generated-templates'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-tested-sdk
+          path: artifacts/packages/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Retain consumer reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-results-selected-consumers-${{ matrix.scenario }}
+          path: artifacts/test-results/sdk
+          if-no-files-found: error
+          retention-days: 14
+      - name: Summarize package consumers
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-results-selected-consumers-${{ matrix.scenario }}
+        run: python3 -B scripts/ci/report.py job --directory artifacts/test-results/sdk
+
+  validation:
+    name: Verify tests
+    if: always() && (needs.select.outputs.work == 'true' || needs.select-checks.outputs.work == 'true')
+    needs: [select, select-checks, preflight, components, platform, native-consumers, package-consumers]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          dotnet: 'false'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - name: Download selected test reports
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: sunder-results-selected-*
+          path: artifacts/ci-results/selected
+      - name: Link test jobs
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/ci/report.py jobs --output artifacts/ci-results/selected/jobs.json
+      - name: Audit selected jobs and exact test coverage
+        if: always()
+        env:
+          SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/test-oracles/summarize-core-test-results.mjs artifacts/ci-results/selected --selection artifacts/validation-selection.json --aggregate --component-layout --github-summary
+      - name: Retain test summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sunder-test-summary
+          path: artifacts/ci-results/selected/core-test-summary.json
+          if-no-files-found: error
+
+  prepare-native:
+    name: Prepare native releases
+    needs: [select, validation]
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.native_build_count > 0 && needs.validation.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write
-      actions: write
-    outputs:
-      reason: ${{ steps.launch.outputs.reason }}
-      run_url: ${{ steps.launch.outputs.run_url }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -94,30 +520,286 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          name: core-app-release-selection
+          name: core-release-selection
           path: artifacts
-      - name: Dispatch the exact App tag or resume its original failed run
-        id: launch
+      - name: Reserve immutable tags and original run identities
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 -B scripts/release/app_release.py launch
+        run: python3 -B scripts/release/native_release.py reserve
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: core-native-reservations
+          path: artifacts/native-reservations/
+          if-no-files-found: error
+          retention-days: 90
 
-  validation:
-    name: Validation
-    needs: select
-    if: needs.select.outputs.recover != 'true'
-    uses: ./.github/workflows/sunder-ci.yml
+  package-native:
+    name: ${{ matrix.job_name }}
+    needs: [select, prepare-native]
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.prepare-native.result == 'success' && needs.select.outputs.binary_packages == 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: read
       actions: read
-    with:
-      scope: all
-      release-packages: ${{ needs.select.outputs.selected_count != '0' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.select.outputs.binary_matrix) }}
+    env:
+      COMPONENT: ${{ matrix.component }}
+      VERSION: ${{ matrix.version }}
+      RID: ${{ matrix.rid }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-native-reservations
+          path: artifacts/native-reservations
+      - name: Reuse verified platform artifacts on retry
+        id: retained
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/native_release.py retained "$COMPONENT" --rid "$RID"
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        if: steps.retained.outputs.reuse != 'true'
+        with:
+          global-json-file: global.json
+      - name: Verify evaluated native version
+        if: steps.retained.outputs.reuse != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/native_release.py check "$COMPONENT"
+      - name: Package and smoke the native executable
+        id: package
+        if: steps.retained.outputs.reuse != 'true'
+        shell: pwsh
+        run: ./scripts/release/package-component.ps1 -Component $env:COMPONENT -Version $env:VERSION -Rid $env:RID
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.retained.outputs.reuse != 'true'
+        with:
+          name: ${{ matrix.component == 'cli' && 'sunder-cli' || 'sunder-runtime-host' }}-${{ matrix.rid }}
+          path: artifacts/release/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Summarize native packaging
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+        run: python3 -B scripts/ci/report.py job
+
+  package-app:
+    name: ${{ matrix.job_name }}
+    needs: [select, prepare-native, package-native]
+    if: ${{ !cancelled() && needs.select.outputs.app_packages == 'true' && needs.prepare-native.result == 'success' && (needs.package-native.result == 'success' || (needs.select.outputs.binary_packages == 'false' && needs.package-native.result == 'skipped')) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    environment: sunder-app-signing
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix: ${{ fromJSON(needs.select.outputs.app_matrix) }}
+    env:
+      RELEASE_REPO_URL: https://github.com/${{ github.repository }}
+      RELEASE_CHANNEL: ${{ matrix.channel }}
+      CI_JOB_NAME: ${{ matrix.job_name }}
+      VERSION: ${{ matrix.version }}
+      RUNTIME: ${{ matrix.rid }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-native-reservations
+          path: artifacts/native-reservations
+      - name: Reuse verified platform artifacts on retry
+        id: retained
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/native_release.py retained app --rid "$RUNTIME"
+      - uses: ./.github/actions/setup
+        if: steps.retained.outputs.reuse != 'true'
+        with:
+          node: 'false'
+          packaging: 'true'
+      - name: Verify evaluated App version
+        if: steps.retained.outputs.reuse != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/native_release.py check app
+      - name: Install Velopack CLI
+        if: steps.retained.outputs.reuse != 'true'
+        shell: pwsh
+        run: ./scripts/release/install-velopack.ps1
+      - name: Azure login for Windows signing
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'Windows'
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Configure Azure Trusted Signing
+        id: windows-signing
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ vars.AZURE_TRUSTED_SIGNING_ENDPOINT || secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME || secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME || secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME }}
+        run: ./scripts/release/configure-windows-signing.ps1
+      - name: Configure Apple signing and notarization
+        id: apple-signing
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_BUILD_CERTIFICATE_BASE64: ${{ secrets.APPLE_BUILD_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_KEYCHAIN_PASSWORD: ${{ secrets.APPLE_SIGNING_KEYCHAIN_PASSWORD }}
+          APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
+        run: bash scripts/release/configure-apple-signing.sh
+      - name: Package Sunder for Windows
+        id: windows_package
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_PUBLISHER_SUBJECT: ${{ vars.WINDOWS_PUBLISHER_SUBJECT || secrets.WINDOWS_PUBLISHER_SUBJECT }}
+          DLIB_PATH: ${{ steps.windows-signing.outputs.dlib_path }}
+          METADATA_PATH: ${{ steps.windows-signing.outputs.metadata_path }}
+        run: |
+          ./scripts/release/package-sunder.ps1 -Version $env:VERSION -Runtime $env:RUNTIME -Channel $env:RELEASE_CHANNEL `
+            -GitHubRepositoryUrl $env:RELEASE_REPO_URL -StrictRelease `
+            -WindowsSignParams "/fd SHA256 /td SHA256 /tr http://timestamp.acs.microsoft.com /dlib `"$env:DLIB_PATH`" /dmdf `"$env:METADATA_PATH`"" `
+            -WindowsPublisherSubject $env:WINDOWS_PUBLISHER_SUBJECT
+      - name: Package Sunder for Unix
+        id: unix_package
+        if: steps.retained.outputs.reuse != 'true' && runner.os != 'Windows'
+        shell: bash
+        env:
+          APPLE_SIGN_APP_IDENTITY: ${{ secrets.APPLE_SIGN_APP_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_NOTARY_PROFILE: ${{ steps.apple-signing.outputs.notary_profile }}
+          APPLE_KEYCHAIN_PATH: ${{ steps.apple-signing.outputs.keychain_path }}
+        run: |
+          arguments=(--version "$VERSION" --runtime "$RUNTIME" --channel "$RELEASE_CHANNEL" --github-repository-url "$RELEASE_REPO_URL" --strict-release)
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            arguments+=(--mac-sign-app-identity "$APPLE_SIGN_APP_IDENTITY" --mac-notary-profile "$APPLE_NOTARY_PROFILE" --mac-keychain "$APPLE_KEYCHAIN_PATH" --mac-team-id "$APPLE_TEAM_ID")
+          fi
+          bash scripts/release/package-sunder.sh "${arguments[@]}"
+      - name: Inspect the signed and notarized mounted DMG
+        id: dmg_inspection
+        if: steps.retained.outputs.reuse != 'true' && runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/release/macos/verify-sunder-dmg.sh "artifacts/velopack/$RELEASE_CHANNEL/$RUNTIME/Sunder-app-$RUNTIME-$RELEASE_CHANNEL.dmg" "$RUNTIME"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.retained.outputs.reuse != 'true'
+        with:
+          name: sunder-app-release-${{ matrix.rid }}
+          path: artifacts/velopack/${{ env.RELEASE_CHANNEL }}/${{ matrix.rid }}/*
+          if-no-files-found: error
+          retention-days: 90
+      - name: Clean up Apple signing keychain
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_KEYCHAIN_PATH: ${{ steps.apple-signing.outputs.keychain_path }}
+        run: |
+          if [[ -n "$APPLE_KEYCHAIN_PATH" && -f "$APPLE_KEYCHAIN_PATH" ]]; then security delete-keychain "$APPLE_KEYCHAIN_PATH"; fi
+      - name: Summarize App packaging
+        if: always()
+        env:
+          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
+          CI_REPORT_ARTIFACT: sunder-app-release-${{ matrix.rid }}
+        run: python3 -B scripts/ci/report.py job
+
+  publish-native:
+    name: Publish ${{ matrix.name }}
+    needs: [select, validation, prepare-native, package-native, package-app]
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.native_count > 0 && (needs.validation.result == 'success' || (needs.select.outputs.work == 'false' && needs.validation.result == 'skipped')) && (needs.select.outputs.native_build_count == '0' || (needs.prepare-native.result == 'success' && (needs.package-native.result == 'success' || (needs.select.outputs.binary_packages == 'false' && needs.package-native.result == 'skipped')) && (needs.package-app.result == 'success' || (needs.select.outputs.app_packages == 'false' && needs.package-app.result == 'skipped')))) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: sunder-github-release-promotion
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.select.outputs.native_matrix) }}
+    env:
+      COMPONENT: ${{ matrix.component }}
+      RELEASE_TAG: ${{ matrix.tag }}
+      RELEASE_CHANNEL: ${{ matrix.channel }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-release-selection
+          path: artifacts
+      - uses: ./.github/actions/setup
+        if: matrix.action == 'build'
+        with:
+          node: 'false'
+          packaging: ${{ matrix.component == 'app' && 'true' || 'false' }}
+      - name: Install the App feed tool
+        if: matrix.action == 'build' && matrix.component == 'app'
+        shell: pwsh
+        run: ./scripts/release/install-velopack.ps1
+      - name: Download verified platform artifacts
+        if: matrix.action == 'build'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: ${{ matrix.component == 'app' && 'sunder-app-release-*' || matrix.component == 'cli' && 'sunder-cli-*' || 'sunder-runtime-host-*' }}
+          path: artifacts/native-assets
+      - name: Download original native reservation
+        if: matrix.action == 'build'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: core-native-reservations
+          path: artifacts/native-reservations
+      - name: Include the source and run reservation
+        if: matrix.action == 'build'
+        run: cp "artifacts/native-reservations/$COMPONENT/native-release-plan.json" artifacts/native-assets/
+      - name: Generate Full-only App feeds
+        if: matrix.action == 'build' && matrix.component == 'app'
+        run: python3 -B scripts/release/generate-app-feeds.py artifacts/native-assets --channel "$RELEASE_CHANNEL"
+      - name: Stage verified native assets
+        if: matrix.action == 'build'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/github_release.py stage "$RELEASE_TAG" --directory artifacts/native-assets --channel "$RELEASE_CHANNEL"
+      - name: Recover retained native assets
+        if: matrix.action == 'recover'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/native_release.py download "$COMPONENT" --directory artifacts/native-assets
+      - name: Publish verified native release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/github_release.py finalize "$RELEASE_TAG" --directory artifacts/native-assets --channel "$RELEASE_CHANNEL"
 
   stage:
-    name: SDK — Retain tested packages or recover original archives
+    name: Retain tested packages
     needs: [select, validation]
-    if: always() && needs.select.result == 'success' && needs.select.outputs.selected_count != '0' && (needs.validation.result == 'success' || needs.select.outputs.recover == 'true')
+    if: ${{ !cancelled() && needs.select.result == 'success' && needs.select.outputs.selected_count > 0 && (needs.validation.result == 'success' || (needs.validation.result == 'skipped' && needs.select.outputs.work == 'false' && needs.select.outputs.recover == 'true')) }}
     runs-on: ubuntu-24.04
     environment: sunder-core-release
     permissions:
@@ -137,29 +819,21 @@ jobs:
         with:
           name: sunder-tested-sdk
           path: artifacts/packages
-      - name: Automatically tag and retain the tested archives
-        id: stage
+      - name: Tag and retain tested package archives
         if: needs.select.outputs.recover != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py stage --directory artifacts/retained-packages
-      - name: Recover staged archives without rebuilding
-        id: recover
+      - name: Recover original package archives
         if: needs.select.outputs.recover == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
-      - name: Summarize retained package staging
-        if: always()
-        env:
-          CI_JOB_NAME: SDK — Retain tested packages or recover original archives
-          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
-        run: python3 -B scripts/ci/report.py job
 
   publish-npm:
-    name: npm libraries — Publish missing versions
+    name: Publish npm
     needs: [select, stage]
-    if: always() && needs.stage.result == 'success' && needs.select.outputs.npm_count != '0'
+    if: ${{ !cancelled() && needs.stage.result == 'success' && needs.select.outputs.npm_count > 0 }}
     runs-on: ubuntu-24.04
     environment: sunder-core-release
     permissions:
@@ -181,23 +855,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
-      - name: Publish missing npm versions to their consumer channels
-        id: publish
+      - name: Publish missing npm versions
         env:
           GH_TOKEN: ${{ github.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: python3 -B scripts/release/sdk_release.py npm --directory artifacts/retained-packages
-      - name: Summarize npm publication
-        if: always()
-        env:
-          CI_JOB_NAME: npm libraries — Publish missing versions
-          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
-        run: python3 -B scripts/ci/report.py job
 
   publish-nuget:
-    name: .NET libraries — Publish missing NuGet versions
+    name: Publish NuGet
     needs: [select, stage, publish-npm]
-    if: always() && needs.stage.result == 'success' && needs.select.outputs.nuget_count != '0' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped')
+    if: ${{ !cancelled() && needs.stage.result == 'success' && needs.select.outputs.nuget_count > 0 && (needs.publish-npm.result == 'success' || (needs.select.outputs.npm_count == '0' && needs.publish-npm.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     environment: sunder-core-release
     permissions:
@@ -225,22 +892,15 @@ jobs:
         with:
           user: ${{ vars.NUGET_USER || secrets.NUGET_USER }}
       - name: Publish missing NuGet versions
-        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: python3 -B scripts/release/sdk_release.py nuget --directory artifacts/retained-packages
-      - name: Summarize NuGet publication
-        if: always()
-        env:
-          CI_JOB_NAME: .NET libraries — Publish missing NuGet versions
-          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
-        run: python3 -B scripts/ci/report.py job
 
   finalize:
-    name: SDK — Finalize accepted package releases
+    name: Finalize package releases
     needs: [select, stage, publish-npm, publish-nuget]
-    if: always() && needs.stage.result == 'success' && (needs.publish-npm.result == 'success' || needs.publish-npm.result == 'skipped') && (needs.publish-nuget.result == 'success' || needs.publish-nuget.result == 'skipped')
+    if: ${{ !cancelled() && needs.stage.result == 'success' && (needs.publish-npm.result == 'success' || (needs.select.outputs.npm_count == '0' && needs.publish-npm.result == 'skipped')) && (needs.publish-nuget.result == 'success' || (needs.select.outputs.nuget_count == '0' && needs.publish-nuget.result == 'skipped')) }}
     runs-on: ubuntu-24.04
     environment: sunder-core-release
     permissions:
@@ -250,29 +910,21 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: ./.github/actions/setup
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: core-release-selection
           path: artifacts
-      - name: Finalize retained releases after successful publication
-        id: finalize
+      - name: Finalize accepted package releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 -B scripts/release/sdk_release.py download --directory artifacts/retained-packages
           python3 -B scripts/release/sdk_release.py finalize --directory artifacts/retained-packages
-      - name: Summarize SDK release finalization
-        if: always()
-        env:
-          CI_JOB_NAME: SDK — Finalize accepted package releases
-          SUNDER_CI_STEPS: ${{ toJSON(steps) }}
-        run: python3 -B scripts/ci/report.py job
 
   summary:
-    name: Results — CI, SDK publication and App release overview
-    if: always()
-    needs: [select, select-app, release-app, validation, stage, publish-npm, publish-nuget, finalize]
+    name: Summary
+    if: always() && (needs.select.result == 'failure' || needs.select-checks.result == 'failure' || needs.select.outputs.work == 'true' || needs.select-checks.outputs.work == 'true' || needs.select.outputs.selected_count > 0 || needs.select.outputs.native_count > 0)
+    needs: [select, select-checks, preflight, components, platform, native-consumers, package-consumers, validation, prepare-native, package-native, package-app, publish-native, stage, publish-npm, publish-nuget, finalize]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -281,19 +933,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        if: needs.select.result == 'success'
-        with:
-          name: core-release-selection
-          path: artifacts
-      - name: Summarize selected versions and publication outcomes
-        if: always()
+      - name: Report validation and publication outcomes
         env:
           SUNDER_CI_JOB_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python3 -B scripts/release/sdk_release.py summary
-          python3 -B scripts/release/app_release.py summary
-      - name: Link job outcomes and durations
+        run: python3 -B scripts/release/select_releases.py summary
+      - name: Link jobs and durations
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}

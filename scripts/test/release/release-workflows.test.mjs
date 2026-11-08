@@ -7,12 +7,30 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const directory = resolve(root, ".github/workflows");
-const workflow = (name) => readFile(resolve(directory, `sunder-${name}.yml`), "utf8");
-const owned = (name) => readFile(resolve(root, name), "utf8");
+const owned = name => readFile(resolve(root, name), "utf8");
+const workflow = await owned(".github/workflows/sunder-sdk-release.yml");
+const jobs = Object.fromEntries([...workflow.slice(workflow.indexOf("\njobs:\n")).matchAll(/\n  ([\w-]+):\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/gu)]
+  .map(([, name, definition]) => [name, definition]));
 
-function requiresJobs(source, jobs) {
-  const needs = /^\s*needs:\s*\[([^\]]+)\]/mu.exec(source)?.[1].split(",").map((name) => name.trim()) ?? [];
-  for (const job of jobs) assert.ok(needs.includes(job), `Missing required job dependency: ${job}`);
+function dependencies(name) {
+  const value = /^    needs: (.*)$/mu.exec(jobs[name])?.[1] ?? "";
+  return value.replaceAll(/[\[\]]/gu, "").split(",").map(value => value.trim()).filter(Boolean);
+}
+
+function mayRun(name, needs) {
+  const expression = /^    if: (.*)$/mu.exec(jobs[name])?.[1];
+  const success = dependencies(name).every(name => needs[name]?.result === "success");
+  if (expression === undefined) return success;
+  if (!/\b(?:always|cancelled|success|failure)\(/u.test(expression) && !success) return false;
+  const code = expression.replace(/^\$\{\{\s*|\s*\}\}$/gu, "").replaceAll(/needs\.([\w-]+)/gu, 'needs["$1"]');
+  return new Function("needs", "always", "cancelled", `return (${code});`)(needs, () => true, () => false);
+}
+
+function state(outputs = {}) {
+  const needs = Object.fromEntries(Object.keys(jobs).map(name => [name, { result: "skipped", outputs: {} }]));
+  needs.select = { result: "success", outputs: { work: "false", selected_count: "0", nuget_count: "0", npm_count: "0", recover: "false",
+    native_count: "0", native_build_count: "0", app_packages: "false", binary_packages: "false", ...outputs } };
+  return needs;
 }
 
 function workflowStep(source, name) {
@@ -31,10 +49,10 @@ function shellBlocks(source) {
     const indent = match[1].length;
     let start = index - 1;
     while (start >= 0 && !/^\s*- /u.test(lines[start])) start--;
-    const shell = lines.slice(start, index).find((line) => /^\s*shell:/u.test(line))?.trim().slice(7);
+    const shell = lines.slice(start, index).find(line => /^\s*shell:/u.test(line))?.trim().slice(7);
     let end = index + 1;
     while (end < lines.length && (!lines[end].trim() || /^ */u.exec(lines[end])[0].length > indent)) end++;
-    const script = lines.slice(index + 1, end).map((line) => line.slice(indent + 2)).join("\n")
+    const script = lines.slice(index + 1, end).map(line => line.slice(indent + 2)).join("\n")
       .replaceAll(/\$\{\{[\s\S]*?\}\}/gu, "GITHUB_EXPRESSION");
     if (shell !== "pwsh") blocks.push({ line: index + 1, script });
     index = end - 1;
@@ -42,323 +60,240 @@ function shellBlocks(source) {
   return blocks;
 }
 
-test("workflows have valid Bash, pinned actions and no release-asset overwrites", async () => {
-  const names = (await readdir(directory)).filter((name) => /\.ya?ml$/u.test(name));
-  assert.ok(names.length > 0);
-  for (const name of names) {
-    const source = await readFile(resolve(directory, name), "utf8");
-    for (const { line, script } of shellBlocks(source)) {
-      const result = spawnSync("bash", ["-n", "-s"], { input: script, encoding: "utf8" });
-      assert.equal(result.status, 0, `${name}:${line}: ${result.stderr}`);
-    }
-    for (const [, action] of source.matchAll(/uses:\s+([^\s#]+)/gu)) {
-      assert.match(action, /^(?:\.\/\.github\/(?:workflows\/[\w.-]+\.ya?ml|actions\/[\w.-]+)|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
-    }
-    assert.doesNotMatch(source, /--clobber|overwrite:\s*true/u);
+test("one workflow retains publisher identity, valid Bash and pinned actions", async () => {
+  assert.deepEqual((await readdir(directory)).filter(name => /\.ya?ml$/u.test(name)), ["sunder-sdk-release.yml"]);
+  assert.match(workflow, /^name: Release\n/u);
+  assert.doesNotMatch(workflow, /uses: \.\/\.github\/workflows\/|workflow_call:|tags:|dispatches|rerun-failed|--clobber|overwrite:\s*true/u);
+  for (const { line, script } of shellBlocks(workflow)) {
+    const result = spawnSync("bash", ["-n", "-s"], { input: script, encoding: "utf8" });
+    assert.equal(result.status, 0, `line ${line}: ${result.stderr}`);
+  }
+  for (const [, action] of workflow.matchAll(/uses:\s+([^\s#]+)/gu)) {
+    assert.match(action, /^(?:\.\/\.github\/actions\/[\w.-]+|[\w-]+\/[\w-]+@[a-f0-9]{40})$/u);
+  }
+  assert.match(workflow, /'release-main'/u);
+  assert.match(workflow, /cancel-in-progress: \$\{\{ github.event_name == 'pull_request' \}\}/u);
+});
+
+test("selection is toolchain-free and PR checks never receive a write-capable job", () => {
+  assert.match(jobs.select, /github.ref == 'refs\/heads\/main'/u);
+  assert.match(jobs.select, /github.repository == 'Younics\/sunder-core'/u);
+  assert.match(jobs.select, /contents: write/u);
+  assert.match(jobs["select-checks"], /contents: read/u);
+  assert.doesNotMatch(jobs["select-checks"], /contents: write|GH_TOKEN:|environment:|secrets\.|id-token:/u);
+  for (const name of ["select", "select-checks"]) {
+    assert.match(jobs[name], /select_releases.py select/u);
+    assert.doesNotMatch(jobs[name], /setup-dotnet|setup-node|\.github\/actions\/setup|npm (?:ci|install|pack)|dotnet (?:restore|build|test)/u);
+  }
+  for (const name of ["components", "platform", "native-consumers", "package-consumers", "validation"]) {
+    assert.match(jobs[name], /contents: read/u);
+    assert.doesNotMatch(jobs[name], /contents: write|environment:|secrets\.|id-token:/u);
   }
 });
 
-test("component tags finalize the same verified assets after their build and test jobs", async () => {
-  for (const component of ["app", "cli", "host"]) {
-    const source = await workflow(`${component}-release`);
-    assert.match(source, new RegExp(`tags: \\["${component}/v\\*"\\]`, "u"));
-    assert.doesNotMatch(source, /production.acceptance|SUNDER_.*ACCEPTANCE_DRIVER/u);
-    if (component === "app") assert.match(source, /workflow_dispatch:/u);
-    else assert.doesNotMatch(source, /workflow_dispatch:/u);
-    assert.match(source, /group: sunder-release-\$\{\{ github\.ref_name \}\}/u);
-    assert.match(source, /github_release\.py stage/u);
-    assert.match(source, /github_release\.py finalize/u);
-    assert.match(source, /environment: sunder-github-release-promotion/u);
-    const publication = source.slice(source.lastIndexOf("\n  release:"));
-    requiresJobs(publication, ["prepare", "package"]);
-    assert.match(source, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.matrix\) \}\}/u);
-    assert.match(source, /metadata.py matrices/u);
+test("no-op pushes stop after selection and failed selection cannot start validation", () => {
+  const needs = state();
+  for (const name of Object.keys(jobs).filter(name => !["select", "select-checks"].includes(name))) {
+    assert.equal(mayRun(name, needs), false, name);
   }
+  needs.select.outputs.work = "true";
+  needs.select.result = "failure";
+  assert.equal(mayRun("preflight", needs), false);
+  assert.equal(mayRun("summary", needs), true);
 });
 
-test("SDK selection precedes its candidate packaging and retains main workflow provenance", async () => {
-  const source = await workflow("sdk-release");
-  const select = source.slice(source.indexOf("\n  select:"), source.indexOf("\n  validation:"));
-  assert.match(select, /github.ref == 'refs\/heads\/main'/u);
-  assert.match(select, /contents: write/u);
-  assert.match(select, /sdk_release.py select/u);
-  assert.doesNotMatch(select, /environment:|secrets\.|id-token:|npm (?:ci|install|pack)/u);
-  assert.match(source, /group: sunder-core-package-release/u);
-  assert.doesNotMatch(source, /tags:|dispatches|rerun-failed|COMPATIBILITY_BASE|REGISTRY_ORIGIN|ARTIFACT_SOURCE_COMMIT|APPROVAL_REFERENCE/u);
-  const ci = await workflow("ci");
-  const component = await workflow("component-validation");
-  const consumers = await workflow("package-consumers");
-  const restore = workflowStep(component, "Restore npm dependencies");
-  const restoreCondition = /\n\s+if: ([^\n]+)/u.exec(restore)[1];
-  const requiresNodeDependencies = new Function("inputs", `return (${restoreCondition});`);
-  for (const scope of ["npm", "dotnet", "repository"]) assert.equal(requiresNodeDependencies({ scope }), true);
-  assert.match(restore, /npm ci --prefix languages\/typescript\/node/u);
-  const pack = component.indexOf('core_ci.py pack');
-  assert.ok(pack > component.indexOf("core_ci.py test") && pack > component.indexOf("Test @younics/create-sunder-package"));
-  const packStep = workflowStep(component, "Pack and verify selected package candidates");
-  assert.match(packStep, /if: inputs.release-packages/u);
-  assert.doesNotMatch(component, /dotnet pack|npm pack --prefix/u);
-  assert.doesNotMatch(ci, /all_new|coordinatedVersion|artifacts\/compatibility\//u);
-  assert.match(consumers, /path: artifacts\/packages\/\*/u);
-  assert.match(consumers, /pattern: sunder-candidate-\*/u);
-  assert.ok(consumers.indexOf("core_ci.py template-consumers") < consumers.indexOf("name: sunder-tested-sdk"));
-  requiresJobs(ci.slice(ci.indexOf("\n  templates:")), ["preflight", "components"]);
-  assert.doesNotMatch(ci, /^  push:/mu);
-  assert.ok(ci.indexOf("sdk_release_documentation.py check") < ci.indexOf("\n  components:"));
-  const scopeExpression = /CI_SCOPE:\s*\$\{\{\s*(.*?)\s*\}\}/u.exec(ci)?.[1];
-  assert.ok(scopeExpression);
-  const scope = new Function("inputs", "github", `return (${scopeExpression});`);
-  for (const event_name of ["push", "pull_request", "merge_group", "schedule", "workflow_dispatch"]) {
-    assert.equal(scope({}, { event_name }), "all");
-  }
-  assert.equal(scope({ scope: "sdk" }, { event_name: "push" }), "sdk");
-  assert.match(source.slice(source.indexOf("\n  validation:"), source.indexOf("\n  stage:")), /scope: all/u);
-});
-
-test("App selection is independent of SDK recovery and dispatch retains exact-tag signing authority", async () => {
-  const source = await workflow("sdk-release");
-  const select = source.slice(source.indexOf("\n  select-app:"), source.indexOf("\n  release-app:"));
-  const launch = source.slice(source.indexOf("\n  release-app:"), source.indexOf("\n  validation:"));
-  assert.doesNotMatch(select, /needs:|needs\.|selected_count/u);
-  assert.match(select, /app_release\.py select/u);
-  assert.match(launch, /needs: select-app/u);
-  assert.doesNotMatch(launch, /needs\.(?:select\.|validation|finalize)|secrets\./u);
-  assert.match(launch, /actions: write/u);
-  assert.match(launch, /app_release\.py launch/u);
-  const app = await workflow("app-release");
-  assert.match(app, /workflow_dispatch:/u);
-  const prepare = app.slice(app.indexOf("\n  prepare:"), app.indexOf("\n  package:"));
-  assert.match(prepare, /fetch-depth: 0/u);
-  assert.match(prepare, /app_release\.py prepare/u);
-  const packageJob = app.slice(app.indexOf("\n  package:"), app.indexOf("\n  release:"));
-  assert.match(packageJob, /app_release\.py retained --rid/u);
-  assert.ok(packageJob.indexOf("app_release.py retained") < packageJob.indexOf("configure-windows-signing"));
-  for (const name of ["Package Sunder for Windows", "Package Sunder for Unix", "Inspect the signed and notarized mounted DMG"]) {
-    assert.match(workflowStep(packageJob, name), /steps.retained.outputs.reuse != 'true'/u);
-  }
-  assert.match(packageJob, /retention-days: 90/u);
-  assert.match(app, /group: sunder-app-promotion/u);
-  const path = /--directory (artifacts\/app-release-assets)/u.exec(app)?.[1];
-  assert.ok(path);
-  assert.equal(spawnSync("git", ["check-ignore", "-q", "--no-index", `${path}/installer.exe`], { cwd: root }).status, 0);
-});
-
-test("SDK publication consumes tested packages and keeps registry credentials in their owning jobs", async () => {
-  const source = await workflow("sdk-release");
-  assert.match(source, /uses: \.\/\.github\/workflows\/sunder-ci\.yml/u);
-  assert.match(source, /name: sunder-tested-sdk/u);
-  assert.doesNotMatch(source, /\b(?:dotnet (?:pack|publish)|npm pack)\b/u);
-  assert.match(source, /sdk_release.py stage --directory artifacts\/retained-packages/u);
-  for (const [, output] of source.matchAll(/sdk_release.py \w+ --directory ([^\s]+)/gu)) {
-    assert.equal(spawnSync("git", ["check-ignore", "-q", "--no-index", `${output}/archive.nupkg`], { cwd: root }).status, 0,
-      `Release handoff ${output} would violate the clean-source guard.`);
-  }
-  const npm = source.slice(source.indexOf("\n  publish-npm:"), source.indexOf("\n  publish-nuget:"));
-  const nuget = source.slice(source.indexOf("\n  publish-nuget:"), source.indexOf("\n  finalize:"));
-  const finalize = source.slice(source.indexOf("\n  finalize:"));
-  assert.match(npm, /id-token: write/u);
-  requiresJobs(npm, ["select", "stage"]);
-  assert.match(npm, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/u);
-  assert.match(npm, /sdk_release.py npm --directory artifacts\/retained-packages/u);
-  assert.doesNotMatch(npm, /NUGET_API_KEY|NPM_DIST_TAG_TOKEN/u);
-  requiresJobs(nuget, ["select", "stage", "publish-npm"]);
-  assert.match(nuget, /environment: sunder-core-release/u);
-  assert.match(nuget, /permissions:\n\s+contents: write\n\s+id-token: write/u);
-  assert.match(nuget, /id: nuget-login\n\s+uses: NuGet\/login@[a-f0-9]{40} # v1\n\s+with:\n\s+user: \$\{\{ vars\.NUGET_USER \|\| secrets\.NUGET_USER \}\}/u);
-  assert.match(nuget, /NUGET_API_KEY: \$\{\{ steps\.nuget-login\.outputs\.NUGET_API_KEY \}\}/u);
-  const download = nuget.indexOf('sdk_release.py download');
-  const login = nuget.indexOf("uses: NuGet/login@");
-  const publish = nuget.indexOf('sdk_release.py nuget');
-  assert.ok(download >= 0 && login > download && publish > login, "NuGet login must obtain a fresh credential after downloading retained bytes and before publication.");
-  assert.doesNotMatch(nuget.slice(login, publish), /sdk_release\.py download|dotnet (?:build|pack)|npm (?:install|pack)/u);
-  assert.doesNotMatch(nuget.replaceAll("secrets.NUGET_USER", ""), /secrets\.|NPM_TOKEN|NODE_AUTH_TOKEN/u);
-  assert.doesNotMatch(source, /secrets\.NUGET_API_KEY/u);
-  assert.equal([...source.matchAll(/secrets\.NPM_TOKEN\b/gu)].length, 1);
-  assert.doesNotMatch(source, /NPM_DIST_TAG_TOKEN|preflight-npm-trusted-publishing/u);
-  assert.match(finalize, /sdk_release\.py download[\s\S]+sdk_release\.py finalize/u);
-  assert.doesNotMatch(finalize, /id-token: write|NUGET_API_KEY|NPM_TOKEN|NODE_AUTH_TOKEN/u);
-  for (const job of ["select", "stage", "publish-npm", "publish-nuget", "finalize"]) {
-    const start = source.indexOf(`\n  ${job}:`);
-    const next = /\n  [\w-]+:/u.exec(source.slice(start + 3));
-    const definition = source.slice(start, next ? start + 3 + next.index : undefined);
-    assert.match(definition, /fetch-depth: 0\b/u, `${job} needs full history to validate retained-source ancestry.`);
-  }
-});
-
-test("NuGet-only and npm-only publication can skip the other registry without skipping finalization", async () => {
-  const source = await workflow("sdk-release");
-  assert.match(source, /if: always\(\) && needs.stage.result == 'success' && needs.select.outputs.npm_count != '0'/u);
-  const nuget = source.slice(source.indexOf("\n  publish-nuget:"), source.indexOf("\n  finalize:"));
-  assert.match(nuget, /always\(\)[^\n]+nuget_count != '0'[^\n]+needs.publish-npm.result == 'skipped'/u);
-  const finalize = source.slice(source.indexOf("\n  finalize:"));
-  requiresJobs(finalize, ["select", "stage", "publish-npm", "publish-nuget"]);
-  assert.match(finalize, /always\(\)[^\n]+needs.publish-npm.result == 'skipped'[^\n]+needs.publish-nuget.result == 'skipped'/u);
-  const condition = /\n\s+if: ([^\n]+)/u.exec(finalize)[1].replaceAll(/needs\.([\w-]+)/gu, 'needs["$1"]');
-  const mayFinalize = new Function("always", "needs", `return (${condition});`);
-  for (const npm of ["success", "skipped", "failure", "cancelled"]) {
-    for (const nuget of ["success", "skipped", "failure", "cancelled"]) {
-      assert.equal(mayFinalize(() => true, { stage: { result: "success" }, "publish-npm": { result: npm }, "publish-nuget": { result: nuget } }),
-        ["success", "skipped"].includes(npm) && ["success", "skipped"].includes(nuget));
+test("selected checks cross the skipped entry job and stop at failed prerequisites", () => {
+  for (const entry of ["select", "select-checks"]) {
+    const needs = state();
+    needs.select.result = "skipped";
+    needs[entry] = { result: "success", outputs: { work: "true" } };
+    assert.equal(mayRun("preflight", needs), true);
+    needs.preflight = { result: "success", outputs: { platform_tests: "true", consumer_tests: "true", scenario_tests: "true" } };
+    for (const name of ["components", "platform", "native-consumers", "package-consumers"]) {
+      assert.match(jobs[name], /if: \$\{\{ !cancelled\(\)/u);
+      needs.components.result = "success";
+      needs.platform.result = "success";
+      assert.equal(mayRun(name, needs), true);
+      for (const dependency of dependencies(name)) {
+        const broken = structuredClone(needs);
+        broken[dependency].result = "skipped";
+        assert.equal(mayRun(name, broken), false, `${name}: ${dependency}`);
+      }
     }
   }
 });
 
-test("release reuses ordinary native validation and source-derived catalog export", async () => {
-  const source = await workflow("sdk-release");
-  const stage = source.slice(source.indexOf("\n  stage:"), source.indexOf("\n  publish-npm:"));
-  requiresJobs(stage, ["select", "validation"]);
-  assert.match(stage, /needs.validation.result == 'success'/u);
-  assert.match(stage, /needs.select.outputs.recover == 'true'/u);
-  const ci = await workflow("ci");
-  assert.match(ci, /uses: \.\/\.github\/workflows\/sunder-host-validation.yml/u);
-  assert.match(ci, /uses: \.\/\.github\/workflows\/sunder-package-consumers.yml/u);
-  const consumers = await workflow("package-consumers");
-  assert.match(consumers, /core_ci.py template-consumers/u);
-  assert.doesNotMatch(consumers, /sdk_release.py pack|dotnet pack|npm pack/u);
-  assert.doesNotMatch(source, /qualification.json|recipe-templates|compatibility-corpus/u);
+test("App Host and CLI publication work with skipped SDK jobs and reject missing required packaging", () => {
+  for (const app of [true, false]) {
+    const needs = state({ work: "true", native_count: "1", native_build_count: "1", app_packages: String(app), binary_packages: String(!app) });
+    for (const name of ["preflight", "validation", "prepare-native"]) needs[name].result = "success";
+    if (!app) needs["package-native"].result = "success";
+    assert.equal(mayRun(app ? "package-app" : "package-native", needs), true);
+    needs[app ? "package-app" : "package-native"].result = "success";
+    assert.equal(mayRun("publish-native", needs), true);
+    assert.equal(mayRun("stage", needs), false);
+    for (const missing of ["failure", "cancelled", "skipped"]) {
+      const broken = structuredClone(needs);
+      broken[app ? "package-app" : "package-native"].result = missing;
+      assert.equal(mayRun("publish-native", broken), false, missing);
+    }
+    needs.validation.result = "failure";
+    assert.equal(mayRun("publish-native", needs), false);
+  }
 });
 
-test("native validation requires both actual vendor-runtime tests on all six architectures", async () => {
-  const source = await workflow("host-validation");
-  const platform = source.slice(source.indexOf("\n  platform:"), source.indexOf("\n  consumers:"));
-  assert.match(platform, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.platform\) \}\}/u);
-  assert.match(platform, /max-parallel: 6/u);
-  assert.match(platform, /--partition "\$NATIVE_PARTITION"/u);
-  assert.match(platform, /name: sunder-process-preflight-\$\{\{ inputs.scope \}\}-\$\{\{ matrix.scope \}\}-\$\{\{ matrix.rid \}\}\$\{\{ matrix.artifact_suffix \}\}/u);
-  assert.match(platform, /name: sunder-results-\$\{\{ inputs.scope \}\}-platform-\$\{\{ matrix.scope \}\}-\$\{\{ matrix.rid \}\}\$\{\{ matrix.artifact_suffix \}\}/u);
-  const preflight = workflowStep(platform, "Verify owned test process cleanup on the native OS");
-  assert.match(preflight, /id: process_preflight/u);
-  assert.match(preflight, /run-node-tests-with-results\.mjs --results-directory artifacts\/process-preflight\s+node-process-preflight scripts\/test-oracles\/owned-test-process\.test\.mjs/u);
-  assert.match(preflight, /SUNDER_TEST_PROCESS_DIAGNOSTICS_DIRECTORY:.*artifacts\/process-preflight/u);
-  for (const prerequisite of ["actions/setup-dotnet@", "Build and test selected native component"]) {
-    assert.ok(platform.indexOf("Verify owned test process cleanup") < platform.indexOf(prerequisite));
+test("single-registry publication skips only unselected uploads and failed validation blocks staging", () => {
+  for (const registry of ["npm", "nuget"]) {
+    const needs = state({ work: "true", selected_count: "1", [`${registry}_count`]: "1" });
+    needs.validation.result = "success";
+    assert.equal(mayRun("stage", needs), true);
+    needs.stage.result = "success";
+    assert.equal(mayRun(`publish-${registry}`, needs), true);
+    const other = registry === "npm" ? "nuget" : "npm";
+    assert.equal(mayRun(`publish-${other}`, needs), false);
+    for (const result of ["success", "failure", "cancelled", "skipped"]) {
+      needs[`publish-${registry}`].result = result;
+      assert.equal(mayRun("finalize", needs), result === "success");
+    }
+    needs.validation.result = "failure";
+    assert.equal(mayRun("stage", needs), false);
   }
-  assert.match(platform, /core_ci.py platform --scope/u);
-  const official = source.slice(source.indexOf("\n  consumers:"));
-  requiresJobs(official, ["prepare", "platform"]);
-  assert.match(official, /matrix: \$\{\{ fromJSON\(needs.prepare.outputs.consumers\) \}\}/u);
-  assert.match(official, /max-parallel: 6/u);
-  assert.match(official, /core_ci.py official --scope[^\n]+--rid/u);
-  assert.match(workflowStep(official, "Retain native consumer results"), /path: artifacts\/test-results\/\$\{\{ matrix.scope \}\}\s*\n/u);
+  const mixed = state({ work: "true", selected_count: "2", npm_count: "1", nuget_count: "1" });
+  mixed.stage.result = "success";
+  assert.equal(mayRun("publish-nuget", mixed), false);
+  mixed["publish-npm"].result = "success";
+  assert.equal(mayRun("publish-nuget", mixed), true);
+});
+
+test("retained-only recovery skips builds but still requires successful selected checks", () => {
+  const needs = state({ selected_count: "1", nuget_count: "1", recover: "true", native_count: "1" });
+  assert.equal(mayRun("stage", needs), true);
+  assert.equal(mayRun("publish-native", needs), true);
+  assert.equal(mayRun("prepare-native", needs), false);
+  needs.select.outputs.work = "true";
+  for (const result of ["failure", "cancelled", "skipped", "success"]) {
+    needs.validation.result = result;
+    assert.equal(mayRun("stage", needs), result === "success");
+    assert.equal(mayRun("publish-native", needs), result === "success");
+  }
+});
+
+test("SDK publication consumes tested archives and scopes registry credentials to uploads", () => {
+  assert.match(jobs.components, /core_ci.py pack --scope/u);
+  assert.ok(jobs.components.indexOf("core_ci.py pack") > jobs.components.indexOf("core_ci.py test"));
+  assert.match(jobs["package-consumers"], /pattern: sunder-candidate-\*/u);
+  assert.ok(jobs["package-consumers"].indexOf("core_ci.py template-consumers") < jobs["package-consumers"].indexOf("name: sunder-tested-sdk"));
+  assert.match(jobs.stage, /name: sunder-tested-sdk/u);
+  assert.match(jobs.stage, /sdk_release.py stage --directory artifacts\/retained-packages/u);
+  assert.doesNotMatch(workflow, /\b(?:dotnet (?:pack|publish)|npm pack)\b/u);
+  assert.match(jobs["publish-npm"], /NODE_AUTH_TOKEN: \$\{\{ secrets.NPM_TOKEN \}\}/u);
+  assert.match(jobs["publish-nuget"], /uses: NuGet\/login@[a-f0-9]{40}/u);
+  assert.match(jobs["publish-nuget"], /NUGET_API_KEY: \$\{\{ steps.nuget-login.outputs.NUGET_API_KEY \}\}/u);
+  const download = jobs["publish-nuget"].indexOf("sdk_release.py download");
+  const login = jobs["publish-nuget"].indexOf("uses: NuGet/login@");
+  const publish = jobs["publish-nuget"].indexOf("sdk_release.py nuget");
+  assert.ok(download >= 0 && login > download && publish > login);
+  assert.doesNotMatch(jobs["publish-nuget"].slice(login, publish), /sdk_release.py download|dotnet (?:build|pack)|npm (?:install|pack)/u);
+  assert.equal([...workflow.matchAll(/secrets.NPM_TOKEN\b/gu)].length, 1);
+  assert.doesNotMatch(workflow, /secrets.NUGET_API_KEY|NPM_DIST_TAG_TOKEN/u);
+  assert.doesNotMatch(jobs.finalize, /id-token: write|secrets\.|NODE_AUTH_TOKEN|setup-dotnet/u);
+  for (const name of ["select", "stage", "publish-npm", "publish-nuget", "finalize", "publish-native"]) {
+    assert.match(jobs[name], /fetch-depth: 0/u, name);
+  }
+  for (const [, directory] of workflow.matchAll(/(?:sdk_release|github_release|native_release).py [^\n]+--directory ([^\s]+)/gu)) {
+    assert.equal(spawnSync("git", ["check-ignore", "-q", "--no-index", `${directory}/archive.zip`], { cwd: root }).status, 0);
+  }
+});
+
+test("native validation preserves all partitions, vendor runtimes and the six-runner budget", async () => {
+  assert.deepEqual(dependencies("platform"), ["preflight", "components"]);
+  assert.deepEqual(dependencies("native-consumers"), ["preflight", "platform"]);
+  for (const name of ["platform", "native-consumers", "package-native", "package-app"]) assert.match(jobs[name], /max-parallel: 6/u);
+  assert.match(jobs.platform, /--partition "\$NATIVE_PARTITION"/u);
+  assert.match(jobs["native-consumers"], /core_ci.py official --scope[^\n]+--rid/u);
+  assert.match(jobs["native-consumers"], /core_ci.py packaging --scope app/u);
+  const preflight = jobs.platform.indexOf("Verify owned test process cleanup");
+  assert.ok(preflight < jobs.platform.indexOf("actions/setup-dotnet@"));
+  assert.ok(preflight < jobs.platform.indexOf("Build and test selected native component"));
+  assert.match(jobs.platform, /owned-test-process.test.mjs/u);
   const smoke = await owned("scripts/test/release/smoke-app-packaging.sh");
-  const dmg = await owned("scripts/release/macos/verify-sunder-dmg.sh");
-  assert.match(source, /core_ci.py packaging/u);
-  assert.match(await owned("scripts/ci/core_ci.py"), /smoke-app-packaging.sh/u);
   assert.match(smoke, /--strict-release/u);
-  assert.match(smoke, /create-sunder-dmg\.sh/u);
-  assert.match(dmg, /dmg_image\.py" attach/u);
-  assert.match(dmg, /dmg_image\.py" detach/u);
-  assert.doesNotMatch(dmg, /hdiutil detach.*\|\| true/u);
-  assert.match(await owned("scripts/ci/check-powershell.ps1"), /Parser\]::ParseFile/u);
+  assert.match(smoke, /create-sunder-dmg.sh/u);
+  assert.doesNotMatch(jobs.platform + jobs["native-consumers"], /continue-on-error|--allow-missing|--allow-empty/u);
 });
 
-test("reporting follows attempted execution and uploads retain cancelled-run diagnostics", async () => {
-  const sources = { native: await workflow("host-validation"), component: await workflow("component-validation"), consumers: await workflow("package-consumers") };
-  for (const [owner, name, identity] of [
-    ["native", "Retain process preflight diagnostics", "process_preflight"],
-    ["native", "Retain platform test results", "platform_tests"],
-  ]) {
-    const source = sources[owner];
-    assert.ok(source.includes(`id: ${identity}\n`));
-    const block = workflowStep(source, name);
-    const condition = /\n\s+if: ([^\n]+)/u.exec(block)?.[1];
-    assert.ok(condition?.startsWith("always()"), name);
+test("native packaging reserves its original run and retries reuse its verified platform bytes", () => {
+  assert.deepEqual(dependencies("prepare-native"), ["select", "validation"]);
+  assert.match(jobs["prepare-native"], /native_release.py reserve/u);
+  for (const name of ["package-native", "package-app"]) {
+    const definition = jobs[name];
+    assert.match(definition, /native_release.py retained/u);
+    assert.match(definition, /native_release.py check/u);
+    assert.ok(definition.indexOf("native_release.py retained") < definition.indexOf("Verify evaluated"));
+    assert.match(definition, /retention-days: 90/u);
+  }
+  assert.match(jobs["publish-native"], /native_release.py download/u);
+  assert.match(jobs["publish-native"], /github_release.py stage "\$RELEASE_TAG"/u);
+  assert.match(jobs["publish-native"], /github_release.py finalize "\$RELEASE_TAG"/u);
+  assert.match(jobs["publish-native"], /environment: sunder-github-release-promotion/u);
+  assert.doesNotMatch(jobs["publish-native"], /GITHUB_REF_NAME|GITHUB_REF:/u);
+});
+
+test("failed and cancelled execution retains diagnostics and selection-driven audits do not rebuild", () => {
+  for (const [name, identity] of [["Retain process preflight diagnostics", "process_preflight"], ["Retain platform test results", "platform_tests"]]) {
+    const block = workflowStep(jobs.platform, name);
+    const condition = /\n\s+if: ([^\n]+)/u.exec(block)[1];
     const shouldRun = new Function("always", "steps", `return (${condition});`);
-    for (const outcome of ["success", "failure", "skipped", "cancelled", ""]) {
-      assert.equal(shouldRun(() => true, { [identity]: { outcome } }),
-        ["success", "failure", "cancelled"].includes(outcome), `${name}: ${outcome}`);
+    for (const outcome of ["success", "failure", "cancelled", "skipped", ""]) {
+      assert.equal(shouldRun(() => true, { [identity]: { outcome } }), ["success", "failure", "cancelled"].includes(outcome));
     }
     assert.match(block, /if-no-files-found: error/u);
   }
-  const consumerUpload = workflowStep(sources.native, "Retain native consumer results");
-  const condition = /\n\s+if: ([^\n]+)/u.exec(consumerUpload)[1];
-  const shouldRun = new Function("always", "steps", `return (${condition});`);
-  for (const identity of ["official_tests", "packaging"]) {
-    for (const outcome of ["success", "failure", "cancelled", "skipped", ""]) {
-      const steps = { official_tests: { outcome: "skipped" }, packaging: { outcome: "skipped" }, [identity]: { outcome } };
-      assert.equal(shouldRun(() => true, steps), ["success", "failure", "cancelled"].includes(outcome));
-    }
+  for (const [job, name] of [["components", "Retain component reports"], ["package-consumers", "Retain consumer reports"]]) {
+    assert.match(workflowStep(jobs[job], name), /if: always\(\)/u);
   }
-  for (const [source, name] of [[sources.component, "Retain component reports"], [sources.consumers, "Retain consumer reports"]]) {
-    assert.match(workflowStep(source, name), /if: always\(\)/u);
-    assert.match(workflowStep(source, name), /if-no-files-found: error/u);
-    assert.match(source, /sunder-results-\$\{\{ inputs.bundle \}\}-/u);
-  }
-  assert.doesNotMatch(sources.native, /continue-on-error|--allow-missing|--allow-empty/u);
+  assert.match(jobs.validation, /--selection artifacts\/validation-selection.json --aggregate --component-layout/u);
+  assert.match(jobs.validation, /SUNDER_CI_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/u);
+  assert.doesNotMatch(jobs.validation, /dotnet (?:build|test)|npm (?:ci|run)|run-.*tests/u);
+  assert.match(jobs.validation, /core-test-summary.json/u);
 });
 
-test("component releases select their own validation and App also requires its Runtime consumer", async () => {
-  for (const component of ["host", "cli", "app"]) {
-    assert.match(await workflow(`${component}-release`), new RegExp(`scope: ${component}\\b`, "u"));
-  }
-  assert.match(await workflow("sdk-release"), /scope: all\b/u);
-  const app = await workflow("app-release");
-  assert.match(app, /scope: host/u);
-  requiresJobs(app.slice(app.indexOf("\n  package:")), ["validation", "runtime-validation"]);
-  const validation = await workflow("host-validation");
-  for (const flag of ["platform_tests", "consumer_tests"]) {
-    assert.ok(validation.includes(`needs.prepare.outputs.${flag} == 'true'`));
-  }
-  assert.match(validation, /metadata.py components --scope/u);
-});
-
-test("CI finalizes failed and missing owning jobs without repeating builds or suites", async () => {
-  const source = await workflow("ci");
-  const audit = source.slice(source.indexOf("\n  test-results:"));
-  requiresJobs(audit, ["preflight", "components", "cross-language", "templates", "native"]);
-  assert.match(audit, /--aggregate/u);
-  assert.ok(audit.includes(`sunder-results-${'${{ env.CI_SCOPE }}'}-*`), "Reports must be isolated per validation bundle");
-  assert.match(audit, /--scope "\$CI_SCOPE" --aggregate/u);
-  assert.match(audit, /--require-scenario generated-templates/u);
-  assert.doesNotMatch(audit, /dotnet (?:build|test)|npm (?:ci|run)|run-.*tests/u);
-  assert.match(audit, /test-results:\n\s+name: [^\n]+\n\s+if: always\(\)/u);
-  assert.doesNotMatch(audit, /needs\.(?:build-test-pack|native)\.result == 'success'/u);
-  assert.match(audit, /core-test-summary\.json/u);
-  assert.match(audit, /SUNDER_CI_JOB_RESULTS: \$\{\{ toJSON\(needs\) \}\}/u);
-  assert.match(source, /group: sunder-core-ci-[^\n]+inputs.scope[^\n]+github.run_id/u);
-  assert.match(source, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/u);
-  assert.match(audit, /--component-layout --github-summary/u);
-  assert.match(source, /sunder-component-validation.yml/u);
-});
-
-test("strict App packaging retains signing, notarization and Full-only feeds", async () => {
-  const source = await workflow("app-release");
+test("strict App packaging retains signing notarization mounted-DMG inspection and Full-only feeds", async () => {
+  const source = jobs["package-app"];
   assert.match(source, /environment: sunder-app-signing/u);
   assert.match(source, /-StrictRelease/u);
   assert.match(source, /configure-windows-signing.ps1/u);
   const signing = await owned("scripts/release/configure-windows-signing.ps1");
-  const requiredSettings = /foreach \(\$name in @\(([^)]+)\)\)/u.exec(signing)?.[1] ?? "";
-  assert.deepEqual([...requiredSettings.matchAll(/'([^']+)'/gu)].map((match) => match[1]), [
+  const settings = /foreach \(\$name in @\(([^)]+)\)\)/u.exec(signing)?.[1] ?? "";
+  assert.deepEqual([...settings.matchAll(/'([^']+)'/gu)].map(match => match[1]), [
     "AZURE_TRUSTED_SIGNING_ENDPOINT", "AZURE_TRUSTED_SIGNING_ACCOUNT_NAME", "AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME",
-  ], "Publisher pinning must not become an additional required signing setting");
+  ]);
   assert.doesNotMatch(signing, /WINDOWS_PUBLISHER_SUBJECT/u);
-  assert.match(source, /WINDOWS_PUBLISHER_SUBJECT: \$\{\{ vars\.WINDOWS_PUBLISHER_SUBJECT \|\| secrets\.WINDOWS_PUBLISHER_SUBJECT \}\}/u);
   assert.match(source, /-WindowsPublisherSubject \$env:WINDOWS_PUBLISHER_SUBJECT/u);
   assert.match(source, /-WindowsSignParams "[^\n]+\/dlib [^\n]+\/dmdf/u);
-  assert.match(source, /--strict-release/u);
+  for (const name of ["Package Sunder for Windows", "Package Sunder for Unix", "Inspect the signed and notarized mounted DMG"]) {
+    assert.match(workflowStep(source, name), /steps.retained.outputs.reuse != 'true'/u);
+  }
   const dmg = await owned("scripts/release/macos/verify-sunder-dmg.sh");
-  assert.match(source, /verify-sunder-dmg.sh/u);
   assert.match(dmg, /codesign --verify --deep --strict/u);
   assert.match(dmg, /stapler validate/u);
+  assert.match(dmg, /dmg_image.py" attach/u);
+  assert.match(dmg, /dmg_image.py" detach/u);
+  assert.doesNotMatch(dmg, /hdiutil detach.*\|\| true/u);
   const feeds = await owned("scripts/release/generate-app-feeds.py");
-  assert.match(source, /generate-app-feeds.py/u);
+  assert.match(jobs["publish-native"], /generate-app-feeds.py/u);
   assert.match(feeds, /"vpk", "upload", "local"/u);
   assert.doesNotMatch(feeds, /"upload", "github"/u);
-  const shell = await readFile(resolve(root, "scripts/release/package-sunder.sh"), "utf8");
-  const powershell = await readFile(resolve(root, "scripts/release/package-sunder.ps1"), "utf8");
-  assert.match(powershell, /if \(\$hasWindowsSignParams\) \{\s+\$signature = Get-AuthenticodeSignature -LiteralPath \$setupPath\s+if \(\$signature\.Status -ne \[System\.Management\.Automation\.SignatureStatus\]::Valid\) \{\s+throw/u);
-  assert.match(powershell, /if \(-not \[string\]::IsNullOrWhiteSpace\(\$WindowsPublisherSubject\) -and\s+\$signature\.SignerCertificate\.Subject -cne \$WindowsPublisherSubject\) \{\s+throw/u);
-  const central = await readFile(resolve(root, "languages/csharp/dotnet/Directory.Packages.props"), "utf8");
-  const version = /Include="Velopack" Version="([^"]+)"/u.exec(central)?.[1];
-  assert.ok(version, "Missing Velopack library version");
+  const shell = await owned("scripts/release/package-sunder.sh");
+  const powershell = await owned("scripts/release/package-sunder.ps1");
+  assert.match(powershell, /Get-AuthenticodeSignature[\s\S]+System.Management.Automation.SignatureStatus\]::Valid/u);
+  assert.match(powershell, /SignerCertificate.Subject -cne \$WindowsPublisherSubject/u);
+  const central = await owned("languages/csharp/dotnet/Directory.Packages.props");
+  const version = /Include="Velopack" Version="([^"]+)"/u.exec(central)[1];
   const versions = JSON.parse(spawnSync("python3", ["-B", "scripts/ci/metadata.py", "toolchains", "--packaging"], { cwd: root, encoding: "utf8" }).stdout);
   assert.equal(versions.velopack, version);
   assert.match(await owned("scripts/release/install-velopack.ps1"), /vpk --version \$versions.velopack/u);
-  for (const script of [shell, powershell]) {
-    assert.equal(/dotnet tool install --global vpk --version ([\d.]+)/u.exec(script)?.[1], version);
-  }
-  assert.match(shell, /strict_release" != "true" && -n "\$github_repository_url"/u);
+  for (const script of [shell, powershell]) assert.equal(/dotnet tool install --global vpk --version ([\d.]+)/u.exec(script)?.[1], version);
   assert.match(shell, /strict_delta_packages[\s\S]+history-dependent delta/u);
-  assert.match(powershell, /-not \$StrictRelease -and -not \[string\]::IsNullOrWhiteSpace\(\$GitHubRepositoryUrl\)/u);
   assert.match(powershell, /strictDeltaPackages[\s\S]+history-dependent delta/u);
 });

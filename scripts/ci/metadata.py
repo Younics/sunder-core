@@ -8,9 +8,14 @@ import re
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[2]
-COMPONENTS = {"ci": ("repository", "Repository"), "npm": ("npm", "npm libraries"),
-              "dotnet": ("dotnet", ".NET libraries"), "app": ("app", "App"),
+COMPONENTS = {"ci": ("repository", "release tooling"), "npm": ("npm", "Node packages"),
+              "dotnet": ("dotnet", ".NET packages"), "app": ("app", "App"),
               "host": ("host", "Host"), "cli": ("cli", "CLI")}
+
+
+def platform_name(rid):
+    system, architecture = rid.split("-")
+    return {"win": "Windows", "linux": "Linux", "osx": "macOS"}[system] + " " + ("ARM64" if architecture == "arm64" else "x64")
 
 
 def platforms(root=ROOT, profile="native"):
@@ -77,14 +82,14 @@ def matrices(root=ROOT, scope="all"):
             "official_tests": "host" in owners, "app_packaging": "app" in owners}
 
 
-def component_matrices(root=ROOT, scope="all", release_packages=False):
+def component_matrices(root=ROOT, scope="all", release_packages=False, *, owners=None):
     policy = json.loads((Path(root) / "eng/test-oracles/core-test-policy.json").read_text())
-    owners = policy["scopes"][scope]
+    owners = policy["scopes"][scope] if owners is None else owners
+    if len(set(owners)) != len(owners) or any(owner not in COMPONENTS for owner in owners):
+        raise ValueError("Unknown/duplicate component selection")
     components = [{"scope": COMPONENTS[owner][0], "name": COMPONENTS[owner][1]} for owner in owners]
     for row in components:
-        task = "Release tooling tests" if row["scope"] == "repository" else (
-            "Build, test and pack selected candidates" if release_packages and row["scope"] in ("npm", "dotnet") else "Build and test")
-        row["job_name"] = f"{row['name']} — {task} — linux-x64"
+        row["job_name"] = ("Check " if row["scope"] == "repository" else "Test ") + row["name"]
     native = []
     for owner in owners:
         if owner not in ("dotnet", "host", "app"):
@@ -92,21 +97,22 @@ def component_matrices(root=ROOT, scope="all", release_packages=False):
         component, label = COMPONENTS[owner]
         for row in matrices(root, component)["platform"]["include"]:
             partition = row["partition"]
-            label, part = "Process tests", ""
+            label, part = COMPONENTS[owner][1], ""
             if partition != "main":
                 name, index = partition.rsplit("-", 1)
                 rule = next(rule for rule in policy["nativePartitions"] if rule["name"] == name and rule["component"] == owner)
-                label = rule["project"].removeprefix("Sunder.").removesuffix(".Tests") + " tests"
-                part = f" — {index}/{rule['shards']}"
+                label = "package builds" if rule["project"] == "Sunder.Package.Build.Tests" else rule["project"].removesuffix(".Tests")
+                part = f" · shard {index}/{rule['shards']}"
             native.append({**row, "scope": component, "component": COMPONENTS[owner][1],
-                           "label": label, "job_name": f"{COMPONENTS[owner][1]} — {label} — {row['rid']}{part}"})
+                            "label": label, "job_name": f"Test {label} · {platform_name(row['rid'])}{part}"})
     # Both second-phase native consumers share one capacity budget.
     consumers = ([{**row, "scope": "host", "task": "official", "component": "Host", "label": "Official Node and .NET runtimes"}
                   for row in platforms(root)["include"]] if "host" in owners else [])
     consumers += ([{**row, "scope": "app", "task": "packaging", "component": "App", "label": "Unsigned packaging smoke"}
                     for row in platforms(root, "packaging")["include"]] if "app" in owners else [])
     for row in consumers:
-        row["job_name"] = f"{row['component']} — {row['label']} — {row['rid']}"
+        task = "Test runtime consumers" if row["task"] == "official" else "Test App packaging"
+        row["job_name"] = f"{task} · {platform_name(row['rid'])}"
     return dict(components={"include": components}, platform={"include": native}, consumers={"include": consumers},
                 platform_tests=bool(native), consumer_tests=bool(consumers), interop=all(owner in owners for owner in ("dotnet", "host", "npm")),
                 component_scopes=[row["scope"] for row in components])

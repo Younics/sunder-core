@@ -20,6 +20,16 @@
     { "component": "ci", "source": "^scripts/" }
   ],
   "defaultComponent": "dotnet",
+  "releaseValidation": {
+    "nuget": { "components": ["dotnet", "host", "cli"], "scenarios": ["interop"] },
+    "npm": { "components": ["npm", "host"], "scenarios": ["interop"] },
+    "app": { "components": ["app", "host", "cli"], "scenarios": [] },
+    "host": { "components": ["host"], "scenarios": [] },
+    "cli": { "components": ["cli"], "scenarios": ["cli-clients"] }
+  },
+  "packageConsumers": {
+    "Sunder.Sdk.Avalonia": ["app"]
+  },
   "primaryLanes": [
     "app-packaging",
     "dotnet-linux",

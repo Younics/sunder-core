@@ -146,10 +146,10 @@ def store_for(row):
     return assets.GitHubRelease(c.REPOSITORY, row["tag"])
 
 
-def prepare(path):
-    packages = metadata.packages(ROOT, evaluate=True)
+def prepare(path, *, releases=None):
+    packages = metadata.packages(ROOT)
     source = c.sha(os.environ["GITHUB_SHA"], 40)
-    releases = github_releases(store_for(packages[0]))
+    releases = github_releases(store_for(packages[0])) if releases is None else releases
     drafts = [release for release in releases if release["draft"] and release["tag_name"] in {row["tag"] for row in packages}]
     recover = bool(drafts)
     if recover:
@@ -178,6 +178,7 @@ def prepare(path):
             output.writelines(f"{key}={value}\n" for key, value in outputs.items())
     print(json.dumps(outputs))
     summary(plan, {"select": {"result": "success", "outputs": outputs}})
+    return plan, recover
 
 
 def pack(plan, directory, kind=None):
@@ -187,6 +188,7 @@ def pack(plan, directory, kind=None):
     rows = selected(plan, kind)
     if not rows:
         return
+    metadata.packages(ROOT, evaluate=True, names={row["name"] for row in rows})
     context = documentation.pack_context(ROOT, plan["artifactSourceCommit"], [row["name"] for row in rows]) if release else nullcontext()
     with context:
         for row in rows:

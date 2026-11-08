@@ -24,18 +24,33 @@ Only the newest stable App release becomes GitHub `latest`. Package, CLI, Host a
 prerelease announcements use `make_latest=false`. npm consumer channels are
 `latest` for stable versions and `next` for prereleases.
 
-## Existing workflow checks
+## Release workflow
 
-`sunder-sdk-release.yml` (**Sunder Core — Main CI and Releases**) owns
-protected-main pushes and manual dispatch on `main`. It selects versions, calls
-the reusable `sunder-ci.yml` with `scope: all`, stages tested archives, publishes
-selected npm packages before NuGet packages, and finalizes their project releases
-in the same run. SDK publication retains its main-workflow provenance identity.
-Independent App selection starts its exact-tag release workflow and links that run
-in the main summary. PRs, merge queues, weekly schedules and default manual
-validation also use `all`.
-Desktop build, test and installer failures therefore belong to App validation, while
-SDK validation retains package-side Avalonia/bridge contracts and Host/CLI consumers.
+**Release** is the single workflow, at `.github/workflows/sunder-sdk-release.yml`.
+Its path preserves existing publisher trust and provenance. Protected-main pushes
+and manual `mode: release` runs compare authored versions with published history
+before installing toolchains. Each newer output selects its existing test owners,
+then packages and publishes in the same run. Shared owners run once.
+
+| Selected output | Required components | Additional consumers |
+| --- | --- | --- |
+| NuGet package | .NET packages, Host, CLI | .NET ↔ Node; generated package templates |
+| npm package | Node packages, Host | .NET ↔ Node; generated package templates |
+| App | App, Host, CLI | Bundled output and installer checks |
+| Host | Host | Official runtimes on six native RIDs |
+| CLI | CLI | Host/Runtime client contracts |
+
+`Sunder.Sdk.Avalonia` additionally selects App validation. Host validation already
+owns client contracts, so combined selections omit the separate CLI-client scenario.
+Every active selection includes release-tooling checks. Tooling/configuration changes
+can select those checks alone. An unchanged published version selects no component
+tests, builds, packaging, signing or publication; a no-op finishes after selection.
+
+PRs and merge queues compare versions with their base commit and use read-only
+validation jobs. Weekly schedules validate `all`; manual `mode: validate` accepts
+an explicit scope, defaulting to `all`. These entry points use the same test owners
+and report audits. SDK candidates are packed for PR validation when their versions
+change. Only protected-main release runs can reserve tags or publish.
 
 ### Configuration ownership
 
@@ -48,7 +63,7 @@ Routine source, package-version and toolchain changes do not require workflow ed
 | `eng/ci/platforms.json` | Native RIDs, runner labels, signing runner exceptions and packaging-smoke platforms |
 | `Directory.Packages.props`, `eng/release/tooling.json` | Velopack version and release-tool SDK/signing-client pins |
 | `eng/test-oracles/ci-scenarios.json`, `template-smoke.json` | Required test scenarios and generated-template variants |
-| `eng/test-oracles/core-test-policy.json` | Component scopes, test/lane ownership and expected skips |
+| `eng/test-oracles/core-test-policy.json` | Release-to-component coverage, package consumers, test/lane ownership, native shards and expected skips |
 
 `scripts/ci/core_ci.py` prepares source, templates and interop inputs using project
 metadata and generated output identities. `scripts/release/` owns component packaging,
@@ -58,7 +73,7 @@ SHA pins. Test additions under a scenario's declared owner are discovered automa
 Build roots, prerequisites and report audits use the same scope. Ordinary setup reads
 only development toolchains; App packaging explicitly requests Velopack/signing metadata.
 
-Validation retains:
+Selected validation retains:
 
 - locked restore, ordinary parallel Release build, portable .NET/public API tests;
 - Node SDK/tooling/artifact tests, then rebuilt outputs for .NET interop;
@@ -74,12 +89,15 @@ package versions and exact older SDK dependencies are not rewritten into one ver
 An older authored version that was never published is not backfilled for testing.
 The test feed is separate from the archives eligible for publication.
 
-`sunder-host-validation.yml` provides native platform/process and App packaging
+The workflow's platform and native-consumer jobs provide process and App packaging
 checks, including actual official .NET/Node installation and Worker launch on all
-six RIDs for scopes containing Host consumers. App tags require App and Host
-validation; Host tags use the Host scope, and CLI tags use the CLI scope.
-CLI tags execute every produced self-contained binary.
-Host tags exercise authenticated Supervisor/Runtime readiness and shutdown.
+six RIDs when Host is selected. Package.Build retains three disjoint method shards
+per RID, selected only with .NET package validation. Names such as
+`Test package builds · macOS x64 · shard 2/3` identify the work directly.
+Sorted test identities are distributed round-robin; shards are concurrent partitions.
+The native matrices retain their six-runner concurrency limit. Standalone packaging
+executes every produced CLI binary and exercises authenticated Host readiness and
+shutdown before retaining its bytes.
 
 Supported RIDs are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`
 and `osx-arm64`. Executable tests use actual native architectures. Windows ARM64
@@ -108,9 +126,8 @@ History comes from NuGet's version index, npm's complete version history and
 published GitHub package archives, not mutable dist tags or exact-version absence.
 For example, unpublished `1.9.0` is skipped after `1.10.0`. Prereleases participate
 in SemVer precedence; build metadata cannot make a version newer. Source changes
-without a version increase do not publish. No selected SDK versions means no SDK
-release packing, tags, publishing login or registry writes; normal source validation
-and independent App selection remain.
+without a version increase do not select that package's validation or publication.
+Native versions and tooling checks are selected independently.
 Only HTTP 404 means absent. Authentication, rate-limit and service failures stop.
 
 The six public NuGets are `Sunder.Sdk`, `Sunder.Sdk.Avalonia`, `Sunder.Sdk.Stacks`,
@@ -252,50 +269,48 @@ bytes and source; use a new authored version for changed payloads.
 
 ## Publish App, CLI or standalone Host
 
-The App authors its independent `<Version>` in
-`languages/csharp/dotnet/host/Sunder.App/Sunder.App.csproj`. The selector requires
-one unconditional literal version and checks its evaluated Release value; the
-.NET SDK's implicit `1.0.0` default is not a release version owner.
+App, CLI and Host author independent `<Version>` values in their respective
+`Sunder.App.csproj`, `Sunder.Cli.csproj` and `Sunder.Host.Supervisor.csproj` under
+`languages/csharp/dotnet/host/`. Selection reads one unconditional literal version;
+packaging verifies its evaluated Release value. The .NET SDK's implicit `1.0.0`
+default is not a release version owner. The integrated-workflow cutover authors
+App `1.0.1`, Host `1.0.0` and CLI `1.0.0`; all six public NuGets remain `1.0.2`.
 
-On protected-main pushes or dispatches, App selection compares that version with
-published `app/v*` releases using SemVer. Stable releases ignore prereleases as
+On protected-main pushes or release dispatches, selection compares each version with
+its published `app/v*`, `cli/v*` or `host/v*` releases. Stable releases ignore prereleases as
 their baseline; prereleases also respect already published stable versions.
 An established major may receive a newer maintenance release alongside a newer
 major, but it cannot replace that newer stable App as GitHub `latest`. A previously
 unpublished older major is not backfilled. Drafts do not count as publications.
 
-App selection is independent of SDK selection/publication and SDK artifact recovery.
-Main creates the exact App tag at its source commit, then explicitly dispatches
-`sunder-app-release.yml` on that tag. A `GITHUB_TOKEN`-created tag push alone does
-not trigger another workflow. Dispatch needs `actions: write`; tag creation and
-draft discovery need `contents: write`. Tag creation policies must permit this
-workflow token to create `app/v*`, while preventing tag updates/deletion.
-The workflow file path stays stable for existing npm provenance.
+Native selection is independent of SDK publication and SDK artifact recovery.
+After required validation, **Prepare native releases** creates immutable tags and
+drafts and retains `native-release-plan.json`, binding component, version, source,
+workflow and original run ID before packaging starts. Tag policies must permit
+workflow creation of `app/v*`, `cli/v*` and `host/v*`, while preventing updates and
+deletion. Native packaging and publication remain in this same **Release** run.
 
-The main summary reports **App release started** and links the App run; it does
-not report completed App publication. The App run independently validates its
-authored version, exact tag/checkout/workflow source, and (for dispatch) main
-ancestry, then validates App/Host, packages six RIDs and publishes verified assets.
-Stable versions use the `stable` Velopack channel; prereleases use `beta`.
-The App summary reports the final publication result and installer download link.
+**Re-run failed jobs** preserves successful platform artifacts, retained for 90 days.
+A retry after successful artifact upload reuses those bytes, including failures in
+later cleanup/reporting. An incomplete reservation requires its original run.
+Expired, missing required or conflicting retained inputs fail rather than replacing
+already retained bytes. A complete draft can recover on later protected `main`
+when the original source is an ancestor and the authored version still matches.
+Recovery verifies the original plan, complete inventory, hashes, tag and provenance
+and publishes those retained bytes without packaging or signing again.
 
-Already-published App versions are skipped. An existing matching ancestor tag
-keeps its original source; an active run is linked, and a failed run is resumed
-with **Re-run failed jobs**. A draft's retained provenance identifies its original
-run. Recovery requires unexpired original platform artifacts (retained for 90
-days); source, inventory and invocation conflicts fail rather than replacing bytes.
-A package-job retry after successful artifact upload reuses that verified artifact,
-including failures in later cleanup/reporting. Unacknowledged dispatches reconcile
-against exact-tag/source runs before another dispatch. App release promotion is
-serialized so maintenance releases cannot race a newer stable `latest` selection.
+Older exact-tag workflows remain historical evidence. Existing tags keep their
+original source; a draft without the integrated reservation must finish through its
+original workflow or use a newly authored version. The original `app/v1.0.0` release
+is therefore separate from the `1.0.1` cutover. New releases start from `main`.
 
-Manual exact-tag App pushes remain supported. After authorization, create and push
-`app/vX.Y.Z` (matching its authored version), `cli/vX.Y.Z` or `host/vX.Y.Z`.
-Their tag workflows validate the actual native outputs before announcement, using
-`sunder-github-release-promotion`. The App additionally uses `sunder-app-signing`.
-CLI/Host archives have no OS signing step and must not be described as signed.
+Permit protected `main` in `sunder-github-release-promotion` and `sunder-app-signing`.
+Preserve the configured environment protections and signing identities. Release
+runs serialize selection and promotion, including maintenance-major `latest` checks.
+CLI/Host archives have no OS signing step. Stable App versions use the `stable`
+Velopack channel; prereleases use `beta`.
 
-The App workflow produces Full-only Velopack channels such as `app-win-x64-stable`:
+App packaging produces Full-only Velopack channels such as `app-win-x64-stable`:
 signed Windows Setup executables, unsigned Linux AppImages and signed/notarized
 macOS drag-to-install DMGs. The Host archive contains `Sunder.Host.Supervisor` and
 `RuntimeHost/Sunder.Runtime.Host`, distinct from the development Runtime fallback.
@@ -324,7 +339,7 @@ Windows: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
 `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`. Azure OIDC supplies signing access;
 no private key/PFX is stored in GitHub. Optional `WINDOWS_PUBLISHER_SUBJECT` adds an
 exact certificate-subject check; omitting it does not disable signature validation.
-Protect the signing environment with reviewers and restricted release tags.
+Protect the signing environment with reviewers and restricted protected-main access.
 
 Apple: `APPLE_BUILD_CERTIFICATE_BASE64`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`,
 `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_SIGNING_KEYCHAIN_PASSWORD` and

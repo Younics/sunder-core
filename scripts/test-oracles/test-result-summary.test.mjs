@@ -15,6 +15,7 @@ import {
   materializeExpectedSkip,
   parseJunitReport,
   parseTrxReport,
+  selectedModel,
   summarizeResults,
 } from "./summarize-core-test-results.mjs";
 
@@ -492,11 +493,13 @@ test("aggregate retains upstream failure even when no selected native lane or fa
   }
 });
 
-test("component aggregate reconciles separate script owners and every official runtime RID", async () => {
+test("selected aggregates require exact consumers and RIDs without demanding unselected suites", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-component-audit-"));
   const previous = process.env.SUNDER_CI_JOB_RESULTS;
   const exitCode = process.exitCode;
-  const model = loadCoreTestModel();
+  const full = loadCoreTestModel();
+  const model = selectedModel(full, { schemaVersion: 1, components: ["npm", "dotnet", "host", "cli", "app", "repository"],
+    scenarios: ["interop"], candidatePackages: false });
   const xml = value => value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   async function reportsFor(directory, declarations) {
     await mkdir(resolve(root, directory), { recursive: true });
@@ -525,7 +528,7 @@ test("component aggregate reconciles separate script owners and every official r
     for (const owner of model.policy.scopes.all) {
       const scope = owner === "ci" ? "repository" : owner;
       const leaf = scopeModel(model, scope);
-      const directory = `sunder-results-all-component-${scope}`;
+      const directory = `sunder-results-selected-component-${scope}`;
       await reportsFor(directory, leaf.declarations.filter(test => test.framework !== "dotnet"
         || test.primaryLane === "dotnet-linux" && test.externalEnvironment === undefined));
       await writeFile(resolve(root, directory, "steps.json"), JSON.stringify({ component: scope,
@@ -534,7 +537,7 @@ test("component aggregate reconciles separate script owners and every official r
       for (const { rid } of platforms) {
         const operatingSystem = { win: "Windows", linux: "Linux", osx: "MacOS" }[rid.split("-")[0]];
         for (const partition of nativePartitionNames(leaf)) {
-          const path = `sunder-results-all-platform-${scope}-${rid}${partition === "main" ? "" : "-" + partition}/platform`;
+          const path = `sunder-results-selected-platform-${scope}-${rid}${partition === "main" ? "" : "-" + partition}/platform`;
           const reports = await reportsFor(path, selectNativePartition(leaf, partition, operatingSystem));
           await writeFile(resolve(root, path, "core-test-evidence.json"), JSON.stringify(buildCoreTestEvidence(reports, leaf,
             { allowPartial: true, operatingSystem, requiredNativePartition: partition })));
@@ -546,7 +549,7 @@ test("component aggregate reconciles separate script owners and every official r
           }
         }
         if (owner === "host") {
-          const path = `sunder-results-all-official-host-${rid}/official`;
+          const path = `sunder-results-selected-official-host-${rid}/official`;
           const tests = selectScenario("official", leaf.declarations, operatingSystem).tests;
           const reports = await reportsFor(path, tests);
           await writeFile(resolve(root, path, "core-test-evidence.json"), JSON.stringify(buildCoreTestEvidence(reports, leaf,
@@ -555,23 +558,44 @@ test("component aggregate reconciles separate script owners and every official r
       }
     }
     for (const scenario of ["interop", "app-interop"]) {
-      await reportsFor(`sunder-results-all-consumers-${scenario}`, selectScenario(scenario, model.declarations, "Linux").tests);
+      await reportsFor(`sunder-results-selected-consumers-${scenario}`, selectScenario(scenario, model.declarations, "Linux").tests);
     }
     for (const { rid } of platforms.filter(row => row.packagingSmoke)) {
-      const path = resolve(root, `sunder-results-all-packaging-app-${rid}`);
+      const path = resolve(root, `sunder-results-selected-packaging-app-${rid}`);
       await mkdir(path);
       await writeFile(resolve(path, "packaging.process.json"), JSON.stringify({ status: 0, signal: null, error: null, cleanupComplete: true }));
     }
-    process.env.SUNDER_CI_JOB_RESULTS = JSON.stringify(Object.fromEntries(["preflight", "components", "cross-language", "templates", "native"]
-      .map(name => [name, { result: name === "templates" ? "skipped" : "success" }])));
+    process.env.SUNDER_CI_JOB_RESULTS = JSON.stringify(Object.fromEntries(["preflight", "components", "package-consumers", "platform", "native-consumers"]
+      .map(name => [name, { result: "success" }])));
     const result = summarizeResults(root, model, { aggregate: true, componentLayout: true });
     assert.equal(result.accepted, true, result.issues.join("\n"));
     assert.equal(result.components.length, 6);
-    const path = resolve(root, "sunder-results-all-official-host-osx-x64/official/Sunder.Runtime.Host.Tests.trx");
+    const path = resolve(root, "sunder-results-selected-official-host-osx-x64/official/Sunder.Runtime.Host.Tests.trx");
     await rm(path);
     const missing = summarizeResults(root, model, { aggregate: true, componentLayout: true });
     assert.equal(missing.accepted, false);
     assert.match(missing.issues.join("\n"), /official-host-osx-x64/u);
+
+    const cli = selectedModel(full, { schemaVersion: 1, components: ["cli", "repository"],
+      scenarios: ["cli-clients"], candidatePackages: false });
+    for (const scope of cli.componentScopes) {
+      const directory = `cli-only/sunder-results-selected-component-${scope}`;
+      await reportsFor(directory, scopeModel(cli, scope).declarations);
+      await writeFile(resolve(root, directory, "steps.json"), JSON.stringify({ component: scope,
+        steps: [{ stage: "test", outcome: "success" }] }));
+    }
+    const consumers = "cli-only/sunder-results-selected-consumers-cli-clients";
+    await reportsFor(consumers, selectScenario("cli-clients", cli.declarations, "Linux").tests);
+    process.env.SUNDER_CI_JOB_RESULTS = JSON.stringify({ preflight: { result: "success" }, components: { result: "success" },
+      "package-consumers": { result: "success" }, platform: { result: "skipped" }, "native-consumers": { result: "skipped" } });
+    const acceptedCli = summarizeResults(resolve(root, "cli-only"), cli, { aggregate: true, componentLayout: true });
+    assert.equal(acceptedCli.accepted, true, acceptedCli.issues.join("\n"));
+    assert.deepEqual(acceptedCli.native, []);
+    assert.deepEqual(acceptedCli.components.map(row => row.component), ["cli", "repository"]);
+    await rm(resolve(root, consumers, "Sunder.Host.Client.Tests.trx"));
+    const missingClient = summarizeResults(resolve(root, "cli-only"), cli, { aggregate: true, componentLayout: true });
+    assert.equal(missingClient.accepted, false);
+    assert.match(missingClient.issues.join("\n"), /Sunder.Host.Client.Tests/u);
   } finally {
     if (previous === undefined) delete process.env.SUNDER_CI_JOB_RESULTS;
     else process.env.SUNDER_CI_JOB_RESULTS = previous;

@@ -49,7 +49,7 @@ Runtime tests have no project reference to the desktop App. Mixed architecture
 tests that inspect App source explicitly declare `[Trait("Component", "App")]`.
 Public package inventory, wire schemas, byte-preserving checkout, development
 toolchain and reporting/workflow contracts belong to repository validation, which
-is included in the SDK validation bundle and the complete main-push release gate.
+is included in the SDK validation bundle and every active release validation selection.
 
 ```sh
 python3 -B scripts/ci/core_ci.py portable --scope sdk --list
@@ -224,14 +224,21 @@ no implicit hosted presentation side effects. Restore/build
 commands retain binlogs and execution sidecars even when tests have not started;
 profile sidecars begin incomplete so cancellation cannot imply successful execution.
 
-`.github/workflows/sunder-ci.yml` runs `all` for PR/merge-queue, scheduled and default
-manual validation. Main pushes enter `sunder-sdk-release.yml`, which runs that same
-complete component graph and then publishes selected independently versioned SDK
-packages. Component releases pass their explicit scopes.
-Every selection's `test-results` job runs with `always()`, downloads its available portable/native reports
-and runs `summarize-core-test-results.mjs <directory> --scope <scope> --aggregate --component-layout --github-summary`.
-CLI has no native test lane. Report paths and artifact names include the bundle and component so
-App and Host calls in the same release cannot overwrite each other.
+The single **Release** workflow at `.github/workflows/sunder-sdk-release.yml` selects
+versions before toolchain setup. Main releases compare against published history;
+read-only PR/merge-queue checks compare against their base commit. Weekly schedules
+validate `all`, and manual `mode: validate` selects a scope. The policy's
+`releaseValidation` and `packageConsumers` entries map selected versions to existing
+owners and exact consumer scenarios, deduplicating shared coverage. Source changes
+without version changes do not select component tests. Tooling/configuration changes
+can select repository checks; a no-op stops after selection.
+
+The **Verify tests** job runs with `always()` when checks were selected, downloads
+available reports and runs `summarize-core-test-results.mjs <directory> --selection
+artifacts/validation-selection.json --aggregate --component-layout --github-summary`.
+It requires only the selected component jobs and exact additional scenarios, including
+`cli-clients` when CLI is selected without Host. CLI has no native test lane.
+Report paths and artifact names include `selected`, the component and partition.
 This checks selected ordinary .NET declarations, required CI scenarios, script fixtures,
 Node source coverage and owning reports without rebuilding or rerunning suites.
 Downloaded reports resolve absolute paths against complete declared source paths,
@@ -250,13 +257,14 @@ explicit inputs and owning acceptance lanes, rather than pretending an unselecte
 skip is execution evidence. The two App web-bridge JavaScript VM tests are required
 by the App-owned `app-interop` scenario; SDK/Host interop has its own scenario.
 
-Native/process and App packaging checks use the reusable
-`sunder-host-validation.yml`. All selected partitions produce the same compact
+Native/process and App packaging checks use the workflow's **platform** and
+**native-consumers** matrices. All selected partitions produce the same compact
 evidence. The policy's `nativePartitions` assigns Package.Build's native methods to
-three shards. Sorted declaration identities are distributed round-robin before OS
+three shards per RID, selected only with .NET package validation. Sorted declaration identities are distributed round-robin before OS
 filtering, including methods in partial classes; each theory stays intact. `main`
 owns that component's remaining native projects and App/Windows side scenarios.
-The shared matrix labels every row by component, RID and partition. Every partition
+Names include `Test Host · Linux ARM64` and `Test package builds · macOS x64 · shard 2/3`.
+Every partition
 runs in a separate checkout with its own result/artifact suffix; the matrix admits
 at most six concurrent jobs. Official-runtime and unsigned-packaging validation
 share a subsequent six-runner matrix after platform jobs finish.
@@ -309,8 +317,8 @@ This avoids a misleading missing-directory error without accepting missing repor
 successful native validation requires every lane owned by its scope. SDK/Host scopes
 require platform/process and official-runtime checks; App scopes require platform,
 bundled-output and installer checks. App releases require both App and Host validation.
-Superseded PR runs are
-cancelled; main, scheduled, manual and release runs have unique CI concurrency groups.
+Superseded PR runs are cancelled. Main release runs share a serialized concurrency
+group; scheduled and manual validation use independent run groups.
 
 The historical Core/Stack migration ledgers are inert preserved archives; the
 separate current candidate remains UNFROZEN / UNRELEASED. Current API snapshots

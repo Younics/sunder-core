@@ -204,7 +204,7 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
     def test_local_and_non_sdk_ci_pack_keep_existing_development_behavior(self):
         for env in ({},
                     dict(GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
-                         GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-ci.yml@refs/heads/main"),
+                          GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/unrelated.yml@refs/heads/main"),
                     dict(GITHUB_REF="refs/tags/cli/v1.2.3", GITHUB_EVENT_NAME="push", GITHUB_SHA=COMMIT,
                          GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-cli-release.yml@refs/tags/cli/v1.2.3")):
             with self.subTest(env=env), patch.dict(os.environ, env, clear=True), patch.object(d, "Source") as source, \
@@ -309,9 +309,9 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
                     d.verify(self.root, [self.root / "artifacts"], COMMIT)
 
     def test_ci_binds_before_pack_and_artifact_consumption_using_the_existing_commands(self):
-        ci = (d.ROOT / ".github/workflows/sunder-component-validation.yml").read_text()
+        ci = (d.ROOT / ".github/workflows/sunder-sdk-release.yml").read_text()
         wrapper = ci.index('core_ci.py pack')
-        self.assertLess(wrapper, ci.index("name: Retain candidate packages for consumer validation"))
+        self.assertLess(wrapper, ci.index("name: Retain candidate packages"))
         driver = (d.ROOT / "scripts/ci/core_ci.py").read_text().split('elif profile == "candidate":', 1)[1].split("        else:", 1)[0]
         self.assertLess(driver.index('"pack"'), driver.index("templates(work)"))
         packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(plan, directory, kind=None):", 1)[1].split("def feed(", 1)[0]

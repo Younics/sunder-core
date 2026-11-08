@@ -1,4 +1,5 @@
 import copy
+from contextlib import contextmanager
 import hashlib
 import io
 import json
@@ -13,6 +14,7 @@ from unittest.mock import patch
 TOOLS = Path(__file__).resolve().parents[2] / "release"
 sys.path.insert(0, str(TOOLS))
 import github_release as release
+import native_release
 
 
 class MemoryRelease(release.GitHubRelease):
@@ -71,13 +73,16 @@ class GitHubReleaseTests(unittest.TestCase):
                 full = f"Sunder-{version}-app-{rid}-stable-full.nupkg"
                 (root / f"releases.app-{rid}-stable.json").write_text(json.dumps(dict(Assets=[dict(
                     FileName=full, SHA256=release.file_identity(root / full)[1][7:])])))
+        plan = dict(schemaVersion=1, component=component, version=version, tag=store.tag, artifactSourceCommit="a" * 40,
+                    runId="123", workflowRef=native_release.WORKFLOW_REF)
+        (root / native_release.PLAN).write_bytes(release.c.canonical(plan))
+        names.append(native_release.PLAN)
         artifacts = []
         for name in names:
             size, digest = release.file_identity(root / name)
             artifacts.append(dict(path=name, size=size, sha256=digest[7:]))
-        invocation = dict(repository=store.repository, releaseId=12, sha="a" * 40, ref="refs/tags/" + store.tag,
-                          refName=store.tag, runId="123", runAttempt="1",
-                          workflowRef=store.repository + f"/.github/workflows/sunder-{component}-release.yml@refs/tags/" + store.tag)
+        invocation = dict(repository=store.repository, releaseId=12, sha="a" * 40, ref="refs/heads/main",
+                          refName="main", runId="123", runAttempt="1", workflowRef=native_release.WORKFLOW_REF)
         provenance = dict(schemaVersion=1, buildType="https://sunderapp.io/provenance/github-actions/v1", invocation=invocation,
                           sources=[dict(name="sunder-core", sha="a" * 40)], artifacts=artifacts)
         sbom = dict(spdxVersion="SPDX-2.3", dataLicense="CC0-1.0", files=[dict(fileName="./" + item["path"],
@@ -88,15 +93,16 @@ class GitHubReleaseTests(unittest.TestCase):
         for name, data in evidence.items(): (root / name).write_bytes(data)
         return evidence
 
+    @contextmanager
     def invocation(self, **changes):
         values = dict(GITHUB_SHA="a" * 40, GITHUB_WORKFLOW_SHA="a" * 40,
-            GITHUB_EVENT_NAME="push", GITHUB_REF="refs/tags/cli/v1.0.0", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2",
-            GITHUB_WORKFLOW_REF="Younics/sunder-core/.github/workflows/sunder-cli-release.yml@refs/tags/cli/v1.0.0",
+            GITHUB_EVENT_NAME="push", GITHUB_REF="refs/heads/main", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2",
+            GITHUB_WORKFLOW_REF=native_release.WORKFLOW_REF,
             GITHUB_OUTPUT="")
-        return patch.dict(os.environ, dict(values, **changes), clear=True)
+        with patch.dict(os.environ, dict(values, **changes), clear=True), patch.object(native_release, "guard"):
+            yield
 
-    def test_only_app_accepts_exact_tag_dispatch_and_maintenance_does_not_replace_latest(self):
-        import app_release
+    def test_native_main_publication_keeps_only_the_newest_stable_app_latest(self):
         for component, newer in (("app", False), ("app", True), ("cli", False), ("host", False)):
             with self.subTest(component=component, newer=newer), tempfile.TemporaryDirectory() as directory:
                 store = MemoryRelease()
@@ -106,19 +112,13 @@ class GitHubReleaseTests(unittest.TestCase):
                 self.candidate(root, store)
                 for path in root.iterdir(): store.add(path, path.read_bytes())
                 published = [dict(tag_name="app/v2.0.0", draft=False, prerelease=False)] if newer else []
-                with self.invocation(GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/tags/" + store.tag,
-                        GITHUB_WORKFLOW_REF=f"{store.repository}/.github/workflows/sunder-{component}-release.yml@refs/tags/{store.tag}"), \
-                     patch.object(app_release, "tag_guard") as guard, patch.object(app_release.sdk, "github_releases", return_value=published), \
+                with self.invocation(GITHUB_EVENT_NAME="workflow_dispatch"), \
+                     patch.object(native_release.sdk, "github_releases", return_value=published), \
                      patch.object(release.subprocess, "run"):
-                    if component != "app":
-                        with self.assertRaisesRegex(ValueError, "tag workflow"): release.core_stage(store, root, component, "stable", finalize=True)
-                        self.assertEqual([], store.requests)
-                    else:
-                        original = copy.deepcopy(store.bytes)
-                        release.core_stage(store, root, component, "stable", finalize=True)
-                        guard.assert_called_once_with(store.tag)
-                        self.assertEqual(str(not newer).lower(), store.value["make_latest"])
-                        self.assertEqual(original, store.bytes)
+                    original = copy.deepcopy(store.bytes)
+                    release.core_stage(store, root, component, "stable", finalize=True)
+                    self.assertEqual(str(component == "app" and not newer).lower(), store.value["make_latest"])
+                    self.assertEqual(original, store.bytes)
 
     def test_creation_lost_response_reuses_the_same_numeric_draft(self):
         store = MemoryRelease(); store.exists = False
@@ -234,7 +234,21 @@ class GitHubReleaseTests(unittest.TestCase):
                 release.core_stage(store, root, "cli", "stable")
             self.assertTrue(store.value["draft"])
             self.assertEqual(evidence, {name: (root / name).read_bytes() for name in evidence})
-            self.assertEqual(10, len(store.value["assets"]))
+            self.assertEqual(11, len(store.value["assets"]))
+
+    def test_legacy_tag_evidence_remains_readable_but_cannot_authorize_main_publication(self):
+        with tempfile.TemporaryDirectory() as directory, self.invocation():
+            root = Path(directory); store = MemoryRelease(); self.candidate(root, store)
+            path = root / "release-provenance.json"
+            value = json.loads(path.read_bytes())
+            value["invocation"].update(ref="refs/tags/" + store.tag, refName=store.tag,
+                workflowRef=f"{store.repository}/.github/workflows/sunder-cli-release.yml@refs/tags/{store.tag}")
+            path.write_text(json.dumps(value))
+            release.verify_evidence(release.local_files(root), 12, store.repository, store.tag, "a" * 40)
+            with patch.object(release.subprocess, "run"), patch.object(store, "upload") as upload:
+                with self.assertRaisesRegex(ValueError, "protected-main evidence"):
+                    release.core_stage(store, root, "cli", "stable")
+                upload.assert_not_called()
 
     def test_foreign_run_changed_payload_and_incomplete_inventory_fail_before_upload(self):
         for mutation in ("run", "payload", "inventory", "sbom"):

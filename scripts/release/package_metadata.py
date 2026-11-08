@@ -29,18 +29,23 @@ def archive_name(kind, name, version):
     return f"{name}.{version}.nupkg" if kind == "nuget" else f"{name.lstrip('@').replace('/', '-')}-{version}.tgz"
 
 
-def packages(root=ROOT, *, evaluate=False):
+def packages(root=ROOT, *, evaluate=False, source=None, names=None):
     root = Path(root)
-    inventory = json.loads((root / INVENTORY).read_text())
+    def read(path):
+        return subprocess.check_output(["git", "show", f"{source}:{path}"], cwd=root) if source else (root / path).read_bytes()
+    inventory = json.loads(read(INVENTORY))
     result = []
     for kind in ("nuget", "npm"):
         for item in inventory[kind]:
             project = item["project"]
             if kind == "nuget":
-                tree = ET.parse(root / project)
+                tree = ET.fromstring(read(project))
                 name = tree.findtext("./PropertyGroup/PackageId") or Path(project).stem
-                version = tree.findtext("./PropertyGroup/Version")
-                if evaluate:
+                versions = [(group, item) for group in tree.findall("PropertyGroup") for item in group.findall("Version")]
+                if len(versions) != 1 or any(node.get("Condition") for node in versions[0]):
+                    raise ValueError("Package needs one unconditional authored Version: " + project)
+                version = versions[0][1].text
+                if evaluate and (names is None or name in names):
                     env = {key: value for key, value in os.environ.items() if key not in
                            ("GH_TOKEN", "GITHUB_TOKEN", "NODE_AUTH_TOKEN", "NUGET_API_KEY")}
                     output = subprocess.check_output(["dotnet", "msbuild", project, "-p:Configuration=Release",
@@ -49,7 +54,7 @@ def packages(root=ROOT, *, evaluate=False):
                     if (properties["PackageId"], properties["PackageVersion"]) != (name, version):
                         raise ValueError("Evaluated package metadata differs from authored metadata: " + project)
             else:
-                manifest = json.loads((root / project / "package.json").read_text())
+                manifest = json.loads(read(project + "/package.json"))
                 name, version = manifest["name"], manifest["version"]
                 if manifest.get("private"):
                     raise ValueError("Public package inventory contains a private workspace")

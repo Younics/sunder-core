@@ -629,11 +629,10 @@ test("selected lane prerequisite gate requires exact selection and every typed i
 });
 
 test("workflow required-test selections resolve current declarations and reject a stale owner", async () => {
-  const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-ci.yml");
+  const workflowPath = resolve(repositoryRoot, ".github/workflows/sunder-sdk-release.yml");
   const workflow = await readFile(workflowPath, "utf8");
-  const host = await readFile(resolve(repositoryRoot, ".github/workflows/sunder-host-validation.yml"), "utf8");
   const declarations = loadCoreTestModel().declarations;
-  validateWorkflowTestSelections([{ source: "ci", content: workflow }, { source: "host", content: host }], declarations);
+  validateWorkflowTestSelections([{ source: "release", content: workflow }], declarations);
   const oldOwner = `${workflow}\n        run: node reporter.mjs --require-scenario removed-interop\n`;
   assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: oldOwner }], declarations), /Unknown or empty CI scenario/u);
   assert.throws(() => validateWorkflowTestSelections([{ source: "ci", content: "--require-test Removed.Tests.Case" }], declarations), /required workflow test.*not declared/u);
