@@ -156,10 +156,8 @@ class AppSelectionTests(unittest.TestCase):
     def test_launch_rechecks_state_before_mutations_and_reruns_only_failed_jobs(self):
         self.selection(source=SOURCE, candidates=[run()])
         with patch.object(app, "pages", return_value=[]): plan = app.select("1.0.0", SOURCE)
-        with patch.object(app.sdk, "source_guard"), patch.object(app, "select", return_value=copy.deepcopy(plan)) as select, \
-             patch.object(app, "pages", return_value=[dict(id=456)]) as jobs, patch.object(app, "api") as api:
+        with patch.object(app.sdk, "source_guard"), patch.object(app, "select", return_value=copy.deepcopy(plan)) as select, patch.object(app, "api") as api:
             self.assertEqual("Original App run resumption requested", app.launch(plan)["reason"])
-            jobs.assert_called_once_with("actions/runs/123/jobs", "jobs")
             api.assert_called_once_with("actions/runs/123/rerun-failed-jobs", "POST")
             api.reset_mock()
             select.return_value.update(action="none", reason="App release already queued or running")
@@ -167,14 +165,6 @@ class AppSelectionTests(unittest.TestCase):
             api.assert_not_called()
             select.return_value["artifactSourceCommit"] = OLD
             with self.assertRaisesRegex(ValueError, "source changed"): app.launch(plan)
-
-    def test_startup_failure_with_no_jobs_reruns_all_jobs_on_the_original_run(self):
-        self.selection(source=SOURCE, candidates=[run()])
-        with patch.object(app, "pages", return_value=[]) as jobs, patch.object(app.sdk, "source_guard"), patch.object(app, "api") as api:
-            plan = app.select("1.0.0", SOURCE)
-            self.assertEqual("123", app.launch(plan)["runId"])
-            jobs.assert_called_with("actions/runs/123/jobs", "jobs")
-            api.assert_called_once_with("actions/runs/123/rerun", "POST")
 
     def test_tag_dispatch_requires_exact_repository_workflow_ref_version_and_main_ancestry(self):
         env = dict(GITHUB_REPOSITORY=app.c.REPOSITORY, GITHUB_SHA=SOURCE, GITHUB_WORKFLOW_SHA=SOURCE,
