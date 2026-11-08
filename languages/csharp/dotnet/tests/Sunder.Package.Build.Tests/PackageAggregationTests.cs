@@ -20,12 +20,6 @@ public sealed class PackageAggregationTests
         var root = CreateTempDirectory();
         var appLeaf = CreateCanonicalLeaf(root, "app", "win-x64", "app-native");
         var runtimeLeaf = CreateCanonicalLeaf(root, "runtime", "win-x64", "runtime-native");
-        var runtimeConfigName = Path.ChangeExtension(CSharpWorkerModuleName(), ".runtimeconfig.json");
-        var runtimeConfig = Assert.Single(Directory.GetFiles(runtimeLeaf, runtimeConfigName, SearchOption.AllDirectories));
-        using (var json = JsonDocument.Parse(await File.ReadAllBytesAsync(runtimeConfig)))
-            await File.WriteAllBytesAsync(runtimeConfig, JsonSerializer.SerializeToUtf8Bytes(json.RootElement,
-                new JsonSerializerOptions { WriteIndented = true, NewLine = "\r\n" }));
-        var testedRuntimeConfig = await File.ReadAllBytesAsync(runtimeConfig);
         var managedRidPath = Path.Combine("lib", "runtimes", "win-x64", "lib", "net10.0", "SharedManaged.dll");
         var nativeExecutablePath = Path.Combine("lib", "package-native");
         foreach (var (leaf, role) in new[] { (appLeaf, "app"), (runtimeLeaf, "runtime") })
@@ -55,12 +49,6 @@ public sealed class PackageAggregationTests
 
         Assert.True(task.Execute(), string.Join(Environment.NewLine, buildEngine.Errors));
         var firstIndex = await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "content-index.json"));
-        Assert.DoesNotContain((byte)'\r', firstIndex);
-        Assert.DoesNotContain((byte)'\r', await File.ReadAllBytesAsync(Path.Combine(output, "manifest", "sunder-package.json")));
-        // Fan-in preserves even non-normalized prebuilt metadata byte-for-byte.
-        Assert.Contains((byte)'\r', testedRuntimeConfig);
-        Assert.Equal(testedRuntimeConfig, await File.ReadAllBytesAsync(
-            Assert.Single(Directory.GetFiles(output, runtimeConfigName, SearchOption.AllDirectories))));
         Assert.True(File.Exists(Path.Combine(output, "payload", "app", "win-x64", "lib", Path.GetFileName(ManifestAssemblyPath))));
         Assert.True(File.Exists(Path.Combine(
             output,

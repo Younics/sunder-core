@@ -54,18 +54,6 @@ public sealed partial class ImplementationFirstRpcBuildTests
         Assert.False(File.Exists(Path.Combine(Path.GetDirectoryName(worker)!, "Avalonia.Controls.dll")));
         Assert.DoesNotContain("Sunder.Sdk.Worker", await File.ReadAllTextAsync(Path.ChangeExtension(app, ".deps.json")), StringComparison.Ordinal);
         Assert.DoesNotContain("Avalonia", await File.ReadAllTextAsync(Path.ChangeExtension(worker, ".deps.json")), StringComparison.Ordinal);
-        foreach (var assembly in new[] { worker, app })
-        {
-            var deps = await File.ReadAllTextAsync(Path.ChangeExtension(assembly, ".deps.json"));
-            Assert.DoesNotContain("\"fileVersion\"", deps, StringComparison.Ordinal);
-            Assert.DoesNotContain('\r', deps);
-            Assert.DoesNotContain((byte)'\r', await File.ReadAllBytesAsync(Path.ChangeExtension(assembly, ".runtimeconfig.json")));
-        }
-        var manifest = await File.ReadAllBytesAsync(Path.Combine(FindRepositoryRoot(),
-            "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.Worker.manifest"));
-        Assert.DoesNotContain((byte)'\r', manifest);
-        var workerBytes = await File.ReadAllBytesAsync(worker);
-        Assert.True(workerBytes.AsSpan().IndexOf(manifest) >= 0, "The worker must embed the stable default manifest on every build host.");
         var dev = Path.Combine(root, "bin/Debug/net10.0/sunder-dev");
         var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(dev);
         Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));

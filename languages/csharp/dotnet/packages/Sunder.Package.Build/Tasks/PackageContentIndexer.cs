@@ -12,7 +12,6 @@ internal static class PackageContentIndexer
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
-        NewLine = "\n",
     };
 
     public static void Write(string stagingPath)

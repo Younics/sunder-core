@@ -10,12 +10,6 @@
     <_GlobalPropertiesToRemoveFromProjectReferences Condition="'$(_SunderPackageSingleProject)' == 'true'">$(_GlobalPropertiesToRemoveFromProjectReferences);$(_SunderPackageRoleGlobals);RuntimeIdentifier;SelfContained;UseAppHost;PublishSingleFile;PublishTrimmed</_GlobalPropertiesToRemoveFromProjectReferences>
     <GenerateRuntimeConfigurationFiles Condition="'$(SunderPackageCompilationRole)' == 'app'">true</GenerateRuntimeConfigurationFiles>
     <CopyLocalLockFileAssemblies Condition="'$(SunderPackageCompilationRole)' == 'app'">true</CopyLocalLockFileAssemblies>
-    <!-- Native file-version probing and the compiler's default manifest depend on
-         the build OS. Use stable metadata for the generated framework-dependent roles. -->
-    <IncludeFileVersionsInDependencyFile Condition="'$(SunderPackageCompilationRole)' != ''">false</IncludeFileVersionsInDependencyFile>
-    <_SunderPackageWorkerManifest>$(MSBuildThisFileDirectory)Sunder.Package.Build.Worker.manifest</_SunderPackageWorkerManifest>
-    <ApplicationManifest Condition="'$(SunderPackageCompilationRole)' == 'worker' and '$(ApplicationManifest)' == '' and '$(NoWin32Manifest)' != 'true' and '$(Win32Resource)' == ''">$(_SunderPackageWorkerManifest)</ApplicationManifest>
-    <MSBuildAllProjects Condition="'$(_SunderPackageSingleProject)' == 'true'">$(MSBuildAllProjects);$(_SunderPackageWorkerManifest)</MSBuildAllProjects>
     <MSBuildAllProjects Condition="'$(SunderPackageCompilationRole)' != '' and '$(SunderPackageRoleCompilationRoot)' != ''">$(MSBuildAllProjects);$(SunderPackageRoleCompilationRoot)/compilation-inputs.v1.json</MSBuildAllProjects>
     <_SunderPackageResourcePreparationTarget Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(SunderPackageCompilationRole)' == ''">_PrepareSunderPackageResources</_SunderPackageResourcePreparationTarget>
     <SkipCompilerExecution Condition="'$(_SunderPackageSingleProject)' == 'true' and '$(DesignTimeBuild)' == 'true'">true</SkipCompilerExecution>
@@ -64,32 +58,6 @@
   <UsingTask TaskName="Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask"
              AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
              Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
-
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.NormalizeSunderRuntimeMetadataTask"
-             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
-             TaskFactory="TaskHostFactory" Runtime="NET" Architecture="$(SunderPackageBuildTaskHostArchitecture)"
-             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' != 'true'" />
-  <UsingTask TaskName="Sunder.Package.Build.Tasks.NormalizeSunderRuntimeMetadataTask"
-             AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"
-             Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == 'true'" />
-
-  <!-- Run at generation, before signing, copying, testing and role-input capture.
-       Prebuilt fan-in never invokes these targets or rewrites tested payloads. -->
-  <Target Name="_NormalizeSunderBuildDependencyFile" AfterTargets="GenerateBuildDependencyFile"
-          DependsOnTargets="_PrepareSunderPackageBuildTasks"
-          Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true' and '$(GenerateDependencyFile)' == 'true'">
-    <NormalizeSunderRuntimeMetadataTask Files="$(ProjectDepsFilePath)" />
-  </Target>
-  <Target Name="_NormalizeSunderRuntimeConfigurationFile" AfterTargets="GenerateBuildRuntimeConfigurationFiles"
-          DependsOnTargets="_PrepareSunderPackageBuildTasks"
-          Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true' and '$(GenerateRuntimeConfigurationFiles)' == 'true'">
-    <NormalizeSunderRuntimeMetadataTask Files="$(ProjectRuntimeConfigFilePath)" />
-  </Target>
-  <Target Name="_NormalizeSunderPublishDependencyFile" AfterTargets="GeneratePublishDependencyFile"
-          DependsOnTargets="_PrepareSunderPackageBuildTasks"
-          Condition="'$(SunderPackageCompilationRole)' != '' and '$(DesignTimeBuild)' != 'true' and '$(GenerateDependencyFile)' == 'true' and '$(_UseBuildDependencyFile)' != 'true' and '$(PublishAot)' != 'true'">
-    <NormalizeSunderRuntimeMetadataTask Files="$(IntermediateDepsFilePath)" />
-  </Target>
 
   <Target Name="_CaptureSunderPackageResourceItems">
     <ItemGroup>

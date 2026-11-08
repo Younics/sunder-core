@@ -6,6 +6,3 @@ compatibility/** -text
 
 # Shell entry points must also run from Windows checkouts.
 *.sh text eol=lf
-
-# The generated worker's embedded manifest must have identical compiler bytes.
-languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.Worker.manifest text eol=lf

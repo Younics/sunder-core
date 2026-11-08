@@ -60,7 +60,6 @@
         "buildTransitive/Sunder.Package.Build.Authoring.References.targets",
         "buildTransitive/Sunder.Package.Build.Authoring.RoleInputs.targets",
         "buildTransitive/Sunder.Package.Build.Authoring.CrossTargeting.targets",
-        "buildTransitive/Sunder.Package.Build.Worker.manifest",
         "buildTransitive/Sunder.Toolchains.props",
         "analyzers/dotnet/cs/Sunder.Package.Build.Editor.dll",
         "tasks/net10.0/Sunder.Package.Build.dll",

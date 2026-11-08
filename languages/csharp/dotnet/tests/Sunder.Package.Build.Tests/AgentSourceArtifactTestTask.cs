@@ -16,7 +16,6 @@ public sealed class AgentSourceArtifactTestTask : Microsoft.Build.Utilities.Task
     public string ProjectIdentity { get; set; } = "AgentOwnerSource.csproj";
     public string PackageId { get; set; } = "younics.ai.agent";
     public string OutputType { get; set; } = "Exe";
-    public string Configuration { get; set; } = "Debug";
     public string DefineConstants { get; set; } = "";
     public string CacheRoot { get; set; } = "";
     public string Candidate { get; set; } = "";
@@ -60,7 +59,7 @@ public sealed class AgentSourceArtifactTestTask : Microsoft.Build.Utilities.Task
                 {
                     BuildEngine = BuildEngine, ProjectDirectory = ProjectDirectory, PackageVersion = "2.0.0",
                     SourceFiles = SourceFiles, ReferencePaths = ReferencePaths, AssemblyName = AssemblyName, ProjectIdentity = ProjectIdentity,
-                    Configuration = Configuration, TargetFramework = "net10.0", OutputType = OutputType, DefineConstants = DefineConstants,
+                    Configuration = "Debug", TargetFramework = "net10.0", OutputType = OutputType, DefineConstants = DefineConstants,
                     IntermediateOutputPath = IntermediateOutputPath,
                 };
                 var request = new SunderRpcPackageApiRequest(Operation, "younics.ai.agent",
@@ -79,7 +78,7 @@ public sealed class AgentSourceArtifactTestTask : Microsoft.Build.Utilities.Task
             var generation = new GenerateSunderRpcBindingsTask
             {
                 BuildEngine = BuildEngine, ProjectDirectory = ProjectDirectory, PackageId = PackageId, PackageVersion = "2.0.0",
-                AssemblyName = AssemblyName, ProjectIdentity = ProjectIdentity, Configuration = Configuration, TargetFramework = "net10.0",
+                AssemblyName = AssemblyName, ProjectIdentity = ProjectIdentity, Configuration = "Debug", TargetFramework = "net10.0",
                 OutputType = OutputType, DefineConstants = DefineConstants, IntermediateOutputPath = IntermediateOutputPath,
                 SourceFiles = SourceFiles, ReferencePaths = ReferencePaths, ContractCacheRoot = cache,
                 ContractOperation = Operation == "Generate" ? "" : Operation,

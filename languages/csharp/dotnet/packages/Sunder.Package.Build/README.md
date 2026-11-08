@@ -33,7 +33,7 @@ generated package uses:
 ```xml
 <ItemGroup>
   <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.0.3" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.0.2" PrivateAssets="all" />
 </ItemGroup>
 ```
 
@@ -93,11 +93,6 @@ Pack builds the declared targets and reports the `.sunderpkg` path. By default,
 the template declares `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`,
 and `osx-arm64`. If you add native dependencies, supply the corresponding assets
 for every platform you declare.
-
-Generated roles use LF JSON, omit build-host-dependent file-version probing from
-dependency metadata, and embed a fixed default worker manifest. These outputs are
-prepared before testing and qualification. Native/prebuilt aggregation preserves
-the qualified payload bytes, including any signing performed by the producer.
 
 ### 5. Validate and install
 
