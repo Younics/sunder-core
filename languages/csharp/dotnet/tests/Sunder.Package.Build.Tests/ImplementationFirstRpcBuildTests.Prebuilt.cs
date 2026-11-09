@@ -134,7 +134,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await File.WriteAllTextAsync(assetsPath, assets.ToJsonString()); await Reject(); await File.WriteAllBytesAsync(assetsPath, assetsBytes);
         var originalSelection = await File.ReadAllBytesAsync(selection);
         foreach (var property in new[] { "-p:RuntimeIdentifier=linux-musl-x64", "-p:BuildProjectReferences=true", "-p:SunderPackageBuildTaskSourceIsImmutable=false",
-                     "-p:SunderPackageComposeRuntimeIdentifiers=" + first + "%3B" + first }) await Reject(property);
+                     "-p:SunderPackageComposeRuntimeIdentifiers=\"" + first + ";" + first + "\"" }) await Reject(property);
         var missing = JsonNode.Parse(originalSelection)!; missing["inputs"]!.AsArray().RemoveAt(1);
         await File.WriteAllTextAsync(selection, missing.ToJsonString()); await Reject(); await File.WriteAllBytesAsync(selection, originalSelection);
         var subsetArchive = Path.Combine(relocated, "bin/Debug/net10.0/subset.sunderpkg");
@@ -167,7 +167,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             using var json = JsonDocument.Parse(evaluated.StandardOutput);
             var value = Assert.Single(json.RootElement.GetProperty("Items").GetProperty("_SunderValidatedRoleInput").EnumerateArray());
             var item = new TaskItem(value.GetProperty("Identity").GetString()!);
-            foreach (var name in new[] { "Frame", "Sha256", "SourceRoot", "ExternalLocations", "ToolDirectory", "EvidenceSha256", "SelectionFile", "SelectionSha256", "RuntimeIdentifier" })
+            foreach (var name in new[] { "Frame", "Sha256", "SourceRoot", "ExternalLocations", "ToolDirectory", "SdkDirectory", "EvidenceSha256", "SelectionFile", "SelectionSha256", "RuntimeIdentifier" })
                 item.SetMetadata(name, value.GetProperty(name).GetString()!);
             validatedInputs.Add(item);
         }

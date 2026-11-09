@@ -18,6 +18,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
     public string ProjectFile { get; set; } = string.Empty;
     public string ProjectAssetsFile { get; set; } = string.Empty;
     public string SourceRoot { get; set; } = string.Empty;
+    public string SdkDirectory { get; set; } = string.Empty;
     public string ProjectIdentity { get; set; } = string.Empty;
     public string PackageVersion { get; set; } = string.Empty;
     public string Configuration { get; set; } = string.Empty;
@@ -154,9 +155,32 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
             if (GeneratedOutputPathSafety.IsDescendantOf(path, sourceRoot)) Track("import:" + Relative(sourceRoot, path), path);
             // External tool/SDK imports are identified by content, never by their
             // native installation prefix. Duplicate names with different bytes fail.
-            else Track("import:" + Path.GetFileName(path), path);
+            else
+            {
+                var name = Path.GetFileName(path);
+                Track("import:" + name, path);
+                if (SunderPrebuiltSdkInputs.IsSdkImport(path, SdkDirectory))
+                {
+                    var key = SunderPrebuiltSdkInputs.ImportXml + name;
+                    var file = SunderPrebuiltSdkInputs.XmlInput(path, key, external["import:" + name], _cancellation.Token);
+                    if (external.TryGetValue(key, out var previous)) Equal(previous, file, "SDK import identity");
+                    external[key] = file; locations[key] = path;
+                }
+            }
         }
-        foreach (var analyzer in GeneratorAnalyzers) Track("generator:" + Path.GetFileName(analyzer.ItemSpec), Full(analyzer.ItemSpec));
+        foreach (var analyzer in GeneratorAnalyzers)
+        {
+            var path = Full(analyzer.ItemSpec); var name = Path.GetFileName(path);
+            var raw = File(path, "generator:" + name, 64 * 1024 * 1024, _cancellation.Token);
+            var diagnostic = SunderPrebuiltSdkInputs.DiagnosticInput(path, SdkDirectory, raw, _cancellation.Token);
+            if (diagnostic is null) Track(raw.Path, path);
+            else
+            {
+                Track(SunderPrebuiltSdkInputs.DiagnosticBytes + name, path);
+                if (external.TryGetValue(diagnostic.Path, out var previous)) Equal(previous, diagnostic, "SDK diagnostic identity");
+                external[diagnostic.Path] = diagnostic; locations[diagnostic.Path] = path;
+            }
+        }
         foreach (var item in Usings) Add("using", item);
         var properties = new SortedDictionary<string, string>(StringComparer.Ordinal);
         foreach (var property in Properties) properties.Add(property.ItemSpec, property.GetMetadata("Value"));
@@ -176,6 +200,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
         result.SetMetadata("SourceRoot", sourceRoot);
         result.SetMetadata("ExternalLocations", Convert.ToBase64String(Write(locations)));
         result.SetMetadata("ToolDirectory", toolDirectory);
+        result.SetMetadata("SdkDirectory", SdkDirectory);
         VerifyCapture(result);
         return result;
     }
@@ -201,6 +226,12 @@ public sealed partial class ManageSunderPackageRoleInputsTask : Microsoft.Build.
                 var tree = Tree(path, source: true, _cancellation.Token);
                 Equal(expected, new SunderPrebuiltFile(expected.Path, tree.Sum(file => file.Bytes), Hash(Write(tree))), "Source dependency tree");
             }
+            else if (expected.Path.StartsWith(SunderPrebuiltSdkInputs.ImportXml, StringComparison.Ordinal))
+                Equal(expected, SunderPrebuiltSdkInputs.XmlInput(path, expected.Path,
+                    frame.ExternalInputs.Single(file => file.Path == "import:" + Path.GetFileName(path)), _cancellation.Token), "SDK import");
+            else if (expected.Path.StartsWith(SunderPrebuiltSdkInputs.DiagnosticIdentity, StringComparison.Ordinal))
+                Equal(expected, SunderPrebuiltSdkInputs.DiagnosticInput(path, input.GetMetadata("SdkDirectory"),
+                    frame.ExternalInputs.Single(file => file.Path == SunderPrebuiltSdkInputs.DiagnosticBytes + Path.GetFileName(path)), _cancellation.Token), "SDK diagnostic");
             else Equal(expected, File(path, expected.Path, 64 * 1024 * 1024, _cancellation.Token), "External input");
         }
         foreach (var tool in frame.Toolset) Equal(tool, File(Path.Combine(input.GetMetadata("ToolDirectory"), tool.Path), tool.Path, 64 * 1024 * 1024, _cancellation.Token), "Toolset");

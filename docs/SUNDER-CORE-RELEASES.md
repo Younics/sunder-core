@@ -273,8 +273,8 @@ App, CLI and Host author independent `<Version>` values in their respective
 `Sunder.App.csproj`, `Sunder.Cli.csproj` and `Sunder.Host.Supervisor.csproj` under
 `languages/csharp/dotnet/host/`. Selection reads one unconditional literal version;
 packaging verifies its evaluated Release value. The .NET SDK's implicit `1.0.0`
-default is not a release version owner. The integrated-workflow cutover authors
-App `1.0.1`, Host `1.0.0` and CLI `1.0.0`; all six public NuGets remain `1.0.2`.
+default is not a release version owner. The integrated-workflow cutover authored
+App `1.0.1`, Host `1.0.0` and CLI `1.0.0`; developer packages are versioned independently.
 
 On protected-main pushes or release dispatches, selection compares each version with
 its published `app/v*`, `cli/v*` or `host/v*` releases. Stable releases ignore prereleases as

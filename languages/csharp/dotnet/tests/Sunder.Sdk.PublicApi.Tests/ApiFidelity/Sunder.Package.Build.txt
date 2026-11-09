@@ -205,6 +205,7 @@ type Sunder.Package.Build.Tasks.ManageSunderPackageRoleInputsTask
   property System.String RolePlanPath { public get; public set; }
   property System.String RolePlanSha256 { public get; public set; }
   property System.String RuntimeIdentifier { public get; public set; }
+  property System.String SdkDirectory { public get; public set; }
   property System.String SelectionFile { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] SourceFiles { public get; public set; }
   property System.String SourceRoot { public get; public set; }

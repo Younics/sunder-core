@@ -225,10 +225,7 @@ public sealed partial class ManageSunderPackageRoleInputsTask
             || evidence.Files is null || evidence.Files.Length is < 1 or > MaximumFiles) throw Invalid("Unsupported or incomplete role-input evidence.");
         input = BindPrivatePackageIdentity(input, evidence.Inputs.PackageId);
         var frame = Frame(input);
-        var missingInputs = evidence.Inputs.ExternalInputs.Select(file => file.Path).Except(frame.ExternalInputs.Select(file => file.Path), StringComparer.Ordinal).ToArray();
-        var extraInputs = frame.ExternalInputs.Select(file => file.Path).Except(evidence.Inputs.ExternalInputs.Select(file => file.Path), StringComparer.Ordinal).ToArray();
-        if (missingInputs.Length != 0 || extraInputs.Length != 0) throw Invalid("External input membership differs: missing=" + string.Join(",", missingInputs.Take(5)) + "; extra=" + string.Join(",", extraInputs.Take(5)));
-        Equal(frame, evidence.Inputs, "Reviewed authoring inputs"); VerifyCapture(input);
+        SunderPrebuiltSdkInputs.RequireEqual(frame, evidence.Inputs); VerifyCapture(input);
         RequireHash(evidence.RolePlan.NativePlanSha256); RequireHash(evidence.RolePlan.InputFingerprint);
         if (evidence.RolePlan.Roles is not { Length: >= 1 and <= 2 } || evidence.RolePlan.Roles.Any(role => role is null))
             throw Invalid("Invalid native role set.");
