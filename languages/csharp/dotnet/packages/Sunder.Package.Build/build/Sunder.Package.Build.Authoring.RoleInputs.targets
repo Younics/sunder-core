@@ -25,13 +25,14 @@
       <_SunderQualificationProperty Include="PublishSingleFile" Value="$(PublishSingleFile)" />
       <_SunderQualificationProperty Include="PublishTrimmed" Value="$(PublishTrimmed)" />
       <_SunderQualificationProperty Include="SdkVersion" Value="$(NETCoreSdkVersion)" />
+      <_SunderQualificationProperty Include="SdkHostRuntimeIdentifier" Value="$(NETCoreSdkRuntimeIdentifier)" />
       <_SunderQualificationProperty Include="RuntimeIdentifiers" Value="$(RuntimeIdentifiers)" />
       <_SunderQualificationProperty Include="SunderPackageRuntimeIdentifiers" Value="$(SunderPackageRuntimeIdentifiers)" />
       <_SunderQualificationProperty Include="@(_SunderGeneratorProperty)" />
       <_SunderQualifiedAuthoredCompile Include="@(Compile)" Exclude="$(GeneratedGlobalUsingsFile);$(GeneratedAssemblyInfoFile);$(TargetFrameworkMonikerAssemblyAttributesPath);$(AssemblyAttributesPath)" />
     </ItemGroup>
     <ManageSunderPackageRoleInputsTask Action="Capture" ProjectDirectory="$(MSBuildProjectDirectory)" ProjectFile="$(MSBuildProjectFullPath)" ProjectAssetsFile="$(ProjectAssetsFile)"
-                                      SourceRoot="$(SunderPackageRoleInputSourceRoot)" ProjectIdentity="$(MSBuildProjectName)" PackageVersion="$(Version)"
+                                      SourceRoot="$(SunderPackageRoleInputSourceRoot)" SdkDirectory="$(MSBuildToolsPath)" ProjectIdentity="$(MSBuildProjectName)" PackageVersion="$(Version)"
                                       Configuration="$(Configuration)" TargetFramework="$(TargetFramework)" RuntimeIdentifier="$(RuntimeIdentifier)" AssemblyName="$(AssemblyName)" AssetsDirectory="$(SunderPackageAssetsDirectory)"
                                       OwnedContractsPath="$(SunderOwnedContractsPath)" ContractLockPath="$(SunderContractLockPath)" AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
                                       SourceFiles="@(_SunderQualifiedAuthoredCompile)" ResourceItems="@(_SunderResourceInputs)" PackageReferences="@(PackageReference)"

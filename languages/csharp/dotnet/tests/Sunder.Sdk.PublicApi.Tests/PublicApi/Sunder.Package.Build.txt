@@ -290,6 +290,7 @@ type public sealed class Sunder.Package.Build.Tasks.ManageSunderPackageRoleInput
   property System.String RolePlanPath { public get; public set; }
   property System.String RolePlanSha256 { public get; public set; }
   property System.String RuntimeIdentifier { public get; public set; }
+  property System.String SdkDirectory { public get; public set; }
   property System.String SelectionFile { public get; public set; }
   property System.String SourceRoot { public get; public set; }
   property System.String TargetFramework { public get; public set; }

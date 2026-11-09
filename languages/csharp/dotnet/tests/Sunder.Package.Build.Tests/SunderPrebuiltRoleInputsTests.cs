@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.Text.Json.Nodes;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Authoring;
 using Xunit;
@@ -8,6 +10,106 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed class SunderPrebuiltRoleInputsTests
 {
+    [Fact]
+    public void SdkXmlComparisonNormalizesOnlyLineEndingsAndRetainsRawByteChecks()
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-prebuilt-sdk-xml");
+        var sdk = scope.CreateDirectory("sdk");
+        var path = scope.WriteAllText("sdk/Import.targets", "<Project>\r\n  <PropertyGroup><Value>same</Value></PropertyGroup>\r\n</Project>\r\n");
+        var native = SunderPrebuiltRoleInputs.File(path, "import:Import.targets", 4096, default);
+        var expected = SunderPrebuiltSdkInputs.XmlInput(path, "sdk-import-xml:Import.targets", native);
+        Assert.Throws<OperationCanceledException>(() => SunderPrebuiltSdkInputs.XmlInput(path, expected.Path, native, new CancellationToken(true)));
+        Assert.True(SunderPrebuiltSdkInputs.IsSdkImport(path, sdk));
+        Assert.False(SunderPrebuiltSdkInputs.IsSdkImport(scope.GetPath("source/Import.targets"), sdk));
+        Assert.False(SunderPrebuiltSdkInputs.IsSdkImport(scope.GetPath("sdk/tool.dll"), sdk));
+        File.WriteAllText(path, File.ReadAllText(path).Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.XmlInput(path, expected.Path, native));
+        var current = SunderPrebuiltRoleInputs.File(path, native.Path, 4096, default);
+        Assert.NotEqual(native.Sha256, current.Sha256);
+        Assert.Equal(expected, SunderPrebuiltSdkInputs.XmlInput(path, expected.Path, current));
+        File.WriteAllText(path, File.ReadAllText(path).Replace("same", "changed", StringComparison.Ordinal));
+        current = SunderPrebuiltRoleInputs.File(path, native.Path, 4096, default);
+        Assert.NotEqual(expected, SunderPrebuiltSdkInputs.XmlInput(path, expected.Path, current));
+    }
+
+    [Fact]
+    public void OnlyCanonicalSdkDiagnosticAssembliesWithoutGeneratorsHavePortableIdentity()
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-prebuilt-sdk-diagnostic");
+        var sdk = scope.CreateDirectory("sdk");
+        var directory = scope.CreateDirectory("sdk/Sdks/Microsoft.NET.Sdk/analyzers");
+        var path = Path.Combine(directory, "Microsoft.CodeAnalysis.NetAnalyzers.dll");
+        WriteAnalyzer(path, "public sealed class Fixture { }");
+        var raw = SunderPrebuiltRoleInputs.File(path, "diagnostic", 1024 * 1024, default);
+        var identity = SunderPrebuiltSdkInputs.DiagnosticInput(path, sdk, raw);
+        Assert.NotNull(identity);
+        Assert.Throws<OperationCanceledException>(() => SunderPrebuiltSdkInputs.DiagnosticInput(path, sdk, raw, new CancellationToken(true)));
+        var external = scope.GetPath("Microsoft.CodeAnalysis.NetAnalyzers.dll"); File.Copy(path, external);
+        Assert.Null(SunderPrebuiltSdkInputs.DiagnosticInput(external, sdk, raw));
+        WriteAnalyzer(path, "[Microsoft.CodeAnalysis.Generator] public sealed class Fixture { }");
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.DiagnosticInput(path, sdk, raw));
+        raw = SunderPrebuiltRoleInputs.File(path, "diagnostic", 1024 * 1024, default);
+        Assert.Null(SunderPrebuiltSdkInputs.DiagnosticInput(path, sdk, raw));
+        WriteAnalyzer(path, "public abstract class Fixture : Microsoft.CodeAnalysis.ISourceGenerator { public abstract void Initialize(Microsoft.CodeAnalysis.GeneratorInitializationContext context); public abstract void Execute(Microsoft.CodeAnalysis.GeneratorExecutionContext context); }");
+        raw = SunderPrebuiltRoleInputs.File(path, "diagnostic", 1024 * 1024, default);
+        Assert.Null(SunderPrebuiltSdkInputs.DiagnosticInput(path, sdk, raw));
+
+        static void WriteAnalyzer(string path, string source)
+        {
+            var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!).Split(Path.PathSeparator)
+                .Append(typeof(GeneratorAttribute).Assembly.Location).Distinct(StringComparer.Ordinal)
+                .Select(value => MetadataReference.CreateFromFile(value));
+            var compilation = CSharpCompilation.Create("Microsoft.CodeAnalysis.NetAnalyzers",
+                [CSharpSyntaxTree.ParseText(source)],
+                references, new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+            using var output = File.Create(path); var result = compilation.Emit(output);
+            Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        }
+    }
+
+    [Fact]
+    public void CrossHostSdkComparisonPreservesNativeRecordsAndRejectsEmittingInputOrSdkDrift()
+    {
+        static SunderPrebuiltFile Record(string path, char hash = 'a') => new(path, 100, new string(hash, 64));
+        var properties = new SortedDictionary<string, string>(StringComparer.Ordinal)
+            { [SunderPrebuiltSdkInputs.HostProperty] = "linux-x64", ["SdkVersion"] = "10.0.403" };
+        var current = new SunderPrebuiltFrame("example.package", "1.0.0", "Package.csproj", "Package", "Release", "net10.0", "win-x64", "Package",
+            "sunder-contracts.owned.json", new string('b', 64), "sunder-contracts.lock.json", new string('c', 64), properties, [],
+            [Record("Source.cs")], [Record("Sunder.Package.Build.dll")],
+            [Record("generator:Emitting.dll"), Record("import:Microsoft.TestPlatform.ImportAfter.targets"),
+             Record("sdk-diagnostic-bytes:Microsoft.CodeAnalysis.NetAnalyzers.dll"), Record("sdk-diagnostic-identity:Microsoft.CodeAnalysis.NetAnalyzers.dll"),
+             Record("sdk-import-xml:Microsoft.TestPlatform.ImportAfter.targets")]);
+        var native = current with
+        {
+            Properties = new(properties, StringComparer.Ordinal) { [SunderPrebuiltSdkInputs.HostProperty] = "win-x64" },
+            ExternalInputs = current.ExternalInputs.Select(file => file.Path.StartsWith("import:", StringComparison.Ordinal)
+                || file.Path.StartsWith(SunderPrebuiltSdkInputs.DiagnosticBytes, StringComparison.Ordinal) ? file with { Bytes = 120, Sha256 = new string('d', 64) } : file).ToArray(),
+        };
+        var retained = SunderPrebuiltRoleInputs.Write(native);
+        SunderPrebuiltSdkInputs.RequireEqual(current, native);
+        Assert.Equal(retained, SunderPrebuiltRoleInputs.Write(native));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with { Properties = properties }));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with
+            { Properties = new(native.Properties, StringComparer.Ordinal) { ["SdkVersion"] = "10.0.402" } }));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with { Toolset = [Record("Sunder.Package.Build.dll", 'e')] }));
+        foreach (var name in current.ExternalInputs.Where(file => !file.Path.StartsWith("import:", StringComparison.Ordinal)
+                     && !file.Path.StartsWith(SunderPrebuiltSdkInputs.DiagnosticBytes, StringComparison.Ordinal)).Select(file => file.Path))
+            Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with
+                { ExternalInputs = native.ExternalInputs.Select(file => file.Path == name ? file with { Sha256 = new string('e', 64) } : file).ToArray() }));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with { ExternalInputs = native.ExternalInputs[1..] }));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with { ExternalInputs = native.ExternalInputs.Reverse().ToArray() }));
+        foreach (var host in new[] { "", "linux-musl-x64" })
+            Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with
+                { Properties = new(native.Properties, StringComparer.Ordinal) { [SunderPrebuiltSdkInputs.HostProperty] = host } }));
+        // Legacy/unpaired records cannot use the cross-host exemption.
+        var unpaired = current.ExternalInputs.Where(file => !file.Path.StartsWith(SunderPrebuiltSdkInputs.ImportXml, StringComparison.Ordinal)).ToArray();
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current with { ExternalInputs = unpaired }, native with
+            { ExternalInputs = native.ExternalInputs.Where(file => !file.Path.StartsWith(SunderPrebuiltSdkInputs.ImportXml, StringComparison.Ordinal)).ToArray() }));
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltSdkInputs.RequireEqual(current, native with
+            { ExternalInputs = native.ExternalInputs.Select(file => file.Path.StartsWith(SunderPrebuiltSdkInputs.DiagnosticBytes, StringComparison.Ordinal)
+                ? file with { Bytes = -1 } : file).ToArray() }));
+    }
+
     [Theory]
     [InlineData("en-US")]
     [InlineData("tr-TR")]

@@ -65,6 +65,29 @@ Evidence binds:
 - Every canonical leaf file, including manifest and content index, by path, size and
   SHA-256. Both the independently validated index and qualification must match.
 
+### Host-specific SDK inputs
+
+Capture also records `SdkHostRuntimeIdentifier`. Cross-host composition still
+requires the same SDK version, exact Sunder toolset, source generators, authored
+inputs and restored RID selection. Two SDK distribution details have portable
+comparisons while retaining their original native hashes in `externalInputs`:
+
+- The SDK's two built-in .NET diagnostic analyzer assemblies have host-specific
+  native images/signatures. Only their canonical SDK locations and matching assembly
+  identities qualify, and metadata inspection must find no source generators.
+  `sdk-diagnostic-bytes:` retains raw bytes; `sdk-diagnostic-identity:` binds the
+  assembly identity. Diagnostics continue running during native compilation.
+- SDK `.props`/`.targets` imports retain their raw `import:` records and add
+  `sdk-import-xml:` records with XML's CRLF/CR-to-LF normalization. All other content
+  stays bound. Authored and NuGet imports retain exact-byte comparison.
+
+Raw records remain exact on the same SDK host and are rechecked throughout every
+capture/export/validation/publication operation. On a different supported host,
+only those paired raw SDK records vary; their membership and portable identities
+still match. Source generators and the Sunder toolset never receive this exemption.
+Existing captures without these records remain strict and require recapture for
+cross-host portability; old evidence is never rewritten into a new qualification.
+
 Restore-input qualification accepts NuGet `project.assets.json` formats **3 and 4**
 only. [NuGet's V4 alias format](https://github.com/NuGet/Home/blob/dev/accepted/2025/Multiple-Equivalent-Framework-Support-TFM-As-Aliases.md)
 is emitted by SDK-aware restore at `SDKAnalysisLevel` 10.0.300 and later (including
@@ -111,12 +134,13 @@ dotnet msbuild Package.csproj -t:PackSunderPackage \
   -p:Configuration=Release \
   -p:SunderPackageUsePrebuiltLeaves=true \
   -p:BuildProjectReferences=false \
-  -p:SunderPackageComposeRuntimeIdentifiers="linux-x64%3Bosx-arm64" \
+  '-p:SunderPackageComposeRuntimeIdentifiers="linux-x64;osx-arm64"' \
   -p:SunderPackagePrebuiltRoleInputsFile=/artifacts/native-inputs/selection.json
 ```
 
 Select one RID with `RuntimeIdentifier`, a subset with
 `SunderPackageComposeRuntimeIdentifiers`, or omit both to require every declared RID.
+The list's double quotes must reach MSBuild; percent-escaped semicolons form one item.
 There is no current-machine role fallback. Missing or extra selections fail. The
 current project must already have its dependency/tool inputs available from an explicit
 restore; the fan-in command never restores them. It reevaluates current authored inputs
