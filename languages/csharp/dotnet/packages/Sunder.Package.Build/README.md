@@ -33,7 +33,7 @@ generated package uses:
 ```xml
 <ItemGroup>
   <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.0.3" PrivateAssets="all" />
+  <PackageReference Include="Sunder.Package.Build" Version="1.0.4" PrivateAssets="all" />
 </ItemGroup>
 ```
 
