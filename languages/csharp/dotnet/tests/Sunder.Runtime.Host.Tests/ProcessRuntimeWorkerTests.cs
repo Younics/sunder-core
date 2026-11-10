@@ -923,28 +923,35 @@ public sealed partial class ProcessRuntimeWorkerTests
         await using var stream = fixture.Worker.InvokeServerStreamAsync("example.provider", fixture.InvocationContext(),
             "messages", "wait", JsonSerializer.SerializeToElement(new { message = "held" }), cancellation.Token).GetAsyncEnumerator();
         var waiting = stream.MoveNextAsync().AsTask();
-        using var entered = await fixture.WaitForWorkerStatusAsync("host-invoke-wait-entered.json");
-        if (negotiated)
+        try
         {
-            var result = await fixture.Worker.InvokeUnaryAsync("example.provider", fixture.InvocationContext(),
-                "messages", "send", JsonSerializer.SerializeToElement(new { message = "healthy" }), CancellationToken.None);
-            Assert.True(result.GetProperty("accepted").GetBoolean());
+            using var entered = await fixture.WaitForWorkerStatusAsync("host-invoke-wait-entered.json");
+            if (negotiated)
+            {
+                var result = await fixture.Worker.InvokeUnaryAsync("example.provider", fixture.InvocationContext(),
+                    "messages", "send", JsonSerializer.SerializeToElement(new { message = "healthy" }), CancellationToken.None);
+                Assert.True(result.GetProperty("accepted").GetBoolean());
+            }
+            else
+            {
+                var limited = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Worker.InvokeUnaryAsync("example.provider", fixture.InvocationContext(),
+                    "messages", "send", JsonSerializer.SerializeToElement(new { message = "not-dispatched" }), CancellationToken.None).AsTask());
+                Assert.Equal("rpc.worker.host-call-limit", limited.Error.Code);
+                Assert.Equal(SunderRpcDispatchState.NotDispatched, limited.Error.DispatchState);
+            }
+            await using var extra = fixture.Worker.InvokeServerStreamAsync("example.provider", fixture.InvocationContext(),
+                "messages", "wait", JsonSerializer.SerializeToElement(new { message = "rejected" }), CancellationToken.None).GetAsyncEnumerator();
+            var failure = await Assert.ThrowsAsync<SunderRpcException>(() => extra.MoveNextAsync().AsTask());
+            Assert.Equal(negotiated ? "rpc.worker.host-stream-limit" : "rpc.worker.host-call-limit", failure.Error.Code);
+            Assert.Equal(SunderRpcDispatchState.NotDispatched, failure.Error.DispatchState);
+            Assert.Equal(SunderRpcRetrySafety.Safe, failure.Error.RetrySafety);
         }
-        else
+        finally
         {
-            var limited = await Assert.ThrowsAsync<SunderRpcException>(() => fixture.Worker.InvokeUnaryAsync("example.provider", fixture.InvocationContext(),
-                "messages", "send", JsonSerializer.SerializeToElement(new { message = "not-dispatched" }), CancellationToken.None).AsTask());
-            Assert.Equal("rpc.worker.host-call-limit", limited.Error.Code);
-            Assert.Equal(SunderRpcDispatchState.NotDispatched, limited.Error.DispatchState);
+            // Drain the pending move before disposal even when an earlier assertion fails.
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
         }
-        await using var extra = fixture.Worker.InvokeServerStreamAsync("example.provider", fixture.InvocationContext(),
-            "messages", "wait", JsonSerializer.SerializeToElement(new { message = "rejected" }), CancellationToken.None).GetAsyncEnumerator();
-        var failure = await Assert.ThrowsAsync<SunderRpcException>(() => extra.MoveNextAsync().AsTask());
-        Assert.Equal(negotiated ? "rpc.worker.host-stream-limit" : "rpc.worker.host-call-limit", failure.Error.Code);
-        Assert.Equal(SunderRpcDispatchState.NotDispatched, failure.Error.DispatchState);
-        Assert.Equal(SunderRpcRetrySafety.Safe, failure.Error.RetrySafety);
-        cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
         Assert.False(fixture.Worker.GenerationCompletion.IsCompleted);
     }
 
