@@ -131,10 +131,13 @@ internal static class SunderPrebuiltRoleInputs
         {
             token.ThrowIfCancellationRequested();
             if (++entries > 65536 || directory.Depth > 32) throw Invalid("Input membership exceeds its discovery budget.");
-            var name = Path.GetFileName(path); var attributes = System.IO.File.GetAttributes(path);
-            if (source && IgnoredDirectories.Contains(name) && (attributes & FileAttributes.Directory) != 0) continue;
+            var name = Path.GetFileName(path);
+            // Lock candidates and quarantine entries can disappear after enumeration.
+            // Exclude their reserved names before inspecting filesystem metadata.
             if (source && (name.EndsWith(GeneratedOutputLock.LockSuffix, StringComparison.Ordinal)
                 || name.Contains(GeneratedOutputLock.LockSuffix + ".", StringComparison.Ordinal))) continue;
+            var attributes = System.IO.File.GetAttributes(path);
+            if (source && IgnoredDirectories.Contains(name) && (attributes & FileAttributes.Directory) != 0) continue;
             if (source && name == ".git") continue;
             if ((attributes & FileAttributes.ReparsePoint) != 0) throw Invalid("Qualified inputs cannot contain links/reparse points.");
             if ((attributes & FileAttributes.Directory) != 0) { pending.Push((path, directory.Depth + 1)); continue; }

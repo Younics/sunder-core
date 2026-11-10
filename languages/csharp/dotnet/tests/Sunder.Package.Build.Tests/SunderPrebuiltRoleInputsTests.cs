@@ -11,6 +11,56 @@ namespace Sunder.Package.Build.Tests;
 public sealed class SunderPrebuiltRoleInputsTests
 {
     [Fact]
+    public async Task SourceTreeIgnoresConcurrentLockMetadataButRetainsInputFidelity()
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-prebuilt-source-locks");
+        var source = scope.WriteAllText("Source.cs", "public sealed class Source { }");
+        var expected = SunderPrebuiltRoleInputs.Tree(scope.RootPath, source: true, default);
+        Assert.Equal("Source.cs", Assert.Single(expected).Path);
+        using var stop = new CancellationTokenSource();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cycles = 0;
+        var writer = Task.Run(() =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                var cycle = Interlocked.Increment(ref cycles);
+                var candidates = Enumerable.Range(0, 128).Select(index =>
+                    scope.GetPath($"Source.cs.sunder-output.lock.candidate-{cycle}-{index}")).ToArray();
+                foreach (var path in candidates) Directory.CreateDirectory(path);
+                started.TrySetResult();
+                Thread.Yield();
+                foreach (var path in candidates) Directory.Delete(path);
+            }
+        });
+        try
+        {
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            for (var capture = 0; capture < 64; capture++)
+                Assert.Equal(expected, SunderPrebuiltRoleInputs.Tree(scope.RootPath, source: true, default));
+            Assert.True(Volatile.Read(ref cycles) > 0);
+        }
+        finally
+        {
+            stop.Cancel();
+            await writer;
+        }
+
+        // Only source capture excludes lock metadata. Native payload membership
+        // and real authored byte/membership changes must remain fail-closed.
+        scope.WriteAllText("Source.cs.sunder-output.lock/owner.json", "{}");
+        Assert.Equal(expected, SunderPrebuiltRoleInputs.Tree(scope.RootPath, source: true, default));
+        Assert.Contains(SunderPrebuiltRoleInputs.Tree(scope.RootPath, source: false, default),
+            file => file.Path == "Source.cs.sunder-output.lock/owner.json");
+        File.WriteAllText(source, "public sealed class Changed { }");
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltRoleInputs.Equal(expected,
+            SunderPrebuiltRoleInputs.Tree(scope.RootPath, source: true, default), "Authored source"));
+        File.Delete(source);
+        Assert.Throws<InvalidDataException>(() => SunderPrebuiltRoleInputs.Equal(expected,
+            SunderPrebuiltRoleInputs.Tree(scope.RootPath, source: true, default), "Authored source membership"));
+    }
+
+    [Fact]
     public void SdkXmlComparisonNormalizesOnlyLineEndingsAndRetainsRawByteChecks()
     {
         using var scope = TemporaryDirectoryScope.Create("sunder-prebuilt-sdk-xml");
