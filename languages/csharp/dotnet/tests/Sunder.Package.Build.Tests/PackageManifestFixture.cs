@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Microsoft.Build.Framework;
 using Sunder.Package.Build.Tasks;
@@ -142,22 +143,14 @@ internal static class PackageManifestFixture
     }
 
     internal static string GetFixtureAssemblyPath(string fixtureName, string? assemblyName = null)
-        => Path.Combine(
-            FindRepositoryRoot(),
-            "languages",
-            "csharp",
-            "dotnet",
-            "tests",
-            "Sunder.Package.Build.TestFixtures",
-            fixtureName,
-            "bin",
-            ResolveConfiguration(),
-            "net10.0",
-            (assemblyName ?? fixtureName) + ".dll");
+        => typeof(PackageManifestFixture).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "Sunder.ManifestFixture." + (assemblyName ?? fixtureName)).Value
+           ?? throw new InvalidOperationException($"The build did not record fixture '{fixtureName}'.");
 
     internal static string ResolveConfiguration()
-        => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)).Parent?.Name
-           ?? "Debug";
+        => typeof(PackageManifestFixture).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .Single(attribute => attribute.Key == "Sunder.Test.Configuration").Value
+           ?? throw new InvalidOperationException("The build did not record its test configuration.");
 
     internal static string FindRepositoryRoot()
     {

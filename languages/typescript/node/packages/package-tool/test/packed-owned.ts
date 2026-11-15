@@ -11,11 +11,13 @@ import { constructorSource, sharedSource } from "./owned-rpc-review-fixtures";
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
 import { exercisePackedImports } from "./packed-imports";
 import { exercisePackedPlatformCatalog } from "./packed-platform-catalog";
+import { execNpm } from "./npm-process";
+import { disposePackedProject } from "./packed-service-tools";
 
 export async function exercisePackedOwned(): Promise<void> {
   const exec=promisify(execFile);const nodeRoot=resolve(__dirname,"../../../..");const tarballs=await mkdtemp(resolve(tmpdir(),"sunder-packed-owned-"));
   try {
-    for(const name of ["@younics/sunder-sdk","@younics/sunder-package-tool"]) await exec("npm",["pack","--workspace",name,"--pack-destination",tarballs,"--ignore-scripts"],{cwd:nodeRoot});
+    for(const name of ["@younics/sunder-sdk","@younics/sunder-package-tool"]) await execNpm(["pack","--workspace",name,"--pack-destination",tarballs,"--ignore-scripts"],{cwd:nodeRoot});
     const archives=(await readdir(tarballs)).filter(name=>name.endsWith(".tgz")).map(name=>resolve(tarballs,name));assert.equal(archives.length,2);
     for(const extension of ["ts","js"]) {
       const root=resolve(tarballs,extension);await mkdir(resolve(root,"src"),{recursive:true});
@@ -23,7 +25,7 @@ export async function exercisePackedOwned(): Promise<void> {
       await writeFile(sourcePath,fixtureSource(input,extension));await writeFile(resolve(root,"sunder-contracts.lock.json"),emptyLock);
       await writeFile(resolve(root,"sunder.package.json"),JSON.stringify({schemaVersion:3,id:"example.owned",name:"Packed",version:"7.6.5",workerCapabilities:[],services:{module:`src/services.${extension}`}}));
       await writeFile(resolve(root,"package.json"),JSON.stringify({name:"packed-owned",version:"1.0.0",private:true,imports:{"#sunder/api":"./.sunder/generated/rpc/api.js"}}));
-      await exec("npm",["install","--omit=dev","--ignore-scripts","--no-audit","--no-fund",...archives],{cwd:root});
+      await execNpm(["install","--omit=dev","--ignore-scripts","--no-audit","--no-fund",...archives],{cwd:root});
       const tool=resolve(root,"node_modules/@younics/sunder-package-tool/dist/cli.js");const run=(...args:string[])=>exec(process.execPath,[tool,...args,"--project",root],{maxBuffer:4*1024*1024});
       const sdk=JSON.parse(await readFile(resolve(root,"node_modules/@younics/sunder-sdk/package.json"),"utf8"));assert.deepEqual(sdk.dependencies??{},{});
       assert.equal(JSON.parse(await readFile(resolve(root,"node_modules/typescript/package.json"),"utf8")).version,"6.0.3");
@@ -59,5 +61,8 @@ export async function exercisePackedOwned(): Promise<void> {
         assert.equal(result.stdout.trim(),"guard");
       }
     }
-  }finally{await rm(tarballs,{recursive:true,force:true});}
+  }finally{
+    for(const extension of ["ts","js"])await disposePackedProject(resolve(tarballs,extension));
+    await rm(tarballs,{recursive:true,force:true});
+  }
 }

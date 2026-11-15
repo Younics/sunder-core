@@ -16,9 +16,9 @@ public sealed partial class PackageViewHostServiceTests
     [InlineData("shutdown")]
     [InlineData("replacement")]
     [InlineData("owner-release")]
-    public async Task NormalLifecycleSettlesAcceptedDeferredStateBeforeRevocationAndProviderDrain(string operation)
+    public Task NormalLifecycleSettlesAcceptedDeferredStateBeforeRevocationAndProviderDrain(string operation)
+        => RunPackageTestAsync("app-accepted-state-lifecycle", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-accepted-state-lifecycle");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -98,12 +98,12 @@ public sealed partial class PackageViewHostServiceTests
             await current.ServiceProvider!.GetRequiredService<IPackageContext>().Storage.State.SetValueAsync("bookmark", "replacement");
             Assert.Equal("replacement", value);
         }
-    }
+    });
 
     [Fact]
-    public async Task ReplacementRevokesExactPredecessorEvenWhenOlderPresentationRetirementStillHoldsItsReference()
+    public Task ReplacementRevokesExactPredecessorEvenWhenOlderPresentationRetirementStillHoldsItsReference()
+        => RunPackageTestAsync("app-state-handoff-retirement-backlog", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-state-handoff-retirement-backlog");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -149,14 +149,14 @@ public sealed partial class PackageViewHostServiceTests
         finally { blocker.Release.TrySetResult(); }
         await host.WaitForRetirementsAsync();
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task StateHandoffWaitsForAcceptedWriteBeforeReplacementButDoesNotPauseRetainedActivation(bool retained)
+    public Task StateHandoffWaitsForAcceptedWriteBeforeReplacementButDoesNotPauseRetainedActivation(bool retained)
+        => RunPackageTestAsync("app-state-handoff", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-state-handoff");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -230,14 +230,14 @@ public sealed partial class PackageViewHostServiceTests
             Assert.Equal("replacement", value);
         }
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task RejectedStateHandoffRestoresCurrentWriteAdmissionWithoutWaitingForCandidateResourceDisposal(bool cancelled)
+    public Task RejectedStateHandoffRestoresCurrentWriteAdmissionWithoutWaitingForCandidateResourceDisposal(bool cancelled)
+        => RunPackageTestAsync("app-state-handoff-abort", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-state-handoff-abort");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -286,12 +286,12 @@ public sealed partial class PackageViewHostServiceTests
         finally { cleanupRelease.TrySetResult(); }
         await host.WaitForRetirementsAsync();
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     [Fact]
-    public async Task FailedDataSettlementStillDisposesLocalResourcesButCannotAcknowledgeRetirementOrReplacement()
+    public Task FailedDataSettlementStillDisposesLocalResourcesButCannotAcknowledgeRetirementOrReplacement()
+        => RunPackageTestAsync("app-state-settlement-failure", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-state-settlement-failure");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -322,5 +322,5 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Single(handler.ClosedSessions);
         Assert.Empty(policy.RetiredActivationIds);
         Assert.Equal(1, host.RetirementFailureCount);
-    }
+    });
 }

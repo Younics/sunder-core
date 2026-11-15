@@ -211,6 +211,11 @@ async function run(file: string, argumentsList: readonly string[], cwd: string):
 }
 
 async function assertOwnedSource(root: string, packageId: string): Promise<void> {
+  for (const path of (await files(root)).filter(path => path.endsWith(".json"))) {
+    const bytes = await readFile(path);
+    assert.equal(bytes.includes(13), false, `${path}: scaffold JSON must retain LF bytes`);
+    assert.equal(bytes.subarray(0, 3).equals(Buffer.from([239, 187, 191])), false, `${path}: scaffold JSON must not gain a BOM`);
+  }
   const source = await readFile(resolve(root, "src/services.ts"), "utf8");
   assert.match(source, /export const messages = defineService\(/u);
   assert.match(source, /async send\(message: string, context: ServiceContext\)/u);

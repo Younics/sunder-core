@@ -77,16 +77,27 @@ export async function canonicalCandidateFixture(packageId: string, input: Record
 }
 
 export async function installFixtureInspector(root:string):Promise<()=>void>{
-  const path=resolve(root,"format-inspector-fixture.cjs");const previous=process.env.SUNDER_CLI;
-  await writeFile(path,`#!${process.execPath}
+  const path=resolve(root,"format-inspector-fixture.cjs");const previous=process.env.SUNDER_CLI;const previousOptions=process.env.NODE_OPTIONS;
+  // SUNDER_CLI is an executable, not a shell command. Run this test-only boundary
+  // through Node's native executable so Windows need not execute a .cjs shebang.
+  // The preload also reaches CLI subprocess consumers, but handles only the exact
+  // inspector entry point; ordinary Node/CLI execution is left untouched.
+  await writeFile(path,`
 const fs=require("node:fs"),p=require("node:path"),crypto=require("node:crypto");
+if(p.basename(process.argv[1]??"")==="dev"&&process.argv[2]==="package"&&process.argv[3]==="validate"){
 try {
- const args=process.argv.slice(2),body=fs.readFileSync(args[3]),data=JSON.parse(body);const output=args[args.indexOf("--api-output")+1];
+ const args=["dev",...process.argv.slice(2)],body=fs.readFileSync(args[3]),data=JSON.parse(body);const output=args[args.indexOf("--api-output")+1];
  const value={schemaVersion:1,archiveSha256:crypto.createHash("sha256").update(body).digest("hex"),...data.inspection};
  fs.mkdirSync(output);fs.writeFileSync(p.join(output,"inspection.json"),data.receiptText??JSON.stringify(value));
  for(const [name,text] of Object.entries(data.files)){if(!/^[A-Za-z0-9][A-Za-z0-9._-]*\\.json$/.test(name))throw Error("invalid fixture path");fs.writeFileSync(p.join(output,name),text);}
-} catch {process.exitCode=1;}
-`,{mode:0o755});
-  process.env.SUNDER_CLI=path;
-  return ()=>{if(process.env.SUNDER_CLI===path){if(previous===undefined)delete process.env.SUNDER_CLI;else process.env.SUNDER_CLI=previous;}};
+} catch {process.exit(1);}
+process.exit(0);
+}
+`);
+  const options=`${previousOptions??""} --require ${JSON.stringify(path)}`.trim();
+  process.env.SUNDER_CLI=process.execPath;process.env.NODE_OPTIONS=options;
+  return ()=>{
+    if(process.env.SUNDER_CLI===process.execPath){if(previous===undefined)delete process.env.SUNDER_CLI;else process.env.SUNDER_CLI=previous;}
+    if(process.env.NODE_OPTIONS===options){if(previousOptions===undefined)delete process.env.NODE_OPTIONS;else process.env.NODE_OPTIONS=previousOptions;}
+  };
 }

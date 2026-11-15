@@ -12,9 +12,25 @@ internal sealed class WindowsFactAttribute : FactAttribute
     }
 }
 
+internal sealed class WindowsTheoryAttribute : TheoryAttribute
+{
+    public WindowsTheoryAttribute()
+    {
+        if (!OperatingSystem.IsWindows()) Skip = "Requires Windows.";
+    }
+}
+
 internal sealed class UnixFactAttribute : FactAttribute
 {
     public UnixFactAttribute()
+    {
+        if (OperatingSystem.IsWindows()) Skip = "Requires a Unix platform.";
+    }
+}
+
+internal sealed class UnixTheoryAttribute : TheoryAttribute
+{
+    public UnixTheoryAttribute()
     {
         if (OperatingSystem.IsWindows()) Skip = "Requires a Unix platform.";
     }

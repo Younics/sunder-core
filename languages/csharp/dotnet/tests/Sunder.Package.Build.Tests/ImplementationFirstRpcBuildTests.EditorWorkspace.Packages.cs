@@ -9,9 +9,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
     private static readonly string[] EditorWorkspaceSdkPackages =
         ["Sunder.Sdk", "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia", "Sunder.Package.Build"];
 
-    private sealed record EditorWorkspacePackage(string ContentHash, string ArchiveHash, string Feed);
+    internal sealed record EditorWorkspacePackage(string ContentHash, string ArchiveHash, string Feed);
 
-    private static Dictionary<string, EditorWorkspacePackage> PrepareEditorWorkspacePackages(
+    internal static Dictionary<string, EditorWorkspacePackage> PrepareEditorWorkspacePackages(
         string feed, string thirdPartyFeed, string version)
     {
         var prepared = new Dictionary<string, EditorWorkspacePackage>(StringComparer.OrdinalIgnoreCase);
@@ -69,14 +69,15 @@ public sealed partial class ImplementationFirstRpcBuildTests
         return prepared;
     }
 
-    private static void AssertEditorWorkspaceRestore(string project, string packages,
-        IReadOnlyDictionary<string, EditorWorkspacePackage> prepared)
+    internal static void AssertEditorWorkspaceRestore(string project, string packages,
+        IReadOnlyDictionary<string, EditorWorkspacePackage> prepared, bool buildPackageReference = false)
     {
         using var assets = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(Path.GetDirectoryName(project)!, "obj/project.assets.json")));
         Assert.Equal(Normalize(packages), Normalize(Assert.Single(assets.RootElement.GetProperty("packageFolders").EnumerateObject()).Name));
         var libraries = assets.RootElement.GetProperty("libraries").EnumerateObject()
             .Where(library => library.Value.GetProperty("type").GetString() == "package").ToArray();
-        Assert.Equal(prepared.Keys.Order(StringComparer.OrdinalIgnoreCase), libraries.Select(library => library.Name).Order(StringComparer.OrdinalIgnoreCase));
+        Assert.Equal(prepared.Keys.Where(name => buildPackageReference || !name.StartsWith("Sunder.Package.Build/", StringComparison.Ordinal))
+            .Order(StringComparer.OrdinalIgnoreCase), libraries.Select(library => library.Name).Order(StringComparer.OrdinalIgnoreCase));
         foreach (var library in libraries)
         {
             var expected = prepared[library.Name];
@@ -93,6 +94,17 @@ public sealed partial class ImplementationFirstRpcBuildTests
         foreach (var framework in assets.RootElement.GetProperty("project").GetProperty("frameworks").EnumerateObject())
             if (framework.Value.TryGetProperty("downloadDependencies", out var downloads))
                 Assert.Empty(downloads.EnumerateArray()); // Framework-dependent roles need no runtime/apphost pack prefetch.
+
+        // MSBuild resolves the build SDK before NuGet evaluates PackageReference.
+        // Verify that it too came from this fresh feed/cache, not a public release.
+        var sdk = Assert.Single(prepared, pair => pair.Key.StartsWith("Sunder.Package.Build/", StringComparison.Ordinal));
+        var sdkDirectory = Path.Combine(packages, sdk.Key.ToLowerInvariant());
+        Assert.True(File.Exists(Path.Combine(sdkDirectory, "Sdk/Sdk.props")));
+        Assert.True(File.Exists(Path.Combine(sdkDirectory, "Sdk/Sdk.targets")));
+        using var sdkMetadata = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(sdkDirectory, ".nupkg.metadata")));
+        Assert.Equal(Normalize(sdk.Value.Feed), Normalize(sdkMetadata.RootElement.GetProperty("source").GetString()!));
+        Assert.Equal(sdk.Value.ArchiveHash, EditorWorkspaceArchiveHash(Path.Combine(sdkDirectory,
+            sdk.Key.Replace('/', '.').ToLowerInvariant() + ".nupkg")));
 
         static string Normalize(string path) => ResolvePhysicalTemporaryPath(Path.TrimEndingDirectorySeparator(Path.GetFullPath(path)));
     }

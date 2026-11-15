@@ -8,6 +8,7 @@ using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.Host.TestSupport;
 using Sunder.Runtime.LocalState;
 using Sunder.Sdk.Compatibility;
 using Sunder.Sdk.Rpc;
@@ -18,6 +19,53 @@ namespace Sunder.Runtime.Host.Tests;
 // Local current inputs are an explicit scope, separate from universal release activation.
 public sealed class AgentCurrentInputsTests
 {
+    [Theory]
+    [InlineData("schema")]
+    [InlineData("profile")]
+    [InlineData("installed-acceptance")]
+    [InlineData("catalog-bytes")]
+    [InlineData("archive-bytes")]
+    [InlineData("missing-archive")]
+    [InlineData("missing-handoff-input")]
+    [InlineData("inventory")]
+    [InlineData("contracts")]
+    public void AppArtifactHandoff_RejectsWrongPhaseOrChangedAndIncompleteInputs(string mutation)
+    {
+        using var temporary = TemporaryDirectoryScope.Create("sunder-agent-handoff");
+        var archives = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var id in new[] { "agent", "maker" })
+        {
+            var path = temporary.GetPath(id + ".sunderpkg");
+            File.WriteAllText(path, id + " synthetic input bytes");
+            archives.Add(id, path);
+        }
+        var catalog = temporary.GetPath("catalog.json");
+        File.WriteAllText(catalog, "synthetic catalog input bytes");
+        var package = new ActivePackageDescriptor("agent", "Agent", "2.0.0", PackageHostRoles.App, null, true, PackageReadinessState.Ready, []);
+        var snapshot = new PackageUiSnapshotDescriptor("agent", PackageSourceKind.Dev, 1,
+            new("app", "win-x64", "dotnet", "Agent.dll", "net10.0", null, []), "snapshot-hash", "old-alias", "old-uri");
+        var handoff = new AgentFamilyArtifactHandoff(2, AgentFamilyArtifactHandoff.DevelopmentProfile, false, package, snapshot,
+            "inventory-hash", "contracts-hash", AgentFamilyArtifactHandoff.Hash(catalog),
+            archives.Select(pair => AgentFamilyArchiveInput.Read(pair.Key, pair.Value)).ToArray());
+        // Exercise the wire representation, including separately allocated target collections.
+        handoff = JsonSerializer.Deserialize<AgentFamilyArtifactHandoff>(JsonSerializer.SerializeToUtf8Bytes(handoff, AgentFamilyArtifactHandoff.Json), AgentFamilyArtifactHandoff.Json)!;
+        handoff.VerifyInputs(archives, catalog, "inventory-hash", "contracts-hash");
+        switch (mutation)
+        {
+            case "schema": handoff = handoff with { SchemaVersion = 1 }; break;
+            case "profile": handoff = handoff with { Profile = "published-installed" }; break;
+            case "installed-acceptance": handoff = handoff with { InstalledAcceptance = true }; break;
+            case "catalog-bytes": File.AppendAllText(catalog, "changed"); break;
+            case "archive-bytes": File.AppendAllText(archives["maker"], "changed"); break;
+            case "missing-archive": archives.Remove("maker"); break;
+            case "missing-handoff-input": handoff = handoff with { Archives = handoff.Archives.Take(1).ToArray() }; break;
+            case "inventory": handoff = handoff with { InventorySha256 = "changed" }; break;
+            case "contracts": handoff = handoff with { ContractsSha256 = "changed" }; break;
+            default: throw new ArgumentOutOfRangeException(nameof(mutation));
+        }
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => handoff.VerifyInputs(archives, catalog, "inventory-hash", "contracts-hash"));
+    }
+
     [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_CURRENT_INPUTS", "SUNDER_AGENT_CURRENT_BASELINE_ROOT", "SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")]
     public async Task QualifiedCurrentRidArchivesMatchIndependentRecords()
     {

@@ -1,0 +1,11 @@
+<Project>
+  <!-- An SDK import is available during the very first NuGet restore, unlike a
+       buildTransitive import from an ordinary PackageReference. -->
+  <Import Project="Sdk.props" Sdk="Microsoft.NET.Sdk" />
+  <PropertyGroup>
+    <_SunderPackageBuildSdkDirectory>$(MSBuildThisFileDirectory)</_SunderPackageBuildSdkDirectory>
+    <_SunderPackageBuildSdkTargetsDirectory Condition="Exists('$(MSBuildThisFileDirectory)../buildTransitive/Sunder.Package.Build.targets')">$(MSBuildThisFileDirectory)../buildTransitive/</_SunderPackageBuildSdkTargetsDirectory>
+    <_SunderPackageBuildSdkTargetsDirectory Condition="'$(_SunderPackageBuildSdkTargetsDirectory)' == ''">$(MSBuildThisFileDirectory)../build/</_SunderPackageBuildSdkTargetsDirectory>
+  </PropertyGroup>
+  <Import Project="$(_SunderPackageBuildSdkTargetsDirectory)Sunder.Package.Build.props" />
+</Project>

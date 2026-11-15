@@ -12,6 +12,8 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
+using Sunder.App.Themes;
+using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
 using Sunder.App.Views.Controls;
@@ -24,6 +26,62 @@ namespace Sunder.App.Tests;
 [Collection(HeadlessAppCollection.Name)]
 public sealed class SettingsWindowLayoutTests
 {
+    [Fact]
+    public async Task AppearanceAndNotificationsHaveWorkingBoundControlsAndPrivacyIsAbsent()
+    {
+        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
+        await ui.Dispatch(async () =>
+        {
+            using var temporary = TemporaryDirectoryScope.Create("sunder-shell-preferences");
+            using var stateService = new ShellStateService(temporary.GetPath("shell.json"));
+            var state = new ShellState { SettingsSidebarWidth = 300 };
+            stateService.Save(state);
+            var themeManager = new ThemeManager(Application.Current!);
+            themeManager.Initialize();
+            var appearance = new SettingsAppearanceViewModel(themeManager, id => stateService.Update(state, value => value.ThemeId = id));
+            var notifications = new NotificationCenterService(temporary.GetPath("notifications.json"));
+            using var client = new EmptySettingsClient();
+            using var vm = new SettingsWindowViewModel(client, PackageViewHostService.Empty, new CliInstallationService(),
+                runtimeResourcePolicySettingsService: new AppRuntimeResourcePolicySettingsService(temporary.GetPath("resources.json")),
+                appearance: appearance, notifications: new SettingsNotificationsViewModel(notifications));
+            var window = new SettingsWindow { DataContext = vm };
+            window.Show();
+            try
+            {
+                Assert.True(vm.ShowAppearanceSettings);
+                Assert.False(vm.ShowPlainCoreSelection);
+                Assert.False(await vm.SelectCoreSectionAsync("privacy"));
+                Assert.DoesNotContain(vm.CoreSections, section => section.Id == "privacy");
+                var selector = window.FindControl<SunderComboBox>("ThemeSelector")!;
+                Assert.True(selector.IsEffectivelyVisible);
+                selector.SelectedItem = SunderThemeDefinition.GraphiteLight;
+                Assert.Same(SunderThemeDefinition.GraphiteLight, appearance.SelectedTheme);
+                Assert.True(await vm.ApplyAsync());
+                Assert.Same(ThemeVariant.Light, Application.Current!.RequestedThemeVariant);
+                Assert.Equal(SunderThemeDefinition.GraphiteLightId, stateService.Load().ThemeId);
+                Assert.Equal(300, stateService.Load().SettingsSidebarWidth);
+                Assert.Equal(SunderThemeDefinition.GraphiteLightId, state.ThemeId);
+
+                Assert.True(await vm.SelectCoreSectionAsync("notifications"));
+                window.UpdateLayout();
+                Assert.False(selector.IsEffectivelyVisible);
+                var master = Assert.Single(window.GetVisualDescendants().OfType<CheckBox>(), checkbox => checkbox.IsEffectivelyVisible
+                    && Equals(checkbox.Content, "Show notification pop-ups"));
+                Assert.True(master.IsChecked);
+                master.IsChecked = false;
+                Assert.False(vm.Notifications!.ShowToasts);
+                Assert.True(await vm.SaveAsync());
+                Assert.False(new NotificationCenterService(temporary.GetPath("notifications.json")).Preferences.ShowToasts);
+                Assert.True(await vm.SelectCoreSectionAsync("appearance"));
+                Assert.Same(SunderThemeDefinition.GraphiteLight, appearance.SelectedTheme);
+                Assert.True(await vm.SelectCoreSectionAsync("notifications"));
+                Assert.False(vm.Notifications.ShowToasts);
+            }
+            finally { window.CloseForShutdown(); }
+            return true;
+        }, default);
+    }
+
     [Fact]
     public async Task PackagePagesOmitShellHeadingAndFrameForBothGeneratedFormsAndHostedViewsButCoreRetainsThem()
     {

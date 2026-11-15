@@ -11,7 +11,7 @@
     <TargetsForTfmSpecificContentInPackage>$(TargetsForTfmSpecificContentInPackage);_AddSunderPackageBuildTaskFiles</TargetsForTfmSpecificContentInPackage>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <NoWarn>$(NoWarn);NU5100;NU5128</NoWarn>
-    <Version>1.0.4</Version>
+    <Version>1.1.0</Version>
     <AssemblyVersion>$(SunderSdkAssemblyVersion)</AssemblyVersion>
     <Title>Sunder.Package.Build</Title>
     <Description>Build and distribute Sunder extensions with MSBuild: generate typed service APIs, worker and UI output, development packages, and .sunderpkg archives.</Description>
@@ -31,6 +31,8 @@
 
   <ItemGroup>
     <Compile Remove="Editor/*.cs" />
+    <None Include="Sdk/Sdk.props;Sdk/Sdk.targets" Pack="true" PackagePath="Sdk/" />
+    <None Include="build/Sunder.Package.Build.Contracts.Restore.targets" Pack="true" PackagePath="buildTransitive/" />
     <None Include="build\Sunder.Toolchains.props" Pack="true" PackagePath="buildTransitive\Sunder.Toolchains.props" />
     <None Include="build\Sunder.Package.Build.props"
           Pack="true"

@@ -400,6 +400,42 @@ test("native aggregate requires every RID and complete disjoint partition report
     const issues = [];
     assert.equal(auditNativeEvidence(root, model, platforms, issues, reports).length, 12);
     assert.deepEqual(issues, []);
+    const skipped = structuredClone(reports);
+    const linkIds = new Set(model.declarations.filter(test => test.nativePrerequisite === "symbolic-link").map(test => test.id));
+    const linkReport = skipped.find(report => report.source.includes("-win-x64")
+      && report.results.some(result => linkIds.has(result.declarationId)));
+    const link = linkReport.results.find(result => linkIds.has(result.declarationId));
+    link.outcome = "Skipped";
+    link.skipReason = "Windows symbolic-link creation privilege is unavailable.";
+    const skipIssues = [];
+    assert.equal(auditNativeEvidence(root, model, platforms, skipIssues, skipped).filter(row => !row.complete).length, 1);
+    assert.match(skipIssues.join("\n"), /was reported as skipped/u);
+    const localModel = { ...model, declarations: model.declarations.filter(test => test.id === link.declarationId) };
+    const localReports = [{ source: "local.trx", discovered: 1, results: [link] }];
+    const localOptions = { allowPartial: true, requiredPrimaryLanes: ["host-platform"], operatingSystem: "Windows" };
+    assert.equal(buildCoreTestEvidence(localReports, localModel, localOptions).counts.skipped, 1);
+    assert.throws(() => buildCoreTestEvidence(localReports, localModel, { ...localOptions, requireTestPrerequisites: true }), /was reported as skipped/u);
+    for (const [rid, os, id, reason] of [
+      ["linux-x64", "Linux", "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.LinuxSecretService_OptInIntegration_StoreLoadDelete",
+        "Set SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS=1 on Linux to permit Secret Service mutation."],
+      ["osx-arm64", "MacOS", "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.MacOsKeychain_OptInIntegration_AddUpdateLoadDelete",
+        "Set SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS=1 on macOS to permit Keychain mutation."],
+    ]) {
+      const skippedKeystore = structuredClone(reports);
+      const report = skippedKeystore.find(report => report.source.includes("-" + rid + "/")
+        && report.results.some(result => result.declarationId === id));
+      const result = report.results.find(result => result.declarationId === id);
+      result.outcome = "Skipped";
+      result.skipReason = reason;
+      const violations = [];
+      assert.equal(auditNativeEvidence(root, model, platforms, violations, skippedKeystore).filter(row => !row.complete).length, 1);
+      assert.match(violations.join("\n"), /was reported as skipped/u);
+      const local = { ...model, declarations: model.declarations.filter(test => test.id === id) };
+      const reportOptions = { ...localOptions, operatingSystem: os };
+      const keystoreReports = [{ source: "local.trx", discovered: 1, results: [result] }];
+      assert.equal(buildCoreTestEvidence(keystoreReports, local, reportOptions).counts.skipped, 1);
+      assert.throws(() => buildCoreTestEvidence(keystoreReports, local, { ...reportOptions, requireTestPrerequisites: true }), /was reported as skipped/u);
+    }
     const selected = reports.find(report => report.source.includes("osx-arm64-package-build-1/"));
     const other = reports.find(report => report.source.includes("osx-arm64-package-build-2/"));
     const overlap = structuredClone(reports);

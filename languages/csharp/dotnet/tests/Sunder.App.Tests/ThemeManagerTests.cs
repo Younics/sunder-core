@@ -1,6 +1,8 @@
 using Avalonia;
 using Avalonia.Media;
 using Sunder.App.Services;
+using Sunder.App.Models;
+using Sunder.App.Themes;
 using Sunder.Sdk.Avalonia.Theming;
 using Xunit;
 
@@ -14,16 +16,25 @@ public sealed class ThemeManagerTests
         var application = new Application();
         var themeManager = new ThemeManager(application);
 
+        Assert.Equal([SunderThemeDefinition.GraphiteDarkId, SunderThemeDefinition.GraphiteLightId], themeManager.AvailableThemes.Select(theme => theme.Id));
+
         foreach (var theme in themeManager.AvailableThemes)
         {
             themeManager.ApplyTheme(theme.Id);
+            Assert.Equal(theme.Variant, application.RequestedThemeVariant);
+            Assert.Same(theme, themeManager.ActiveTheme);
 
             foreach (var key in SunderThemeKeys.BrushKeys)
             {
                 Assert.True(application.Resources.ContainsKey(key), $"Missing theme brush resource '{key}'.");
                 Assert.IsType<SolidColorBrush>(application.Resources[key]);
             }
+            Assert.Equal(theme.BackgroundApp, Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.BackgroundAppBrush]).Color);
+            Assert.Equal(theme.ForegroundPrimary, Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.ForegroundPrimaryBrush]).Color);
         }
+
+        themeManager.ApplyTheme("unknown-theme");
+        Assert.Same(SunderThemeDefinition.GraphiteDark, themeManager.ActiveTheme);
     }
 
     [Fact]
@@ -46,6 +57,13 @@ public sealed class ThemeManagerTests
         Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlayMiddleColor]);
         Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlaySoftColor]);
         Assert.IsType<Color>(application.Resources[SunderThemeKeys.LoadingOverlayEndColor]);
+
+        var restored = new ThemeManager(application, new ShellState { ThemeId = SunderThemeDefinition.GraphiteLightId });
+        restored.Initialize();
+        Assert.Same(SunderThemeDefinition.GraphiteLight, restored.ActiveTheme);
+        Assert.Equal(SunderThemeDefinition.GraphiteLight.Variant, application.RequestedThemeVariant);
+        Assert.Equal(SunderThemeDefinition.GraphiteLight.ForegroundPrimary,
+            Assert.IsType<SolidColorBrush>(application.Resources[SunderThemeKeys.ForegroundPrimaryBrush]).Color);
     }
 
     [Fact]

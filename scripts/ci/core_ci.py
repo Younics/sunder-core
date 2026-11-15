@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Local/CI preparation for the Core test lanes. Product metadata owns output names."""
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 import json
 import os
 from pathlib import Path
@@ -13,6 +13,8 @@ import time
 import xml.etree.ElementTree as ET
 
 from metadata import ROOT, platforms
+import bash_runtime
+import linux_secret_service
 
 NODE = ROOT / "languages/typescript/node"
 DOTNET = ROOT / "languages/csharp/dotnet"
@@ -20,7 +22,8 @@ DOTNET = ROOT / "languages/csharp/dotnet"
 
 def run(*args, capture=False, env=None, cwd=ROOT):
     command = [str(arg) for arg in args]
-    if os.name == "nt" and command[0] == "npm": command[0] = "npm.cmd"
+    if command[0] == "npm": command = ["node", str(ROOT / "scripts/npm-command.mjs"), *command[1:]]
+    elif command[0] == "bash": command = bash_runtime.command(*command[1:])
     print("+ " + " ".join(command), flush=True)
     result = subprocess.run(command, cwd=cwd, env=env, check=True, text=True,
                             stdout=subprocess.PIPE if capture else None)
@@ -231,15 +234,17 @@ def official_inputs(work, rid, scope="all"):
         "SUNDER_WORKER_RELEASE_METRICS_PATH": ROOT / "artifacts/test-results" / scope / "official" / f"dotnet-worker-{rid}.json"})
 
 
-def oracle(script, *args):
-    run("node", ROOT / "scripts/test-oracles" / (script + ".mjs"), *args)
+def oracle(script, *args, prefix=()):
+    run(*prefix, "node", ROOT / "scripts/test-oracles" / (script + ".mjs"), *args)
 
 
-def dotnet_tests(selection, name, *, scope="all", build=False, directory=None):
+def dotnet_tests(selection, name, *, scope="all", build=False, directory=None, linux_keystore=False, linux_display=False):
     output = ROOT / "artifacts/test-results" / scope / (directory or name)
     try:
-        oracle("run-dotnet-tests-with-results", "--scope", scope, "--" + selection, name, "--configuration", "Release",
-               "--results-directory", output, *(["--build", "--disable-build-servers"] if build else []))
+        with linux_secret_service.session(output.parent / (output.name + "-secret-service.log")) if linux_keystore else nullcontext():
+            display = {"prefix": ("dbus-run-session", "--", "xvfb-run", "--auto-servernum", "--server-args=-screen 0 1280x1024x24")} if linux_display else {}
+            oracle("run-dotnet-tests-with-results", "--scope", scope, "--" + selection, name, "--configuration", "Release",
+                   "--results-directory", output, *(["--build", "--disable-build-servers"] if build else []), **display)
     finally:
         oracle("summarize-core-test-results", output, "--scope", scope, "--allow-partial", "--require-" + selection, name)
 
@@ -296,13 +301,17 @@ def validate(profile, *, rid=None, scope="all", partition=None):
             if "dotnet" in components or "host" in components: node_inputs()
             run("dotnet", "restore", build_input(selected, work), "--locked-mode")
             if profile == "platform":
+                os.environ["SUNDER_REQUIRE_TEST_PREREQUISITES"] = "1"
                 os.environ["SUNDER_REQUIRE_NODE24_HOST_INTEGRATION"] = "1"
-                os.environ["SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS"] = "1" if sys.platform == "darwin" else "0"
+                os.environ["SUNDER_RUN_EXTERNAL_KEYSTORE_TESTS"] = "1" if sys.platform in ("darwin", "linux") else "0"
+                keystore = {"linux_keystore": True} if sys.platform == "linux" and "host" in components and partition in (None, "main") else {}
+                if sys.platform == "linux" and "app" in components and partition in (None, "main"):
+                    keystore["linux_display"] = True
                 if partition is None:
-                    dotnet_tests("primary-lane", "host-platform", scope=scope, build=True, directory="platform")
+                    dotnet_tests("primary-lane", "host-platform", scope=scope, build=True, directory="platform", **keystore)
                 else:
                     if partition != "main": os.environ["SUNDER_TEST_DIAGNOSTICS"] = "1"
-                    dotnet_tests("native-partition", partition, scope=scope, build=True, directory="platform/" + partition)
+                    dotnet_tests("native-partition", partition, scope=scope, build=True, directory="platform/" + partition, **keystore)
                 if partition not in (None, "main"): return
                 if os.name == "nt" and "dotnet" in components: dotnet_tests("scenario", "output-lock", scope=scope, build=True, directory="lock-interop")
                 if "app" in components:

@@ -101,6 +101,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             Assert.False(File.Exists(Path.Combine(appPayload, "lib", "Sunder.App.Bridge.dll")));
             Assert.True(File.Exists(Path.Combine(packages!, "sunder.sdk.avalonia", packedVersion, "lib/net10.0/Sunder.App.Bridge.dll")));
             var appTarget = Assert.Single(validation.Manifest.Targets, target => target!.Role == "app")!;
+            Assert.Contains("package-development-feedback.v1", appTarget.RequiredHostCapabilities!);
             await ActivatePackedAppAsync(Path.Combine(appPayload, appTarget.EntryPoint!), appPayload);
             Directory.Delete(appPayload, recursive: true);
             Assert.False(Directory.Exists(appPayload));
@@ -126,7 +127,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         }
     }
 
-    private static async Task<string> CreateEditorWorkspaceFixtureAsync(
+    internal static async Task<string> CreateEditorWorkspaceFixtureAsync(
         string root, string? packedVersion, string? feed, string? thirdPartyFeed, string? packages)
     {
         var package = Path.Combine(root, "package with spaces");
@@ -152,6 +153,11 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 {
                     public GreetingView() { InitializeComponent(); }
                     public string NamedText => Status.Text ?? "";
+                    // Compile against the packed public SDK, not Host implementation
+                    // types or an ambient source SDK assembly.
+                    public Task<Sunder.Sdk.Services.SunderContent> CapturePublicSdkAsync(
+                        Sunder.Sdk.Abstractions.IPackageDevelopmentSession session, CancellationToken token)
+                        => session.CaptureViewAsync("example.generated.view", new(), 128, token);
                 }
                 """, StringComparison.Ordinal));
         await File.WriteAllTextAsync(Path.Combine(package, "GreetingView.axaml"), """
@@ -160,7 +166,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
             </UserControl>
             """);
         var sdkReferences = packedVersion is not null
-            ? $"<PackageReference Include=\"Sunder.Sdk.Worker\" Version=\"[{packedVersion}]\" /><PackageReference Include=\"Sunder.Sdk.Avalonia\" Version=\"[{packedVersion}]\" /><PackageReference Include=\"Sunder.Package.Build\" Version=\"[{packedVersion}]\" PrivateAssets=\"all\" />"
+            ? $"<PackageReference Include=\"Sunder.Sdk.Worker\" Version=\"[{packedVersion}]\" /><PackageReference Include=\"Sunder.Sdk.Avalonia\" Version=\"[{packedVersion}]\" />"
             : string.Join(Environment.NewLine, new[] { "Sunder.Sdk.Worker", "Sunder.Sdk.Avalonia" }.Select(name =>
                 $"<ProjectReference Include=\"{SecurityElement.Escape(Path.Combine(repository, "languages/csharp/dotnet/packages", name, name + ".csproj"))}\" />"));
         var project = Path.Combine(package, "EditorWorkspace.csproj");
@@ -170,8 +176,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var buildImport = packedVersion is null
             ? $"<Import Project=\"{SecurityElement.Escape(Path.Combine(repository, "languages/csharp/dotnet/packages/Sunder.Package.Build/build/Sunder.Package.Build.targets"))}\" />"
             : "";
+        var sdk = packedVersion is null ? "Microsoft.NET.Sdk" : "Sunder.Package.Build/" + packedVersion;
         await File.WriteAllTextAsync(project, $$"""
-            <Project Sdk="Microsoft.NET.Sdk">
+            <Project Sdk="{{sdk}}">
               <PropertyGroup>
                 <TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
                 <Version>7.6.5</Version><SunderPackageProject>true</SunderPackageProject><NuGetAudit>false</NuGetAudit>
@@ -203,7 +210,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         return project;
     }
 
-    private static async Task PackEditorSdkAsync(string feed, string version, Func<string, IReadOnlyList<string>, Task<ProcessResult>> run)
+    internal static async Task PackEditorSdkAsync(string feed, string version, Func<string, IReadOnlyList<string>, Task<ProcessResult>> run)
     {
         var repository = FindRepositoryRoot();
         var configuration = "EditorWorkspace-" + Guid.NewGuid().ToString("N");

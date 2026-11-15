@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,6 +6,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { currentRid } from "../src/model";
 import { emptyLock, fixtureSource, installFixtureSdk } from "./service-fixtures";
+import { interruptWatchCli, startWatchCli } from "./watch-process";
 
 const cli = resolve(__dirname, "../../dist/cli.js");
 const nodeModules = resolve(__dirname, "../../../../node_modules");
@@ -14,9 +14,7 @@ const delay = async (ms: number): Promise<void> => new Promise(done => setTimeou
 const text = async (path: string): Promise<string> => readFile(path, "utf8").catch(() => "");
 
 function watch(root: string, progress = false) {
-  const child = spawn(process.execPath, [cli, "dev", "--watch", "--project", root], {
-    stdio: "pipe", env: { ...process.env, SUNDER_BUILDER_WATCH_PROGRESS: progress ? "1" : "0" },
-  });
+  const child = startWatchCli(cli, root, { ...process.env, SUNDER_BUILDER_WATCH_PROGRESS: progress ? "1" : "0" });
   let output = "";
   let standardOutput = "";
   child.stdout.on("data", data => { output += data; standardOutput += data; });
@@ -49,9 +47,13 @@ function watch(root: string, progress = false) {
       assert.equal(child.exitCode, null, output);
     },
     async close(): Promise<void> {
-      child.kill("SIGINT");
+      interruptWatchCli(child);
       const timeout = setTimeout(() => child.kill("SIGKILL"), 90_000);
-      try { assert.equal(await exited, 0, output); }
+      try {
+        assert.equal(await exited, 0, output);
+        assert.deepEqual((await readdir(resolve(root, "dist"))).filter(name => /(?:\.stage-|\.sunder-output\.lock)/u.test(name)), [],
+          "Graceful shutdown must release private staging and output locks.");
+      }
       finally { clearTimeout(timeout); }
     },
     async kill(): Promise<void> {

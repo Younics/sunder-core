@@ -14,7 +14,9 @@ public sealed class SettingsWindowFactory(
     ShellStateService shellStateService,
     ShellState shellState,
     AppRuntimeResourcePolicySettingsService runtimeResourcePolicySettingsService,
-    IRuntimeResourcePolicyStatusSource runtimeResourcePolicyStatusSource)
+    IRuntimeResourcePolicyStatusSource runtimeResourcePolicyStatusSource,
+    IThemeManager themeManager,
+    NotificationCenterService notificationCenter)
 {
     internal SettingsWindow Create(
         PackageViewHostService packageViewHostService,
@@ -41,7 +43,9 @@ public sealed class SettingsWindowFactory(
                 persistBackgroundTaskPopoverSize,
                 runtimeResourcePolicySettingsService,
                 runtimeResourcePolicyStatusSource,
-                runtimes);
+                runtimes,
+                new SettingsAppearanceViewModel(themeManager, id => shellStateService.Update(shellState, state => state.ThemeId = id)),
+                new SettingsNotificationsViewModel(notificationCenter));
         return window;
     }
 }

@@ -56,7 +56,7 @@ internal static partial class SunderRpcContractCacheStore
 
     internal static void Publish(string root, IReadOnlyDictionary<string, byte[]> entries,
         IReadOnlyDictionary<string, SunderRpcContractCacheRequirement> requirements, CancellationToken token = default,
-        Action<string>? checkpoint = null)
+        Action<string>? checkpoint = null, bool onlyMissing = false)
     {
         if (entries.Count is < 1 or > 128) throw Corrupt("Publication requires 1..128 descriptor entries.");
         foreach (var (hash, bytes) in entries)
@@ -71,7 +71,8 @@ internal static partial class SunderRpcContractCacheStore
         root = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(root);
         using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30), token);
         InitializeRoot(root);
-        Recover(root, token, checkpoint);
+        if (onlyMissing) ValidateRoot(root, requireComplete: true);
+        else Recover(root, token, checkpoint);
         var selected = entries.OrderBy(pair => pair.Key, StringComparer.Ordinal).Select(pair =>
         {
             var requirement = requirements[pair.Key];
@@ -79,6 +80,9 @@ internal static partial class SunderRpcContractCacheStore
             var receipt = ReceiptBytes(requirement);
             var oldDescriptor = ExistingHash(SunderRpcContractCache.GetDescriptorPath(root, pair.Key));
             var oldReceipt = ExistingHash(SunderRpcContractCache.GetReceiptPath(root, pair.Key));
+            if (onlyMissing && (oldDescriptor != "" && oldDescriptor != Hash(pair.Value)
+                || oldReceipt != "" && oldReceipt != Hash(receipt)))
+                throw Corrupt("Automatic restore cannot replace corrupt cache evidence. Run explicit contracts restore to review recovery.");
             return (Hash: pair.Key, Descriptor: pair.Value, Receipt: receipt, OldDescriptor: oldDescriptor, OldReceipt: oldReceipt);
         }).Where(entry => entry.OldDescriptor != Hash(entry.Descriptor) || entry.OldReceipt != Hash(entry.Receipt)).ToArray();
         if (selected.Length == 0) return;
@@ -196,6 +200,20 @@ internal static partial class SunderRpcContractCacheStore
 
     private static string ExistingHash(string path)
         => GeneratedOutputPathSafety.PathExists(path) ? Hash(SunderRpcDescriptorFileReader.ReadStableBytes(path, MaximumDescriptorBytes, "existing cache entry")) : "";
+
+    internal static void RequireMissingOrEqual(string path, byte[] expected)
+    {
+        try
+        {
+            if (!GeneratedOutputPathSafety.PathExists(path)
+                || SunderRpcDescriptorFileReader.ReadStableBytes(path, expected.Length, "automatic restore preimage").AsSpan().SequenceEqual(expected)) return;
+        }
+        catch (Exception error) when (error is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidDataException("contract-cache.entry-corrupt: Automatic restore found invalid existing cache evidence. Its bytes were preserved; run explicit contracts restore to review recovery.", error);
+        }
+        throw Corrupt("Automatic restore cannot replace corrupt cache evidence. Its bytes were preserved; run explicit contracts restore to review recovery.");
+    }
 
     private static void WriteNew(string path, byte[] bytes)
     {

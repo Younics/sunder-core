@@ -3,10 +3,11 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:chil
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, open, readFile, readlink, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
-import { homedir, hostname, tmpdir } from "node:os";
+import { hostname, tmpdir, userInfo } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { installFixtureSdk } from "./service-fixtures";
+import { interruptWatchCli, startWatchCli } from "./watch-process";
 import { inflateRawSync } from "node:zlib";
 import { canonicalizeDescriptor, parseRpcContractDescriptor, type JsonValue } from "@younics/sunder-sdk";
 import { currentRid, SUPPORTED_RIDS, SUPPORTED_WORKER_CAPABILITIES } from "../src/model";
@@ -2348,7 +2349,7 @@ test("watch recreates immutable build context and App watcher after structural c
   try {
     await addWebApp(root);
     const cli = resolve(__dirname, "..", "..", "dist", "cli.js");
-    const watchProcess = spawn(process.execPath, [cli, "dev", "--watch", "--project", root], { stdio: ["pipe", "pipe", "pipe"] });
+    const watchProcess = startWatchCli(cli, root);
     child = watchProcess;
     watchProcess.stdout.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
     watchProcess.stderr.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
@@ -2384,7 +2385,7 @@ test("watch recreates immutable build context and App watcher after structural c
 
     await writeFile(resolve(root, "app-next", "index.html"), "<!doctype html><html><body>APP_WATCH_V3</body></html>\n", "utf8");
     await waitUntil(async () => (await readTextIfPresent(appOutput)).includes("APP_WATCH_V3"), "recreated App watcher", () => output);
-    watchProcess.kill("SIGINT");
+    interruptWatchCli(watchProcess);
     assert.equal(await waitForExit(watchProcess), 0, output);
     child = undefined;
   } finally {
@@ -2683,7 +2684,7 @@ async function writeLockOwner(
     linuxPidNamespace = owner.linuxPidNamespace ?? await readlink("/proc/self/ns/pid");
   }
   const processMarkerToken = randomUUID();
-  const processMarkerRoot = resolve(homedir(), ".sunder", "generated-output", "processes");
+  const processMarkerRoot = resolve(userInfo().homedir, ".sunder", "generated-output", "processes");
   const processMarkerPath = resolve(processMarkerRoot, `${processMarkerToken}.json`);
   await mkdir(processMarkerRoot, { recursive: true, mode: 0o700 });
   await writeFile(processMarkerPath, `${JSON.stringify({

@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, relative, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { npmCommand } from "../npm-command.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const inventoryPath = resolve(repositoryRoot, "eng/test-oracles/core-public-packages.json");
@@ -257,21 +258,21 @@ async function rebuildPublicWorkspacesFromCleanOutput(publicWorkspaces) {
     await rm(dist, { recursive: true, force: true });
     await rm(resolve(project, "dist-test"), { recursive: true, force: true });
   }
-  runRequired(process.platform === "win32" ? "npm.cmd" : "npm", ["run", "build"], nodeWorkspaceRoot, "clean public workspace build");
+  runRequired("npm", ["run", "build"], nodeWorkspaceRoot, "clean public workspace build");
   for (const workspace of publicWorkspaces) {
     await assert.rejects(access(resolve(repositoryRoot, workspace.project, "dist", staleSentinelName)), { code: "ENOENT" });
   }
 }
 
 function pack(project, outputDirectory) {
-  const command = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(command, [
+  const invocation = npmCommand([
     "pack",
     "--ignore-scripts",
     "--json",
     "--pack-destination",
     outputDirectory,
-  ], {
+  ]);
+  const result = spawnSync(invocation.command, invocation.arguments, {
     cwd: project,
     encoding: "utf8",
     env: { ...process.env, NO_COLOR: "1" },
@@ -283,6 +284,7 @@ function pack(project, outputDirectory) {
 }
 
 function runRequired(command, arguments_, cwd, label) {
+  if (command === "npm") ({ command, arguments: arguments_ } = npmCommand(arguments_));
   const result = spawnSync(command, arguments_, {
     cwd,
     encoding: "utf8",

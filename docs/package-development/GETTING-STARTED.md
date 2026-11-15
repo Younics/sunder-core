@@ -20,13 +20,14 @@ Install the template, then create a project with a starter Avalonia view:
 ```sh
 dotnet new install Sunder.Package.Templates
 dotnet new sunder-package --name MyPackage --packageId my.company.package --packageName "My Package" --withAvalonia --output MyPackage
-dotnet restore MyPackage/MyPackage.csproj
-dotnet build MyPackage/MyPackage.csproj --no-restore
+dotnet build MyPackage/MyPackage.csproj
 ```
 
 Omit `--withAvalonia` for a headless service package. The template creates **one authored Library project** with `SunderPackageProject=true`,
 package metadata, an ordinary private service and a contract lock. Sunder generates
 interfaces, clients, DI, Worker entry points and optional App composition.
+Its versioned Build SDK restores declared exact contract inputs during ordinary
+restore; no preparation script is needed. Explicit API selection remains separate.
 
 | Option | Result |
 | --- | --- |

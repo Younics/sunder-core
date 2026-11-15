@@ -11,6 +11,38 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class PackageStorageActivationTransactionTests
 {
+    [WindowsFact]
+    public async Task LogDiscovery_InProgressDoesNotBlockWorkspaceOrFileSnapshotsAndRollback()
+    {
+        using var fixture = new Fixture();
+        var workspaceChild = Directory.CreateDirectory(Path.Combine(fixture.Workspace, "agent")).FullName;
+        var filesChild = Directory.CreateDirectory(Path.Combine(fixture.PackageRoot, "files", "attachments")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(workspaceChild, "retained.txt"), "workspace");
+        await File.WriteAllTextAsync(Path.Combine(filesChild, "retained.txt"), "files");
+        var logDirectory = Directory.CreateDirectory(Path.Combine(fixture.PackageRoot, "logs", "archive")).FullName;
+        var logPath = Path.Combine(logDirectory, "runtime.log");
+        await File.WriteAllTextAsync(logPath, "msg=retained-log\n");
+        await using var logs = new PackageLogStreamService(fixture.Paths.PackageDataRootPath);
+        using var discovery = logs.EnumerateLogEntries().GetEnumerator();
+        while (discovery.MoveNext() && discovery.Current != logPath) { }
+        Assert.Equal(logPath, discovery.Current);
+
+        // Keep discovery parked as it is across a reconciliation yield. On Windows,
+        // queued descendant-directory handles would prevent the parent snapshots.
+        var storage = await fixture.BeginAsync();
+        await fixture.WriteValuesAsync("rejected");
+        await File.WriteAllTextAsync(Path.Combine(workspaceChild, "retained.txt"), "rejected");
+        await File.WriteAllTextAsync(Path.Combine(filesChild, "retained.txt"), "rejected");
+        await storage.RollbackAsync(fixture.Logger);
+
+        await fixture.AssertValuesAsync("baseline");
+        Assert.Equal("workspace", await File.ReadAllTextAsync(Path.Combine(workspaceChild, "retained.txt")));
+        Assert.Equal("files", await File.ReadAllTextAsync(Path.Combine(filesChild, "retained.txt")));
+        Assert.Equal("msg=retained-log\n", await File.ReadAllTextAsync(logPath));
+        Assert.Empty(fixture.Backups);
+        Assert.Empty(fixture.Journals);
+    }
+
     [Fact]
     public async Task IntentWriteFailure_DoesNotMoveStorageOrCreateUnownedBackups()
     {
@@ -19,6 +51,29 @@ public sealed class PackageStorageActivationTransactionTests
         await Assert.ThrowsAsync<IOException>(() => fixture.BeginAsync(new FailingFileSystem { FailIntent = true }));
 
         await fixture.AssertValuesAsync("baseline");
+        Assert.Empty(fixture.Backups);
+        Assert.Empty(fixture.Journals);
+    }
+
+    [WindowsTheory]
+    [InlineData("workspace")]
+    [InlineData("files")]
+    public async Task SnapshotRenameFailure_ReportsPackageAndStoreWithoutExposingPaths(string store)
+    {
+        using var fixture = new Fixture();
+        var child = Directory.CreateDirectory(Path.Combine(fixture.PackageRoot, store, "held")).FullName;
+        var path = Path.Combine(child, "retained.txt");
+        await File.WriteAllTextAsync(path, "preserve");
+        using var held = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+        var failure = await Assert.ThrowsAsync<PackageStorageSnapshotException>(() => fixture.BeginAsync());
+        var diagnostic = PackageSessionLifecycleService.DescribeWorkerStartupFailure(failure, "fallback");
+
+        Assert.Equal($"Package 'test.package' could not create its {store} activation snapshot (Windows error 5).", diagnostic);
+        Assert.DoesNotContain(fixture.Paths.RootPath, diagnostic, StringComparison.Ordinal);
+        Assert.IsType<IOException>(failure.InnerException);
+        await fixture.AssertValuesAsync("baseline");
+        Assert.Equal("preserve", await File.ReadAllTextAsync(path));
         Assert.Empty(fixture.Backups);
         Assert.Empty(fixture.Journals);
     }
@@ -241,6 +296,13 @@ public sealed class PackageStorageActivationTransactionTests
         var diagnostic = RuntimeStartupDiagnosticReporter.CreateDiagnostic(new IOException(new string('x', 3000)));
         Assert.Equal("runtime.v1.internal", diagnostic.Code);
         Assert.Equal(2048, diagnostic.Message.Length);
+
+        var internalFailure = new IOException("private path and secret values");
+        var snapshotFailure = new PackageStorageSnapshotException(new string('x', 3000) + "\n/private", true, internalFailure);
+        Assert.Equal("Package 'unknown' could not create its workspace activation snapshot.",
+            PackageSessionLifecycleService.DescribeWorkerStartupFailure(snapshotFailure, "fallback"));
+        Assert.Same(internalFailure, snapshotFailure.InnerException);
+        Assert.Equal("fallback", PackageSessionLifecycleService.DescribeWorkerStartupFailure(internalFailure, "fallback"));
     }
 
     private sealed class FailingFileSystem : PackageStorageActivationFileSystem

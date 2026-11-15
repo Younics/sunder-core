@@ -24,6 +24,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
+        NewLine = "\n",
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
     private const string OwnedSource = """
@@ -916,7 +917,7 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         Assert.False(Directory.Exists(_temporary.GetPath("missing")));
     }
 
-    [Theory]
+    [Sunder.Core.TestSupport.SymbolicLinkTheory(directory: true, file: true)]
     [InlineData("file")]
     [InlineData("ancestor")]
     [InlineData("dangling")]
@@ -928,15 +929,8 @@ public sealed partial class SunderRpcAuthoringReceiptTests : IDisposable
         File.WriteAllBytes(target, bytes);
         var timestamp = File.GetLastWriteTimeUtc(target);
         var link = _temporary.GetPath("link");
-        try
-        {
-            if (kind == "ancestor") Directory.CreateSymbolicLink(link, targetDirectory);
-            else File.CreateSymbolicLink(link, kind == "dangling" ? _temporary.GetPath("absent.json") : target);
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-        {
-            return;
-        }
+        if (kind == "ancestor") Directory.CreateSymbolicLink(link, targetDirectory);
+        else File.CreateSymbolicLink(link, kind == "dangling" ? _temporary.GetPath("absent.json") : target);
         var path = kind == "ancestor" ? Path.Combine(link, "receipt.json") : link;
 
         var error = Assert.ThrowsAny<IOException>(() => SunderRpcAuthoringDocuments.ValidateAuthoringReceipt(path, bytes));

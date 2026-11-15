@@ -65,7 +65,9 @@ export async function synchronize(check = false) {
   for (const [relative, content] of generated) {
     const filename = path.join(root, relative);
     if (check) {
-      if (await readFile(filename, "utf8").catch(() => "") !== content)
+      // Checkout newlines may differ; every other character must remain exact.
+      const actual = await readFile(filename, "utf8").catch(() => "");
+      if (actual.replace(/\r\n/gu, "\n") !== content)
         throw new Error(`${relative} differs from eng/toolchains.json; run node scripts/toolchains.mjs --write.`);
     } else await writeFile(filename, content);
   }

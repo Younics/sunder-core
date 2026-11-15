@@ -273,12 +273,14 @@ internal static class CanonicalPackageTestBuilder
                     RuntimeExecutionRuntimeChecksumAlgorithm.Sha512,
                     new string('a', 128));
                 var distribution = new RuntimeExecutionRuntimeDistribution(
-                    "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/dotnet-runtime-10.0.1-" + target.Rid + ".tar.gz",
+                    "https://builds.dotnet.microsoft.com/dotnet/Runtime/10.0.1/"
+                        + OfficialRuntimeSourcePolicy.ArchiveName(ConfiguredOfficialSourceId.DotNet, "10.0.1", target.Rid!),
                     OfficialRuntimeSourcePolicy.DotNetMetadata,
                     new string('b', 64),
                     null,
                     null,
-                    RuntimeExecutionRuntimeArchiveFormat.TarGzip,
+                    target.Rid!.StartsWith("win-", StringComparison.Ordinal)
+                        ? RuntimeExecutionRuntimeArchiveFormat.Zip : RuntimeExecutionRuntimeArchiveFormat.TarGzip,
                     OfficialRuntimeSourcePolicy.Profile(ConfiguredOfficialSourceId.DotNet),
                     104857600);
                 return new InstalledPackageExecutionRuntimeBindingRecord(

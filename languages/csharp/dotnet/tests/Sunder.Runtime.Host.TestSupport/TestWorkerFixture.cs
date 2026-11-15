@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -125,17 +126,18 @@ internal static class TestWorkerFixture
         };
 
     private static string OutputDirectory
-        => Path.Combine(
-            FindRepositoryRoot(),
-            "languages",
-            "csharp",
-            "dotnet",
-            "tests",
-            "Sunder.Runtime.Host.TestWorker",
-            "bin",
-            ResolveConfiguration(),
-            "net10.0",
-            PackageTargetSelection.GetCurrentRuntimeIdentifier());
+    {
+        get
+        {
+            // Bind the fixture to its actual project dependency, including alternate
+            // output layouts. Parent-directory names are not build configurations.
+            var path = typeof(TestWorkerFixture).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+                .SingleOrDefault(attribute => attribute.Key == "Sunder.TestWorker.AssemblyPath")?.Value;
+            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path) || !File.Exists(path))
+                throw new FileNotFoundException("Build the owning test project to produce its exact Worker dependency.", path);
+            return Path.GetDirectoryName(path)!;
+        }
+    }
 
     private static void WriteDependencyManifestForRid(string sourcePath, string destinationPath, string rid)
     {
@@ -157,19 +159,5 @@ internal static class TestWorkerFixture
             runtimeTarget["name"] = targetName;
         }
         File.WriteAllText(destinationPath, document.ToJsonString(JsonOptions));
-    }
-
-    private static string ResolveConfiguration()
-        => new DirectoryInfo(AppContext.BaseDirectory.TrimEnd(
-                Path.DirectorySeparatorChar,
-                Path.AltDirectorySeparatorChar))
-            .Parent?.Name
-           ?? "Debug";
-
-    private static string FindRepositoryRoot()
-    {
-        for (var directory = new DirectoryInfo(AppContext.BaseDirectory); directory is not null; directory = directory.Parent)
-            if (File.Exists(Path.Combine(directory.FullName, "Sunder.Core.slnx"))) return directory.FullName;
-        throw new DirectoryNotFoundException("The source-built test Worker repository is unavailable.");
     }
 }

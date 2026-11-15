@@ -4,6 +4,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:vm="using:Sunder.App.ViewModels"
         xmlns:controls="using:Sunder.App.Views.Controls"
+        xmlns:themes="using:Sunder.App.Themes"
         x:Class="Sunder.App.Views.SettingsWindow"
         x:DataType="vm:SettingsWindowViewModel"
         mc:Ignorable="d"
@@ -215,6 +216,32 @@
               <StackPanel Spacing="{DynamicResource Sunder.Spacing.Large}" Margin="{DynamicResource Sunder.Padding.Panel}">
                 <Border IsVisible="{Binding IsPackageRuntimesSelection}">
                   <controls:PackageRuntimesSettings DataContext="{Binding PackageRuntimes}" />
+                </Border>
+                <Border Classes="card-surface" IsVisible="{Binding ShowAppearanceSettings}">
+                  <StackPanel Spacing="14">
+                    <controls:SettingsFieldHeader Title="Theme" HelpText="Apply a theme to all open Sunder windows and package views. Your choice is kept when Sunder restarts." />
+                    <controls:SunderComboBox x:Name="ThemeSelector" ItemsSource="{Binding Appearance.Themes}"
+                                             SelectedItem="{Binding Appearance.SelectedTheme}" AutomationProperties.Name="Theme">
+                      <controls:SunderComboBox.ItemTemplate>
+                        <DataTemplate x:DataType="themes:SunderThemeDefinition">
+                          <TextBlock Text="{Binding DisplayName}" />
+                        </DataTemplate>
+                      </controls:SunderComboBox.ItemTemplate>
+                    </controls:SunderComboBox>
+                  </StackPanel>
+                </Border>
+                <Border Classes="card-surface" IsVisible="{Binding ShowNotificationSettings}">
+                  <StackPanel Spacing="14">
+                    <CheckBox Content="Show notification pop-ups" IsChecked="{Binding Notifications.ShowToasts}" />
+                    <StackPanel Spacing="10" IsEnabled="{Binding Notifications.ShowToasts}">
+                      <CheckBox Content="Informational messages" IsChecked="{Binding Notifications.ShowInformation}" />
+                      <CheckBox Content="Successful operations and task completion" IsChecked="{Binding Notifications.ShowSuccess}" />
+                      <CheckBox Content="Warnings" IsChecked="{Binding Notifications.ShowWarnings}" />
+                    </StackPanel>
+                    <Border Classes="settings-note-card">
+                      <TextBlock Classes="muted" Text="Error pop-ups always remain visible. Turning off pop-ups does not remove notifications from the notification tray. These preferences control Sunder's in-app pop-ups, not operating-system notifications." TextWrapping="Wrap" />
+                    </Border>
+                  </StackPanel>
                 </Border>
                 <Border Classes="card-surface"
                         IsVisible="{Binding ShowPlainCoreSelection}">

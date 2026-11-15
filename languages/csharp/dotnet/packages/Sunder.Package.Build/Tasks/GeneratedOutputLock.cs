@@ -523,11 +523,7 @@ internal sealed class GeneratedOutputLock : IDisposable
             host.LinuxBootId,
             host.LinuxPidNamespace,
             DateTime.UtcNow);
-        var root = ProcessMarkerRoot();
-        EnsureMarkerAncestors(root);
-        CreateMarkerRoot(root);
-        EnsureMarkerAncestors(root);
-        EnsurePrivateMarkerRoot(root);
+        var root = PrepareProcessMarkerRoot(GeneratedOutputUserProfile.Home);
         var path = Path.Combine(root, token + ".json");
         WriteDurableJson(path, marker, privateFile: true);
         var registration = new ProcessMarkerRegistration(path, marker);
@@ -599,12 +595,19 @@ internal sealed class GeneratedOutputLock : IDisposable
 
     private static string ProcessMarkerRoot()
     {
-        // UserProfile, unlike TMP/TEMP/TMPDIR, survives Builder Worker replacement.
-        // Keep this location identical to package-tool's homedir() based location.
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (string.IsNullOrWhiteSpace(home) || !Path.IsPathFullyQualified(home))
-            throw new IOException("Could not establish a private user profile for generated output locking.");
-        return NormalizePath(Path.Combine(home, ".sunder", "generated-output", "processes"));
+        // Shared with package-tool's os.userInfo().homedir. Maker's isolated
+        // HOME/USERPROFILE and a Worker's temp directory are configuration only.
+        return NormalizePath(Path.Combine(GeneratedOutputUserProfile.Home, ".sunder", "generated-output", "processes"));
+    }
+
+    internal static string PrepareProcessMarkerRoot(string accountHome)
+    {
+        var root = NormalizePath(Path.Combine(accountHome, ".sunder", "generated-output", "processes"));
+        EnsureMarkerAncestors(root);
+        CreateMarkerRoot(root);
+        EnsureMarkerAncestors(root);
+        EnsurePrivateMarkerRoot(root, accountHome);
+        return root;
     }
 
     private static void EnsureMarkerAncestors(string path)
@@ -639,7 +642,7 @@ internal sealed class GeneratedOutputLock : IDisposable
         }
     }
 
-    private static void EnsurePrivateMarkerRoot(string root)
+    private static void EnsurePrivateMarkerRoot(string root, string? accountHome = null)
     {
         if (OperatingSystem.IsWindows()) return; // The user profile inherits the user's ACL.
         var mode = File.GetUnixFileMode(root);
@@ -650,7 +653,7 @@ internal sealed class GeneratedOutputLock : IDisposable
         {
             if ((File.GetUnixFileMode(current) & (UnixFileMode.GroupWrite | UnixFileMode.OtherWrite)) != 0)
                 throw new IOException($"Generated output process marker ancestor '{current}' must not be writable by other users.");
-            if (PathsEqual(current, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile))) break;
+            if (PathsEqual(current, accountHome ?? GeneratedOutputUserProfile.Home)) break;
         }
     }
 

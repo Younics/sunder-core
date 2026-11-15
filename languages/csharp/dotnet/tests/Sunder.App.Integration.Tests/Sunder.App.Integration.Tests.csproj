@@ -1,17 +1,33 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
+    <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_PolicyAppTargetPath" />
     <ProjectReference Include="..\Sunder.Runtime.Host.TestSupport\Sunder.Runtime.Host.TestSupport.csproj" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\GeneratedOwnedRpc\GeneratedOwnedRpc.csproj"
                       ReferenceOutputAssembly="false" OutputItemType="_PolicyPackageTargetPath" />
     <Compile Remove="AppPolicyStartupHook.cs" />
     <None Include="AppPolicyStartupHook.cs" />
+    <Compile Remove="WindowsWebViewCaptureProcessProbe.cs" />
+    <None Include="WindowsWebViewCaptureProcessProbe.cs" />
+    <Compile Remove="InstalledDevelopmentCaptureStartupHook.cs" />
+    <None Include="InstalledDevelopmentCaptureStartupHook.cs" />
+    <Compile Remove="AppStartupWebViewObserver.cs" />
+    <None Include="AppStartupWebViewObserver.cs" />
+    <Compile Remove="AgentFamilyAppStartupHook.cs" />
+    <None Include="AgentFamilyAppStartupHook.cs" />
   </ItemGroup>
   <Target Name="RecordGeneratedPolicyPackage" AfterTargets="Build" DependsOnTargets="ResolveReferences">
     <Error Condition="'@(_PolicyPackageTargetPath->Count())' != '1'" Text="The policy tests require one source-built generated RPC package." />
     <PropertyGroup>
       <_PolicyPackageTargetDirectory>@(_PolicyPackageTargetPath->'%(RootDir)%(Directory)')</_PolicyPackageTargetDirectory>
-      <_PolicyPackagePath>$([System.IO.Path]::GetFullPath('$(_PolicyPackageTargetDirectory)../sunder-dev'))</_PolicyPackagePath>
+    </PropertyGroup>
+    <ReadLinesFromFile File="$(_PolicyPackageTargetDirectory)sunder-policy-package-path.txt">
+      <Output TaskParameter="Lines" ItemName="_PolicyPackageOutputPath" />
+    </ReadLinesFromFile>
+    <Error Condition="'@(_PolicyPackageOutputPath->Count())' != '1'" Text="The owning fixture must record one composed package output." />
+    <PropertyGroup>
+      <_PolicyPackagePath>@(_PolicyPackageOutputPath)</_PolicyPackagePath>
     </PropertyGroup>
     <Error Condition="!Exists('$(_PolicyPackagePath)/manifest/sunder-package.json')" Text="The owning build did not compose the generated RPC package at '$(_PolicyPackagePath)'." />
     <WriteLinesToFile File="$(TargetDir)sunder-policy-package-path.txt" Lines="$(_PolicyPackagePath)" Overwrite="true" WriteOnlyWhenDifferent="true" />
@@ -27,5 +43,46 @@
          NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
          ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
     <WriteLinesToFile File="$(TargetDir)sunder-policy-app-target-path.txt" Lines="@(_PolicyAppTargetPath->'%(FullPath)')" Overwrite="true" />
+  </Target>
+  <Target Name="BuildWindowsWebViewCaptureProcessProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)webview-capture-probe/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)webview-capture-probe" />
+    <Csc Sources="$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)webview-capture-probe/Sunder.App.Tests.dll" TargetType="Exe"
+         TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         DisabledWarnings="$(NoWarn)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+  <Target Name="BuildInstalledDevelopmentCaptureStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/InstalledDevelopmentCaptureStartupHook.cs;$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)development-capture-hook/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)development-capture-hook" />
+    <Csc Sources="$(MSBuildProjectDirectory)/InstalledDevelopmentCaptureStartupHook.cs;$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)development-capture-hook/Sunder.App.Tests.dll" TargetType="Library"
+         TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)" DisabledWarnings="$(NoWarn)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+  <Target Name="BuildAppStartupWebViewObserver" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/AppStartupWebViewObserver.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)startup-webview-observer/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)startup-webview-observer" />
+    <Csc Sources="$(MSBuildProjectDirectory)/AppStartupWebViewObserver.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)startup-webview-observer/Sunder.App.Tests.dll" TargetType="Library"
+         TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)" DisabledWarnings="$(NoWarn)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+  <Target Name="BuildAgentFamilyAppStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/AgentFamilyAppStartupHook.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)agent-family-app-hook/Sunder.App.Tests.dll">
+    <MakeDir Directories="$(TargetDir)agent-family-app-hook" />
+    <Csc Sources="$(MSBuildProjectDirectory)/AgentFamilyAppStartupHook.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)agent-family-app-hook/Sunder.App.Tests.dll" TargetType="Library"
+         TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)" DisabledWarnings="$(NoWarn)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
   </Target>
 </Project>

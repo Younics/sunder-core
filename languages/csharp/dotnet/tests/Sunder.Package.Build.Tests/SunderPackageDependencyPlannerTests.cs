@@ -24,12 +24,12 @@ public sealed class SunderPackageDependencyPlannerTests
         var app = planner.Project(SunderPackageRoleMembership.App);
         Assert.Equal(new[] { "Backend/1.0.0", "Helper/1.0.0", "Native/1.0.0", "Shared/1.0.0" }, worker.Libraries);
         Assert.Equal(new[] { "BuildOnly/1.0.0", "Shared/1.0.0", "Ui/1.0.0" }, app.Libraries);
-        Assert.Contains(worker.RuntimePaths, path => path.EndsWith("native/libfixture.dylib", StringComparison.Ordinal));
-        Assert.DoesNotContain(app.RuntimePaths, path => path.Contains("/native/", StringComparison.Ordinal));
-        Assert.Contains(app.CompilePaths, path => path.EndsWith("/ref/Ui.dll", StringComparison.Ordinal));
-        Assert.DoesNotContain(app.CompilePaths, path => path.EndsWith("/lib/Ui.dll", StringComparison.Ordinal));
-        Assert.Contains(app.RuntimePaths, path => path.EndsWith("/lib/Ui.dll", StringComparison.Ordinal));
-        Assert.DoesNotContain(app.RuntimePaths, path => path.EndsWith("/ref/Ui.dll", StringComparison.Ordinal));
+        Assert.Contains(worker.RuntimePaths, path => path.Replace('\\', '/').EndsWith("native/libfixture.dylib", StringComparison.Ordinal));
+        Assert.DoesNotContain(app.RuntimePaths, path => path.Replace('\\', '/').Contains("/native/", StringComparison.Ordinal));
+        Assert.Contains(app.CompilePaths, path => path.Replace('\\', '/').EndsWith("/ref/Ui.dll", StringComparison.Ordinal));
+        Assert.DoesNotContain(app.CompilePaths, path => path.Replace('\\', '/').EndsWith("/lib/Ui.dll", StringComparison.Ordinal));
+        Assert.Contains(app.RuntimePaths, path => path.Replace('\\', '/').EndsWith("/lib/Ui.dll", StringComparison.Ordinal));
+        Assert.DoesNotContain(app.RuntimePaths, path => path.Replace('\\', '/').EndsWith("/ref/Ui.dll", StringComparison.Ordinal));
         Assert.Equal(new[] { fixture.HelperProject }, app.ExcludedProjects);
         using var assets = JsonDocument.Parse(worker.Files.Single(file => file.Path == "project.assets.json").Contents);
         Assert.False(assets.RootElement.GetProperty("libraries").TryGetProperty("Ui/1.0.0", out _));
@@ -102,8 +102,8 @@ public sealed class SunderPackageDependencyPlannerTests
             Assert.Equal("net10.0", projected["project"]!["frameworks"]![key]!["framework"]!.GetValue<string>());
             Assert.Equal("net10.0", projected["project"]!["restore"]!["frameworks"]![key]!["framework"]!.GetValue<string>());
         }
-        Assert.Contains(app.CompilePaths, path => path.EndsWith("/ref/Ui.dll", StringComparison.Ordinal));
-        Assert.Contains(app.RuntimePaths, path => path.EndsWith("/lib/Ui.dll", StringComparison.Ordinal));
+        Assert.Contains(app.CompilePaths, path => path.Replace('\\', '/').EndsWith("/ref/Ui.dll", StringComparison.Ordinal));
+        Assert.Contains(app.RuntimePaths, path => path.Replace('\\', '/').EndsWith("/lib/Ui.dll", StringComparison.Ordinal));
         Assert.Equal(before, File.ReadAllBytes(fixture.Assets));
     }
 

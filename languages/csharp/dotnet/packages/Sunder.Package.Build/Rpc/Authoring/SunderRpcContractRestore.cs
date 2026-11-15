@@ -11,7 +11,7 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
     internal bool AllowDevelopmentRegistryOrigin { get; } = allowDevelopmentRegistryOrigin;
 
     internal async Task<int> RestoreAsync(string lockPath, string cacheRoot, IReadOnlyList<string> candidates, CancellationToken token = default,
-        string? platformCatalog = null)
+        string? platformCatalog = null, bool onlyMissing = false)
     {
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, AllowDevelopmentRegistryOrigin);
         if (platformCatalog is not null && string.IsNullOrWhiteSpace(platformCatalog))
@@ -63,12 +63,12 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
                 try
                 {
                     var entries = SunderRpcContractCache.Resolve(artifact.Contracts.Values.ToDictionary(contract => contract.DescriptorSha256,
-                        contract => required[contract.DescriptorSha256], StringComparer.Ordinal), cacheRoot);
-                    _ = SunderRpcContractCache.ResolveModelProjections([artifact], cacheRoot, entries);
+                        contract => required[contract.DescriptorSha256], StringComparer.Ordinal), cacheRoot, token);
+                    _ = SunderRpcContractCache.ResolveModelProjections([artifact], cacheRoot, entries, token);
                     continue;
                 }
                 catch (InvalidDataException error) when (error.Message.StartsWith("contract-cache.entry-missing:", StringComparison.Ordinal)
-                    || error.Message.StartsWith("contract-cache.entry-corrupt:", StringComparison.Ordinal)) { }
+                    || !onlyMissing && error.Message.StartsWith("contract-cache.entry-corrupt:", StringComparison.Ordinal)) { }
                 var origin = new Uri(artifact.RegistryOrigin.TrimEnd('/') + "/");
                 Collect(artifact, await ReadCanonicalCandidateAsync(origin, artifact.PackageId, artifact.SelectedPackageVersion, token));
             }
@@ -79,7 +79,7 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
         try
         {
             cached = SunderRpcContractCache.Resolve(required.Where(pair => !restored.ContainsKey(pair.Key))
-                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), cacheRoot);
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), cacheRoot, token);
         }
         catch (InvalidDataException error) when (error.Message.StartsWith("contract-cache.entry-missing:", StringComparison.Ordinal))
         {
@@ -89,7 +89,7 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
             new KeyValuePair<string, SunderRpcResolvedContractCacheEntry>(pair.Key, new(required[pair.Key], SunderRpcContractDescriptor.Parse(pair.Value), pair.Value))))
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal));
         var cachedProjections = SunderRpcContractCache.ResolveProjectionContracts(contractLock.PackageArtifacts.Values
-            .Where(artifact => !projections.ContainsKey(artifact.PackageId)).ToArray(), cacheRoot, complete);
+            .Where(artifact => !projections.ContainsKey(artifact.PackageId)).ToArray(), cacheRoot, complete, token);
         var allProjections = new Dictionary<string, SunderRpcModelProjectionContract>(cachedProjections, StringComparer.Ordinal);
         foreach (var (id, bytes) in projections)
             foreach (var entry in SunderRpcContractCache.VerifyModelProjection(contractLock.PackageArtifacts[id], bytes,
@@ -111,15 +111,53 @@ internal sealed partial class SunderRpcContractRestore(HttpClient http, bool all
         var unchanged = SunderRpcAuthoringDocuments.ReadContractLock(lockPath, AllowDevelopmentRegistryOrigin);
         if (!unchanged.ExactBytes.AsSpan().SequenceEqual(contractLock.ExactBytes))
             throw Error("rpc-authoring.evidence-mismatch", "The contract lock changed during restore.");
+        if (onlyMissing) ValidateAutomaticPublication();
         // Descriptor pairs and catalogs are independently immutable. If a
         // process stops between publications, generation fails until exact restore
         // supplies the missing catalog; descriptor integrity never creates a Registry selection.
         foreach (var batch in restored.Chunk(128))
-            SunderRpcContractCacheStore.Publish(cacheRoot, batch.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), required, token);
+            SunderRpcContractCacheStore.Publish(cacheRoot, batch.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal), required, token,
+                onlyMissing: onlyMissing);
         if (projections.Count != 0) SunderRpcContractCacheStore.PublishModelProjections(cacheRoot, projections, contractLock.PackageArtifacts.Values.ToArray(), complete, token);
         if (catalogs.Count != 0) SunderRpcPlatformCatalogCache.Publish(cacheRoot,
-            catalogs.ToDictionary(pair => pair.Key, pair => pair.Value.GetCanonicalUtf8(), StringComparer.Ordinal), platformRequirements, token);
+            catalogs.ToDictionary(pair => pair.Key, pair => pair.Value.GetCanonicalUtf8(), StringComparer.Ordinal), platformRequirements, token,
+                onlyMissing: onlyMissing);
         return restored.Count;
+
+        void ValidateAutomaticPublication()
+        {
+            // A missing pair can hide corrupt surviving evidence in another pair.
+            // Check the complete acquired selection before publishing anything;
+            // each writer repeats its checks under the shared publication lease.
+            var root = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(cacheRoot);
+            if (!GeneratedOutputPathSafety.PathExists(root)) return;
+            using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30), token);
+            GeneratedOutputPathSafety.EnsureRegularDirectory(root, "automatic contract cache");
+            if (!Directory.EnumerateFileSystemEntries(root).Any()) return;
+            SunderRpcContractCacheStore.ValidateRoot(root, requireComplete: true);
+            foreach (var (hash, bytes) in restored)
+            {
+                SunderRpcContractCacheStore.RequireMissingOrEqual(SunderRpcContractCache.GetDescriptorPath(root, hash), bytes);
+                SunderRpcContractCacheStore.RequireMissingOrEqual(SunderRpcContractCache.GetReceiptPath(root, hash),
+                    SunderRpcContractCacheStore.ReceiptBytes(required[hash]));
+            }
+            foreach (var (id, bytes) in projections)
+            {
+                var hash = contractLock.PackageArtifacts[id].ModelProjectionSha256;
+                var path = SunderRpcContractCache.GetModelProjectionPath(root, hash);
+                SunderRpcContractCacheStore.RequireMissingOrEqual(path, bytes);
+                SunderRpcContractCacheStore.RequireMissingOrEqual(Path.ChangeExtension(path, "receipt.json"),
+                    SunderRpcContractCache.ModelProjectionReceiptBytes(hash, bytes.Length));
+            }
+            foreach (var (hash, catalog) in catalogs)
+            {
+                var bytes = catalog.GetCanonicalUtf8();
+                var path = SunderRpcPlatformCatalogCache.CatalogPath(root, hash);
+                SunderRpcContractCacheStore.RequireMissingOrEqual(path, bytes);
+                SunderRpcContractCacheStore.RequireMissingOrEqual(Path.ChangeExtension(path, "receipt.json"),
+                    SunderRpcPlatformCatalogCache.ReceiptBytes(hash, bytes.Length));
+            }
+        }
 
         void Collect(SunderRpcLockedPackageArtifact artifact, SunderPackagePublicApiSnapshot snapshot)
         {

@@ -124,7 +124,9 @@
                                     RuntimeIdentifier="$(RuntimeIdentifier)" PackageVersion="$(Version)"
                                     ProjectDirectory="$(MSBuildProjectDirectory)" EvaluatedResources="@(_SunderResourceInputs)" ValidateResourceEvaluation="true"
                                     EvaluatedGeneratorProperties="@(_SunderGeneratorProperty)"
+                                    ProjectImports="$(MSBuildAllProjects)"
                                     Role="$(SunderPackageCompilationRole)" OutputLockLeaseId="$(_SunderRpcGeneratedOutputLockLeaseId)">
+      <Output TaskParameter="CompilerProjectImports" PropertyName="MSBuildAllProjects" />
       <Output TaskParameter="CompileItems" ItemName="_SunderRoleCompile" />
       <Output TaskParameter="ReferencePaths" ItemName="_SunderRoleReferences" />
       <Output TaskParameter="RuntimeReferencePaths" ItemName="_SunderRoleRuntimeReferences" />

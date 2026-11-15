@@ -11,9 +11,9 @@ public sealed partial class PackageViewHostServiceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AppActivationServicesStartOnlyAfterPublicationWithoutViewNavigationAndDrainOnRevocation(bool publish)
+    public Task AppActivationServicesStartOnlyAfterPublicationWithoutViewNavigationAndDrainOnRevocation(bool publish)
+        => RunPackageTestAsync("app-activation-service", async scope =>
     {
-        using var scope = TemporaryDirectoryScope.Create("app-activation-service");
         var package = CreateActiveAgentPackage();
         var folder = CreateAppPackageSource(scope.RootPath, package.PackageId);
         var evidence = scope.GetPath("startup-evidence");
@@ -53,7 +53,7 @@ public sealed partial class PackageViewHostServiceTests
         await host.WaitForRetirementsAsync();
         Assert.Equal(2, File.ReadAllLines(evidence).Count(line => line == "revoked"));
         Assert.Equal(2, File.ReadAllLines(evidence).Count(line => line == "disposed"));
-    }
+    });
 }
 
 public sealed class ShellLifecycleActivationService(string evidence) : IPackageAppActivationService, IAsyncDisposable

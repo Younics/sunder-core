@@ -13,6 +13,7 @@ using Microsoft.Build.Framework;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Rpc.Authoring.CSharp;
 using Sunder.Package.Build.Tasks;
@@ -103,9 +104,9 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         SunderRpcContractCacheStore.InitializeRoot(_cache);
         _descriptor = SunderRpcContractDescriptor.Parse(File.ReadAllBytes(Fixture("conformance/valid/minimal.rpc.json")));
         File.WriteAllBytes(SunderRpcContractCache.GetDescriptorPath(_cache, _descriptor.Sha256), _descriptor.GetCanonicalUtf8());
-        File.Copy(Fixture("authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(_cache, _descriptor.Sha256));
-        File.Copy(Fixture("authoring/conformance/valid/minimal-package-owned-baseline.json"), Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName));
-        File.Copy(Fixture("authoring/conformance/valid/package-api-contract-lock.json"), LockPath);
+        CopyAuthoringFixture("cache-entry-receipt.json", SunderRpcContractCache.GetReceiptPath(_cache, _descriptor.Sha256));
+        CopyAuthoringFixture("minimal-package-owned-baseline.json", Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName));
+        CopyAuthoringFixture("package-api-contract-lock.json", LockPath);
         ModelProjectionTestEvidence.Seed(_cache, SunderRpcAuthoringDocuments.ReadContractLock(LockPath).PackageArtifacts[DependencyId]);
         File.WriteAllText(Path.Combine(_root, "Program.cs"), WorkerSource);
         File.WriteAllText(Path.Combine(_root, "Consumer.cs"), ConsumerSource);
@@ -455,7 +456,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         Assert.Equal(descriptorsBefore, Snapshot(Path.Combine(generation.IntermediateOutputPath, "sunder-contracts")));
     }
 
-    [Fact]
+    [SymbolicLinkFact(directory: false)]
     public void ReceiptSymlink_IsRejectedEvenWithExactBytesAndHash()
     {
         var generation = Generate();
@@ -464,15 +465,7 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
         var receipt = Assert.Single(task.AuthoringReceipts);
         var external = Path.Combine(_root, "external-receipt.json");
         File.Move(receipt.ItemSpec, external);
-        try
-        {
-            File.CreateSymbolicLink(receipt.ItemSpec, external);
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException)
-        {
-            File.Move(external, receipt.ItemSpec);
-            return;
-        }
+        File.CreateSymbolicLink(receipt.ItemSpec, external);
         var before = File.ReadAllBytes(initial.ManifestOutputPath);
         Assert.False(task.Execute());
         Assert.Equal(before, File.ReadAllBytes(initial.ManifestOutputPath));
@@ -892,6 +885,9 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
             WorkingDirectory = _root, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false,
         };
         start.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        // The external telemetry collector is not part of compilation and can
+        // retain the fixture's private package cache after MSBuild exits.
+        start.Environment["AVALONIA_TELEMETRY_OPTOUT"] = "1";
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
@@ -914,6 +910,10 @@ public sealed partial class SunderRpcImportedBuildTests : IDisposable
     private static string[] Snapshot(string path) => Directory.GetFiles(path, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)
         .Select(file => Path.GetRelativePath(path, file) + ":" + Sha256(File.ReadAllBytes(file)) + ":" + File.GetLastWriteTimeUtc(file).Ticks).ToArray();
     private static string Fixture(string path) => Path.Combine(RepositoryRoot(), "specs/rpc/v1", path);
+    private static void CopyAuthoringFixture(string name, string destination)
+        // Checkout EOL conversion is not authored wire evidence. Keep the shared
+        // conformance files untouched; materialize canonical LF in this owned fixture.
+        => File.WriteAllText(destination, File.ReadAllText(Fixture("authoring/conformance/valid/" + name)).ReplaceLineEndings("\n"));
     private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

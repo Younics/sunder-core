@@ -206,7 +206,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                     resources = Array.Empty<string>(), workerDependencies = (object?)null, frameworkInputs = Array.Empty<string>(),
                     frameworkProperties = new { }, frameworkGenerators = Array.Empty<string>(),
                 }));
-                var snapshot = SunderRoleCompilationSnapshot.Publish(plan.RootElement, inputs, "worker");
+                var snapshot = Path.GetFullPath(SunderRoleCompilationSnapshot.Publish(plan.RootElement, inputs, "worker"));
                 if (files <= 2) return snapshot;
                 // Expand the real producer's small output into historical copies.
                 // This regression owns discovery, not 33,280 redundant Publish reads.

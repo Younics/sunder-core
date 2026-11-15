@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
@@ -575,15 +576,11 @@ public sealed class PackageStoreCoordinatorTests
         Assert.True(File.Exists(journalPath));
     }
 
-    [Theory]
+    [UnixTheory]
     [InlineData(false)]
     [InlineData(true)]
     public void StorageSnapshot_AcceptsRegularFileAndRejectsFifoWithoutOpeningIt(bool fifo)
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
         var root = CreateTempDirectory();
         var path = Path.Combine(root, "package.entry");
         try
@@ -1217,7 +1214,7 @@ public sealed class PackageStoreCoordinatorTests
         Assert.False(Directory.Exists(fixture.Paths.GetInstalledPackagePath("test.package", "1.0.0")));
     }
 
-    [Fact]
+    [SymbolicLinkFact(directory: true)]
     public async Task Commit_WhenTransactionDirectoryIsSymbolicLink_RejectsWithoutWritingOutsideRoot()
     {
         var fixture = await CreateFixtureAsync();
@@ -1229,15 +1226,7 @@ public sealed class PackageStoreCoordinatorTests
         Directory.CreateDirectory(outsidePath);
         var transactionPath = Path.Combine(fixture.Paths.TransactionRootPath, preparation.Stage!.StageId);
         Directory.Delete(transactionPath, recursive: true);
-        try
-        {
-            Directory.CreateSymbolicLink(transactionPath, outsidePath);
-        }
-        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-        {
-            await fixture.Coordinator.DiscardStageAsync(preparation.Stage.StageId);
-            return;
-        }
+        Directory.CreateSymbolicLink(transactionPath, outsidePath);
 
         var result = await fixture.Coordinator.CommitStageAsync(preparation.Stage.StageId);
 

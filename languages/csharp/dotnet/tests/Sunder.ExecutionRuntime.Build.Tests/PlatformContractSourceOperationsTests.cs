@@ -239,10 +239,9 @@ public sealed class PlatformContractSourceOperationsTests
         await tree.Success("check");
     }
 
-    [Fact]
+    [WindowsOrMacOsFact]
     public async Task RecursiveSourcePolicy_HiddenAttributeAloneDoesNotExcludeOrdinarySource()
     {
-        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows()) return;
         using var tree = new CoreTree();
         await tree.Bootstrap();
         var before = File.ReadAllBytes(tree.Baseline);
@@ -429,11 +428,10 @@ public sealed class PlatformContractSourceOperationsTests
             yield return [action, mutation];
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: true, file: true)]
     [MemberData(nameof(PublicationMutations))]
     public async Task Publication_RechecksExactInputsAndCleansOnlyOwnByteProvenStage(string action, string mutation)
     {
-        if (OperatingSystem.IsWindows() && mutation.EndsWith("link", StringComparison.Ordinal)) return;
         using var tree = new CoreTree();
         await tree.Bootstrap();
         if (action is "accept" or "export") await tree.Success("freeze");
@@ -540,12 +538,11 @@ public sealed class PlatformContractSourceOperationsTests
         Assert.Equal(before, tree.AllCoreBytes());
     }
 
-    [Theory]
+    [WindowsOrMacOsTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Payload_RejectsCaseAliasedLanguageTreesBeforeAnySourceWrite(bool rootAlias)
     {
-        if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsWindows()) return;
         using var tree = new CoreTree();
         await tree.Bootstrap();
         await tree.Success("freeze");
@@ -561,13 +558,12 @@ public sealed class PlatformContractSourceOperationsTests
         Assert.False(File.Exists(Path.Combine(tree.Sources, "Injected.cs")));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: true, file: true)]
     [InlineData("file")]
     [InlineData("directory")]
     [InlineData("dangling")]
     public async Task RecursiveSources_RejectNestedLinksWithoutFollowingThem(string kind)
     {
-        if (OperatingSystem.IsWindows()) return;
         using var tree = new CoreTree();
         var nested = Directory.CreateDirectory(Path.Combine(tree.Sources, "Nested", "Contracts")).FullName;
         var target = tree.Temp.WriteAllText("outside.cs", "#error Must not read this linked source");
@@ -581,7 +577,7 @@ public sealed class PlatformContractSourceOperationsTests
         Assert.Empty(Directory.GetFileSystemEntries(tree.BaselineParent));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: true, file: true)]
     [InlineData("core-link")]
     [InlineData("source-link")]
     [InlineData("source-file-link")]
@@ -595,7 +591,6 @@ public sealed class PlatformContractSourceOperationsTests
     [InlineData("output-parent-missing")]
     public async Task UnsafePaths_FailClosedWithoutCreatingParentsOrTouchingLinkTargets(string kind)
     {
-        if (OperatingSystem.IsWindows() && kind.Contains("link", StringComparison.Ordinal)) return;
         using var tree = new CoreTree();
         await tree.Bootstrap();
         await tree.Success("freeze");
@@ -738,13 +733,12 @@ public sealed class PlatformContractSourceOperationsTests
             tree.Root, tree.Baseline, expected, proposal, new SunderRpcInputSnapshot()));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: false)]
     [InlineData("same-stamp")]
     [InlineData("link")]
     [InlineData("cancel")]
     public async Task SharedTransaction_RechecksStageAfterSecondInputVerificationAndHonorsFinalCancellation(string mutation)
     {
-        if (OperatingSystem.IsWindows() && mutation == "link") return;
         using var tree = new CoreTree();
         await tree.Bootstrap();
         var expected = File.ReadAllBytes(tree.Baseline);

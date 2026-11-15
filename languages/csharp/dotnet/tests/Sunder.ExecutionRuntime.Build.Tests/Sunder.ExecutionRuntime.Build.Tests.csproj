@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <Compile Include="..\Shared\Platform\SymbolicLinkFactAttribute.cs" Link="TestSupport\SymbolicLinkFactAttribute.cs" />
     <ProjectReference Include="..\..\tools\Sunder.ExecutionRuntime.Build\Sunder.ExecutionRuntime.Build.csproj" />
     <ProjectReference Include="..\..\libraries\Sunder.Package.Format\Sunder.Package.Format.csproj" />
   </ItemGroup>

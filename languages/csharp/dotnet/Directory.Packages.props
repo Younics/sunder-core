@@ -8,7 +8,7 @@
     <!-- App / SDK -->
     <PackageVersion Include="Avalonia" Version="$(SunderAvaloniaVersion)" />
     <PackageVersion Include="Avalonia.AvaloniaEdit" Version="12.0.0" />
-    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.1.1" />
+    <PackageVersion Include="Avalonia.Controls.WebView" Version="12.1.2" />
     <PackageVersion Include="Avalonia.Desktop" Version="$(SunderAvaloniaVersion)" />
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="$(SunderAvaloniaVersion)" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="$(SunderAvaloniaVersion)" />

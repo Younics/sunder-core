@@ -22,6 +22,31 @@ public sealed class LocalStateV1Tests
         Assert.Equal(Path.GetFullPath(configuredRoot), AppLocalState.ResolveRootPath(configuredRoot));
     }
 
+    [WindowsFact]
+    [SupportedOSPlatform("windows")]
+    public Task Runtime_owned_identity_and_canonicalization_support_long_windows_paths()
+        => Sunder.Core.TestSupport.TemporaryDirectoryScope.RunAsync("sunder-owned-long-path", scope =>
+        {
+            var directory = scope.GetPath(new string('a', 100), new string('b', 100));
+            RuntimeOwnedFileSystem.CreateDirectory(directory);
+            Assert.True(directory.Length > 260);
+            Assert.Equal(directory, RuntimeOwnedFileSystem.GetCanonicalPhysicalPath(directory));
+            var identity = RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(directory);
+            Assert.Equal(identity, RuntimeOwnedFileSystem.GetMutableDirectoryIdentity(@"\\?\" + directory));
+
+            var original = Path.Combine(directory, "original.json");
+            using (var file = RuntimeOwnedFileSystem.CreateFile(original, FileMode.CreateNew,
+                       FileAccess.Write, FileShare.None, 4096, FileOptions.None))
+                file.WriteByte(1);
+            var fileIdentity = RuntimeOwnedFileSystem.GetMutableRegularFileIdentity(directory, original);
+            var retired = Path.Combine(directory, "retired.json");
+            File.Move(original, retired);
+            RuntimeOwnedFileSystem.ValidateMutableRegularFileIdentity(directory, retired, fileIdentity);
+            Assert.Equal(retired, RuntimeOwnedFileSystem.GetCanonicalPhysicalPath(retired));
+            Assert.False(File.Exists(original));
+            return Task.CompletedTask;
+        });
+
     [Fact]
     public void Fresh_runtime_and_app_roots_initialize_schema_one_atomically()
     {
@@ -536,7 +561,7 @@ public sealed class LocalStateV1Tests
         Assert.False(Directory.Exists(Path.Combine(runtimeRoot, "reset-receipts")));
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public async Task Reset_refuses_root_reparse_point_without_mutating_target()
     {
         var root = CreateTempDirectory();
@@ -545,14 +570,7 @@ public sealed class LocalStateV1Tests
         RuntimeLocalState.EnsureInitialized(target);
         var staleSchemaTemp = Path.Combine(target, ".schema.json.interrupted.tmp");
         File.WriteAllText(staleSchemaTemp, "stale");
-        try
-        {
-            Directory.CreateSymbolicLink(link, target);
-        }
-        catch (Exception linkException) when (linkException is UnauthorizedAccessException or IOException)
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(link, target);
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(
             () => RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, link));
@@ -563,7 +581,7 @@ public sealed class LocalStateV1Tests
         Assert.False(Directory.Exists(Path.Combine(target, "reset-receipts")));
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public async Task Reset_refuses_existing_root_beneath_reparse_ancestor_without_mutation()
     {
         var root = CreateTempDirectory();
@@ -573,10 +591,7 @@ public sealed class LocalStateV1Tests
         RuntimeLocalState.EnsureInitialized(targetRoot);
         var staleSchemaTemp = Path.Combine(targetRoot, ".schema.json.interrupted.tmp");
         File.WriteAllText(staleSchemaTemp, "stale");
-        if (!TryCreateDirectorySymbolicLink(linkAncestor, targetAncestor))
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(linkAncestor, targetAncestor);
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(
             () => RuntimeV1StateReset.ResetAsync(
@@ -589,17 +604,14 @@ public sealed class LocalStateV1Tests
         Assert.False(Directory.Exists(Path.Combine(targetRoot, "reset-receipts")));
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public async Task Reset_refuses_nonexistent_root_beneath_reparse_ancestor_without_creation()
     {
         var root = CreateTempDirectory();
         var targetAncestor = Path.Combine(root, "target");
         var linkAncestor = Path.Combine(root, "runtime-link");
         Directory.CreateDirectory(targetAncestor);
-        if (!TryCreateDirectorySymbolicLink(linkAncestor, targetAncestor))
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(linkAncestor, targetAncestor);
 
         var exception = await Assert.ThrowsAsync<InvalidDataException>(
             () => RuntimeV1StateReset.ResetAsync(
@@ -637,7 +649,7 @@ public sealed class LocalStateV1Tests
         }
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public async Task Reset_refuses_reparse_root_entry_without_mutating_target()
     {
         var root = CreateTempDirectory();
@@ -647,14 +659,7 @@ public sealed class LocalStateV1Tests
         Directory.CreateDirectory(outside);
         var marker = Path.Combine(outside, "keep.txt");
         File.WriteAllText(marker, "keep");
-        try
-        {
-            Directory.CreateSymbolicLink(Path.Combine(runtimeRoot, "installed"), outside);
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(Path.Combine(runtimeRoot, "installed"), outside);
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, runtimeRoot));
@@ -664,7 +669,7 @@ public sealed class LocalStateV1Tests
         Assert.False(Directory.Exists(Path.Combine(runtimeRoot, "reset-receipts")));
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public async Task Reset_refuses_nested_reparse_point_without_mutating_target()
     {
         var root = CreateTempDirectory();
@@ -676,10 +681,7 @@ public sealed class LocalStateV1Tests
         Directory.CreateDirectory(outside);
         var marker = Path.Combine(outside, "keep.txt");
         File.WriteAllText(marker, "keep");
-        if (!TryCreateDirectorySymbolicLink(Path.Combine(installedVersion, "linked-payload"), outside))
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(Path.Combine(installedVersion, "linked-payload"), outside);
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, runtimeRoot));
@@ -857,13 +859,9 @@ public sealed class LocalStateV1Tests
         Assert.False(Directory.Exists(Path.Combine(runtimeRoot, RuntimeV1StateDescriptor.ResetReceiptDirectory)));
     }
 
-    [Fact]
+    [UnixFact]
     public void Runtime_owned_mutation_refuses_a_different_mount_identity()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
         var root = CreateTempDirectory();
 
         Assert.Throws<InvalidDataException>(() =>
@@ -892,14 +890,9 @@ public sealed class LocalStateV1Tests
             category => Assert.Equal("partial", category.GetProperty("status").GetString()));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task Reset_refuses_replaced_bound_root_after_started_receipt()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var runtimeRoot = Path.Combine(CreateTempDirectory(), "runtime", "v1");
         var movedRoot = runtimeRoot + "-moved";
         RuntimeLocalState.EnsureInitialized(runtimeRoot);
@@ -975,19 +968,6 @@ public sealed class LocalStateV1Tests
         Assert.Contains(
             "package-data",
             receipt.RootElement.GetProperty("preservedPaths").EnumerateArray().Select(item => item.GetString()));
-    }
-
-    private static bool TryCreateDirectorySymbolicLink(string linkPath, string targetPath)
-    {
-        try
-        {
-            Directory.CreateSymbolicLink(linkPath, targetPath);
-            return true;
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or IOException)
-        {
-            return false;
-        }
     }
 
     private static bool TryCreateHardLink(string existingPath, string newPath)

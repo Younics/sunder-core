@@ -280,11 +280,18 @@ function validateExpectedSkipPolicy(declarations, policy) {
 
 export function discoverDotnetTests(source, content, policy) {
   const output = [];
-  for (const { id, name, attributes, policyAttributes, attributeNames, externalAttribute } of csharpTestDeclarations(content)) {
+  for (const { id, name, attributes, policyAttributes, attributeNames, externalAttribute, body } of csharpTestDeclarations(content)) {
+    if (/\bif\s*\([^;{}]*\bOperatingSystem\s*\.[^;{}]*\)\s*\{?\s*return\s*;/u.test(body)
+        || /\bcatch\s*\([^{};]*(?:UnauthorizedAccessException|PlatformNotSupportedException|IOException)[^{};]*\)\s*(?:when\s*\([^{};]*\)\s*)?\{\s*return\s*;/u.test(body)) {
+      throw new Error(`Test '${id}' can silently return without exercising its platform/prerequisite assertions. Declare platform/capability ownership instead.`);
+    }
     const project = source.split("/")[4];
     const externalArguments = [...(externalAttribute ?? "").matchAll(/"([^"]+)"/gu)]
       .map((argument) => argument[1]);
     const operatingSystems = operatingSystemsFor(attributeNames.join(" "));
+    const nativePrerequisite = attributeNames.some(name => /^SymbolicLink(?:Fact|Theory)(?:Attribute)?$/u.test(name))
+      ? "symbolic-link" : attributeNames.some(name => /^(?:Linux|MacOs)ExternalKeyStoreFact(?:Attribute)?$/u.test(name))
+        ? "external-keystore" : undefined;
     const declaration = {
       id,
       framework: "dotnet",
@@ -294,7 +301,9 @@ export function discoverDotnetTests(source, content, policy) {
       attributes,
       operatingSystems,
       externalEnvironment: externalArguments[0],
-      externalPrerequisites: dotnetPrerequisites(name, source, externalArguments),
+      externalPrerequisites: dotnetPrerequisites(policyAttributes, attributeNames, externalArguments),
+      nativePrerequisite,
+      requiredInNativeQualification: nativePrerequisite !== undefined,
     };
     const ownership = { ...declaration, attributes: policyAttributes };
     output.push({ ...declaration, component: componentFor(ownership, policy), primaryLane: dotnetLaneFor(ownership, policy) });
@@ -348,7 +357,7 @@ function discoverPythonTests(source, content) {
       name: testMatch[1],
       runnerSelector: `${className}.${testMatch[1]}`,
       operatingSystems: ["Windows", "Linux", "MacOS"],
-      externalPrerequisites: [{ kind: "executable", name: "python3", requiredWhenSelected: true }],
+      externalPrerequisites: [{ kind: "executable", name: "python3", minimumVersion: "3.11", requiredWhenSelected: true }],
       primaryLane: "release-artifact",
     });
   }
@@ -364,7 +373,10 @@ function discoverShellFixture(source) {
     source,
     name,
     operatingSystems: ["Windows", "Linux", "MacOS"],
-    externalPrerequisites: [{ kind: "executable", name: "bash", requiredWhenSelected: true }],
+    externalPrerequisites: [
+      { kind: "executable", name: "python3", requiredWhenSelected: true },
+      { kind: "executable", name: "bash", requiredWhenSelected: true },
+    ],
     primaryLane: "release-artifact",
   };
 }
@@ -380,9 +392,12 @@ function dotnetLaneFor(declaration, policy) {
   return policy.defaultDotnetLane;
 }
 
-function dotnetPrerequisites(name, source, externalArguments) {
+function dotnetPrerequisites(attributes, attributeNames, externalArguments) {
   const prerequisites = [{ kind: "executable", name: "dotnet", requiredWhenSelected: true }];
-  if (/CrossLanguage|Interop|RetainedTypeScriptBuildsWithSelectedCandidateTools|RetainedCheckedJavaScriptBuildsWithSelectedCandidateTools/iu.test(`${name} ${source}`)) {
+  const tools = [...attributes.matchAll(/Trait\(\s*"Prerequisite"\s*,\s*"([^"\r\n]+)"\s*\)/gu)].map(match => match[1]);
+  for (const tool of tools) if (tool !== "Node") throw new Error(`Unknown .NET test prerequisite '${tool}'.`);
+  if (tools.includes("Node")
+      || attributeNames.some(name => /^Node24(?:Fact|Theory)(?:Attribute)?$/u.test(name))) {
     prerequisites.push({ kind: "executable", name: "node", minimumMajorVersion: 24, requiredWhenSelected: true });
   }
   if (externalArguments[0] !== undefined) {
@@ -400,6 +415,7 @@ function dotnetPrerequisites(name, source, externalArguments) {
 }
 
 function operatingSystemsFor(attributes) {
+  if (/WindowsOrMacOs(?:Fact|Theory)/u.test(attributes)) return ["Windows", "MacOS"];
   if (/\bMacOs[A-Za-z0-9_]*(?:Fact|Theory)\b/u.test(attributes)) return ["MacOS"];
   if (/Windows[A-Za-z0-9_]*(?:Fact|Theory)/u.test(attributes)) return ["Windows"];
   if (/Linux[A-Za-z0-9_]*(?:Fact|Theory)/u.test(attributes)) return ["Linux"];
@@ -412,7 +428,8 @@ function externalInputPrerequisite(name) {
     SUNDER_AGENT_CURRENT_BASELINE_ROOT: "directory",
     SUNDER_AGENT_UI_SNAPSHOT_DIR: "directory",
     SUNDER_AGENT_PACKAGE_ARCHIVE_DIR: "directory",
-    SUNDER_MAKER_DEV_PACKAGE: "directory",
+    SUNDER_AGENT_PLATFORM_CATALOG: "file",
+    SUNDER_MAKER_PACKAGE_ARCHIVE: "file",
     SUNDER_MAKER_IMPORT_CANDIDATE: "file",
     SUNDER_MAKER_PLATFORM_CATALOG: "file",
     SUNDER_NODE_MODULE_PACKAGE_PATH: "file",

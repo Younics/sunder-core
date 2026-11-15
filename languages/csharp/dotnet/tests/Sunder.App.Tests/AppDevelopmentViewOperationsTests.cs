@@ -101,7 +101,9 @@ public sealed class AppDevelopmentViewOperationsTests
         for (var index = 0; index < 64; index++)
             await fixture.Operations.InteractAsync(index == 0 ? original : original with { OperationId = Guid.NewGuid().ToString("N") }, default);
         for (var index = 0; index < 9; index++) await fixture.InspectAsync();
+        fixture.Operations.RetireSnapshots();
         Assert.Equal("dispatched", (await fixture.Operations.InteractAsync(original, default)).State);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Operations.InteractAsync(original with { OperationId = Guid.NewGuid().ToString("N") }, default));
         var fresh = await fixture.InspectAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Operations.InteractAsync(Input(fresh, Assert.Single(fresh.Elements), "invoke"), default));
         Assert.Equal(64, fixture.Selected.Inputs);

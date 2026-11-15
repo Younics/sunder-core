@@ -246,10 +246,13 @@ internal sealed class DevPackageWatchService : IAsyncDisposable
 
     private void StartReloadLocked()
     {
-        _reloadCancellation?.Cancel();
+        var previousCancellation = _reloadCancellation;
         var cancellation = new CancellationTokenSource();
         var previousReload = _reloadTask;
+        // Cancel can run the previous attempt's finally inline. Publish its
+        // successor first so retirement cannot clear the still-dirty owner set.
         _reloadCancellation = cancellation;
+        previousCancellation?.Cancel();
         _reloadTask = RunSerializedReloadAsync(previousReload, cancellation,
             _changedPackageIds.All(_completedPublications.Contains), Stopwatch.GetTimestamp());
         _eventStream.PublishOperationPhase(RuntimeOperationPhase.DevReloadDebounce, _changedPackageIds.ToArray());

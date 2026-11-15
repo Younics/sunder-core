@@ -1,0 +1,7 @@
+<Project>
+  <!-- Match an authored source import: register the role hooks before the .NET
+       SDK consumes AfterMicrosoftNETSdkTargets. -->
+  <Import Project="$(_SunderPackageBuildSdkTargetsDirectory)Sunder.Package.Build.targets"
+          Condition="'$(_SunderPackageBuildTargetsImported)' != 'true'" />
+  <Import Project="Sdk.targets" Sdk="Microsoft.NET.Sdk" />
+</Project>

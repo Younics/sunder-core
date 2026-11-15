@@ -11,8 +11,11 @@ namespace Sunder.App.Tests;
 
 public sealed partial class PackageViewHostServiceTests
 {
-    [Fact]
-    public async Task DevelopmentViewBindingRequiresAnAlreadyCachedAttachedExactPackageView()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task DevelopmentViewBindingRequiresAnAlreadyCachedAttachedExactPackageView(bool nativeDocument, bool nativeCapture)
     {
         await using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
         await ui.Dispatch(async () =>
@@ -32,7 +35,16 @@ public sealed partial class PackageViewHostServiceTests
             generation.RuntimeStamp = new(revision.RuntimeInstanceId, 4);
             generation.Composition.PublishServices();
             var created = 0;
-            registry.RegisterPackageView(package.PackageId, new("test.view-owner.view", "Owned view"), () => { created++; return new Panel(); });
+            registry.RegisterPackageView(package.PackageId, new("test.view-owner.view", "Owned view"), () =>
+            {
+                created++;
+                var panel = new Panel();
+                if (nativeDocument) panel.Children.Add(new NativeDocumentMarker(nativeCapture));
+                return panel;
+            });
+            var closed = Assert.Single(host.GetDevelopmentViews(package.PackageId, revision));
+            Assert.False(closed.IsOpen);
+            Assert.False(closed.CanCapture);
             Assert.Throws<InvalidOperationException>(() => host.OpenDevelopmentView(package.PackageId, "test.view-owner.view", revision));
             Assert.Equal(0, created); // Inspection must not navigate, construct or preload.
             var root = host.GetOrCreateView("test.view-owner.view")!;
@@ -43,6 +55,9 @@ public sealed partial class PackageViewHostServiceTests
             {
                 var binding = host.OpenDevelopmentView(package.PackageId, "test.view-owner.view", revision);
                 Assert.Same(root, binding.Root);
+                var opened = Assert.Single(host.GetDevelopmentViews(package.PackageId, revision));
+                Assert.True(opened.IsOpen);
+                Assert.Equal(!nativeDocument || nativeCapture, opened.CanCapture);
                 binding.RequireCurrent();
                 Assert.Throws<InvalidOperationException>(() => host.OpenDevelopmentView("other.package", binding.ViewId, revision));
                 Assert.Throws<InvalidOperationException>(() => host.OpenDevelopmentView(package.PackageId, "settings:" + package.PackageId, revision));
@@ -121,6 +136,12 @@ public sealed partial class PackageViewHostServiceTests
             }
             finally { window.Close(); }
         }, default);
+    }
+
+    private sealed class NativeDocumentMarker(bool canCapture) : Control, IAppDevelopmentDocumentOwner
+    {
+        public bool CanCapture => canCapture;
+        public IAppDevelopmentDocument DevelopmentDocument => throw new InvalidOperationException("View discovery must not inspect the native document.");
     }
 
     public sealed class DevelopmentViewTestApplication : Application

@@ -85,7 +85,8 @@ test("failed identity publishes no lock or marker and the same lease module can 
     return { stdout: ticks, stderr: "" };
   });
   const factory = mock.method(identityModule, "createProcessStartIdentityProbe", () => probe);
-  const profile = mock.method(require("node:os") as typeof os, "homedir", () => home);
+  const account = os.userInfo();
+  const profile = mock.method(require("node:os") as typeof os, "userInfo", () => ({ ...account, homedir: home }));
   const modulePath = require.resolve("../src/output");
   delete require.cache[modulePath];
   const leases = require(modulePath) as typeof import("../src/output");
@@ -98,7 +99,7 @@ test("failed identity publishes no lock or marker and the same lease module can 
       const path = `${output}.sunder-output.lock/owner.json`;
       const before = await readFile(path);
       fail = true; // Self identity is cached; the owner's inspection now fails.
-      await assert.rejects(leases.withOutputLeases([output], async () => assert.fail("must not steal"), 50), /Timed out/u);
+      await assert.rejects(leases.withOutputLeases([output], async () => assert.fail("must not steal"), 50), /Timed out.*Owner PID.*unknown.*temporary bootstrap failure/u);
       assert.deepEqual(await readFile(path), before);
     });
     await assert.rejects(stat(`${output}.sunder-output.lock`), { code: "ENOENT" });

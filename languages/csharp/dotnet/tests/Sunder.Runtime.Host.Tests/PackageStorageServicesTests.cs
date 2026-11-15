@@ -6,6 +6,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sunder.Core.TestSupport;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Storage;
 using Xunit;
@@ -670,21 +671,14 @@ public sealed class PackageStorageServicesTests
         Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(statePath)!, "state.json.tmp.*"));
     }
 
-    [Fact]
+    [SymbolicLinkFact(directory: false)]
     public async Task JsonPackageKeyValueStore_SymbolicLinkDocumentIsRejectedWithoutMutatingTarget()
     {
         var tempDirectory = CreateTempDirectory();
         var outsidePath = Path.Combine(CreateTempDirectory(), "outside.json");
         var statePath = Path.Combine(tempDirectory, "state.json");
         await new JsonPackageKeyValueStore(outsidePath).SetValueAsync("stable", "outside");
-        try
-        {
-            File.CreateSymbolicLink(statePath, outsidePath);
-        }
-        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        File.CreateSymbolicLink(statePath, outsidePath);
         var original = File.ReadAllBytes(outsidePath);
 
         await Assert.ThrowsAsync<IOException>(
@@ -1335,14 +1329,10 @@ public sealed class PackageStorageServicesTests
         Assert.True(windowsProtection.ShouldReprotect(MasterKeyProtectionSchemes.RestrictedFile));
     }
 
-    [Fact]
+    [WindowsFact]
+    [SupportedOSPlatform("windows")]
     public void WindowsDataProtection_CurrentUserRoundTripsWhenRunningOnWindows()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         var key = RandomNumberGenerator.GetBytes(32);
         var entropy = RandomNumberGenerator.GetBytes(32);
         var protection = new WindowsDataProtection();
@@ -1645,13 +1635,13 @@ public sealed class PackageStorageServicesTests
     {
         var command = CreateShellCommand(
             "read line; i=0; while [ $i -lt 3000 ]; do printf 'o'; printf 'e' >&2; i=$((i+1)); done; printf -- \":$line\"",
-            "set /p line=& for /L %i in (1,1,3000) do @(<nul set /p =o& <nul set /p =e 1>&2)& <nul set /p =:%line%");
+            "set /p line=& (for /L %i in (1,1,3000) do @(<nul set /p =o& <nul set /p =e>&2))& <nul set /p =:!line!& exit /b 0");
 
         var result = CommandRunner.Run(command.FileName, command.Arguments, "input-value\n");
 
         Assert.Equal(0, result.ExitCode);
-        Assert.EndsWith(":input-value", result.StandardOutput.TrimEnd(), StringComparison.Ordinal);
-        Assert.Equal(3000, result.StandardError.TrimEnd().Length);
+        Assert.Equal(new string('o', 3000) + ":input-value", result.StandardOutput.TrimEnd());
+        Assert.Equal(new string('e', 3000), result.StandardError.TrimEnd());
     }
 
     [Fact]
@@ -1674,7 +1664,7 @@ public sealed class PackageStorageServicesTests
     {
         var command = CreateShellCommand(
             "if read line; then printf unexpected; else printf closed; fi",
-            "set /p line= && (<nul set /p =unexpected) || (<nul set /p =closed)");
+            "set /p line= && (<nul set /p =unexpected) || (<nul set /p =closed)& exit /b 0");
 
         var result = CommandRunner.Run(
             command.FileName,
@@ -1714,15 +1704,19 @@ public sealed class PackageStorageServicesTests
         Assert.True(store.IsAvailable);
         var identifier = Guid.NewGuid().ToString("N");
         var key = RandomNumberGenerator.GetBytes(32);
+        var replacement = RandomNumberGenerator.GetBytes(32);
         try
         {
             Assert.True(store.TryStore(identifier, key));
             Assert.Equal(key, store.Load(identifier));
+            Assert.True(store.TryStore(identifier, replacement));
+            Assert.Equal(replacement, store.Load(identifier));
         }
         finally
         {
             Assert.True(store.TryDelete(identifier));
         }
+        Assert.Throws<PackageStorageKeyUnavailableException>(() => store.Load(identifier));
     }
 
     [Fact]
@@ -1794,7 +1788,7 @@ public sealed class PackageStorageServicesTests
     }
 
     private static ShellCommand CreateShellCommand(string unixCommand, string windowsCommand) => OperatingSystem.IsWindows()
-        ? new ShellCommand("cmd.exe", ["/d", "/s", "/c", windowsCommand])
+        ? new ShellCommand("cmd.exe", ["/d", "/s", "/v:on", "/c", windowsCommand])
         : new ShellCommand("/bin/sh", ["-c", unixCommand]);
 
     private static void AssertFailureMarker(

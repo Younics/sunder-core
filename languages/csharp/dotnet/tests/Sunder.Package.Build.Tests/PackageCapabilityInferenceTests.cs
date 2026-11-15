@@ -343,18 +343,8 @@ public sealed class PackageCapabilityInferenceTests
     {
         var root = FindRepositoryRoot();
         var configuration = ResolveConfiguration();
-        var sdkOutput = Path.Combine(
-            root,
-            "languages",
-            "csharp",
-            "dotnet",
-            "tests",
-            "Sunder.Package.Build.TestFixtures",
-            "SourceReferenceSdk",
-            "bin",
-            configuration,
-            "net10.0");
-        var sdkAssemblyPath = Path.Combine(sdkOutput, "Sunder.Sdk.dll");
+        var sdkAssemblyPath = GetFixtureAssemblyPath("SourceReferenceSdk", "Sunder.Sdk");
+        var sdkOutput = Path.GetDirectoryName(sdkAssemblyPath)!;
         Assert.True(File.Exists(sdkAssemblyPath));
         Assert.True(File.Exists(Path.Combine(sdkOutput, "Sunder.Sdk.pdb")));
         Assert.True(File.Exists(Path.Combine(sdkOutput, "Sunder.Sdk.xml")));

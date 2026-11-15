@@ -32,7 +32,10 @@ public sealed partial class ImplementationFirstRpcBuildTests
         var cache = Path.Combine(native, ".sunder/rpc-cache"); Directory.CreateDirectory(cache); SunderRpcContractCacheStore.InitializeRoot(cache);
         var descriptor = SunderRpcContractDescriptor.Parse(await File.ReadAllBytesAsync(Path.Combine(rpcFixtures, "conformance/valid/minimal.rpc.json")));
         await File.WriteAllBytesAsync(SunderRpcContractCache.GetDescriptorPath(cache, descriptor.Sha256), descriptor.GetCanonicalUtf8());
-        File.Copy(Path.Combine(rpcFixtures, "authoring/conformance/valid/cache-entry-receipt.json"), SunderRpcContractCache.GetReceiptPath(cache, descriptor.Sha256));
+        // Materialize canonical wire evidence in this owned fixture; a Windows
+        // checkout's EOL conversion must not masquerade as corrupt cache bytes.
+        await File.WriteAllTextAsync(SunderRpcContractCache.GetReceiptPath(cache, descriptor.Sha256),
+            (await File.ReadAllTextAsync(Path.Combine(rpcFixtures, "authoring/conformance/valid/cache-entry-receipt.json"))).ReplaceLineEndings("\n"));
         ModelProjectionTestEvidence.Seed(cache, SunderRpcAuthoringDocuments.ReadContractLock(Path.Combine(native, "sunder-contracts.lock.json")).PackageArtifacts["example.dependency"]);
         await File.WriteAllTextAsync(Path.Combine(native, "ImportedProvider.cs"), """
             using Sunder.Sdk.Rpc;

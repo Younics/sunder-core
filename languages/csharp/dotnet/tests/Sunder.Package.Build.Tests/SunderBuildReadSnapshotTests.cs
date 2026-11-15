@@ -40,7 +40,7 @@ public sealed class SunderBuildReadSnapshotTests
         snapshot.Complete();
     }
 
-    [Fact]
+    [SymbolicLinkFact(directory: true)]
     public void ReplacingCapturedAncestorWithLinkRejectsTheHandoff()
     {
         using var directory = TemporaryDirectoryScope.Create("sunder-read-snapshot");
@@ -52,12 +52,7 @@ public sealed class SunderBuildReadSnapshotTests
         _ = SunderRpcDescriptorFileReader.ReadStableBytes(path, 3, "source");
         var moved = directory.GetPath("moved");
         Directory.Move(original, moved);
-        try { Directory.CreateSymbolicLink(original, moved); }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-        {
-            Directory.Move(moved, original);
-            return;
-        }
+        Directory.CreateSymbolicLink(original, moved);
         Assert.Throws<IOException>(() => snapshot.Complete());
         Directory.Delete(original);
     }

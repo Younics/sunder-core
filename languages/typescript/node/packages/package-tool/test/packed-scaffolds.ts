@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
+import { execNpm } from "./npm-process";
 
 const exec = promisify(execFile);
 
@@ -20,18 +21,18 @@ export async function exercisePackedScaffolds(archives: readonly string[], creat
       const config = await readFile(resolve(root, "sunder.package.json"));
       const source = await readFile(resolve(root, `src/services.${language}`));
       const lock = await readFile(resolve(root, "sunder-contracts.lock.json"));
-      await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], { cwd: root });
+      await execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], { cwd: root });
       const sdkRoot = resolve(root, "node_modules/@younics/sunder-sdk");
       const sdk = JSON.parse(await readFile(resolve(sdkRoot, "package.json"), "utf8"));
       assert.equal(sdk.peerDependenciesMeta.react.optional, true);
       if (preset === "node") await assert.rejects(stat(resolve(root, "node_modules/react")), { code: "ENOENT" });
       for (const retired of ["dist/authoring.js", "test/historical-authoring.ts", "dist-test/test/historical-authoring.js"])
         await assert.rejects(stat(resolve(sdkRoot, retired)), { code: "ENOENT" });
-      const run = (script: string) => exec("npm", ["run", script], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
+      const run = (script: string) => execNpm(["run", script], { cwd: root, maxBuffer: 4 * 1024 * 1024 });
       await run("contracts:check");
       const baselinePath = resolve(root, "sunder-contracts.owned.json");
       await assert.rejects(stat(baselinePath), { code: "ENOENT" });
-      await exec("npm", ["test"], { cwd: root });
+      await execNpm(["test"], { cwd: root });
       // Check the emitted declaration closure with no Node ambient types and no
       // skipLibCheck; a browser facade must not leak the Worker SDK entry point.
       await writeFile(resolve(root, "browser-declarations.ts"), 'import {Self} from "#sunder/api"; import {createBrowserContext} from "@younics/sunder-sdk/browser"; const owner=createBrowserContext(Self); const result:Promise<string>=owner.api(Self).messages.send("browser"); void result; owner.dispose();\n');

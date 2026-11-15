@@ -12,6 +12,7 @@ import { buildDevPackage, buildWebTarget, bundleProduction, prepareProject } fro
 import { readProjectDescriptorFile } from "../src/descriptor-files";
 import { assertPendingAfterTurn, startOutputLockContender } from "./observable-barriers";
 import { emptyLock, installFixtureSdk } from "./service-fixtures";
+import { interruptWatchCli, startWatchCli } from "./watch-process";
 
 const cli=resolve(__dirname,"../../dist/cli.js");const exec=promisify(execFile);
 const generated=(root:string)=>resolve(root,".sunder/generated/rpc");
@@ -109,8 +110,8 @@ test("Vite and generated output share one fenced source snapshot; waiting genera
 });
 test("watch treats service identity and package versions as structural inputs",async()=>{
  const root=await project(["first"]);let child:ChildProcessWithoutNullStreams|undefined;let output="";
- try{child=spawn(process.execPath,[cli,"dev","--watch","--project",root],{stdio:"pipe"});child.stdout.on("data",data=>output+=data);child.stderr.on("data",data=>output+=data);const bundle=resolve(root,"dist/sunder-dev/payload/runtime/shared/bin/worker.cjs");
+  try{child=startWatchCli(cli,root);child.stdout.on("data",data=>output+=data);child.stderr.on("data",data=>output+=data);const bundle=resolve(root,"dist/sunder-dev/payload/runtime/shared/bin/worker.cjs");
  await wait(()=>exists(bundle),()=>output);await config(root,value=>{value.version="1.0.1";});await wait(async()=>/CONTRACT_VERSION = "1.0.1"/.test(await readFile(resolve(generated(root),"owned/first.ts"),"utf8").catch(()=>"")),()=>output);
- child.kill("SIGINT");assert.equal(await close(child),0,output);child=undefined;
+  interruptWatchCli(child);assert.equal(await close(child),0,output);child=undefined;
  }finally{child?.kill("SIGKILL");await rm(root,{recursive:true,force:true});}
 });

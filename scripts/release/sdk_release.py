@@ -21,6 +21,7 @@ sys.dont_write_bytecode = True
 import github_release as assets
 import package_metadata as metadata
 import release_coordinates as c
+import bash_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 PLAN = "release-plan.json"
@@ -202,7 +203,8 @@ def pack(plan, directory, kind=None):
             else:
                 with tempfile.TemporaryDirectory() as temporary:
                     work = Path(temporary)
-                    command = ["npm", "pack", "--prefix", "languages/typescript/node", "--workspace", row["name"], "--json", "--pack-destination", str(work)]
+                    command = ["node", str(ROOT / "scripts/npm-command.mjs"), "pack", "--prefix", "languages/typescript/node",
+                               "--workspace", row["name"], "--json", "--pack-destination", str(work)]
                     report = subprocess.check_output(command, cwd=ROOT)
                     report_path = Path(temporary) / "pack.json"
                     report_path.write_bytes(report)
@@ -333,8 +335,8 @@ def stage(plan, candidate, directory):
                     if path.name not in assets.EVIDENCE:
                         shutil.copyfile(path, work / path.name)
                 env = dict(os.environ, GITHUB_RELEASE_ID=str(info["id"]))
-                subprocess.run(["bash", str(ROOT / "scripts/release/generate-release-evidence.sh"), str(work),
-                    "sunder-core=" + plan["artifactSourceCommit"]], env=env, check=True)
+                subprocess.run(bash_runtime.command(ROOT / "scripts/release/generate-release-evidence.sh", work,
+                    "sunder-core=" + plan["artifactSourceCommit"]), env=env, check=True)
                 for name in assets.EVIDENCE - {path.name for path in folder.iterdir()}:
                     shutil.copyfile(work / name, folder / name)
         if info["draft"]:
@@ -365,8 +367,8 @@ def publish(plan, directory, kind):
         if not info["draft"]:
             print(f"Skipping finalized {row['name']}@{row['version']}.", flush=True)
             continue
-        subprocess.run(["bash", str(ROOT / "scripts/release/publish-sdk.sh"), kind, row["name"], row["version"],
-                        str(folder / row["archive"]), plan["artifactSourceCommit"]], check=True)
+        subprocess.run(bash_runtime.command(ROOT / "scripts/release/publish-sdk.sh", kind, row["name"], row["version"],
+                        folder / row["archive"], plan["artifactSourceCommit"]), check=True)
 
 
 def finalize(plan, directory):

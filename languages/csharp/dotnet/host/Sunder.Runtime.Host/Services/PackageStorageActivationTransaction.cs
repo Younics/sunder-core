@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Security.Cryptography;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 
@@ -88,9 +89,9 @@ internal sealed class PackageStorageActivationTransaction
                     secretsSnapshot = null;
                     if (workspaceSnapshot is not null)
                     {
-                        CaptureDirectorySnapshot(workspaceSnapshot);
+                        CaptureDirectorySnapshot(package.Descriptor.PackageId, workspaceSnapshot, isWorkspace: true);
                     }
-                    CaptureDirectorySnapshot(fileStoreSnapshot);
+                    CaptureDirectorySnapshot(package.Descriptor.PackageId, fileStoreSnapshot, isWorkspace: false);
                 }
                 finally
                 {
@@ -303,7 +304,7 @@ internal sealed class PackageStorageActivationTransaction
     private static PackageStorageMigrationJournal? GetJournal(ActiveLoadedPackage package)
         => package.MigrationJournal ?? package.Worker.StorageMigrationJournal;
 
-    private static void CaptureDirectorySnapshot(WorkspaceSnapshot snapshot)
+    private static void CaptureDirectorySnapshot(string packageId, WorkspaceSnapshot snapshot, bool isWorkspace)
     {
         var workspacePath = Path.GetFullPath(snapshot.WorkspacePath);
         var workspace = new DirectoryInfo(workspacePath);
@@ -316,7 +317,14 @@ internal sealed class PackageStorageActivationTransaction
         var parent = Path.GetDirectoryName(workspacePath)
                      ?? throw new IOException("The package workspace has no parent directory.");
         PackageStorePathGuard.EnsureSafe(snapshot.BackupPath, parent);
-        DurableJsonDocument.MoveDirectory(workspacePath, snapshot.BackupPath);
+        try
+        {
+            DurableJsonDocument.MoveDirectory(workspacePath, snapshot.BackupPath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            throw new PackageStorageSnapshotException(packageId, isWorkspace, exception);
+        }
         snapshot.BackupMoved = true;
         DurableJsonDocument.SyncDirectory(parent);
         CopyDirectory(snapshot.BackupPath, workspacePath);
@@ -396,6 +404,23 @@ internal sealed class PackageStorageActivationTransaction
     private static bool PathEquals(string left, string right)
         => string.Equals(Path.GetFullPath(left), Path.GetFullPath(right), OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+}
+
+internal sealed class PackageStorageSnapshotException(string packageId, bool isWorkspace, Exception failure)
+    : IOException(CreateMessage(packageId, isWorkspace, failure), failure)
+{
+    private static string CreateMessage(string packageId, bool isWorkspace, Exception failure)
+    {
+        // Only a bounded package identity and Host-authored operation cross the API.
+        // Original filesystem paths and exception text remain in the inner exception.
+        var safeId = packageId.Length is > 0 and <= 128
+                     && packageId.All(static character => char.IsAsciiLetterOrDigit(character) || character is '.' or '-' or '_')
+            ? packageId : "unknown";
+        var store = isWorkspace ? "workspace" : "files";
+        var nativeError = OperatingSystem.IsWindows() && failure.InnerException is Win32Exception windowsFailure
+            ? $" (Windows error {windowsFailure.NativeErrorCode})" : string.Empty;
+        return $"Package '{safeId}' could not create its {store} activation snapshot{nativeError}.";
+    }
 }
 
 internal sealed class PackageStorageRollbackException(

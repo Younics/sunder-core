@@ -308,7 +308,7 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         { ["packageId"] = "example.dependency", ["contractId"] = "example.rpc.v1.minimal" };
         File.WriteAllText(LockPath, contractLock.ToJsonString(new JsonSerializerOptions
         {
-            WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = true, NewLine = "\n", Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }) + "\n");
         var providerMetadata = audienceOnly
             ? "ProviderId = \"example.before\", Audience = ExampleAfterRpcError.Code == \"example.after\" ? SunderServiceAudience.Owner : SunderServiceAudience.Public"
@@ -435,7 +435,7 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         Failure(badKind, "output type");
     }
 
-    [Theory]
+    [Sunder.Core.TestSupport.SymbolicLinkTheory(directory: true, file: true)]
     [InlineData("baseline")]
     [InlineData("parent")]
     [InlineData("root")]
@@ -445,29 +445,25 @@ public sealed partial class SunderRpcOwnedContractCommandTests : IDisposable
         Success(Command("Accept"));
         var baseline = Baseline().ExactBytes;
         var command = Command("Accept");
-        try
+        if (kind == "baseline")
         {
-            if (kind == "baseline")
-            {
-                var original = Path.Combine(_root, "original.json");
-                File.Move(BaselinePath, original);
-                File.CreateSymbolicLink(BaselinePath, original);
-            }
-            else if (kind == "source")
-            {
-                var original = Path.Combine(_root, "original.cs");
-                File.Move(SourcePath, original);
-                File.CreateSymbolicLink(SourcePath, original);
-            }
-            else
-            {
-                var link = Path.Combine(_root, "linked");
-                Directory.CreateSymbolicLink(link, _root);
-                if (kind == "root") command.ProjectDirectory = link;
-                else command.OwnedContractsPath = Path.Combine(link, Path.GetFileName(BaselinePath));
-            }
+            var original = Path.Combine(_root, "original.json");
+            File.Move(BaselinePath, original);
+            File.CreateSymbolicLink(BaselinePath, original);
         }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException) { return; }
+        else if (kind == "source")
+        {
+            var original = Path.Combine(_root, "original.cs");
+            File.Move(SourcePath, original);
+            File.CreateSymbolicLink(SourcePath, original);
+        }
+        else
+        {
+            var link = Path.Combine(_root, "linked");
+            Directory.CreateSymbolicLink(link, _root);
+            if (kind == "root") command.ProjectDirectory = link;
+            else command.OwnedContractsPath = Path.Combine(link, Path.GetFileName(BaselinePath));
+        }
         Failure(command, "symbolic link");
         Assert.Equal(baseline, File.ReadAllBytes(BaselinePath));
         Assert.False(Directory.Exists(Generated));

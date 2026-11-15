@@ -124,7 +124,13 @@ public sealed partial class GenerateSunderRpcBindingsTask
         var bytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
             schemaVersion = 1,
-            compilationCacheRoot = Path.Combine(Path.GetDirectoryName(directory)!, "sunder-package-compilations"),
+            // The immutable descriptor already binds configuration, TFM and RID.
+            // Repeating their analysis directories here can make MSBuild's Windows
+            // wildcard NuGet imports silently omit the role's generated props/targets.
+            // Honor the configured restore/intermediate root without shortening hashes.
+            compilationCacheRoot = Path.Combine(string.IsNullOrWhiteSpace(ProjectExtensionsPath)
+                ? Path.GetDirectoryName(directory)!
+                : Path.GetFullPath(ProjectExtensionsPath, projectDirectory), "sunder-package-compilations"),
             packageId = compilation.ResolvedPackageId,
             projectIdentity = ProjectIdentity.Trim(),
             configuration = Configuration.Trim(),

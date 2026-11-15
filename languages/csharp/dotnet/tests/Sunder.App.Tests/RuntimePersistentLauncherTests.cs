@@ -448,13 +448,7 @@ public sealed class RuntimePersistentLauncherTests
                 }
                 return Task.FromResult(CommandResult());
             });
-        var startInfo = new ProcessStartInfo("/opt/sunder/Sunder.Host.Supervisor")
-        {
-            WorkingDirectory = "/opt/sunder",
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add("--urls");
-        startInfo.ArgumentList.Add("http://127.0.0.1:5275");
+        var startInfo = CreateLinuxStartInfo();
 
         var receipt = await launcher.ReconcileAndLaunchAsync(
             startInfo,
@@ -474,7 +468,8 @@ public sealed class RuntimePersistentLauncherTests
         Assert.Contains("--unit=sunder-host.service", commands[launchIndex].Arguments);
         Assert.DoesNotContain("--collect", commands[launchIndex].Arguments);
         Assert.Contains("--property=KillMode=mixed", commands[launchIndex].Arguments);
-        Assert.Contains("/opt/sunder/Sunder.Host.Supervisor", commands[launchIndex].Arguments);
+        Assert.Contains(startInfo.FileName, commands[launchIndex].Arguments);
+        Assert.Contains($"--working-directory={startInfo.WorkingDirectory}", commands[launchIndex].Arguments);
         Assert.Equal("systemd-user", receipt.Backend);
         Assert.Equal("sunder-host.service", receipt.ServiceName);
         Assert.Equal(4242, receipt.ProcessId);
@@ -1001,9 +996,11 @@ public sealed class RuntimePersistentLauncherTests
 
     private static ProcessStartInfo CreateLinuxStartInfo()
     {
-        var startInfo = new ProcessStartInfo("/opt/sunder/Sunder.Host.Supervisor")
+        // Commands are faked, but the launcher validates paths on the test host.
+        var directory = Path.Combine(Path.GetTempPath(), "sunder-systemd-fixture");
+        var startInfo = new ProcessStartInfo(Path.Combine(directory, "Sunder.Host.Supervisor"))
         {
-            WorkingDirectory = "/opt/sunder",
+            WorkingDirectory = directory,
             UseShellExecute = false,
         };
         startInfo.ArgumentList.Add("--urls");

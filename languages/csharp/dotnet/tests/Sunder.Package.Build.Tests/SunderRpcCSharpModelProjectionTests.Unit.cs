@@ -26,7 +26,7 @@ public sealed partial class SunderRpcCSharpModelProjectionTests
                 public ValueTask ExecuteAsync(string request) => ValueTask.CompletedTask;
                 public ValueTask FlushAsync() => ValueTask.CompletedTask;
             }
-            """;
+            """.Replace("\r\n", "\n", StringComparison.Ordinal);
         if (reverseMethods) source = source.Replace("public ValueTask ExecuteAsync(string request) => ValueTask.CompletedTask;\n    public ValueTask FlushAsync() => ValueTask.CompletedTask;",
             "public ValueTask FlushAsync() => ValueTask.CompletedTask;\n    public ValueTask ExecuteAsync(string request) => ValueTask.CompletedTask;", StringComparison.Ordinal);
         var input = new SunderRpcCSharpCompilerInput("example.shared", "1.0.0", [new("source.cs", source)], References(), GenerateServiceInterfaces: true);

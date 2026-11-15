@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Sdk.Abstractions;
@@ -373,6 +374,40 @@ public sealed class BackgroundTaskQueueServiceTests
 
         Assert.Equal(BackgroundTaskIndicator.Hidden, process.Indicator);
         Assert.Equal(BackgroundTaskIndicator.Hidden, queue.GetTask(process.TaskId)?.Indicator);
+    }
+
+    [Fact]
+    public async Task CompletedHistory_DoesNotRetainExecutionCallbacks()
+    {
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var (taskId, payload) = EnqueueCapturedPayload(queue);
+        await WaitForConditionAsync(() => queue.GetTask(taskId)?.IsTerminal == true);
+        await queue.CancelAllAsync();
+        for (var attempt = 0; attempt < 20 && payload.IsAlive; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            await Task.Delay(25);
+        }
+
+        var history = Assert.Single(queue.ListTasks());
+        Assert.Equal(taskId, history.TaskId);
+        Assert.Equal("captured payload", history.Title);
+        Assert.Equal(BackgroundTaskState.Completed, history.State);
+        Assert.False(payload.IsAlive, "Completed display history must not retain package execution closures.");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (Guid TaskId, WeakReference Payload) EnqueueCapturedPayload(BackgroundTaskQueueService queue)
+    {
+        var payload = new object();
+        var task = queue.Enqueue(CreateRequest("captured payload", "work", _ =>
+        {
+            GC.KeepAlive(payload);
+            return Task.CompletedTask;
+        }));
+        return (task.TaskId, new WeakReference(payload));
     }
 
     [Fact]

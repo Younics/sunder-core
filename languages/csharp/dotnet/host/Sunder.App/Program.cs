@@ -17,8 +17,11 @@ sealed class Program
     // Initialization code. Don't use any Avalonia, third-party APIs or any
     // SynchronizationContext-reliant code before AppMain is called: things aren't initialized
     // yet and stuff might break.
+    // Keep the CLR entry point synchronous. An async Main gets a generated entry
+    // point without STAThread, and an await can also leave the original main
+    // thread before Avalonia installs its synchronization context.
     [STAThread]
-    public static async Task Main(string[] args)
+    public static void Main(string[] args)
     {
         StartupTimestamp = Stopwatch.GetTimestamp();
         var velopackApp = VelopackApp
@@ -51,7 +54,7 @@ sealed class Program
         velopackApp.Run();
         StartupOptions = AppStartupOptionsParser.Parse(args);
         AppLocalState.EnsureInitialized();
-        if (await TryForwardLaunchToPrimaryInstanceAsync(args))
+        if (TryForwardLaunchToPrimaryInstanceAsync(args).GetAwaiter().GetResult())
         {
             return;
         }
@@ -70,7 +73,8 @@ sealed class Program
                 return false;
             }
 
-            var forwarded = await SingleInstanceCoordinator.TryForwardLaunchArgumentsAsync(args);
+            var forwarded = await SingleInstanceCoordinator.TryForwardLaunchArgumentsAsync(args)
+                .ConfigureAwait(false);
             if (!forwarded)
             {
                 AppSessionLog.WriteInfo(

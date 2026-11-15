@@ -66,13 +66,13 @@ internal sealed partial class SunderRpcContractRestore
             result.Add(catalog.ContentIdentity, catalog);
             return result;
         }
-        if (offlineCandidate) return SunderRpcPlatformCatalogCache.Resolve(contractLock, cacheRoot);
+        if (offlineCandidate) return SunderRpcPlatformCatalogCache.Resolve(contractLock, cacheRoot, token);
         foreach (var group in requirements.GroupBy(item => (item.ContentIdentity, item.RegistryOrigin)))
         {
             var selected = group.First();
             if (selected.RegistryOrigin is null)
             {
-                result[selected.ContentIdentity] = SunderRpcPlatformCatalogCache.Resolve(contractLock, cacheRoot)[selected.ContentIdentity];
+                result[selected.ContentIdentity] = SunderRpcPlatformCatalogCache.Resolve(contractLock, cacheRoot, token)[selected.ContentIdentity];
                 continue;
             }
             var metadataUri = new Uri(new Uri(selected.RegistryOrigin), $"api/v1/platform-contracts/sunder.core/releases/{Segment(selected.ReleaseVersion)}");

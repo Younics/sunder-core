@@ -12,7 +12,7 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname, userInfo } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 import { createProcessStartIdentityProbe, ProcessStartIdentityError } from "./process-start-identity";
 
@@ -26,6 +26,7 @@ const LOCK_TRANSITION_SUFFIX = ".transition";
 const TARGET_LEAF_DISCOVERY_SUFFIX = ".sunder-target-leaf-container";
 const DEFAULT_LOCK_WAIT_MILLISECONDS = 5 * 60_000;
 const UNVERIFIABLE_OWNER_WAIT_MILLISECONDS = 1_000;
+const LOCK_RENAME_RETRY_MILLISECONDS = 1_000;
 const TRANSACTION_SUFFIX = ".sunder-output-transaction.json";
 const INSTALLED_SUFFIX = ".installed";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -78,6 +79,11 @@ interface OwnedDirectory {
   readonly token: string;
   readonly processMarker: ProcessMarkerRegistration;
   markerReleased: boolean;
+}
+
+interface OwnerInspection {
+  readonly state: "alive" | "dead" | "unknown" | "unverifiable";
+  readonly diagnostic?: string;
 }
 
 interface TransactionOutput {
@@ -290,7 +296,10 @@ async function acquireOutputLock(key: string, deadline: number, waitMilliseconds
   const lockPath = `${key}${LOCK_SUFFIX}`;
   await mkdir(dirname(lockPath), { recursive: true });
   let unverifiableSince: number | undefined;
+  let waitReason = "";
+  const reportedWait = new Set<string>();
   while (true) {
+    throwIfLockTimedOut(deadline, waitMilliseconds, lockPath, waitReason);
     let acquired: OwnedDirectory | undefined;
     let quarantinePath: string | undefined;
     const transition = await acquireTransitionGuard(lockPath, deadline, waitMilliseconds);
@@ -304,13 +313,24 @@ async function acquireOutputLock(key: string, deadline: number, waitMilliseconds
       } else {
         await ensureRegularDirectory(lockPath, "generated output lock");
         const candidate = await readDirectoryOwner(lockPath);
-        const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate, deadline);
+        throwIfLockTimedOut(deadline, waitMilliseconds, lockPath, waitReason);
+        const inspection = candidate === undefined ? { state: "unverifiable" as const } : await getOwnerState(candidate, deadline);
+        const { state } = inspection;
         unverifiableSince = checkUnverifiableOwner(state, unverifiableSince, deadline, waitMilliseconds, lockPath);
+        if (candidate !== undefined && (state === "alive" || state === "unknown")) {
+          const reason = `Owner PID ${candidate.pid}: ${state}.${inspection.diagnostic === undefined ? "" : ` ${inspection.diagnostic}`}`;
+          const identity = `${candidate.token}:${state}`;
+          if (!reportedWait.has(identity)) {
+            process.stderr.write(`Waiting for generated output lock ${JSON.stringify(lockPath)}. ${reason} Existing output is preserved.\n`);
+            reportedWait.add(identity);
+          }
+          waitReason = reason;
+        }
         if (candidate !== undefined && state === "dead") {
           const current = await readDirectoryOwner(lockPath);
           if (current?.token === candidate.token) {
             const candidateQuarantine = `${lockPath}.stale-${candidate.token}-${randomUUID()}`;
-            if (await tryRenameDirectory(lockPath, candidateQuarantine)) quarantinePath = candidateQuarantine;
+            if (await tryRenameDirectory(lockPath, candidateQuarantine, deadline)) quarantinePath = candidateQuarantine;
           }
         }
       }
@@ -321,7 +341,7 @@ async function acquireOutputLock(key: string, deadline: number, waitMilliseconds
       await rm(quarantinePath, { recursive: true, force: true }).catch(() => undefined);
     }
     if (acquired !== undefined) return acquired;
-    throwIfLockTimedOut(deadline, waitMilliseconds, lockPath);
+    throwIfLockTimedOut(deadline, waitMilliseconds, lockPath, waitReason);
     await delay(25 + Math.floor(Math.random() * 75));
   }
 }
@@ -359,7 +379,7 @@ async function releaseOutputLock(lock: OwnedDirectory, waitMilliseconds: number)
       }
       if (!ownerUnreadable) {
         const candidateQuarantine = `${lock.path}.release-${lock.token}-${randomUUID()}`;
-        if (await tryRenameDirectory(lock.path, candidateQuarantine)) quarantinePath = candidateQuarantine;
+        if (await tryRenameDirectory(lock.path, candidateQuarantine, deadline)) quarantinePath = candidateQuarantine;
       }
     } finally {
       await releaseTransitionGuard(transition, deadline, waitMilliseconds);
@@ -393,7 +413,7 @@ async function acquireTransitionGuard(
       throw new Error(`The generated output transition guard '${guardPath}' is not a regular directory.`);
     }
     const candidate = await readDirectoryOwner(guardPath);
-    const state = candidate === undefined ? "unverifiable" : await getOwnerState(candidate, deadline);
+    const { state } = candidate === undefined ? { state: "unverifiable" as const } : await getOwnerState(candidate, deadline);
     unverifiableSince = checkUnverifiableOwner(state, unverifiableSince, deadline, waitMilliseconds, guardPath);
     if (candidate !== undefined && state === "dead") {
       const current = await readDirectoryOwner(guardPath);
@@ -402,7 +422,7 @@ async function acquireTransitionGuard(
         // after reading this dead guard but before attempting the same rename.
         const tombstonePath = `${guardPath}.stale-${candidate.token}`;
         if (await tryLstat(tombstonePath) === undefined) {
-          await tryRenameDirectory(guardPath, tombstonePath);
+          await tryRenameDirectory(guardPath, tombstonePath, deadline);
         }
       }
     }
@@ -446,7 +466,7 @@ async function releaseTransitionGuard(
       return;
     }
     const releasePath = `${guard.path}.guard-release-${guard.token}`;
-    if (await tryRenameDirectory(guard.path, releasePath)) {
+    if (await tryRenameDirectory(guard.path, releasePath, deadline)) {
       await rm(releasePath, { recursive: true, force: true }).catch(() => undefined);
       releaseProcessMarkerOwnership(guard);
       return;
@@ -532,13 +552,13 @@ async function readLockOwner(path: string): Promise<LockOwner | undefined> {
   }
 }
 
-async function getOwnerState(owner: LockOwner, deadline: number): Promise<"alive" | "dead" | "unknown" | "unverifiable"> {
-  if (!await hasValidLocalProcessMarker(owner)) return "unverifiable";
+async function getOwnerState(owner: LockOwner, deadline: number): Promise<OwnerInspection> {
+  if (!await hasValidLocalProcessMarker(owner)) return { state: "unverifiable" };
   const actual = await processIdentity.ownerIdentity(owner.pid, deadline - Date.now());
-  if (actual.state === "absent") return "dead";
-  if (actual.state === "unknown") return "unknown";
-  if (actual.identity !== owner.processStartedAt) return "dead";
-  return owner.platform === "darwin" ? "unknown" : "alive";
+  if (actual.state === "absent") return { state: "dead" };
+  if (actual.state === "unknown") return actual;
+  if (actual.identity !== owner.processStartedAt) return { state: "dead" };
+  return { state: owner.platform === "darwin" ? "unknown" : "alive" };
 }
 
 async function ensureRegularDirectory(path: string, label: string): Promise<void> {
@@ -548,19 +568,32 @@ async function ensureRegularDirectory(path: string, label: string): Promise<void
   }
 }
 
-async function tryRenameDirectory(source: string, destination: string): Promise<boolean> {
-  try {
-    await rename(source, destination);
-    return true;
-  } catch (error) {
-    if (["ENOENT", "EACCES", "EPERM", "EEXIST", "ENOTEMPTY"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
-    throw error;
+async function tryRenameDirectory(source: string, destination: string, deadline: number): Promise<boolean> {
+  const started = performance.now();
+  const retryMilliseconds = Math.max(0, Math.min(LOCK_RENAME_RETRY_MILLISECONDS, deadline - Date.now()));
+  while (true) {
+    try {
+      await rename(source, destination);
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "";
+      if (["ENOENT", "EEXIST", "ENOTEMPTY"].includes(code)) return false;
+      if (!["EACCES", "EPERM"].includes(code)) throw error;
+      // A sharing/permission failure is not a live producer. Retry briefly for
+      // closing Windows handles, then preserve the lock and report the real cause.
+      if (performance.now() - started >= retryMilliseconds) {
+        throw new Error(`Cannot retire generated output lock ${JSON.stringify(source)}: ${code}. `
+          + "The filesystem denied the rename (permissions or an open handle). Close processes holding this lock directory and retry. "
+          + "The lock was preserved; do not delete the generated output.", { cause: error });
+      }
+      await delay(25 + Math.floor(Math.random() * 75));
+    }
   }
 }
 
-function throwIfLockTimedOut(deadline: number, waitMilliseconds: number, path: string): void {
+function throwIfLockTimedOut(deadline: number, waitMilliseconds: number, path: string, reason = ""): void {
   if (Date.now() >= deadline) {
-    throw new Error(`Timed out after ${waitMilliseconds} ms waiting for generated output lock '${path}'.`);
+    throw new Error(`Timed out after ${waitMilliseconds} ms waiting for generated output lock '${path}'.${reason === "" ? "" : ` ${reason}`}`);
   }
 }
 
@@ -700,8 +733,9 @@ function validLinuxProof(
 }
 
 function processMarkerRoot(): string {
-  // Shared with GeneratedOutputLock.cs; never derive new evidence from TMPDIR.
-  const home = homedir();
+  // Match GeneratedOutputLock.cs. HOME/USERPROFILE may be an isolated Maker
+  // configuration directory; only the OS account home is shared with Shell.
+  const home = userInfo().homedir;
   if (!isAbsolute(home)) throw new Error("Could not establish a private user profile for generated output locking.");
   return normalizeMarkerPath(resolve(home, ".sunder", "generated-output", "processes"));
 }
@@ -733,7 +767,7 @@ async function ensureMarkerAncestors(path: string): Promise<void> {
 
 async function ensurePrivateMarkerRoot(root: string): Promise<void> {
   if (process.platform === "win32") return; // User profile directories inherit the user's ACL.
-  const home = normalizeMarkerPath(homedir());
+  const home = normalizeMarkerPath(userInfo().homedir);
   for (let current = root; ; current = dirname(current)) {
     const entry = await lstat(current);
     if ((entry.mode & (current === root ? 0o077 : 0o022)) !== 0 || entry.uid !== process.getuid!()) {

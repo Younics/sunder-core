@@ -17,6 +17,7 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         "SUNDER_NODE_MODULE_LEAF_PATH",
         "SUNDER_NODE_MODULE_WORKSPACE_PATH")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task DotNetToNode_RealRuntimeHostRunsRuntimeBackedModuleUnaryStreamDataFaultAndShutdown()
     {
         var configured = GetNodeModuleInputs();
@@ -116,6 +117,7 @@ public sealed class CrossLanguageWorkerRuntimeHostTests(
         "SUNDER_NODE_MODULE_LEAF_PATH",
         "SUNDER_NODE_MODULE_WORKSPACE_PATH")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task NodeToDotNet_RealRuntimeHostRoutesRpcToNativeDotNetWorker()
     {
         var configured = GetNodeModuleInputs();

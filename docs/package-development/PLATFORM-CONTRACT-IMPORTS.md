@@ -99,13 +99,16 @@ lock-origin form while retaining exact-origin and content validation. See
 ## Exact Restore And Offline Builds
 
 ```powershell
-dotnet msbuild Package.csproj -t:RestoreSunderContracts `
+dotnet restore Package.csproj `
   -p:SunderPlatformCatalogPath=./sunder-platform-contracts.v1.json
 
 sunder-package contracts restore --platform-catalog ./sunder-platform-contracts.v1.json --project .
 ```
 
-The input must match an existing lock; it cannot select a release. Online restore
+The .NET SDK's ordinary restore uses declared inputs, including during normal
+Build/Rebuild. Compilation and no-restore never fetch them. `RestoreSunderContracts`
+remains available for explicit recovery. The input must match an existing lock;
+it cannot select a release. Online restore
 reads exact release metadata and canonical catalog bytes, checking the same-origin
 URL, exact Content-Length/strong ETag, complete descriptor inventory and locked
 content identity. Selection accepts only Supported

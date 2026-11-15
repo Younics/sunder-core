@@ -212,7 +212,7 @@ public sealed partial class TaskShadowStagingTests
             "packages",
             "Sunder.Package.Build",
             "build");
-        foreach (var fileName in new[] { "Sunder.Package.Build.targets", "Sunder.Package.Build.SourceLock.targets",
+        foreach (var fileName in new[] { "Sunder.Package.Build.targets", "Sunder.Package.Build.SourceLock.targets", "Sunder.Package.Build.Contracts.Restore.targets",
                      "Sunder.Package.Build.Authoring.targets", "Sunder.Package.Build.Authoring.Outer.targets",
                      "Sunder.Package.Build.Authoring.Dispatch.targets", "Sunder.Package.Build.Authoring.CrossTargeting.targets" })
         {
@@ -220,12 +220,16 @@ public sealed partial class TaskShadowStagingTests
         }
 
         var probeOutput = scope.GetPath("probe.txt");
+        // Exercise task loading beyond MAX_PATH without relying on the runner's
+        // machine-wide Windows long-path policy or changing the immutable set.
+        var longShadowRoot = scope.GetPath("shadow", new string('a', 80), new string('b', 80));
         var consumer = scope.WriteAllText("PackagedConsumer.csproj", $$"""
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
                 <TargetFramework>net10.0-windows</TargetFramework>
                 <EnableWindowsTargeting>true</EnableWindowsTargeting>
                 <SunderPackageProject>false</SunderPackageProject>
+                <SunderPackageBuildTaskShadowRoot>{{longShadowRoot}}</SunderPackageBuildTaskShadowRoot>
                 <TargetDir>{{targetDirectory}}{{Path.DirectorySeparatorChar}}</TargetDir>
               </PropertyGroup>
               <Import Project="{{Path.Combine(buildTransitive, "Sunder.Package.Build.targets")}}" />
@@ -248,6 +252,7 @@ public sealed partial class TaskShadowStagingTests
         Assert.Equal("net10.0", fields[0]);
         Assert.Equal(Path.Combine(packageRoot, "tasks", "net10.0", "Sunder.Package.Build.dll"), fields[1]);
         Assert.Equal("true", fields[2], ignoreCase: true);
+        Assert.True(Path.Combine(fields[3], "Sunder.Package.Build.dll").Length > 260);
         AssertPublishedSet(fields[3], source);
     }
 

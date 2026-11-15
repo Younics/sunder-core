@@ -29,4 +29,8 @@
     <SunderPackageTarget Include="runtime/$(RuntimeIdentifier)" Role="runtime" Rid="$(RuntimeIdentifier)" Kind="worker" />
   </ItemGroup>
   <Import Project="..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
+  <Target Name="RecordGeneratedPolicyPackageOutput" AfterTargets="Build">
+    <WriteLinesToFile File="$(TargetDir)sunder-policy-package-path.txt" Lines="$(SunderPackageComposedOutputPath)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
 </Project>

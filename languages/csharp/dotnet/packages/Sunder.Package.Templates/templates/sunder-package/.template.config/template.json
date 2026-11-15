@@ -193,6 +193,7 @@
     {
       "source": "Sunder.Package.Template/",
       "target": "./",
+      "copyOnly": ["sunder-contracts.lock.json"],
       "exclude": [
         "**/[Bb]in/**",
         "**/[Oo]bj/**",

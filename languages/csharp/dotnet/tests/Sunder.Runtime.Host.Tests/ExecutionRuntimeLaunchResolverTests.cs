@@ -157,7 +157,7 @@ public sealed class ExecutionRuntimeLaunchResolverTests
             var source = new RuntimePackageSource(manifest.Id, PackageSourceKind.Installed, projection, projection,
                 PackageHostRoles.Runtime, [], new('c', 64), manifest, content, key, target);
             var layout = new ExecutionRuntimeStoreLayout(Path.Combine(Root, "store"));
-            RuntimeRoot = layout.GetContentRootPath(new('d', 64));
+            RuntimeRoot = Path.GetFullPath(layout.GetContentRootPath(new('d', 64)));
             var launcher = OfficialRuntimeMaterializer.LauncherPath(identity);
             LauncherPath = Path.Combine(RuntimeRoot, launcher);
             Directory.CreateDirectory(Path.GetDirectoryName(LauncherPath)!);

@@ -49,18 +49,8 @@ test("published SDK build excludes the removed RPC V2 module", () => {
     assert.equal(existsSync(resolve(distRoot, fileName)), false);
   }
 });
-const expectations = readConformanceExpectations();
-const hasValueProfileCorpus = (() => {
-  try {
-    return expectations.fixtures.some((fixture) => fixture.path === "valid/value-profile.rpc.json")
-      && expectations.fixtures.every((fixture) => {
-        const value = JSON.parse(readFileSync(resolve(conformanceRoot, fixture.path), "utf8")) as { readonly schemaProfile?: unknown };
-        return !fixture.valid || value.schemaProfile === "sunder.rpc.values.v1";
-      });
-  } catch {
-    return false;
-  }
-})();
+const expectations = JSON.parse(readFileSync(resolve(conformanceRoot, "expectations.json"), "utf8")) as ConformanceExpectations;
+assert.ok(expectations.fixtures.length > 0, "The shared RPC V1 conformance corpus must not be empty.");
 
 assert.equal(expectations.formatVersion, 1);
 assert.equal(expectations.descriptorVersion, 1);
@@ -69,24 +59,8 @@ assert.equal(
   expectations.hashes.abiDomainSeparatorHex,
 );
 
-function readConformanceExpectations(): ConformanceExpectations {
-  try {
-    return JSON.parse(readFileSync(resolve(conformanceRoot, "expectations.json"), "utf8")) as ConformanceExpectations;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    return {
-      formatVersion: 1,
-      descriptorVersion: 1,
-      hashes: { abiDomainSeparatorHex: "73756e6465722e7270632e6162692e763100" },
-      fixtures: [],
-    };
-  }
-}
-
 for (const fixture of expectations.fixtures) {
-  test(`RPC V1 conformance: ${fixture.path}`, {
-    skip: hasValueProfileCorpus ? false : "Shared value-profile fixtures have not landed yet.",
-  }, async () => {
+  test(`RPC V1 conformance: ${fixture.path}`, async () => {
     const source = readFileSync(resolve(conformanceRoot, fixture.path));
     if (!fixture.valid) {
       let failure: unknown;

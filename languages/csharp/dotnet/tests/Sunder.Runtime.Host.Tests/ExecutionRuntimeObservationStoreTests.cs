@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Xunit;
@@ -142,10 +143,9 @@ public sealed class ExecutionRuntimeObservationStoreTests
         Assert.Equal(0, fixture.Containment.Terminations);
     }
 
-    [Fact]
+    [SymbolicLinkFact(directory: true)]
     public async Task LinkedCaptureSubtreeCannotBorrowOutsideEvidenceOrPermitLeaseDeletion()
     {
-        if (OperatingSystem.IsWindows()) return; // Match existing store symlink qualification.
         await using var fixture = await Fixture.CreateAsync();
         var reference = await fixture.CaptureAsync();
         var link = fixture.Layout.ExecutionObservationCaptureRootPath;

@@ -47,9 +47,9 @@ public sealed partial class PackageViewHostServiceTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task DevelopmentRetentionRevalidatesExactActivationWithoutReplacingUnchangedRpcSessions(bool workerEdited)
+    public Task DevelopmentRetentionRevalidatesExactActivationWithoutReplacingUnchangedRpcSessions(bool workerEdited)
+        => RunPackageTestAsync("app-worker-edit-retention", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-worker-edit-retention");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var manifestPath = Path.Combine(folder, "manifest", "sunder-package.json");
         File.WriteAllText(manifestPath, File.ReadAllText(manifestPath).Replace("\"core.v1\"",
@@ -138,7 +138,8 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(workerEdited ? 3 : 0, handler.ClosedSessions.Count);
 
         AppPackageUiRecoveryRequest? recovery = null;
-        host.PackageUiRecoveryRequested += request => recovery = request;
+        void ObserveRecovery(AppPackageUiRecoveryRequest request) => recovery = request;
+        host.PackageUiRecoveryRequested += ObserveRecovery;
         var fault = await Assert.ThrowsAsync<FormatException>(() => InvokePendingCandidateManagedFaultAsync(view));
         Assert.True(host.TryHandleUnhandledException(fault));
         Assert.NotNull(recovery);
@@ -151,16 +152,19 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(0, host.LoadedPackageCount);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => rpc.CreateCallScopeAsync().AsTask());
         Assert.Equal(birthStamp.AppGenerationId, Assert.Single(policy.RetiredActivationIds));
-    }
+        host.PackageUiRecoveryRequested -= ObserveRecovery;
+        // Snapshot download/assertion callbacks share this fixture's closure.
+        view = null!;
+    });
 
     [Theory]
     [InlineData("permit")]
     [InlineData("rpc")]
     [InlineData("presentation")]
     [InlineData("cancelled")]
-    public async Task WorkerOnlyRetentionFailurePreservesPublishedSourceCallerAndBirthOwner(string failure)
+    public Task WorkerOnlyRetentionFailurePreservesPublishedSourceCallerAndBirthOwner(string failure)
+        => RunPackageTestAsync("app-worker-edit-rollback", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-worker-edit-rollback");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -224,12 +228,12 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Same(view, host.GetOrCreateView("agent.chat"));
         Assert.Equal(3, policy.Requests.Count);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => scope.TryReportInvariantViolationAsync(endpoint, new Exception("retired scope")).AsTask());
-    }
+    });
 
     [Fact]
-    public async Task UnchangedObservationActivationDoesNotBlockWebViewPublicationReloadAndUnload()
+    public Task UnchangedObservationActivationDoesNotBlockWebViewPublicationReloadAndUnload()
+        => RunPackageTestAsync("app-node-web-retained-sibling", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-node-web-retained-sibling");
         var folder = CreateAppPackageSource(temporary.GetPath("managed"), "agent");
         var manifestPath = Path.Combine(folder, "manifest", "sunder-package.json");
         File.WriteAllText(manifestPath, File.ReadAllText(manifestPath).Replace("\"core.v1\"",
@@ -308,15 +312,15 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Same(managedView, host.GetOrCreateView("agent.chat"));
         Assert.False(GetIsDisposed(managedView!));
         Assert.Equal(2, handler.ClosedSessions.Count);
-    }
+    });
 
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
-    public async Task BuilderActivation_LoadReloadUnloadKeepsProviderAndSessionAliveUntilActualOwnerRetirement(bool initialQuarantinedSibling, bool overridesInstalled)
+    public Task BuilderActivation_LoadReloadUnloadKeepsProviderAndSessionAliveUntilActualOwnerRetirement(bool initialQuarantinedSibling, bool overridesInstalled)
+        => RunPackageTestAsync("app-development-retention", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-development-retention");
         var builderFolder = CreateAppPackageSource(Path.Combine(temporary.RootPath, "builder"), "agent");
         var projectFolder = CreateAppPackageSource(Path.Combine(temporary.RootPath, "project"), "project");
         File.WriteAllText(Path.Combine(projectFolder, ShellLifecycleTestPackageModule.SkipViewMarkerFileName), "");
@@ -416,7 +420,9 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(1, stagedViews);
         Assert.True(workCancelled.Task.IsCompleted);
         await Assert.ThrowsAsync<ObjectDisposedException>(() => second.Status());
-    }
+        // Backend publication callbacks share the assertion closure containing this tuple.
+        second = default;
+    });
 
     [Theory]
     [InlineData("rejected")]
@@ -424,9 +430,9 @@ public sealed partial class PackageViewHostServiceTests
     [InlineData("fingerprint")]
     [InlineData("retry")]
     [InlineData("policy")]
-    public async Task RetainedActivation_RejectsUnsafeReuseAndSurvivesCandidateRollback(string change)
+    public Task RetainedActivation_RejectsUnsafeReuseAndSurvivesCandidateRollback(string change)
+        => RunPackageTestAsync("app-retention-fences", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retention-fences");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var runtimeRoot = Path.Combine(temporary.RootPath, "runtime-state");
@@ -454,14 +460,14 @@ public sealed partial class PackageViewHostServiceTests
         await host.WaitForRetirementsAsync();
         Assert.Equal(change != "rejected", GetIsDisposed(original));
         Assert.Equal(change == "rejected", ReferenceEquals(original, host.GetOrCreateView("agent.chat")));
-    }
+    });
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task AcknowledgedOwnerWithdrawalRetiresExactActivationAndFencesPendingPublication(bool pendingPublication)
+    public Task AcknowledgedOwnerWithdrawalRetiresExactActivationAndFencesPendingPublication(bool pendingPublication)
+        => RunPackageTestAsync("app-owner-withdrawal", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-owner-withdrawal");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -505,12 +511,12 @@ public sealed partial class PackageViewHostServiceTests
         if (publication is not null) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => publication);
         await host.WaitForRetirementsAsync();
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     [Fact]
-    public async Task NaturalGenerationRetirementJoinsAlreadyRemovedActivationDrain()
+    public Task NaturalGenerationRetirementJoinsAlreadyRemovedActivationDrain()
+        => RunPackageTestAsync("app-retirement-drain-join", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retirement-drain-join");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder);
@@ -539,12 +545,12 @@ public sealed partial class PackageViewHostServiceTests
         if (naturalDrain is not null) await naturalDrain.WaitAsync(TimeSpan.FromSeconds(3));
         Assert.Equal(1, target.Disposals);
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     [Fact]
-    public async Task FailedHostRetirementAcknowledgementRetriesExactAdmissionWithoutRepeatingLocalDisposal()
+    public Task FailedHostRetirementAcknowledgementRetriesExactAdmissionWithoutRepeatingLocalDisposal()
+        => RunPackageTestAsync("app-retirement-ack-retry", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retirement-ack-retry");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with { PolicySubject = new("agent", "1.0.0", new('b', 64)) };
@@ -569,12 +575,12 @@ public sealed partial class PackageViewHostServiceTests
         await host.ApplyPackageDeltaAsync([], []);
         await host.WaitForRetirementsAsync();
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     [Fact]
-    public async Task CandidateActivationRetirementDoesNotDetachPublishedOwnersBoundary()
+    public Task CandidateActivationRetirementDoesNotDetachPublishedOwnersBoundary()
+        => RunPackageTestAsync("app-retirement-boundary-owner", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retirement-boundary-owner");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -608,7 +614,7 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Same(view, host.GetOrCreateView("agent.chat"));
         boundary.Release();
         Assert.Equal(0, host.RetirementFailureCount);
-    }
+    });
 
     private sealed class BlockedRetirementLifetime(IAsyncDisposable? inner) : IAsyncDisposable
     {

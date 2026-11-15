@@ -25,7 +25,7 @@ public sealed partial class AgentPackageReleaseSmokeTests
         "shell.tools",
     ];
 
-    [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_PACKAGE_RELEASE", "SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")]
+    [ExternalArtifactFact("SUNDER_REQUIRE_AGENT_INSTALLED_FAMILY", "SUNDER_AGENT_PACKAGE_ARCHIVE_DIR")]
     [Trait("Category", "ExternalArtifact")]
     public async Task ReleaseArchives_InstallActivateUnloadReloadAndReinstallAsOneFamily()
     {
@@ -177,9 +177,15 @@ public sealed partial class AgentPackageReleaseSmokeTests
         IReadOnlyList<InstalledPackageDescriptor> installed,
         RuntimePackagePaths paths)
     {
+        var semantic = installed.Single(package => package.PackageId == SemanticMemoryPackageId);
+        VerifyReleasedSqliteBytes(archives, semantic.Version, paths.GetInstalledPackagePath(semantic.PackageId, semantic.Version));
+    }
+
+    private static void VerifyReleasedSqliteBytes(IReadOnlyList<string> archives, string version, string packageFolder)
+    {
         var semanticArchivePath = Assert.Single(archives, path => string.Equals(
             Path.GetFileNameWithoutExtension(path),
-            $"{SemanticMemoryPackageId}.{installed.Single(package => package.PackageId == SemanticMemoryPackageId).Version}",
+            $"{SemanticMemoryPackageId}.{version}",
             StringComparison.OrdinalIgnoreCase));
         var expectedArchiveEntries = SunderPackageFormat.SupportedRuntimeIdentifiers
             .Select(rid => $"payload/runtime/{rid}/lib/{GetSqliteLibraryName(rid)}")
@@ -201,9 +207,8 @@ public sealed partial class AgentPackageReleaseSmokeTests
                 path => Assert.True(archive.GetEntry(path)?.Length > 0, $"SQLite release entry was empty: {path}"));
         }
 
-        var semanticPackage = installed.Single(package => package.PackageId == SemanticMemoryPackageId);
         var currentRid = PackageTargetSelection.GetCurrentRuntimeIdentifier();
-        var installRoot = paths.GetInstalledPackagePath(semanticPackage.PackageId, semanticPackage.Version);
+        var installRoot = packageFolder;
         var providerPath = Path.Combine(
             installRoot,
             "payload", "runtime", "shared", "lib", "SQLitePCLRaw.provider.e_sqlite3.dll");

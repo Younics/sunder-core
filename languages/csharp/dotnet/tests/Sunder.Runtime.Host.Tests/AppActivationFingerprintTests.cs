@@ -3,12 +3,85 @@ using Sunder.Package.Format;
 using Sunder.Package.Projections;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
+using Sunder.Runtime.Host.TestSupport;
 using Xunit;
 
 namespace Sunder.Runtime.Host.Tests;
 
 public sealed class AppActivationFingerprintTests
 {
+    [Fact]
+    public async Task InstalledPolicyCheckpointsAndSameDecisionRenewalsPreserveActivationComparison()
+    {
+        using var policy = new ActivePolicyTestContext();
+        await policy.RefreshAsync();
+        var before = await CaptureInstalledPolicyAsync(policy);
+        var fingerprint = InstalledPolicyComparison(before);
+        policy.Clock.Advance(TimeSpan.FromSeconds(1));
+        var checkpoint = await CaptureInstalledPolicyAsync(policy);
+        Assert.True(checkpoint.Snapshots.Single().Generation > before.Snapshots.Single().Generation);
+        Assert.Equal(fingerprint, InstalledPolicyComparison(checkpoint));
+
+        policy.Clock.Advance(TimeSpan.FromSeconds(1));
+        await policy.RefreshAsync();
+        var renewed = await CaptureInstalledPolicyAsync(policy);
+        Assert.NotEqual(before.Snapshots.Single().LastNonce, renewed.Snapshots.Single().LastNonce);
+        Assert.Equal(fingerprint, InstalledPolicyComparison(renewed));
+    }
+
+    [Theory]
+    [InlineData("state")]
+    [InlineData("origin")]
+    [InlineData("policy-revision")]
+    [InlineData("package-decision")]
+    [InlineData("platform-decision")]
+    [InlineData("clock-generation")]
+    [InlineData("clock-epoch")]
+    [InlineData("clock-invalid")]
+    [InlineData("lease-state")]
+    public async Task InstalledPolicyComparisonStillPinsDecisionsAndClockValidity(string boundary)
+    {
+        using var policy = new ActivePolicyTestContext();
+        policy.Response = request => ActivePolicyTestContext.Allowed(request) with
+        {
+            Packages = ActivePolicyTestContext.Allowed(request).Packages.Select(decision => decision with
+                { PlatformDependencies = [ActivePolicyTestContext.Platform] }).ToArray(),
+        };
+        await policy.RefreshAsync(platforms: [ActivePolicyTestContext.Platform]);
+        var before = await CaptureInstalledPolicyAsync(policy);
+        var snapshot = before.Snapshots.Single();
+        snapshot = boundary switch
+        {
+            "policy-revision" => snapshot with { PackagePolicy = snapshot.PackagePolicy with { Revision = 2 } },
+            "package-decision" => snapshot with { Packages = snapshot.Packages.ToDictionary(pair => pair.Key,
+                pair => pair.Value with { Decision = pair.Value.Decision with { Disposition = "Denied", PackageState = "SecurityBlocked" } }) },
+            "platform-decision" => snapshot with { Platforms = snapshot.Platforms.ToDictionary(pair => pair.Key,
+                pair => pair.Value with { Decision = pair.Value.Decision with { Disposition = "Denied", LifecycleState = "Revoked" } }) },
+            "clock-generation" => snapshot with { ClockGeneration = snapshot.ClockGeneration + 1 },
+            "clock-epoch" => snapshot with { HighWater = snapshot.HighWater with { BootSessionId = "another-boot" } },
+            "clock-invalid" => snapshot with { ClockInvalidated = true },
+            "lease-state" => snapshot with { Packages = snapshot.Packages.ToDictionary(pair => pair.Key,
+                pair => pair.Value with { Lease = pair.Value.Lease with { State = RuntimePolicyLeaseStates.Expired } }) },
+            _ => snapshot,
+        };
+        var after = new InstalledPackagePolicyRecord(boundary == "state" ? "PolicyBlocked" : before.State, before.ErrorCode,
+            boundary == "origin" ? "https://another.registry" : before.RegistryOrigin, before.Package, [snapshot]);
+        Assert.NotEqual(InstalledPolicyComparison(before), InstalledPolicyComparison(after));
+    }
+
+    private static async Task<InstalledPackagePolicyRecord> CaptureInstalledPolicyAsync(ActivePolicyTestContext context)
+    {
+        var subject = ActivePolicyTestContext.Package;
+        var installed = new InstalledPackageRecord(subject.PackageId, subject.PackageId, null, subject.Version, null,
+            context.Paths.RootPath, Path.Combine(context.Paths.RootPath, "manifest.json"), subject.PackageContentIdentity,
+            [], [], true, ActivePolicyTestContext.ObservedAt, InstalledPackageProvenanceRecord.Unknown, []);
+        return Assert.Single(await context.Cache.CaptureInstalledAsync([installed], default)).Policy!;
+    }
+
+    private static string InstalledPolicyComparison(InstalledPackagePolicyRecord policy)
+        => AppActivationFingerprint.Create(Guid.Empty, policy.Package.PackageId,
+            [Source(policy.Package.PackageId) with { InstalledPolicy = policy }], [State(policy.Package.PackageId)]);
+
     [Fact]
     public async Task ValidatedWorkerOnlyEditPreservesAppComparisonAndSnapshotButChangesFullPolicyAuthority()
     {

@@ -145,16 +145,12 @@ public sealed partial class SunderRpcCSharpImportPrepassTests : IDisposable
             };
             contracts.Add(descriptor.ContractId, entry);
             File.WriteAllBytes(SunderRpcContractCache.GetDescriptorPath(_root, descriptor.Sha256), descriptor.GetCanonicalUtf8());
-            File.WriteAllText(SunderRpcContractCache.GetReceiptPath(_root, descriptor.Sha256), $$"""
+            File.WriteAllBytes(SunderRpcContractCache.GetReceiptPath(_root, descriptor.Sha256),
+                SunderRpcAuthoringDocuments.WriteDeterministicDocument(JsonSerializer.SerializeToElement(new
                 {
-                  "schemaVersion": 1,
-                  "contractId": "{{descriptor.ContractId}}",
-                  "contractVersion": "{{descriptor.Version}}",
-                  "descriptorBytes": {{entry.DescriptorBytes}},
-                  "descriptorSha256": "{{descriptor.Sha256}}",
-                  "abiSha256": "{{descriptor.AbiSha256}}"
-                }
-                """ + "\n");
+                    schemaVersion = 1, contractId = descriptor.ContractId, contractVersion = descriptor.Version,
+                    descriptorBytes = entry.DescriptorBytes, descriptorSha256 = descriptor.Sha256, abiSha256 = descriptor.AbiSha256,
+                })));
             var individual = _lock with
             {
                 PackageArtifacts = new Dictionary<string, SunderRpcLockedPackageArtifact>

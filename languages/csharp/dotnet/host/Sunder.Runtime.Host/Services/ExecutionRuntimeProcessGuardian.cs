@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 
@@ -74,7 +75,11 @@ internal static class ExecutionRuntimeProcessGuardian
                 FileName = payloadExecutable,
                 WorkingDirectory = Environment.CurrentDirectory,
                 UseShellExecute = false,
-                CreateNoWindow = true,
+                // The Windows guardian already owns a headless console. Inherit
+                // it instead of allocating a second conhost for each Worker;
+                // redirected IPC is unchanged. Keep the no-window fallback when
+                // no parent console exists, and preserve non-Windows behavior.
+                CreateNoWindow = !OperatingSystem.IsWindows() || GetConsoleCP() == 0,
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -182,6 +187,9 @@ internal static class ExecutionRuntimeProcessGuardian
         }
         return false;
     }
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetConsoleCP();
 
     private static async Task MonitorParentAsync(
         int parentProcessId,

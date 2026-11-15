@@ -58,17 +58,18 @@ internal static partial class SunderRpcPlatformCatalogCache
     }
 
     internal static IReadOnlyDictionary<string, SunderVerifiedPlatformContractCatalog> Resolve(
-        SunderRpcContractLock contractLock, string cacheRoot)
+        SunderRpcContractLock contractLock, string cacheRoot, CancellationToken token = default)
     {
         var requirements = Requirements(contractLock);
         var result = new Dictionary<string, SunderVerifiedPlatformContractCatalog>(StringComparer.Ordinal);
         if (requirements.Count == 0) return result;
         var root = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(cacheRoot);
         if (!GeneratedOutputPathSafety.PathExists(root)) throw Missing();
-        using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30));
+        using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30), token);
         SunderRpcContractCacheStore.ValidateRoot(root, requireComplete: true);
         foreach (var group in requirements.GroupBy(item => item.ContentIdentity, StringComparer.Ordinal))
         {
+            token.ThrowIfCancellationRequested();
             var path = CatalogPath(root, group.Key);
             if (!GeneratedOutputPathSafety.PathExists(path)) throw Missing();
             var bytes = ReadOwnedPair(Path.GetDirectoryName(path)!, group.Key);
@@ -79,7 +80,7 @@ internal static partial class SunderRpcPlatformCatalogCache
 
     internal static void Publish(string cacheRoot, IReadOnlyDictionary<string, byte[]> envelopes,
         IReadOnlyList<SunderRpcPlatformRequirement> requirements,
-        CancellationToken token = default, Action<string>? checkpoint = null)
+        CancellationToken token = default, Action<string>? checkpoint = null, bool onlyMissing = false)
     {
         if (envelopes.Count is < 1 or > 128) throw new InvalidDataException("platform-api.catalog-invalid: Catalog publication exceeds its bound.");
         // Detach and verify the whole set before writing any evidence.
@@ -99,6 +100,12 @@ internal static partial class SunderRpcPlatformCatalogCache
         GeneratedOutputPathSafety.EnsureSafeAncestors(directory, includeLeaf: true, "catalog cache");
         Directory.CreateDirectory(directory);
         GeneratedOutputPathSafety.EnsureRegularDirectory(directory, "catalog cache");
+        if (onlyMissing)
+            foreach (var item in selected)
+            {
+                SunderRpcContractCacheStore.RequireMissingOrEqual(Path.Combine(directory, item.Hash + ".json"), item.Bytes);
+                SunderRpcContractCacheStore.RequireMissingOrEqual(Path.Combine(directory, item.Hash + ReceiptSuffix), ReceiptBytes(item.Hash, item.Bytes.Length));
+            }
         foreach (var item in selected)
         {
             PublishPair(directory, item.Hash, item.Bytes, token, checkpoint);

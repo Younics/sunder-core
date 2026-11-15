@@ -65,21 +65,22 @@ internal static partial class SunderRpcContractCache
     }
 
     internal static IReadOnlyDictionary<string, SunderRpcModelProjection> ResolveModelProjections(
-        IReadOnlyList<SunderRpcLockedPackageArtifact> artifacts, string cacheRoot, SunderRpcResolvedContractCache cache)
-        => new ReadOnlyDictionary<string, SunderRpcModelProjection>(ResolveProjectionContracts(artifacts, cacheRoot, cache)
+        IReadOnlyList<SunderRpcLockedPackageArtifact> artifacts, string cacheRoot, SunderRpcResolvedContractCache cache, CancellationToken token = default)
+        => new ReadOnlyDictionary<string, SunderRpcModelProjection>(ResolveProjectionContracts(artifacts, cacheRoot, cache, token)
             .ToDictionary(pair => pair.Key, pair => pair.Value.ModelProjection, StringComparer.Ordinal));
 
     internal static IReadOnlyDictionary<string, SunderRpcModelProjectionContract> ResolveProjectionContracts(
-        IReadOnlyList<SunderRpcLockedPackageArtifact> artifacts, string cacheRoot, SunderRpcResolvedContractCache cache)
+        IReadOnlyList<SunderRpcLockedPackageArtifact> artifacts, string cacheRoot, SunderRpcResolvedContractCache cache, CancellationToken token = default)
     {
         var result = new Dictionary<string, SunderRpcModelProjectionContract>(StringComparer.Ordinal);
         if (artifacts.Count == 0) return new ReadOnlyDictionary<string, SunderRpcModelProjectionContract>(result);
         var root = GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(cacheRoot);
         if (!GeneratedOutputPathSafety.PathExists(root)) throw CacheError("contract-cache.entry-missing", "The selected model projection cache is absent; run explicit contracts restore.");
-        using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30));
+        using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30), token);
         SunderRpcContractCacheStore.ValidateRoot(root, requireComplete: true);
         foreach (var artifact in artifacts.OrderBy(value => value.PackageId, StringComparer.Ordinal))
         {
+            token.ThrowIfCancellationRequested();
             var path = GetModelProjectionPath(root, artifact.ModelProjectionSha256);
             if (!GeneratedOutputPathSafety.PathExists(path)) throw CacheError("contract-cache.entry-missing", $"The pinned model projection for '{artifact.PackageId}' is absent; supply its exact candidate or explicit online restore.");
             var bytes = ReadOwnedModelProjectionPair(Path.GetDirectoryName(path)!, artifact.ModelProjectionSha256);

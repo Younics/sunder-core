@@ -137,7 +137,7 @@ class VerifyNuGetPackageSetTests(unittest.TestCase):
             self.create_set(root)
             self.create_package(root, "Sunder.Sdk", "Sunder.Sdk", "9.9.9")
             wrong = root / "Sunder.Sdk.9.9.9.nupkg"
-            wrong.rename(root / f"Sunder.Sdk.{self.version}.nupkg")
+            wrong.replace(root / f"Sunder.Sdk.{self.version}.nupkg")
 
             with self.assertRaisesRegex(ValueError, "version"):
                 MODULE.verify_package_set(self.version, root, self.commit)

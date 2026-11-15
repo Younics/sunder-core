@@ -247,6 +247,13 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         var incoming = root + "-incoming";
         try
         {
+            var ignoredLogs = new[] { "data", "files", "workspace", ".workspace.sunder-activation-test" }
+                .Select(directory => Directory.CreateDirectory(Path.Combine(root, "ignored.package", directory)).FullName)
+                .Select(directory => Path.Combine(directory, "private.log"))
+                .Append(Path.Combine(root, "root.log"))
+                .ToArray();
+            foreach (var ignored in ignoredLogs)
+                await File.WriteAllTextAsync(ignored, "msg=not-a-package-log\n");
             if (movePopulatedDirectory)
             {
                 Directory.CreateDirectory(Path.Combine(incoming, "logs"));
@@ -257,6 +264,9 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             }
             await using var service = new PackageLogStreamService(root);
             service.Start();
+            Assert.Empty(service.GetSnapshot().Entries);
+            foreach (var ignored in ignoredLogs)
+                await File.AppendAllTextAsync(ignored, "msg=not-a-live-package-log\n");
             var logs = Path.Combine(root, "test.package", "logs");
             if (movePopulatedDirectory) Directory.Move(incoming, Path.GetDirectoryName(logs)!);
             else
@@ -298,12 +308,12 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             service.Start();
             Assert.Empty(service.GetSnapshot().Entries);
 
-            Directory.CreateDirectory(incoming);
+            var incomingLogs = Directory.CreateDirectory(Path.Combine(incoming, "logs")).FullName;
             const int fileCount = 140; // More than one directory-discovery turn.
             for (var index = 0; index < fileCount; index++)
-                await File.WriteAllTextAsync(Path.Combine(incoming, $"{index}.LOG"), $"msg=entry-{index}\n");
-            Directory.CreateSymbolicLink(Path.Combine(incoming, "linked-directory"), outside);
-            File.CreateSymbolicLink(Path.Combine(incoming, "linked-file.log"), outsideFile);
+                await File.WriteAllTextAsync(Path.Combine(incomingLogs, $"{index}.LOG"), $"msg=entry-{index}\n");
+            Directory.CreateSymbolicLink(Path.Combine(incomingLogs, "linked-directory"), outside);
+            File.CreateSymbolicLink(Path.Combine(incomingLogs, "linked-file.log"), outsideFile);
             Directory.Move(incoming, Path.Combine(root, "test.package"));
             await WaitUntilAsync(() => service.GetSnapshot(limit: 1000).Entries.Count == fileCount);
             var entries = service.GetSnapshot(limit: 1000).Entries;
@@ -370,36 +380,64 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     {
         var folder = CreateDevPackageFolder();
         var stageCount = 0;
-        var commitCount = 0;
         var events = new RuntimeEventStreamService();
-        var watcher = CreateWatcher(
-            folder,
-            events,
-            stage: (request, _) =>
+        var debounces = new System.Collections.Concurrent.ConcurrentQueue<CancellationToken>();
+        var staged = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var committed = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var discarded = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var releaseDebounce = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var watcher = new DevPackageWatchService(
+            (request, _) =>
             {
-                Interlocked.Increment(ref stageCount);
-                return Task.FromResult(CreateStage(request.PackageIds));
+                var id = $"stage-{Interlocked.Increment(ref stageCount)}";
+                staged.Enqueue(id);
+                return Task.FromResult(new PackageLifecycleStageResult(id, [], [], [], request.PackageIds));
             },
-            commit: (_, _) =>
+            (id, _) =>
             {
-                Interlocked.Increment(ref commitCount);
+                committed.Enqueue(id);
                 return Task.FromResult(CreateReloadResult(success: true));
+            },
+            (id, _) => { discarded.Enqueue(id); return Task.FromResult(true); },
+            events, NullLogger<DevPackageWatchService>.Instance,
+            (delay, token) =>
+            {
+                if (delay != DevPackageWatchService.DebounceDelay) return Task.CompletedTask;
+                debounces.Enqueue(token);
+                return releaseDebounce.Task.WaitAsync(token);
             });
-        await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
-
-        for (var index = 0; index < 20; index++)
+        try
         {
-            await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), index.ToString());
+            await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "first");
+            await WaitUntilAsync(() => !debounces.IsEmpty);
+            var first = debounces.First();
+            for (var index = 0; index < 20; index++)
+                await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), index.ToString());
+
+            await WaitUntilAsync(() => first.IsCancellationRequested);
+            Assert.Empty(staged);
+            releaseDebounce.TrySetResult();
+            await WaitUntilAsync(() => events.GetSnapshot().Events.Any(
+                item => item.Kind == RuntimeEventKind.DevReloadCompleted && item.Success == true),
+                () => $"Debounces={debounces.Count}; staged={string.Join(',', staged)}; committed={string.Join(',', committed)}; discarded={string.Join(',', discarded)}; events={System.Text.Json.JsonSerializer.Serialize(events.GetSnapshot())}");
+            await watcher.DisposeAsync();
+            var afterDispose = debounces.Count;
+
+            await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "after-dispose");
+            await Task.Delay(150);
+            Assert.Equal(afterDispose, debounces.Count);
+            Assert.Equal(staged.Last(), Assert.Single(committed));
+            // Windows may deliver a late native event during staging. Every
+            // superseded candidate must be discarded, not committed or leaked.
+            Assert.Equal(staged.Order(StringComparer.Ordinal), discarded.Concat(committed).Order(StringComparer.Ordinal));
         }
-
-        await WaitUntilAsync(() => Volatile.Read(ref commitCount) == 1);
-        Assert.Equal(1, stageCount);
-
-        await watcher.DisposeAsync();
-        await File.AppendAllTextAsync(GetDevPackagePayloadPath(folder), "after-dispose");
-        await Task.Delay(150);
-        Assert.Equal(1, commitCount);
-        TryDeleteDirectory(folder);
+        finally
+        {
+            releaseDebounce.TrySetResult();
+            await watcher.DisposeAsync();
+            TryDeleteDirectory(Path.GetDirectoryName(folder)!);
+        }
     }
 
     [Fact]
@@ -433,7 +471,6 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         var commitCount = 0;
         var events = new RuntimeEventStreamService();
         await using var watcher = CreateWatcher(
-            folder,
             events,
             commit: (_, _) =>
             {
@@ -547,7 +584,6 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         var folder = CreateDevPackageFolder();
         var events = new RuntimeEventStreamService();
         await using var watcher = CreateWatcher(
-            folder,
             events,
             commit: (_, _) => Task.FromResult(CreateReloadResult(success: false, "stage is stale because the session generation changed")));
         await watcher.SynchronizeAsync([new DevPackageWatchTarget("test.package", folder)]);
@@ -568,7 +604,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
         var parent = Path.GetDirectoryName(folder)!;
         var commits = 0;
         var events = new RuntimeEventStreamService();
-        await using var watcher = CreateWatcher(folder, events, commit: (_, _) =>
+        await using var watcher = CreateWatcher(events, commit: (_, _) =>
         {
             Interlocked.Increment(ref commits);
             return Task.FromResult(CreateReloadResult(true));
@@ -775,7 +811,6 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     }
 
     private static DevPackageWatchService CreateWatcher(
-        string folder,
         RuntimeEventStreamService events,
         Func<PackageLifecycleStageRequest, CancellationToken, Task<PackageLifecycleStageResult>>? stage = null,
         Func<string, CancellationToken, Task<PackageLifecycleOperationResult>>? commit = null)
@@ -799,7 +834,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
     private static PackageLifecycleOperationResult CreateReloadResult(bool success, string? error = null)
         => new(success, success ? "reloaded" : error, [], [], error is null ? [] : [error], ["test.package"]);
 
-    private static async Task WaitUntilAsync(Func<bool> condition)
+    private static async Task WaitUntilAsync(Func<bool> condition, Func<string>? diagnostic = null)
     {
         var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
         while (!condition() && DateTimeOffset.UtcNow < deadline)
@@ -807,7 +842,7 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             await Task.Delay(25);
         }
 
-        Assert.True(condition(), "Condition was not reached before the test deadline.");
+        Assert.True(condition(), "Condition was not reached before the test deadline. " + diagnostic?.Invoke());
     }
 
     private static string CreateDevPackageFolder(string? path = null)

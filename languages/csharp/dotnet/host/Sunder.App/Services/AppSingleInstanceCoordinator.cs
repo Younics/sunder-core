@@ -30,7 +30,7 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
     public bool IsPrimary => _ownsMutex;
 
     public static AppSingleInstanceCoordinator CreateForCurrentUser()
-        => Create(BuildCurrentUserScope());
+        => Create(BuildCurrentUserScope(Environment.GetEnvironmentVariable(AppLocalState.StateRootEnvironmentVariable)));
 
     internal static AppSingleInstanceCoordinator Create(string scope)
     {
@@ -234,12 +234,24 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
         }
     }
 
-    private static string BuildCurrentUserScope()
-        => string.Join(
+    internal static string BuildCurrentUserScope(string? configuredStateRoot)
+    {
+        var scope = string.Join(
             '\n',
             Environment.UserName,
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData));
+        if (string.IsNullOrWhiteSpace(configuredStateRoot)) return scope;
+
+        // An explicitly isolated App profile must never forward into the user's
+        // ordinary session (or a different isolated profile). Keep the default
+        // scope unchanged for existing normal launches.
+        var root = Path.TrimEndingDirectorySeparator(AppLocalState.ResolveRootPath(configuredStateRoot));
+        var defaultRoot = Path.TrimEndingDirectorySeparator(AppLocalState.ResolveRootPath(null));
+        if (string.Equals(root, defaultRoot, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            return scope;
+        return scope + "\n" + (OperatingSystem.IsWindows() ? root.ToUpperInvariant() : root);
+    }
 
     private static string ComputeInstanceId(string scope)
     {

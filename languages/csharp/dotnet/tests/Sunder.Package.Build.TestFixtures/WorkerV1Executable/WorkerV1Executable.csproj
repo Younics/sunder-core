@@ -36,4 +36,8 @@
   </Target>
 
   <Import Project="..\..\..\packages\Sunder.Package.Build\build\Sunder.Package.Build.targets" />
+  <Target Name="RecordWorkerSdkPackagePath" AfterTargets="EmitSunderDevOutput">
+    <WriteLinesToFile File="$(TargetDir)sunder-worker-sdk-package-path.txt" Lines="$(SunderDevOutputPath)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true" />
+  </Target>
 </Project>

@@ -152,12 +152,20 @@ public sealed partial class PackageTemplateTests
                 .SelectMany(static document => document.Descendants("PackageReference"))
                 .Where(reference => reference.Attribute("Include")?.Value.StartsWith("Sunder.", StringComparison.Ordinal) == true)
                 .ToArray();
-            Assert.Equal(4, sunderReferences.Length);
+            Assert.Equal(3, sunderReferences.Length);
             var authoredDependencies = Directory.EnumerateFiles(payload, "*.in", SearchOption.AllDirectories)
                 .Where(path => path.EndsWith(".csproj.in", StringComparison.Ordinal) || path.EndsWith(".props.in", StringComparison.Ordinal))
                 .Select(XDocument.Load).SelectMany(document => document.Descendants("PackageReference"))
                 .ToDictionary(reference => reference.Attribute("Include")!.Value, reference => reference.Attribute("Version")!.Value);
             Assert.All(sunderReferences, reference => Assert.Equal(authoredDependencies[reference.Attribute("Include")!.Value], reference.Attribute("Version")?.Value));
+            var generatedSdk = XDocument.Load(Path.Combine(output, "Escaped.Sample.csproj")).Root!.Attribute("Sdk")!.Value;
+            var authoredSdk = XDocument.Load(Path.Combine(payload, "Sunder.Package.Template.csproj.in")).Root!.Attribute("Sdk")!.Value;
+            Assert.Equal(authoredSdk, generatedSdk);
+            var buildVersion = XDocument.Load(Path.Combine(repositoryRoot,
+                "languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj"))
+                .Root!.Elements("PropertyGroup").Elements("Version").Single().Value;
+            Assert.Equal("Sunder.Package.Build/" + buildVersion, generatedSdk);
+            Assert.DoesNotContain(sunderReferences, reference => reference.Attribute("Include")!.Value == "Sunder.Package.Build");
 
             // NuGet's reference-version getter must retain the referenced SDK's
             // exact version, never the independently versioned consumer's value.
@@ -194,6 +202,9 @@ public sealed partial class PackageTemplateTests
                 .Select(XDocument.Load)
                 .ToArray();
             var generatedProject = Assert.Single(generatedProjects);
+            var generatedLock = await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.lock.json"));
+            Assert.Equal(await File.ReadAllBytesAsync(Path.Combine(payload, "sunder-contracts.lock.json")), generatedLock);
+            Assert.DoesNotContain((byte)'\r', generatedLock);
             Assert.Equal("1.0.0", Assert.Single(generatedProject.Descendants("Version")).Value);
             Assert.Equal("false", Assert.Single(generatedProject.Descendants("IsPackable")).Value);
             Assert.Equal("true", Assert.Single(generatedProject.Descendants("RestorePackagesWithLockFile")).Value);
@@ -203,8 +214,10 @@ public sealed partial class PackageTemplateTests
                 "Escaped.Sample.csproj"));
             Assert.Empty(workerProject.Descendants("SunderPackagePrimaryProject"));
             Assert.Empty(workerProject.Descendants("SelfContained"));
-            Assert.Equal("false", Assert.Single(workerProject.Descendants("EnableRuntimePackDownload")).Value);
-            Assert.Equal("false", Assert.Single(workerProject.Descendants("EnableAppHostPackDownload")).Value);
+            // Cold-restore defaults now belong to the Build SDK props, rather
+            // than being duplicated in every generated project.
+            Assert.Empty(workerProject.Descendants("EnableRuntimePackDownload"));
+            Assert.Empty(workerProject.Descendants("EnableAppHostPackDownload"));
             Assert.Empty(workerProject.Descendants("UseAppHost"));
             Assert.Empty(workerProject.Descendants("PublishSingleFile"));
             Assert.Empty(workerProject.Descendants("PublishTrimmed"));
@@ -270,9 +283,13 @@ public sealed partial class PackageTemplateTests
     {
         var repositoryRoot = FindRepositoryRoot();
         var root = CreateTempDirectory();
-        // The local-only stable patch satisfies the independently authored template
-        // ranges; the isolated feed/cache cannot substitute a public SDK package.
+        // NuGet ranges can use a fresh local-only stable patch. MSBuild SDK
+        // resolution is exact: pack the authored Build pin separately, still
+        // into this invocation's isolated feed/cache, never a user cache.
         var currentVersion = "1.1." + Random.Shared.Next(10000, 60000);
+        var buildSdkVersion = XDocument.Load(Path.Combine(repositoryRoot,
+            "languages/csharp/dotnet/packages/Sunder.Package.Templates/templates/sunder-package/Sunder.Package.Template/Sunder.Package.Template.csproj.in"))
+            .Root!.Attribute("Sdk")!.Value.Split('/')[1];
         try
         {
             var packageProject = Path.Combine(
@@ -307,7 +324,7 @@ public sealed partial class PackageTemplateTests
                 templatePackage));
 
             var localFeed = Path.Combine(root, "feed");
-            var toolConfiguration = await PackLocalSunderFeedAsync(repositoryRoot, localFeed, currentVersion);
+            var toolConfiguration = await PackLocalSunderFeedAsync(repositoryRoot, localFeed, currentVersion, buildSdkVersion);
             var catalog = Path.Combine(root, "core-platform-catalog.json");
             if (shapeName == "Stacks")
             {
@@ -318,8 +335,10 @@ public sealed partial class PackageTemplateTests
             }
 
             var packagesPath = Path.Combine(root, "packages");
-            await AssertPackedInternalRpcBindingConsumerAsync(root, localFeed, packagesPath, currentVersion);
-            await File.WriteAllTextAsync(Path.Combine(root, "NuGet.Config"), $"<configuration><packageSources><clear/><add key=\"local\" value=\"{System.Security.SecurityElement.Escape(localFeed)}\"/></packageSources></configuration>");
+            await AssertPackedInternalRpcBindingConsumerAsync(root, localFeed, packagesPath, currentVersion, buildSdkVersion);
+            // SDK resolution precedes project evaluation, so use the same isolated
+            // NuGet configuration for the SDK resolver and PackageReference restore.
+            await File.WriteAllTextAsync(Path.Combine(root, "NuGet.Config"), $"<configuration><config><add key=\"globalPackagesFolder\" value=\"{System.Security.SecurityElement.Escape(packagesPath)}\"/></config><fallbackPackageFolders><clear/></fallbackPackageFolders><packageSources><clear/><add key=\"local\" value=\"{System.Security.SecurityElement.Escape(localFeed)}\"/></packageSources></configuration>");
             var shapes = new[]
             {
                 new GeneratedShape("Default", [], 1, 6, HasApp: false, HasDependency: false),
@@ -369,18 +388,9 @@ public sealed partial class PackageTemplateTests
 
                 var primaryProject = Path.Combine(output, projectName + ".csproj");
                 Assert.Single(Directory.EnumerateFiles(output, "*.csproj", SearchOption.AllDirectories));
-                AssertSuccess(await RunDotnetAsync(
-                    output,
-                    "restore",
-                    primaryProject,
-                    "--source",
-                    localFeed,
-                    "--packages",
-                    packagesPath,
-                    "--disable-parallel",
-                    "--ignore-failed-sources"));
                 if (shape.Name == "Stacks")
                 {
+                    AssertSuccess(await RunDotnetAsync(output, "restore", primaryProject, "--disable-parallel"));
                     var stackInputs = await CaptureTemplateInputsAsync(output);
                     var emptyLock = await File.ReadAllBytesAsync(Path.Combine(output, "sunder-contracts.lock.json"));
                     var gated = await RunDotnetAsync(output, "build", primaryProject, "--no-restore", "--disable-build-servers");
@@ -401,7 +411,6 @@ public sealed partial class PackageTemplateTests
                     output,
                     "build",
                     primaryProject,
-                    "--no-restore",
                     "--disable-build-servers");
                 AssertSuccess(build);
 
@@ -631,7 +640,7 @@ public sealed partial class PackageTemplateTests
         }
     }
 
-    private static async Task<string> PackLocalSunderFeedAsync(string repositoryRoot, string localFeed, string version)
+    private static async Task<string> PackLocalSunderFeedAsync(string repositoryRoot, string localFeed, string version, string buildSdkVersion)
     {
         Directory.CreateDirectory(localFeed);
         var configuration = "TemplateSdk-" + Guid.NewGuid().ToString("N");
@@ -645,6 +654,7 @@ public sealed partial class PackageTemplateTests
         };
         foreach (var packageProject in packageProjects)
         {
+            var packageVersion = Path.GetFileNameWithoutExtension(packageProject) == "Sunder.Package.Build" ? buildSdkVersion : version;
             AssertSuccess(await RunDotnetAsync(
                 repositoryRoot,
                 "pack",
@@ -655,8 +665,8 @@ public sealed partial class PackageTemplateTests
                 "--disable-build-servers",
                 "-o",
                 localFeed,
-                $"-p:Version={version}",
-                $"-p:PackageVersion={version}",
+                $"-p:Version={packageVersion}",
+                $"-p:PackageVersion={packageVersion}",
                 "-p:GeneratePackageOnBuild=false"));
             // Reuse restored third-party nupkgs, never a cached/published Sunder
             // baseline. The consumer restore is then genuinely offline.
@@ -678,10 +688,10 @@ public sealed partial class PackageTemplateTests
         Assert.All(
             new[] { "Sunder.Sdk", "Sunder.Sdk.Avalonia", "Sunder.Sdk.Stacks", "Sunder.Sdk.Worker", "Sunder.Package.Build" },
             packageId => Assert.True(
-                File.Exists(Path.Combine(localFeed, $"{packageId}.{version}.nupkg")),
+                File.Exists(Path.Combine(localFeed, $"{packageId}.{(packageId == "Sunder.Package.Build" ? buildSdkVersion : version)}.nupkg")),
                 $"Local feed package was not created for {packageId}."));
 
-        using var buildPackage = ZipFile.OpenRead(Path.Combine(localFeed, $"Sunder.Package.Build.{version}.nupkg"));
+        using var buildPackage = ZipFile.OpenRead(Path.Combine(localFeed, $"Sunder.Package.Build.{buildSdkVersion}.nupkg"));
         Assert.DoesNotContain(buildPackage.Entries, entry => entry.FullName.Contains("BouncyCastle", StringComparison.Ordinal));
         return configuration;
     }
@@ -690,7 +700,8 @@ public sealed partial class PackageTemplateTests
         string root,
         string localFeed,
         string packagesPath,
-        string version)
+        string version,
+        string buildSdkVersion)
     {
         var consumerDirectory = Path.Combine(root, "packed-internal-rpc-consumer");
         Directory.CreateDirectory(consumerDirectory);
@@ -705,7 +716,7 @@ public sealed partial class PackageTemplateTests
               </PropertyGroup>
               <ItemGroup>
                 <PackageReference Include="Sunder.Sdk" Version="{{version}}" />
-                <PackageReference Include="Sunder.Package.Build" Version="{{version}}" PrivateAssets="all" />
+                <PackageReference Include="Sunder.Package.Build" Version="{{buildSdkVersion}}" PrivateAssets="all" />
                 <SunderRpcBinding Include="sample.rpc.json"
                                   Namespace="Packed.Internal.Generated"
                                   OutputFile="Binding.g.cs"

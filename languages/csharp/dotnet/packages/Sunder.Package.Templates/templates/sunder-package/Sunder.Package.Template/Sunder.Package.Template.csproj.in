@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Sunder.Package.Build/1.1.0">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -8,16 +8,12 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
-    <!-- Needed on the first restore, before the Build package's props exist. -->
-    <EnableRuntimePackDownload>false</EnableRuntimePackDownload>
-    <EnableAppHostPackDownload>false</EnableAppHostPackDownload>
     <RuntimeIdentifiers>win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</RuntimeIdentifiers>
     <SunderPackageProject>true</SunderPackageProject>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.1" />
-    <PackageReference Include="Sunder.Package.Build" Version="1.0.1" PrivateAssets="all" />
+    <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
   </ItemGroup>
 
   <Import Project="Views/Avalonia.PackageReferences.props" Condition="Exists('Views/Avalonia.PackageReferences.props')" />

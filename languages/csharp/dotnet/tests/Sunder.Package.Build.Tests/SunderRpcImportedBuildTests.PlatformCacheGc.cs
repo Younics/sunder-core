@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Rpc.Authoring;
 using Sunder.Package.Build.Tasks;
 using Sunder.Package.Format;
@@ -140,13 +141,22 @@ public sealed partial class SunderRpcImportedBuildTests
     }
 
     [Theory]
-    [InlineData("linked-body")]
-    [InlineData("linked-repair")]
     [InlineData("changed-tombstone")]
     [InlineData("intent-traversal")]
     [InlineData("intent-size")]
     [InlineData("intent-batch-size")]
     public void PlatformCacheGc_RejectsUnsafePathsAndChangedRecoveryPreimages(string failure)
+        => AssertPlatformCacheGcRejectsUnsafePathsAndChangedRecoveryPreimages(failure);
+
+    [SymbolicLinkFact(directory: false)]
+    public void PlatformCacheGc_RejectsLinkedBodyWithoutChangingTarget()
+        => AssertPlatformCacheGcRejectsUnsafePathsAndChangedRecoveryPreimages("linked-body");
+
+    [SymbolicLinkFact(directory: false)]
+    public void PlatformCacheGc_RejectsLinkedRepairWithoutChangingTarget()
+        => AssertPlatformCacheGcRejectsUnsafePathsAndChangedRecoveryPreimages("linked-repair");
+
+    private void AssertPlatformCacheGcRejectsUnsafePathsAndChangedRecoveryPreimages(string failure)
     {
         var fixture = PlatformFixture(); var cache = Path.Combine(_root, "catalog-gc");
         PublishGcCatalog(cache, fixture);
@@ -210,6 +220,7 @@ public sealed partial class SunderRpcImportedBuildTests
 
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task PlatformCacheGc_CrossLanguageCrashRecoveryPublicationAndLeaseContention()
     {
         var fixture = PlatformFixture(); var cache = Path.Combine(_root, "catalog-gc");

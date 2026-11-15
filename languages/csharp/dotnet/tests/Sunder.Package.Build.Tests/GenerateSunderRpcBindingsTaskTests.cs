@@ -132,12 +132,12 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             Assert.Empty(failed.ContractBundles);
             Assert.Empty(failed.RpcProviders);
 
-            File.WriteAllText(
-                sourcePath,
-                ImplementationFirstSource.Replace(
-                    "[SunderService(SunderServiceExposure.Public)]\n[SunderAppUse(Required = true)]",
-                    string.Empty,
-                    StringComparison.Ordinal));
+            var withoutService = ImplementationFirstSource
+                .Replace("[SunderService(SunderServiceExposure.Public)]", string.Empty, StringComparison.Ordinal)
+                .Replace("[SunderAppUse(Required = true)]", string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("[SunderService", withoutService, StringComparison.Ordinal);
+            Assert.DoesNotContain("[SunderAppUse", withoutService, StringComparison.Ordinal);
+            File.WriteAllText(sourcePath, withoutService);
             var removed = CreateSourceTask(root, intermediateOutputPath, sourcePath, references);
             Assert.False(removed.Execute());
             Assert.Contains(((TestBuildEngine)removed.BuildEngine).Errors, error =>
@@ -740,7 +740,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         }
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: false)]
     public void Execute_RejectsDescriptorSymbolicLink()
     {
         var root = CreateTempDirectory();
@@ -748,14 +748,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         {
             var descriptorPath = WriteDescriptor(root, "test.binding");
             var linkPath = Path.Combine(root, "linked.rpc.json");
-            try
-            {
-                File.CreateSymbolicLink(linkPath, descriptorPath);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-            {
-                return;
-            }
+            File.CreateSymbolicLink(linkPath, descriptorPath);
             var task = CreateTask(root, Path.Combine(root, "obj"), Binding(linkPath, "Test.Generated"));
 
             Assert.False(task.Execute());
@@ -768,7 +761,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         }
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: false)]
     public void Execute_RejectsOutputSymbolicLink()
     {
         var root = CreateTempDirectory();
@@ -783,14 +776,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var outsidePath = Path.Combine(root, "outside.g.cs");
             File.WriteAllText(outsidePath, "outside");
             var linkPath = Path.Combine(generatedDirectory, "Binding.g.cs");
-            try
-            {
-                File.CreateSymbolicLink(linkPath, outsidePath);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-            {
-                return;
-            }
+            File.CreateSymbolicLink(linkPath, outsidePath);
             var binding = Binding(WriteDescriptor(root, "test.binding"), "Test.Generated");
             binding.SetMetadata("OutputFile", "Binding.g.cs");
             var task = CreateTask(root, intermediateOutputPath, binding);
@@ -903,7 +889,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         }
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: false)]
     public void CleanGeneratedOutput_DeletesOnlyACompleteMarkedLinkFreeSet()
     {
         var root = CreateTempDirectory();
@@ -936,14 +922,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var outside = Path.Combine(root, "outside.txt");
             File.WriteAllText(outside, "outside");
             var link = Path.Combine(generatedDirectory, "linked.txt");
-            try
-            {
-                File.CreateSymbolicLink(link, outside);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-            {
-                return;
-            }
+            File.CreateSymbolicLink(link, outside);
             var linked = CreateCleanupTask(root, intermediateOutputPath);
             Assert.False(linked.Execute());
             Assert.Equal("outside", File.ReadAllText(outside));
@@ -1081,7 +1060,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         }
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public void Execute_RejectsDescriptorWithUnsafeAncestorOutsideProjectDirectory()
     {
         var root = CreateTempDirectory();
@@ -1092,14 +1071,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var linkDirectory = Path.Combine(root, "outside-link");
             Directory.CreateDirectory(projectDirectory);
             var descriptorPath = WriteDescriptor(realDirectory, "test.binding");
-            try
-            {
-                Directory.CreateSymbolicLink(linkDirectory, realDirectory);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-            {
-                return;
-            }
+            Directory.CreateSymbolicLink(linkDirectory, realDirectory);
 
             var linkedDescriptorPath = Path.Combine(linkDirectory, Path.GetFileName(descriptorPath));
             var task = CreateTask(
@@ -1118,7 +1090,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
         }
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public void Execute_RejectsOutputWithUnsafeAncestorOutsideProjectDirectory()
     {
         var root = CreateTempDirectory();
@@ -1129,14 +1101,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var linkOutputDirectory = Path.Combine(root, "outside-link");
             Directory.CreateDirectory(projectDirectory);
             Directory.CreateDirectory(realOutputDirectory);
-            try
-            {
-                Directory.CreateSymbolicLink(linkOutputDirectory, realOutputDirectory);
-            }
-            catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-            {
-                return;
-            }
+            Directory.CreateSymbolicLink(linkOutputDirectory, realOutputDirectory);
             var task = CreateTask(
                 projectDirectory,
                 Path.Combine(linkOutputDirectory, "obj"),

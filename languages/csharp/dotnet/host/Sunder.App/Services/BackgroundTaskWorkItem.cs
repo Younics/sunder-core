@@ -8,7 +8,7 @@ internal sealed class BackgroundTaskWorkItem(Guid taskId, BackgroundTaskRequest 
 
     public Guid TaskId { get; } = taskId;
 
-    public BackgroundTaskRequest Request { get; } = request;
+    public BackgroundTaskRequest Request { get; private set; } = request;
 
     internal Task ExecuteAsync(BackgroundTaskContext context)
     {
@@ -135,6 +135,8 @@ internal sealed class BackgroundTaskWorkItem(Guid taskId, BackgroundTaskRequest 
         }
 
         CancellationTokenSourceDisposed = true;
+        // Retained terminal history is display data, not ownership of package code.
+        Request = Request with { ExecuteAsync = static _ => Task.CompletedTask };
         CancellationTokenSource.Dispose();
     }
 }

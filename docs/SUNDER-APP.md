@@ -45,6 +45,16 @@ Each persistent V1 root contains `schema.json` with product identity `Sunder`, s
 
 Package and Registry secrets use Runtime-V1-specific DPAPI entropy and macOS Keychain/Linux Secret Service namespaces. Existing unversioned filesystem data and old credential items remain untouched.
 
+Native package-browser profiles are transient App-owned state. On Windows, compact
+names under `webview-data` bind the package and exact activation without nesting the
+authored package ID. The complete WebView2 user-data path is limited to 170 characters
+to leave room for native database/cache descendants below Windows path limits. An
+overlong configured root fails before browser creation with guidance to shorten
+`SUNDER_APP_STATE_ROOT`; profiles are never silently relocated outside that root.
+Retirement drains capture callbacks and waits for the matching WebView2 browser-process
+exit before deleting profile data. Adapter detachment alone is not retirement proof;
+a timeout or unreclaimed quarantine cannot acknowledge successful cleanup.
+
 ### Workspace restoration
 
 `shell-state.json` remembers the selected view (or intentionally closed state) in
@@ -130,6 +140,7 @@ Environment variables:
 | `SUNDER_RUNTIME_URL` | Runtime URL used by the app and CLI |
 | `SUNDER_RUNTIME_HOST_PATH` | Host Supervisor executable or folder used by the app |
 | `SUNDER_HOST_PAYLOAD_ROOT` | Release-mode current-user root for versioned Host payloads |
+| `SUNDER_APP_STATE_ROOT` | Explicit App V1 state root; Windows browser profiles must fit the native path budget described above |
 
 Default runtime URL:
 

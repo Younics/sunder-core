@@ -56,24 +56,26 @@ const selectedTests = partitionName === undefined
 if (selectedTests.length === 0) {
   throw new Error(`Selection project='${project ?? "all"}', lane='${primaryLane ?? "all"}' has no runnable .NET tests on ${operatingSystem}.`);
 }
+const projectNames = scenario?.projectOrder ?? [...new Set(selectedTests.map(test => test.project))].sort();
 if (list) {
   const output = `${JSON.stringify({ scope, project: project ?? "all", primaryLane: primaryLane ?? "all", scenario: scenarioName,
     nativePartition: partitionName, operatingSystem,
     declarations: selectedTests.map((test) => test.id),
-    projects: [...new Set(selectedTests.map((test) => test.project))].sort().map((name) => ({ project: name,
+    projects: projectNames.map((name) => ({ project: name,
       filter: selectedProjectFilter(name),
       ...dotnetTestBudget(name, selectedTests), ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }) })) }, null, 2)}\n`;
   await new Promise((resolve, reject) => process.stdout.write(output, (error) => error ? reject(error) : resolve()));
   process.exit(0);
 }
+// A native partition is qualification, not an optional local capability probe.
+if (partitionName !== undefined) process.env.SUNDER_REQUIRE_TEST_PREREQUISITES = "1";
 const outputDirectory = resolve(repositoryRoot, requestedOutputDirectory);
 const cleanDirectory = project === undefined && primaryLane === undefined && scenarioName === undefined && partitionName === undefined && requestedOutputDirectory === `${resultRoot}/dotnet`
   ? dirname(outputDirectory)
   : outputDirectory;
 rmSync(cleanDirectory, { recursive: true, force: true });
 mkdirSync(outputDirectory, { recursive: true });
-const projectPaths = [...new Set(selectedTests
-  .map((test) => `languages/csharp/dotnet/tests/${test.project}/${test.project}.csproj`))].sort();
+const projectPaths = projectNames.map(name => `languages/csharp/dotnet/tests/${name}/${name}.csproj`);
 
 const failed = [];
 Object.assign(process.env, scenario?.environment);
@@ -95,6 +97,9 @@ for (const projectPath of projectPaths) {
   if (result.error !== null || result.status !== 0 || !result.cleanupComplete) failed.push(projectName);
   if (!result.cleanupComplete || result.error?.code === "ECANCELED") {
     throw new Error(`Stopping before the next project: ${projectName} was cancelled or process cleanup could not be confirmed. See ${logStem}.process.json.`);
+  }
+  if (scenario?.projectOrder !== undefined && failed.length > 0) {
+    throw new Error(`Stopping ordered scenario '${scenarioName}' after failed project ${projectName}; dependent consumers were not started.`);
   }
 }
 if (failed.length > 0) {

@@ -1,14 +1,18 @@
 using Avalonia.Media;
+using Avalonia.Styling;
 
 namespace Sunder.App.Themes;
 
 public sealed record SunderThemeDefinition
 {
     public const string GraphiteDarkId = "sunder-graphite-dark";
+    public const string GraphiteLightId = "sunder-graphite-light";
 
     public required string Id { get; init; }
 
     public required string DisplayName { get; init; }
+
+    public ThemeVariant Variant { get; init; } = ThemeVariant.Dark;
 
     public required Color BackgroundApp { get; init; }
 
@@ -115,4 +119,43 @@ public sealed record SunderThemeDefinition
             Selection = Color.Parse("#3F301F"),
             Disabled = Color.Parse("#595D64"),
         };
+
+    public static SunderThemeDefinition GraphiteLight { get; } = GraphiteDark with
+    {
+        Id = GraphiteLightId,
+        DisplayName = "Sunder Graphite Light",
+        Variant = ThemeVariant.Light,
+        BackgroundApp = Color.Parse("#EDEDEC"),
+        SurfaceBase = Color.Parse("#F8F8F7"),
+        SurfaceRaised = Color.Parse("#FFFFFF"),
+        SurfacePopover = Color.Parse("#FFFFFF"),
+        SurfaceWorkspace = Color.Parse("#F3F3F2"),
+        SurfaceHover = Color.Parse("#E3E4E3"),
+        SurfaceSelected = Color.Parse("#F2E5D0"),
+        SurfaceDragOver = Color.Parse("#EFDEC0"),
+        SurfaceCode = Color.Parse("#E8E9E8"),
+        BorderSubtle = Color.Parse("#CFD1CF"),
+        BorderStrong = Color.Parse("#A5A8A5"),
+        BorderWarning = Color.Parse("#9B752F"),
+        BorderDanger = Color.Parse("#B32E40"),
+        BorderFocus = Color.Parse("#986013"),
+        ForegroundPrimary = Color.Parse("#242625"),
+        ForegroundSecondary = Color.Parse("#4B504D"),
+        ForegroundMuted = Color.Parse("#60645F"),
+        ForegroundOnAccent = Colors.White,
+        ForegroundCode = Color.Parse("#805019"),
+        Accent = Color.Parse("#986013"),
+        AccentSoft = Color.Parse("#F2E5D0"),
+        Success = Color.Parse("#176C50"),
+        SuccessSoft = Color.Parse("#DCEFE5"),
+        Warning = Color.Parse("#805E1F"),
+        WarningSoft = Color.Parse("#F4E9CE"),
+        Danger = Color.Parse("#B32E40"),
+        DangerSoft = Color.Parse("#F8E0E4"),
+        Info = Color.Parse("#805019"),
+        InfoSoft = Color.Parse("#F2E5D0"),
+        Focus = Color.Parse("#986013"),
+        Selection = Color.Parse("#E8D3AF"),
+        Disabled = Color.Parse("#91968F"),
+    };
 }

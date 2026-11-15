@@ -103,6 +103,14 @@ Supported RIDs are `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`
 and `osx-arm64`. Executable tests use actual native architectures. Windows ARM64
 App signing uses the x64 Azure signing client on Windows x64.
 
+The supported Linux package browser backend is **WebKitGTK**, including on machines
+that also have WPE installed. Install GTK 3, WebKitGTK 4.1 and libsoup 3; use an X11
+or XWayland desktop session. On Debian/Ubuntu these are `libgtk-3-0`,
+`libwebkit2gtk-4.1-0` and `libsoup-3.0-0`. Package capture uses WebKit's own viewport
+snapshot, with bounded output, selected-region cropping and callback-safe retirement.
+Optional WPE support is deferred: its current adapter cannot provide the required
+capture/retirement guarantees. It is not silently selected as a reduced-function backend.
+
 These checks do not fabricate deployed Registry recovery, whole-product performance
 or production installer acceptance. Those retain their owning requirements. See
 [the official runtime contract](OFFICIAL-RUNTIME-HANDOFF.md) and

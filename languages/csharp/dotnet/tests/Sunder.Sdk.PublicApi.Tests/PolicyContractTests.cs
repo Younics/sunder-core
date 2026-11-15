@@ -15,6 +15,7 @@ public sealed class PolicyContractTests
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
+        NewLine = "\n",
         PropertyNameCaseInsensitive = false,
         AllowDuplicateProperties = false,
         NumberHandling = JsonNumberHandling.Strict,

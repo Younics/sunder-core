@@ -27,7 +27,8 @@ public sealed class InstalledPackageExecutionRuntimeBindingTests
         Assert.Equal(["installedArtifact", "requirement", "resolvedAtUtc", "rid", "role", "runtime"],
             json["packages"]![0]!["executionRuntimeBindings"]![0]!.AsObject().Select(value => value.Key).Order(StringComparer.Ordinal));
         Assert.False(Directory.Exists(paths.ExecutionRuntimeStoreRootPath));
-        Assert.Equal([paths.StateFilePath], Directory.EnumerateFiles(paths.RootPath, "*", SearchOption.AllDirectories));
+        Assert.Equal([Path.GetFullPath(paths.StateFilePath)],
+            Directory.EnumerateFiles(paths.RootPath, "*", SearchOption.AllDirectories).Select(Path.GetFullPath));
     }
 
     [Theory]

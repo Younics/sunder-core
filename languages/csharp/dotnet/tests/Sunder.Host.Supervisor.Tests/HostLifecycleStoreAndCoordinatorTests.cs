@@ -408,7 +408,6 @@ public sealed partial class HostSupervisorFoundationTests
         var root = CreateTempDirectory();
         var hostRoot = Path.Combine(root, "host");
         var runtimeRoot = Path.Combine(root, "runtime");
-        var preservedRoot = Path.Combine(root, "preserved-runtime");
         try
         {
             RuntimeLocalState.EnsureInitialized(runtimeRoot);
@@ -421,13 +420,13 @@ public sealed partial class HostSupervisorFoundationTests
                              isRuntimeLeaseAvailable: static () => true,
                              runtimeStateRoot: runtimeRoot))
             {
-                await Assert.ThrowsAsync<AggregateException>(() => coordinator.ResetRuntimeStateAsync(
+                var failure = await Assert.ThrowsAsync<IOException>(() => coordinator.ResetRuntimeStateAsync(
                     startupCacheOnly: false,
-                    afterStarted: () =>
-                    {
-                        Directory.Move(runtimeRoot, preservedRoot);
-                        Directory.CreateDirectory(runtimeRoot);
-                    }));
+                    afterStarted: () => throw new IOException("Injected post-start reset failure.")));
+                Assert.Equal("Injected post-start reset failure.", failure.Message);
+                var receiptPath = Assert.Single(Directory.EnumerateFiles(
+                    Path.Combine(runtimeRoot, RuntimeV1StateDescriptor.ResetReceiptDirectory), "*.json"));
+                Assert.Equal("partial", JsonNode.Parse(await File.ReadAllTextAsync(receiptPath))!["status"]!.GetValue<string>());
 
                 var status = coordinator.GetStatus();
                 var conflict = await Assert.ThrowsAsync<HostLifecycleConflictException>(() =>

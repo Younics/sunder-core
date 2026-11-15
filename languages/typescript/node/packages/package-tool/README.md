@@ -68,6 +68,13 @@ React preset also adds a view connected to the worker's service.
 In a second terminal, run `npm run sunder:dev`. Source changes regenerate APIs and
 rebuild `dist/sunder-dev`; Sunder's output watcher applies complete updates.
 
+Builds coordinate writes to generated output; source editing remains available.
+Verified exited owners are recovered automatically. When another process owns an
+output lock, diagnostics identify its PID. A persistent rename permission/sharing
+failure is reported after a brief retry, preserving the lock and existing output.
+Resolve the reported filesystem obstruction and retry; do not delete `dist` as a
+lock-recovery step.
+
 ### 4. Build and smoke-test
 
 ```sh

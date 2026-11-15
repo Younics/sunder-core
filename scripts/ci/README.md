@@ -3,6 +3,20 @@
 Use the versions in `global.json` and `eng/toolchains.json` on `PATH`.
 The setup action and `install-node.sh` consume these owners.
 
+Core npm callers share `scripts/npm-command.mjs`. It honors PATH order, supports
+Windows `npm.exe` shims, and invokes an official `npm.cmd` installation through its
+adjacent `npm-cli.js` with the selected Node, without a command shell. An explicit
+`SUNDER_NPM_EXECUTABLE` must be an absolute npm executable or JS entry point; an
+invalid override fails instead of selecting another installation.
+
+Core Python/shell-fixture callers share `scripts/ci/bash_runtime.py`. On Windows
+it locates and validates Git Bash rather than launching System32's WSL shim. Set
+`SUNDER_BASH_EXECUTABLE` to an absolute native Bash path to select another install.
+The launcher disables profiles and passes the binding to nested processes. It
+preserves the original Windows Unicode environment's variable casing for Bash,
+rather than forwarding Python's uppercased `os.environ` keys. It does not install
+tools; Python and native Bash must already be available.
+
 ```sh
 python3 -B scripts/ci/core_ci.py portable --scope sdk --list
 python3 -B scripts/ci/core_ci.py portable --scope sdk
@@ -35,6 +49,21 @@ All rows share one six-runner budget and independent checkouts.
 `main` owns that component's other projects and App/Windows side scenarios. Partition reports
 have distinct paths and artifact suffixes; the aggregate requires all of them and
 rechecks their actual TRX selections. Omitting `--partition` runs the full local lane.
+
+Linux Host `main` (or an unpartitioned Host-containing scope) requires `dbus-daemon`,
+`gnome-keyring-daemon`, `secret-tool` and `gdbus`. Hosted Linux Host jobs install
+`dbus gnome-keyring libsecret-tools libglib2.0-bin`. The runner creates a private bus,
+unlocked test-only keyring and private XDG directories; it never reuses a desktop
+bus or keyring control socket. Daemons are reaped and disposable keyring state is
+removed after execution; startup diagnostics remain beside the partition's reports.
+Missing tools or startup failures stop qualification, not skip it. Ordinary filtered
+local tests keep the explicit keystore opt-in. Native evidence rejects skipped
+Linux Secret Service/macOS Keychain integration even if an opt-in flag was omitted.
+
+Linux App `main` uses a private D-Bus session and Xvfb display for real WebKitGTK
+capture tests. Hosted runners install GTK 3, WebKitGTK 4.1, libsoup 3, Xvfb/xauth
+and fonts. Tests assert the production factory selects GTK even if WPE is present;
+there is no missing-display/browser success skip or desktop screenshot fallback.
 
 Interop preparation publishes `SUNDER_NODE_MODULE_WORKSPACE_PATH` together with the
 archive and current-RID leaf. Node caller compilation resolves its SDK, fixture and

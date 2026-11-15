@@ -58,7 +58,7 @@ internal static class AppSessionLog
         // file I/O. The bounded queue is best-effort; terminal evidence is also
         // included in the watchdog's fail-fast message.
         EnsureProcessorStarted();
-        Entries.TryWrite(AppSessionLogEntry.Write(PackageLogLevel.Information, message, exception: null));
+        Entries.TryWrite(AppSessionLogEntry.Write(PackageLogLevel.Information, message, exceptionText: null));
     }
 
     public static async Task FlushAsync(CancellationToken cancellationToken = default)
@@ -75,9 +75,12 @@ internal static class AppSessionLog
         DeveloperLogEntryScope developerLogScope,
         string? developerLogSource)
     {
-        Trace.WriteLine(exception is null ? message : $"{message}{Environment.NewLine}{exception}");
+        // Exception stacks and custom fields can root a collectible package.
+        // Preserve their diagnostics, not their live object graph, in both logs.
+        var exceptionText = exception?.ToString();
+        Trace.WriteLine(exceptionText is null ? message : $"{message}{Environment.NewLine}{exceptionText}");
         EnsureProcessorStarted();
-        Entries.TryWrite(AppSessionLogEntry.Write(level, message, exception));
+        Entries.TryWrite(AppSessionLogEntry.Write(level, message, exceptionText));
         if (!visibleInDeveloperLog)
         {
             return;
@@ -89,7 +92,7 @@ internal static class AppSessionLog
             developerLogScope,
             string.IsNullOrWhiteSpace(developerLogSource) ? "application" : developerLogSource.Trim(),
             message,
-            exception);
+            exceptionText);
         lock (RecentEntriesGate)
         {
             snapshotEntry = snapshotEntry with { SequenceId = ++_sequence };
@@ -120,9 +123,9 @@ internal static class AppSessionLog
 
                 Directory.CreateDirectory(LogRootPath);
                 var line = $"{DateTimeOffset.Now:O} level={entry.Level} {entry.Message}";
-                if (entry.Exception is not null)
+                if (entry.ExceptionText is not null)
                 {
-                    line += $"{Environment.NewLine}{entry.Exception}";
+                    line += $"{Environment.NewLine}{entry.ExceptionText}";
                 }
 
                 await File.AppendAllTextAsync(SessionLogPath, line + Environment.NewLine).ConfigureAwait(false);
@@ -139,17 +142,17 @@ internal static class AppSessionLog
 internal sealed record AppSessionLogEntry(
     PackageLogLevel Level,
     string Message,
-    Exception? Exception,
+    string? ExceptionText,
     TaskCompletionSource? FlushCompletion)
 {
-    public static AppSessionLogEntry Write(PackageLogLevel level, string message, Exception? exception)
-        => new(level, message, exception, FlushCompletion: null);
+    public static AppSessionLogEntry Write(PackageLogLevel level, string message, string? exceptionText)
+        => new(level, message, exceptionText, FlushCompletion: null);
 
     public static AppSessionLogEntry Dropped(long count)
         => Write(PackageLogLevel.Warning, $"Dropped {count} file log entr{(count == 1 ? "y" : "ies")} because the log queue was full.", null);
 
     public static AppSessionLogEntry Flush(TaskCompletionSource completion)
-        => new(PackageLogLevel.Information, string.Empty, Exception: null, completion);
+        => new(PackageLogLevel.Information, string.Empty, ExceptionText: null, completion);
 }
 
 internal sealed record AppSessionLogSnapshotEntry(
@@ -158,7 +161,7 @@ internal sealed record AppSessionLogSnapshotEntry(
     DeveloperLogEntryScope Scope,
     string Source,
     string Message,
-    Exception? Exception)
+    string? ExceptionText)
 {
     internal long SequenceId { get; init; }
 }

@@ -11,10 +11,12 @@ public sealed partial class PackageTemplateTests
 {
     [ExternalArtifactFact("SUNDER_REQUIRE_SDK_CORPUS", "SUNDER_COMPATIBILITY_CONTEXT")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public Task RetainedTypeScriptBuildsWithSelectedCandidateTools() => RunNodeCorpusAsync("node-ts-source-v1", ".ts");
 
     [ExternalArtifactFact("SUNDER_REQUIRE_SDK_CORPUS", "SUNDER_COMPATIBILITY_CONTEXT")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public Task RetainedCheckedJavaScriptBuildsWithSelectedCandidateTools() => RunNodeCorpusAsync("node-checked-js-source-v1", ".js");
 
     private static async Task RunNodeCorpusAsync(string profile, string extension)

@@ -1355,14 +1355,6 @@ internal static partial class SunderRpcAuthoringDocuments
         hash.AppendData(bytes);
     }
 
-    private static byte[] NormalizedSourceBytes(string text)
-    {
-        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n')
-            .TrimEnd('\n') + "\n";
-        return Utf8NoBom.GetBytes(normalized);
-    }
-
     private static string LowerSha256(ReadOnlySpan<byte> bytes)
         => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 

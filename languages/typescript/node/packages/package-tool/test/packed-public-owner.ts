@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -10,6 +10,8 @@ import type { JsonValue } from "@younics/sunder-sdk";
 import { currentRid } from "../src/model";
 import { exerciseOwnedWorker } from "./owned-rpc-worker";
 import { liveCatalogWatch } from "./service-fixtures";
+import { execNpm } from "./npm-process";
+import { disposePackedProject } from "./packed-service-tools";
 
 const exec = promisify(execFile);
 type Use = {role:string;contractId:string;contractVersion:string;required:boolean;actions:string[]};
@@ -22,11 +24,11 @@ export async function exercisePackedPublicOwner(archives: readonly string[], cre
     const root = await mkdtemp(resolve(tmpdir(), "sunder-packed-public-owner-")); const name = `Public ${language}`;
     try {
       await exec(process.execPath, [creator, root, "--preset", "react-node", "--language", language, "--package-id", `packed.public.${language}`, "--package-name", name]);
-      await exec("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], {cwd:root});
+      await execNpm(["install", "--ignore-scripts", "--no-audit", "--no-fund", ...archives], {cwd:root});
       const fromProject = createRequire(resolve(root, "package.json"));
       const tool = resolve(root, "node_modules/@younics/sunder-package-tool/dist/cli.js");
       const run = (...args:string[]) => exec(process.execPath, [tool, ...args, "--project", root], {maxBuffer:4_194_304});
-      const typecheck = () => exec("npm", ["run", "typecheck"], {cwd:root,maxBuffer:4_194_304});
+      const typecheck = () => execNpm(["run", "typecheck"], {cwd:root,maxBuffer:4_194_304});
       const appPath = resolve(root, `app/src/App.${language === "ts" ? "tsx" : "jsx"}`); const appSource = await readFile(appPath);
       const sourcePath = resolve(root, `src/services.${language}`); const source = await readFile(sourcePath, "utf8");
       assert.doesNotMatch(source, /appUse|runtimeUse/);
@@ -104,6 +106,6 @@ globalThis.teardown=()=>{root.unmount();context.dispose();};
       await writeFile(sourcePath, publicSource.replace('exposure: "public",','exposure: "public", appUse: {actions:["discover"]},'));
       await assert.rejects(run(...packageArgs), /match|source|leaf/i);
       assert.deepEqual(await readFile(archivePath),archive); assert.deepEqual(await readFile(baselinePath),frozen);
-    } finally { await rm(root, {recursive:true,force:true}); }
+    } finally { await disposePackedProject(root); }
   }
 }
