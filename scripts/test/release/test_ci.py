@@ -88,6 +88,54 @@ class CiMetadataTests(unittest.TestCase):
             self.assertNotIn("SUNDER_TEST_LOCAL_INPUT", os.environ)
         self.assertFalse(work[0].exists())
 
+    def test_template_sdk_resolution_and_restore_share_discoverable_candidate_feed_and_cache(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            work, feed, output = root / "consumers", root / "feed", root / "packages"
+            for path in (work, feed, output, root / "eng/test-oracles", root / "eng/platform-contracts"):
+                path.mkdir(parents=True, exist_ok=True)
+            variants = {"dotnet": [{"name": "headless", "options": [], "platformContract": "sample.contract"}], "node": []}
+            (root / "eng/test-oracles/template-smoke.json").write_text(json.dumps(variants))
+            (root / "eng/platform-contracts/sunder-contracts.owned.json").write_text(json.dumps({
+                "contracts": {"sample.contract": {"current": {"catalogRelease": {"releaseVersion": "1.1.0"}}}}}))
+            names = ["Sunder.Package.Templates", "@younics/sunder-sdk", "@younics/create-sunder-package"]
+            (feed / "test-feed.json").write_text(json.dumps({"packages": [{"name": name, "archive": str(index)} for index, name in enumerate(names)]}))
+            for index in range(len(names)):
+                (feed / str(index)).write_bytes(b"retained candidate")
+            evaluations = []
+
+            def run(*args, **kwargs):
+                if "export" in args:
+                    Path(args[args.index("--output") + 1]).write_text("catalog")
+                if args[:3] == ("dotnet", "new", "sunder-package"):
+                    sample = Path(args[args.index("--output") + 1])
+                    sample.mkdir()
+                    (sample / "Smoke.headless.csproj").write_text('<Project Sdk="Sunder.Package.Build/1.1.0"/>')
+                if args[:2] not in (("dotnet", "restore"), ("dotnet", "build"), ("dotnet", "msbuild")):
+                    return
+                path = Path(args[2])
+                self.assertEqual(path.parent, kwargs.get("cwd"))
+                environment = kwargs["env"]
+                self.assertEqual(str(work / "template-cli-home"), environment["DOTNET_CLI_HOME"])
+                self.assertEqual(str(work / "template-packages"), environment["NUGET_PACKAGES"])
+                config = work / "NuGet.Config"
+                document = core_ci.ET.parse(config)
+                self.assertEqual(str(feed), document.find("./packageSources/add[@key='candidate']").get("value"))
+                self.assertEqual("Sunder.*", document.find("./packageSourceMapping/packageSource[@key='candidate']/package").get("pattern"))
+                if args[1] == "restore":
+                    self.assertEqual(str(config), str(args[args.index("--configfile") + 1]))
+                evaluations.append(args)
+                if "-t:PackSunderPackage" in args:
+                    (path.parent / "smoke.headless.1.0.0.sunderpkg").write_bytes(b"validated output")
+                if kwargs.get("capture"):
+                    return str(path.parent)
+
+            with patch.object(core_ci, "ROOT", root), patch.object(core_ci, "target", side_effect=lambda name: root / (name + ".dll")), \
+                    patch.object(core_ci, "run", side_effect=run), patch.dict(os.environ, {}, clear=True):
+                result = core_ci.templates(work, feed, output)
+            self.assertEqual(5, len(evaluations))  # restore, platform import, build, pack, evaluated output
+            self.assertEqual(str(work / "dotnet-template-headless/sunder-dev"), result["SUNDER_DOTNET_TEMPLATE_DEV_PATH"])
+
     def test_batched_python_results_keep_failures_subtests_and_skips_per_method(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

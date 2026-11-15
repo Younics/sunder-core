@@ -36,8 +36,8 @@ def project(name):
     return matches[0]
 
 
-def property_value(path, name):
-    return run("dotnet", "msbuild", path, "-p:Configuration=Release", "-getProperty:" + name, capture=True)
+def property_value(path, name, *, env=None, cwd=ROOT):
+    return run("dotnet", "msbuild", path, "-p:Configuration=Release", "-getProperty:" + name, capture=True, env=env, cwd=cwd)
 
 
 def target(name):
@@ -166,7 +166,9 @@ def templates(work, feed=None, package_output=None):
     mappings = ET.SubElement(config, "packageSourceMapping"); ET.SubElement(mappings, "clear")
     ET.SubElement(ET.SubElement(mappings, "packageSource", key="candidate"), "package", pattern="Sunder.*")
     ET.SubElement(ET.SubElement(mappings, "packageSource", key="nuget.org"), "package", pattern="*")
-    config_path = work / "template.nuget.config"
+    # MSBuild SDK resolution precedes restore's --configfile handling. Its feed
+    # must be discoverable from each consumer, including later property queries.
+    config_path = work / "NuGet.Config"
     ET.ElementTree(config).write(config_path, encoding="utf-8", xml_declaration=True)
     cli = target("Sunder.Cli")
     host_inputs = {}
@@ -176,13 +178,13 @@ def templates(work, feed=None, package_output=None):
         run("dotnet", "new", "sunder-package", "--name", "Smoke." + name, "--packageId", "smoke." + name.replace("-", ""),
             "--packageName", "Smoke " + name, "--output", sample, *variant["options"], env=env)
         path = one(sample.glob("*.csproj"))
-        run("dotnet", "restore", path, "--configfile", config_path, env=env)
+        run("dotnet", "restore", path, "--configfile", config_path, env=env, cwd=sample)
         if variant.get("platformContract"):
             run("dotnet", "msbuild", path, "-t:ImplementSunderPlatformApi", "-p:SunderContractId=" + variant["platformContract"],
-                "-p:SunderPlatformCatalogPath=" + str(catalog), env=env)
-        run("dotnet", "build", path, "-c", "Release", "--no-restore", env=env)
-        run("dotnet", "msbuild", path, "-t:PackSunderPackage", "-p:Configuration=Release", env=env)
-        output = Path(property_value(path, "TargetDir"))
+                "-p:SunderPlatformCatalogPath=" + str(catalog), env=env, cwd=sample)
+        run("dotnet", "build", path, "-c", "Release", "--no-restore", env=env, cwd=sample)
+        run("dotnet", "msbuild", path, "-t:PackSunderPackage", "-p:Configuration=Release", env=env, cwd=sample)
+        output = Path(property_value(path, "TargetDir", env=env, cwd=sample))
         run("dotnet", cli, "dev", "package", "validate", one(output.glob("*.sunderpkg")))
         if name == "headless": host_inputs["SUNDER_DOTNET_TEMPLATE_DEV_PATH"] = str(output / "sunder-dev")
     bootstrap = work / "node-template-bootstrap"
