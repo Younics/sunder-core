@@ -400,11 +400,14 @@ public sealed class RuntimeWatchAndStreamOwnershipTests
             },
             (id, _) => { discarded.Enqueue(id); return Task.FromResult(true); },
             events, NullLogger<DevPackageWatchService>.Instance,
-            (delay, token) =>
+            async (delay, token) =>
             {
-                if (delay != DevPackageWatchService.DebounceDelay) return Task.CompletedTask;
+                if (delay != DevPackageWatchService.DebounceDelay) return;
                 debounces.Enqueue(token);
-                return releaseDebounce.Task.WaitAsync(token);
+                await releaseDebounce.Task.WaitAsync(token);
+                // The barrier holds the write burst, not every future timer open.
+                // Late native events must still start their own cancelable debounce.
+                await Task.Delay(delay, token);
             });
         try
         {
