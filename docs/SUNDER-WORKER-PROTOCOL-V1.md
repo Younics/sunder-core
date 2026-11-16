@@ -133,6 +133,14 @@ cleanup: Worker code must not call `setsid` or move itself or descendants to ano
 detachment of its recorded guardian or payload and retains the process-tree lease, but portable Unix process groups
 cannot prove containment of an arbitrary descendant after it detaches.
 
+On Windows, the Host drains each guardian's synchronous redirected stdout/stderr
+pipes on two owned readers, not shared ThreadPool workers. Reads are 4 KiB, with
+4-KiB pause / 2-KiB resume backpressure thresholds; idle Workers cannot occupy Runtime's shared dispatch
+threads merely by leaving an output pipe open. Consumer cancellation does not
+acknowledge native-read settlement: containment disposal awaits the actual readers.
+This does not change framing, protocol limits, process containment or App supervision
+deadlines.
+
 ## Immutable Contributions
 
 `worker.ready` contains one closed contribution catalog:

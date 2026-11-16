@@ -22,7 +22,7 @@ using Xunit;
 namespace Sunder.App.Integration.Tests;
 
 [Collection("App/Runtime integration")]
-public sealed class GeneratedAppProcessPolicyTests(GeneratedOwnedRpcPackageFixture packageFixture) : IClassFixture<GeneratedOwnedRpcPackageFixture>
+public sealed partial class GeneratedAppProcessPolicyTests(GeneratedOwnedRpcPackageFixture packageFixture) : IClassFixture<GeneratedOwnedRpcPackageFixture>
 {
     [Theory]
     [Trait("Capability", "Process")]

@@ -356,6 +356,8 @@ type public sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsT
   attribute Microsoft.Build.Framework.OutputAttribute
   property Microsoft.Build.Framework.ITaskItem[] CompileItems { public get; private set; }
   attribute Microsoft.Build.Framework.OutputAttribute
+  property Microsoft.Build.Framework.ITaskItem[] CompilerProjectImports { public get; private set; }
+  attribute Microsoft.Build.Framework.OutputAttribute
   property Microsoft.Build.Framework.ITaskItem[] ContractBundles { public get; private set; }
   property Microsoft.Build.Framework.ITaskItem[] EvaluatedGeneratorProperties { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] EvaluatedResources { public get; public set; }
@@ -363,6 +365,7 @@ type public sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsT
   property Microsoft.Build.Framework.ITaskItem[] ExcludedGenerators { public get; private set; }
   attribute Microsoft.Build.Framework.OutputAttribute
   property Microsoft.Build.Framework.ITaskItem[] ExcludedProjectReferences { public get; private set; }
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { public get; public set; }
   attribute Microsoft.Build.Framework.OutputAttribute
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { public get; private set; }
   attribute Microsoft.Build.Framework.OutputAttribute
@@ -401,9 +404,10 @@ type public sealed class Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsT
   property System.String RuntimeIdentifier { public get; public set; }
   property System.String TargetFramework { public get; public set; }
   method public override System.Boolean Execute()
-type public sealed class Sunder.Package.Build.Tasks.RestoreSunderContractsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
+type public sealed class Sunder.Package.Build.Tasks.RestoreSunderContractsTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ICancelableTask, Microsoft.Build.Framework.ITask
   method public .ctor()
   property System.Boolean AllowDevelopmentRegistryOrigin { public get; public set; }
+  property System.Boolean OnlyMissing { public get; public set; }
   property System.Boolean VerifyOnly { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] CandidateArchives { public get; public set; }
   property System.String ContractCacheRoot { public get; public set; }
@@ -411,6 +415,7 @@ type public sealed class Sunder.Package.Build.Tasks.RestoreSunderContractsTask :
   property System.String PlatformCatalogPath { public get; public set; }
   attribute Microsoft.Build.Framework.RequiredAttribute
   property System.String ProjectDirectory { public get; public set; }
+  method public final virtual System.Void Cancel()
   method public override System.Boolean Execute()
 type public sealed class Sunder.Package.Build.Tasks.ValidateSunderDevOutputPathTask : Microsoft.Build.Utilities.Task, Microsoft.Build.Framework.ITask
   method public .ctor()

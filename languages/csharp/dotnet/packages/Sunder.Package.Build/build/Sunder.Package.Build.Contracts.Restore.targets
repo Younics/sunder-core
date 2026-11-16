@@ -1,0 +1,17 @@
+<Project>
+  <!-- Join each canonical project's ordinary restore graph, including solution
+       restore. Compile/Build/Pack and design-time evaluation never acquire APIs.
+       The SDK entry point makes this import available on a cold NuGet cache. -->
+  <Target Name="_RestoreSunderContractsForNuGet" BeforeTargets="_GenerateRestoreGraphProjectEntry"
+          DependsOnTargets="_PrepareSunderPackageBuildTasks"
+          Condition="'$(MSBuildIsRestoring)' == 'true' and '$(SunderRestoreContracts)' != 'false' and '$(_SunderRpcHasAuthoringInputs)' == 'true' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(SunderPackageCompilationRole)' == '' and '$(SunderPackageInnerBuild)' != 'true' and '$(SunderRpcProjectExportBuild)' != 'true' and '$(_SunderRpcProjectImportEnabled)' != 'true' and '$(SunderPackageUsePrebuiltLeaves)' != 'true' and '$(SunderPackageProject)' != 'false'">
+    <ItemGroup>
+      <_SunderAutomaticContractCandidate Remove="@(_SunderAutomaticContractCandidate)" />
+      <_SunderAutomaticContractCandidate Include="$(SunderPackageCandidatePath)" Condition="'$(SunderPackageCandidatePath)' != ''" />
+    </ItemGroup>
+    <RestoreSunderContractsTask ProjectDirectory="$(MSBuildProjectDirectory)" ContractLockPath="$(SunderContractLockPath)"
+                               AllowDevelopmentRegistryOrigin="$(SunderAllowDevelopmentRegistryOrigin)"
+                               ContractCacheRoot="$(SunderContractCacheRoot)" OnlyMissing="true"
+                               CandidateArchives="@(_SunderAutomaticContractCandidate)" PlatformCatalogPath="$(SunderPlatformCatalogPath)" />
+  </Target>
+</Project>

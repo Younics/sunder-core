@@ -1,3 +1,4 @@
+using Sunder.Core.TestSupport;
 using Sunder.Runtime.Host.Infrastructure.Storage;
 using Sunder.Sdk.Storage;
 using Xunit;
@@ -77,24 +78,24 @@ public sealed class PackageStorageContractTests
     }
 
     [Fact]
-    public async Task LocalFileStore_RejectsNonPortablePathsAndSymbolicLinkTraversal()
+    public async Task LocalFileStore_RejectsNonPortablePaths()
     {
         var root = CreateTempDirectory();
-        var outside = CreateTempDirectory();
         var store = new LocalPackageFileStore(root);
 
         await Assert.ThrowsAsync<ArgumentException>(() => store.WriteAsync("folder\\file.bin", new byte[] { 1 }));
         await Assert.ThrowsAsync<ArgumentException>(() => store.WriteAsync("CON", new byte[] { 1 }));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(root));
+    }
 
+    [SymbolicLinkFact(directory: true)]
+    public void LocalFileStore_RejectsSymbolicLinkTraversal()
+    {
+        var root = CreateTempDirectory();
+        var outside = CreateTempDirectory();
+        var store = new LocalPackageFileStore(root);
         var linkPath = Path.Combine(root, "link");
-        try
-        {
-            Directory.CreateSymbolicLink(linkPath, outside);
-        }
-        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(linkPath, outside);
 
         var exception = Assert.Throws<ArgumentException>(() => store.ResolvePath("link/file.bin"));
         Assert.Contains("symbolic links", exception.Message, StringComparison.Ordinal);

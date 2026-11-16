@@ -476,7 +476,8 @@ internal sealed partial class PackageSessionLifecycleService
 
     internal static string DescribeWorkerStartupFailure(Exception exception, string fallback)
         // Only Host-authored, bounded diagnostics are safe to return to the App.
-        => exception is ExecutionRuntimeGuardianLaunchException ? exception.Message : fallback;
+        => exception is ExecutionRuntimeGuardianLaunchException or PackageStorageSnapshotException
+            ? exception.Message : fallback;
 
     private static async Task AddDevOverlayAsync(
         PackageSessionSourceSnapshot sources,

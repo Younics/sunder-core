@@ -559,7 +559,7 @@ public sealed class ExecutionRuntimeArtifactDownloaderTests
         private static async Task WriteZipEntryAsync(ZipArchive zip, string name, byte[] bytes)
         {
             var entry = zip.CreateEntry(name, CompressionLevel.NoCompression);
-            entry.LastWriteTime = DateTimeOffset.UnixEpoch;
+            entry.LastWriteTime = new DateTimeOffset(1980, 1, 1, 0, 0, 0, TimeSpan.Zero);
             await using var output = entry.Open();
             await output.WriteAsync(bytes);
         }

@@ -67,6 +67,8 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
     public ITaskItem[] EvaluatedResources { get; set; } = [];
     public bool ValidateResourceEvaluation { get; set; }
     public ITaskItem[] EvaluatedGeneratorProperties { get; set; } = [];
+    public ITaskItem[] ProjectImports { get; set; } = [];
+    [Output] public ITaskItem[] CompilerProjectImports { get; private set; } = [];
 
     /// <summary>Gets the validated role-local compilation inputs.</summary>
     [Output]
@@ -90,6 +92,7 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
         ProjectAssetsFile = string.Empty; ProjectExtensionsPath = string.Empty;
         CompileAssetPaths = []; RuntimeAssetPaths = []; ExcludedProjectReferences = [];
         ResourceItems = []; ExcludedGenerators = [];
+        CompilerProjectImports = [];
         try
         {
             using var reads = new SunderBuildReadSnapshot();
@@ -190,10 +193,28 @@ public sealed partial class ReadSunderPackageRoleInputsTask : Microsoft.Build.Ut
                 if (ProjectAssetsFile.Length != 0) ProjectAssetsFile = RemapPath(ProjectAssetsFile);
                 if (ProjectExtensionsPath.Length != 0) ProjectExtensionsPath = RemapPath(ProjectExtensionsPath);
             }
+            // MSBuild's native timestamp/copy APIs still observe MAX_PATH when
+            // Windows long-path policy is disabled. Keep SDK wildcard-import
+            // directories ordinary; only pass explicit native file paths to the
+            // compiler and copy targets, after validating the unchanged snapshots.
+            if (OperatingSystem.IsWindows())
+            {
+                CompileItems = CompileItems.Select(NativeItem).ToArray();
+                ResourceItems = ResourceItems.Select(NativeItem).ToArray();
+                CompilerProjectImports = ProjectImports.Select(NativeItem).ToArray();
+            }
+            else CompilerProjectImports = ProjectImports;
             return true;
 
             string RemapPath(string value) => Path.Combine(compilationRoot, Path.GetRelativePath(root, value));
             ITaskItem Remap(ITaskItem value) => new TaskItem(value) { ItemSpec = RemapPath(value.ItemSpec) };
+            ITaskItem NativeItem(ITaskItem value) => new TaskItem(value) { ItemSpec = NativePath(value.ItemSpec) };
+            static string NativePath(string value)
+            {
+                var full = Path.GetFullPath(value);
+                if (full.Length < 260 || full.StartsWith(@"\\?\", StringComparison.Ordinal)) return full;
+                return full.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + full[2..] : @"\\?\" + full;
+            }
         }
         catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or JsonException or KeyNotFoundException or FormatException)
         {

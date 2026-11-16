@@ -29,7 +29,7 @@ internal static class PackageOutputLockFixture
         }
         var processStartedAtValue = processStartedAt.ToUniversalTime().ToString("O");
         var processMarkerToken = Guid.NewGuid().ToString("D");
-        var sunderHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sunder");
+        var sunderHome = Path.Combine(GeneratedOutputUserProfile.Home, ".sunder");
         var generatedOutput = Path.Combine(sunderHome, "generated-output");
         var processMarkerRoot = Path.Combine(generatedOutput, "processes");
         if (OperatingSystem.IsWindows()) Directory.CreateDirectory(processMarkerRoot);

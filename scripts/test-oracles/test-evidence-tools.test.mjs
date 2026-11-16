@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
@@ -40,11 +40,37 @@ test("OS eligibility follows conditional attributes and every lane has a compati
   validateLaneReachability(tests);
   assert.throws(() => validateLaneReachability([{ ...tests[2], primaryLane: "dotnet-linux" }]), /unreachable/u);
   const model = loadCoreTestModel();
+  for (const [id, systems] of [
+    ["Sunder.Runtime.Host.Tests.PackageStorageServicesTests.WindowsDataProtection_CurrentUserRoundTripsWhenRunningOnWindows", ["Windows"]],
+    ["Sunder.ExecutionRuntime.Build.Tests.PlatformContractSourceOperationsTests.RecursiveSourcePolicy_HiddenAttributeAloneDoesNotExcludeOrdinarySource", ["Windows", "MacOS"]],
+    ["Sunder.ExecutionRuntime.Build.Tests.PlatformContractSourceOperationsTests.Payload_RejectsCaseAliasedLanguageTreesBeforeAnySourceWrite", ["Windows", "MacOS"]],
+  ]) {
+    const declaration = model.declarations.find(test => test.id === id);
+    assert.equal(declaration?.primaryLane, "host-platform", id);
+    assert.deepEqual(declaration.operatingSystems, systems, id);
+  }
   for (const scope of Object.keys(policy.scopes)) validateLaneReachability(scopeModel(model, scope).declarations);
 });
 
 test("native method partitions cover each scoped OS exactly once and distribute partial classes", () => {
   const all = loadCoreTestModel();
+  const required = all.declarations.filter(test => test.requiredInNativeQualification);
+  const links = required.filter(test => test.nativePrerequisite === "symbolic-link");
+  assert.deepEqual(required.filter(test => test.nativePrerequisite === "external-keystore").map(test => test.id).sort(), [
+    "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.LinuxSecretService_OptInIntegration_StoreLoadDelete",
+    "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.MacOsKeychain_OptInIntegration_AddUpdateLoadDelete",
+  ]);
+  assert.ok(new Set(links.map(test => test.id)).isSupersetOf(new Set(policy.expectedSkips
+    .filter(skip => skip.declarationId && skip.runnerReasonPattern?.includes("symbolic-link creation privilege"))
+    .map(skip => skip.declarationId))));
+  for (const os of ["Windows", "Linux", "MacOS"]) {
+    const selected = nativePartitionNames(all).flatMap(name => selectNativePartition(all, name, os));
+    for (const test of required) {
+      assert.equal(test.primaryLane, "host-platform", test.id);
+      assert.equal(selected.filter(selectedTest => selectedTest.id === test.id).length,
+        test.operatingSystems.includes(os) ? 1 : 0, test.id);
+    }
+  }
   for (const scope of ["all", "sdk", "dotnet", "npm", "app", "repository", "host"]) {
     const model = scopeModel(all, scope);
     const names = nativePartitionNames(model);
@@ -87,7 +113,26 @@ test("native method partitions cover each scoped OS exactly once and distribute 
   assert.match(mixed.stderr, /Select a native partition/u);
 });
 
-test("CI scenarios discover added cases and reject missing owners without workflow test lists", () => {
+test("test bodies cannot turn unsupported platforms or missing capabilities into passing cases", () => {
+  for (const body of [
+    "if (OperatingSystem.IsWindows()) return;",
+    'if (OperatingSystem.IsWindows() && kind == "symbolic") { return; }',
+    "try { Setup(); } catch (IOException) { return; }",
+    "try { Setup(); } catch (Exception error) when (error is UnauthorizedAccessException or IOException) { return; }",
+  ]) {
+    assert.throws(() => discoverDotnetTests(fixtureSource,
+      `namespace Example.Tests; public class Security { [Fact] public void Case() { ${body} Assert.True(false); } }`, policy), /silently return/u);
+  }
+  assert.equal(discoverDotnetTests(fixtureSource, `namespace Example.Tests; public class Security {
+    [WindowsFact] public void Case() {
+      var fixture = "if (OperatingSystem.IsWindows()) return;";
+      // if (OperatingSystem.IsWindows()) return;
+      Assert.True(fixture.Length > 0);
+    }
+  }`, policy).length, 1);
+});
+
+test("CI scenarios discover added cases and reject missing owners without workflow test lists", async () => {
   const { declarations } = loadCoreTestModel();
   const official = selectScenario("official", declarations, "Linux");
   assert.ok(official.tests.some(test => test.id.endsWith("WorkerSdkPackagedExecutable_ExactArchiveInstallsThroughRuntimeHostAndRecordsReleaseEvidence")));
@@ -99,6 +144,70 @@ test("CI scenarios discover added cases and reject missing owners without workfl
   for (const name of ["ExecutesExactNativeContractAcrossNavigation", "RejectsSeededNonceOwnershipMutation"]) {
     assert.ok(interop.tests.some(test => test.id.endsWith(name)));
   }
+  const family = selectScenario("agent-family", declarations, "Windows");
+  assert.deepEqual(family.projectOrder, ["Sunder.Runtime.Host.Tests", "Sunder.App.Integration.Tests"]);
+  assert.equal(family.environment.SUNDER_REQUIRE_MAKER_STANDALONE, "1");
+  const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
+  const preview = spawnSync(process.execPath, [runner, "--scenario", "agent-family", "--list"], { encoding: "utf8" });
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.deepEqual(JSON.parse(preview.stdout).projects.map(project => project.project), family.projectOrder);
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-scenario-order-"));
+  try {
+    const config = resolve(root, "eng/test-oracles/ci-scenarios.json");
+    await mkdir(dirname(config), { recursive: true });
+    const projects = ["Producer", "Consumer"];
+    const tests = projects.map(project => ({ framework: "dotnet", project, id: `${project}.Test`, operatingSystems: ["Windows"] }));
+    for (const projectOrder of [[], ["Producer"], ["Producer", "Producer"], ["Producer", "Unknown"], "Producer,Consumer"]) {
+      await writeFile(config, JSON.stringify({ ordered: { selectors: projects, projectOrder } }));
+      assert.throws(() => selectScenario("ordered", tests, "Windows", root), /projectOrder must name every selected project exactly once/u);
+    }
+    await writeFile(config, JSON.stringify({ ordered: { selectors: projects, projectOrder: projects } }));
+    assert.deepEqual(selectScenario("ordered", tests, "Windows", root).projectOrder, projects);
+    const windowsProducer = [{ ...tests[0], operatingSystems: ["Linux"] }, tests[1]];
+    assert.deepEqual(selectScenario("ordered", windowsProducer, "Windows", root).projectOrder, ["Consumer"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("ordered scenarios execute the Runtime exporter first and stop before consumers when it fails", async () => {
+  const root = await mkdtemp(resolve(tmpdir(), "sunder-scenario-execution-"));
+  try {
+    const log = resolve(root, "started.jsonl");
+    const hook = resolve(root, "ordered process #100%.mjs");
+    const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
+    for (const fail of [false, true]) {
+      await writeFile(log, "");
+      // Stub the owned process boundary, not the scenario selector/runner. Force
+      // the same Windows receipt path on every OS, without launching any .NET.
+      await writeFile(hook, `
+        import childProcess from 'node:child_process';
+        import { syncBuiltinESMExports } from 'node:module';
+        import { EventEmitter } from 'node:events';
+        import { PassThrough } from 'node:stream';
+        import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+        Object.defineProperty(process, 'platform', { value: 'win32' });
+        childProcess.spawn = (command, args) => {
+          const request = JSON.parse(readFileSync(args[args.indexOf('-RequestPath') + 1], 'utf8'));
+          appendFileSync(${JSON.stringify(log)}, JSON.stringify(request) + '\\n');
+          writeFileSync(args[args.indexOf('-ResultPath') + 1], JSON.stringify({
+            ProcessId: 2147483646, Status: ${fail ? 1 : 0}, Error: null, CleanupComplete: true,
+          }));
+          const child = new EventEmitter();
+          child.pid = 2147483646; child.exitCode = 0; child.signalCode = null;
+          child.stdout = new PassThrough(); child.stderr = new PassThrough();
+          process.nextTick(() => { child.emit('exit', 0, null); child.stdout.end(); child.stderr.end(); child.emit('close', 0, null); });
+          return child;
+        };
+        syncBuiltinESMExports();
+      `);
+      const result = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner, "--scenario", "agent-family",
+        "--results-directory", resolve(root, fail ? "failed" : "passed")], { cwd: repositoryRoot, encoding: "utf8" });
+      assert.equal(result.status, fail ? 1 : 0, result.stdout + result.stderr);
+      const requests = (await readFile(log, "utf8")).trim().split("\n").map(line => JSON.parse(line));
+      assert.deepEqual(requests.map(request => request.args[1].split("/").at(-1)), fail
+        ? ["Sunder.Runtime.Host.Tests.csproj"] : ["Sunder.Runtime.Host.Tests.csproj", "Sunder.App.Integration.Tests.csproj"]);
+      if (fail) assert.match(result.stderr, /Stopping ordered scenario 'agent-family'.*dependent consumers were not started/u);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("component scopes partition the full inventory and cannot hide missing owned lanes", () => {
@@ -210,6 +319,7 @@ test("C# inventory follows namespace and nested partial type scopes while retain
         }
         public partial class Cases {
           [ExternalArtifactTheory("SUNDER_REQUIRE_NODE_MODULE_INTEROP", "SUNDER_NODE_MODULE_PACKAGE_PATH", "SUNDER_NODE_MODULE_LEAF_PATH")]
+          [Trait("Prerequisite", "Node")]
           [InlineData("case")]
           public Task CrossLanguageRelease() => Task.CompletedTask;
           [Fact, Xunit.TraitAttribute("Category", "Release")]
@@ -255,6 +365,25 @@ test("C# inventory follows namespace and nested partial type scopes while retain
     public partial class Cases { [Fact] public void InAnotherFile() { } }
   `, policy);
   assert.equal(secondPart[0].id, "Example.Outer.Inner.Cases.InAnotherFile");
+});
+
+test("Node prerequisites are explicit rather than inferred from test names or fixture strings", () => {
+  const declarations = discoverDotnetTests(fixtureSource, `
+    namespace Example.Tests;
+    public class Cases {
+      [Fact, Trait("Prerequisite", "Node")] public void ExecutesJavaScript() { }
+      [Fact] public void CrossLanguageCorpusInterop() { }
+      [Fact, InlineData("Trait(\\\"Prerequisite\\\", \\\"Node\\\")")] public void DataOnly() { }
+    }
+  `, policy);
+  assert.deepEqual(declarations.map(test => test.externalPrerequisites.some(item => item.name === "node")), [true, false, false]);
+  assert.throws(() => discoverDotnetTests(fixtureSource, `namespace Example.Tests;
+    public class Cases { [Fact, Trait("Prerequisite", "Ndoe")] public void Invalid() { } }`, policy), /Unknown .NET test prerequisite/u);
+  const model = loadCoreTestModel();
+  const app = model.declarations.find(test => test.id === "Sunder.App.Tests.AppWebDevelopmentScriptTests.FixedDocumentScriptsBoundAndRedactInspectionAndRejectStaleOrProtectedInput");
+  assert.ok(app.externalPrerequisites.some(item => item.name === "node" && item.minimumMajorVersion === 24));
+  const corpus = model.declarations.find(test => test.id === "Sunder.Sdk.Worker.Tests.WorkerFramingTests.Reader_ExecutesSharedCrossLanguageTransportVectors");
+  assert.ok(!corpus.externalPrerequisites.some(item => item.name === "node"));
 });
 
 test("project-scoped test selection excludes process cases from the fast lane and keeps them in full validation", async () => {
@@ -424,9 +553,11 @@ test("script reporters isolate Actions command files and retain failed fixture e
     const scripts = resolve(root, "scripts/test-oracles");
     await mkdir(scripts, { recursive: true });
     for (const name of ["run-node-tests-with-results.mjs", "run-release-fixtures-with-results.mjs",
-      "run-python-fixture.py", "test-process-environment.mjs"]) {
+      "run-python-fixture.py", "test-process-environment.mjs", "test-lane-prerequisites.mjs"]) {
       await writeFile(resolve(scripts, name), await readFile(resolve(repositoryRoot, "scripts/test-oracles", name)));
     }
+    await mkdir(resolve(root, "scripts/ci"));
+    await writeFile(resolve(root, "scripts/ci/bash_runtime.py"), await readFile(resolve(repositoryRoot, "scripts/ci/bash_runtime.py")));
     const declarations = [
       { framework: "python", source: "fixture.py", name: "test_environment", runnerSelector: "ReporterFixture.test_environment" },
       { framework: "shell", source: "fixture.sh", name: "shell environment" },
@@ -487,6 +618,21 @@ fixture("Node environment", () => {
         for (const name of commandFiles) assert.equal(await readFile(env[name], "utf8"), "parent command file\n", `${framework}/${name}`);
       }
     }
+    const output = resolve(root, "missing-prerequisite");
+    await mkdir(output);
+    const previous = resolve(output, "release-fixtures.junit.xml");
+    await writeFile(previous, "retained earlier report");
+    const unavailable = { ...declarations[0], externalPrerequisites: [
+      { kind: "executable", name: process.execPath, minimumVersion: "999.1", requiredWhenSelected: true },
+    ] };
+    await writeFile(resolve(scripts, "core-test-policy.mjs"), `export const loadCoreTestModel = () => (${JSON.stringify({
+      policy: { reports: { releaseFixtures: "release-fixtures.junit.xml" } }, declarations: [unavailable],
+    })});`);
+    const blocked = spawnSync(process.execPath, [resolve(scripts, "run-release-fixtures-with-results.mjs"),
+      "--scope", "repository", "--results-directory", output], { cwd: root, env, encoding: "utf8" });
+    assert.notEqual(blocked.status, 0);
+    assert.match(blocked.stderr, /below required version 999.1/u);
+    assert.equal(await readFile(previous, "utf8"), "retained earlier report");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -520,12 +666,12 @@ test("lane entry includes the IPC publisher regression on every OS and fails clo
   const maker = model.declarations.find((item) => item.externalEnvironment === "SUNDER_REQUIRE_MAKER_STANDALONE");
   assert.equal(maker?.primaryLane, "release-artifact");
   assert.deepEqual(maker.externalPrerequisites.filter((item) => item.kind === "environmentPath").map((item) => [item.name, item.pathKind]),
-    [["SUNDER_MAKER_DEV_PACKAGE", "directory"], ["SUNDER_MAKER_IMPORT_CANDIDATE", "file"], ["SUNDER_MAKER_PLATFORM_CATALOG", "file"]]);
+     [["SUNDER_MAKER_PACKAGE_ARCHIVE", "file"], ["SUNDER_MAKER_IMPORT_CANDIDATE", "file"], ["SUNDER_MAKER_PLATFORM_CATALOG", "file"]]);
   for (const input of maker.externalPrerequisites.filter((item) => item.kind.startsWith("environment"))) delete env[input.name];
   const makerGate = spawnSync(process.execPath, [runner, "--test", maker.id, "--list"], { cwd: repositoryRoot, env, encoding: "utf8" });
   assert.equal(makerGate.status, 2, makerGate.stderr);
   assert.match(makerGate.stderr, /SUNDER_REQUIRE_MAKER_STANDALONE must equal '1' exactly/u);
-  assert.match(makerGate.stderr, /SUNDER_MAKER_DEV_PACKAGE/u);
+  assert.match(makerGate.stderr, /SUNDER_MAKER_PACKAGE_ARCHIVE/u);
   assert.match(makerGate.stderr, /SUNDER_MAKER_IMPORT_CANDIDATE/u);
   assert.match(makerGate.stderr, /SUNDER_MAKER_PLATFORM_CATALOG/u);
   assert.doesNotMatch(makerGate.stdout, /^READY/mu);
@@ -683,7 +829,10 @@ test("selected lane prerequisite gate requires exact selection and every typed i
   const probes = {
     fileProbe: (path) => path === "/fixture/file",
     directoryProbe: (path) => path === "/fixture/directory",
-    executableProbe: () => {
+    executableProbe: (prerequisite, environment) => {
+      assert.equal(prerequisite.name, "fixture-tool");
+      assert.equal(prerequisite.minimumMajorVersion, undefined);
+      assert.equal(environment.FIXTURE_FILE, "/fixture/file");
       executableProbeCount++;
       return { available: true };
     },
@@ -699,6 +848,12 @@ test("selected lane prerequisite gate requires exact selection and every typed i
     environment: { REQUIRE_FIXTURE: "1", FIXTURE_FILE: "/fixture/file", FIXTURE_DIR: "/fixture/directory" },
   }).length, 0);
   assert.equal(executableProbeCount, 1);
+  const versioned = minimumVersion => [{ id: "fixture.version", externalPrerequisites: [
+    { kind: "executable", name: process.execPath, minimumVersion, requiredWhenSelected: true },
+  ] }];
+  assert.equal(missingPrerequisites(versioned(process.versions.node)).length, 0);
+  assert.equal(missingPrerequisites(versioned(String(Number(process.versions.node.split(".")[0]) + 1))).length, 1);
+  assert.match(missingPrerequisites(versioned("invalid"))[0].reason, /invalid minimum version/u);
 });
 
 test("workflow required-test selections resolve current declarations and reject a stale owner", async () => {
@@ -718,7 +873,11 @@ test("Node matrix builds every packed input before selecting all packed scenario
     await mkdir(scripts, { recursive: true });
     const runner = resolve(scripts, "run-node-test-matrix-with-results.mjs");
     await writeFile(runner, await readFile(resolve(repositoryRoot, "scripts/test-oracles/run-node-test-matrix-with-results.mjs")));
+    await writeFile(resolve(root, "scripts/npm-command.mjs"), await readFile(resolve(repositoryRoot, "scripts/npm-command.mjs")));
     await writeFile(resolve(scripts, "node-test-workspace.mjs"), await readFile(resolve(repositoryRoot, "scripts/test-oracles/node-test-workspace.mjs")));
+    await writeFile(resolve(scripts, "checkout-bytes.mjs"), await readFile(resolve(repositoryRoot, "scripts/test-oracles/checkout-bytes.mjs")));
+    const initialize = spawnSync("git", ["init", "--quiet", root], { encoding: "utf8" });
+    assert.equal(initialize.status, 0, initialize.stderr);
     const nodeRoot = resolve(root, "languages/typescript/node");
     await mkdir(resolve(nodeRoot, "node_modules"), { recursive: true });
     await mkdir(resolve(root, "specs"));
@@ -740,6 +899,7 @@ test("Node matrix builds every packed input before selecting all packed scenario
       import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
       import { dirname, resolve } from "node:path";
       childProcess.spawnSync = (command, args, options) => {
+        if (args[0]?.endsWith("npm-cli.js")) args = args.slice(1);
         appendFileSync(${JSON.stringify(log)}, JSON.stringify({ args, cwd: options.cwd, env: {
           packedClosure: options.env.SUNDER_TEST_PACKED_CLOSURE,
           packedServices: options.env.SUNDER_TEST_PACKED_SERVICES,
@@ -768,6 +928,9 @@ test("Node matrix builds every packed input before selecting all packed scenario
     assert.ok(commands.some(({ args }) => args.includes("node-sdk")));
     assert.ok(commands.some(({ args }) => args.includes("node-create-sunder-package")));
     assert.ok(commands.some(({ args }) => args.join(" ") === "run templates:typecheck"));
+    const sdkHarness = commands.findIndex(({ args }) => args.join(" ") === "exec -- tsc -p packages/sdk/tsconfig.test.json");
+    assert.ok(sdkHarness >= 0 && sdkHarness < toolReport, "Compile the SDK Worker harness before package-tool tests");
+    assert.equal(commands.filter(({ args }) => args.join(" ") === "exec -- tsc -p packages/sdk/tsconfig.test.json").length, 1);
     // Hosted steps must reuse one producer, preserve the complete packed closure,
     // and test exactly the same package selection as the local all-in-one entry.
     await writeFile(log, "");
@@ -785,6 +948,20 @@ test("Node matrix builds every packed input before selecting all packed scenario
       assert.equal(staged.filter(({ args }) => args.includes(report)).length, 1);
     }
     assert.deepEqual(staged.find(({ args }) => args.includes("node-package-tool")).env, commands[toolReport].env);
+    const stagedTool = staged.findIndex(({ args }) => args.includes("node-package-tool"));
+    const stagedSdkCompiles = staged.map(({ args }, index) => args.join(" ") === "exec -- tsc -p packages/sdk/tsconfig.test.json" ? index : -1).filter(index => index >= 0);
+    assert.equal(stagedSdkCompiles.length, 2, "The separately selected package-tool job must prepare its own SDK harness");
+    assert.ok(stagedSdkCompiles[1] < stagedTool);
+
+    await writeFile(log, "");
+    const drift = resolve(nodeRoot, "packages/create-sunder-package/template/sunder-contracts.lock.json");
+    await mkdir(dirname(drift), { recursive: true });
+    await writeFile(drift, "{}\r\n");
+    const rejected = spawnSync(process.execPath, ["--import", pathToFileURL(hook).href, runner], { encoding: "utf8" });
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /Canonical JSON checkout bytes are invalid/u);
+    assert.equal(await readFile(log, "utf8"), "", "Reject drift before starting reports, builds or packing");
+    assert.equal(await readFile(drift, "utf8"), "{}\r\n", "Preflight must never repair an input implicitly");
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -794,42 +971,71 @@ test("Node producers own workspace links and dependency writes", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "sunder-node-isolation-"));
   try {
     const checkout = resolve(root, "checkout");
+    await mkdir(checkout);
+    const initialize = spawnSync("git", ["init", "--quiet", checkout], { encoding: "utf8" });
+    assert.equal(initialize.status, 0, initialize.stderr);
     const source = resolve(checkout, "languages/typescript/node");
     const sdk = resolve(source, "packages/sdk");
+    const workspaces = [
+      { directory: "sdk", name: "@younics/sunder-sdk" },
+      { directory: "plain", name: "plain-workspace" },
+    ];
     const contracts = "languages/csharp/dotnet/tests/Sunder.Runtime.Host.InteropWorker/Contracts";
     const oracle = `${contracts}/example.rpc.json`;
-    await mkdir(resolve(sdk, "dist"), { recursive: true });
     await mkdir(resolve(source, "node_modules/@younics"), { recursive: true });
     await mkdir(resolve(source, "node_modules/dependency"));
+    await mkdir(resolve(source, "node_modules/@younics/dependency"));
+    for (const { directory, name } of workspaces) {
+      const path = resolve(source, "packages", directory);
+      await mkdir(resolve(path, "dist"), { recursive: true });
+      await writeFile(resolve(path, "package.json"), JSON.stringify({ name, main: "dist/index.js" }));
+      await writeFile(resolve(path, "dist/index.js"), "checkout");
+      await symlink(path, resolve(source, "node_modules", name), process.platform === "win32" ? "junction" : "dir");
+    }
     await mkdir(resolve(sdk, "node_modules/private-dependency/dist"), { recursive: true });
     await mkdir(resolve(checkout, "specs"));
+    await mkdir(resolve(checkout, "scripts"));
+    await writeFile(resolve(checkout, "scripts/npm-command.mjs"), "export const launcher = 'checkout';\n");
     await mkdir(resolve(checkout, contracts), { recursive: true });
     await writeFile(resolve(checkout, oracle), "authored wire oracle");
-    await writeFile(resolve(sdk, "package.json"), JSON.stringify({ name: "@younics/sunder-sdk", main: "dist/index.js" }));
-    await writeFile(resolve(sdk, "dist/index.js"), "checkout");
     await writeFile(resolve(source, "node_modules/dependency/value"), "locked dependency");
+    await writeFile(resolve(source, "node_modules/@younics/dependency/value"), "scoped dependency");
     await writeFile(resolve(sdk, "node_modules/private-dependency/dist/index.js"), "workspace dependency");
-    await symlink(sdk, resolve(source, "node_modules/@younics/sunder-sdk"), process.platform === "win32" ? "junction" : "dir");
     const producers = [createNodeTestWorkspace(checkout, root), createNodeTestWorkspace(checkout, root)];
     for (const [index, producer] of producers.entries()) {
-      const output = resolve(producer.nodeRoot, "packages/sdk/dist");
-      await assert.rejects(stat(output), { code: "ENOENT" });
-      await mkdir(output);
-      await writeFile(resolve(output, "index.js"), `producer ${index}`);
       const require = createRequire(resolve(producer.nodeRoot, "consumer.cjs"));
-      assert.equal(await readFile(require.resolve("@younics/sunder-sdk"), "utf8"), `producer ${index}`);
-      assert.equal(await readFile(resolve(output, "../node_modules/private-dependency/dist/index.js"), "utf8"), "workspace dependency");
+      for (const { directory, name } of workspaces) {
+        const path = resolve(producer.nodeRoot, "packages", directory);
+        const output = resolve(path, "dist");
+        await assert.rejects(stat(output), { code: "ENOENT" });
+        await mkdir(output);
+        await writeFile(resolve(output, "index.js"), `producer ${index}`);
+        assert.equal(await realpath(resolve(producer.nodeRoot, "node_modules", name)), await realpath(path));
+        assert.equal(await readFile(require.resolve(name), "utf8"), `producer ${index}`);
+      }
+      assert.equal(await readFile(resolve(producer.nodeRoot, "packages/sdk/node_modules/private-dependency/dist/index.js"), "utf8"), "workspace dependency");
       assert.equal(await readFile(resolve(producer.root, oracle), "utf8"), "authored wire oracle");
+      assert.equal(await readFile(resolve(producer.root, "scripts/npm-command.mjs"), "utf8"), "export const launcher = 'checkout';\n");
     }
     await writeFile(resolve(producers[0].nodeRoot, "node_modules/dependency/value"), "private mutation");
+    await writeFile(resolve(producers[0].nodeRoot, "node_modules/@younics/dependency/value"), "private scoped mutation");
     await writeFile(resolve(producers[0].root, oracle), "private oracle mutation");
+    await writeFile(resolve(producers[0].root, "scripts/npm-command.mjs"), "private launcher mutation");
     await rm(resolve(producers[0].nodeRoot, "packages/sdk/dist"), { recursive: true });
     assert.equal(await readFile(resolve(producers[1].nodeRoot, "packages/sdk/dist/index.js"), "utf8"), "producer 1");
     assert.equal(await readFile(resolve(producers[1].nodeRoot, "node_modules/dependency/value"), "utf8"), "locked dependency");
     assert.equal(await readFile(resolve(source, "node_modules/dependency/value"), "utf8"), "locked dependency");
-    assert.equal(await readFile(resolve(sdk, "dist/index.js"), "utf8"), "checkout");
+    assert.equal(await readFile(resolve(producers[1].nodeRoot, "node_modules/@younics/dependency/value"), "utf8"), "scoped dependency");
+    assert.equal(await readFile(resolve(source, "node_modules/@younics/dependency/value"), "utf8"), "scoped dependency");
+    for (const { directory, name } of workspaces) {
+      const path = resolve(source, "packages", directory);
+      assert.equal(await realpath(resolve(source, "node_modules", name)), await realpath(path));
+      assert.equal(await readFile(resolve(path, "dist/index.js"), "utf8"), "checkout");
+    }
     assert.equal(await readFile(resolve(producers[1].root, oracle), "utf8"), "authored wire oracle");
     assert.equal(await readFile(resolve(checkout, oracle), "utf8"), "authored wire oracle");
+    assert.equal(await readFile(resolve(producers[1].root, "scripts/npm-command.mjs"), "utf8"), "export const launcher = 'checkout';\n");
+    assert.equal(await readFile(resolve(checkout, "scripts/npm-command.mjs"), "utf8"), "export const launcher = 'checkout';\n");
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -222,9 +222,11 @@ class GitHubReleaseTests(unittest.TestCase):
                 store.add(name, evidence[name])
             for name in evidence: (root / name).unlink()
             def command(arguments, **kwargs):
-                if Path(arguments[1]).name == "generate-release-evidence.sh":
+                script = str(release.ROOT / "scripts/release/generate-release-evidence.sh")
+                if script in arguments:
+                    script_index = arguments.index(script)
                     self.assertEqual("1", kwargs["env"]["GITHUB_RUN_ATTEMPT"])
-                    for name, data in evidence.items(): (Path(arguments[2]) / name).write_bytes(data)
+                    for name, data in evidence.items(): (Path(arguments[script_index + 1]) / name).write_bytes(data)
             def upload(identifier, paths):
                 self.assertEqual(12, identifier)
                 existing = {item["name"] for item in store.value["assets"]}

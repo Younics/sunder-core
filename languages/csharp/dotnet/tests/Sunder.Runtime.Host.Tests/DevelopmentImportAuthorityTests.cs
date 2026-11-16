@@ -86,9 +86,15 @@ public sealed class DevelopmentImportAuthorityTests
     [InlineData("hash")]
     [InlineData("catalog")]
     [InlineData("duplicate")]
-    [InlineData("symlink")]
     [InlineData("disabled")]
     public async Task GeneratedHandoffRejectsUnverifiedOrNonlocalEvidenceBeforeRetention(string failure)
+        => await AssertInvalidGeneratedHandoffAsync(failure);
+
+    [SymbolicLinkFact(directory: false)]
+    public async Task GeneratedHandoffRejectsLinkedEvidenceBeforeRetention()
+        => await AssertInvalidGeneratedHandoffAsync("symlink");
+
+    private static async Task AssertInvalidGeneratedHandoffAsync(string failure)
     {
         using var fixture = new Fixture(optional: true, platform: true) { Offline = true };
         var prepared = await fixture.Preparation.PrepareAsync(await fixture.LocalInputs(), default);
@@ -262,7 +268,7 @@ public sealed class DevelopmentImportAuthorityTests
     }
 
     [Fact]
-    public async Task MissingChangedOrLinkedEvidenceCannotBeUsedAsDevelopmentAuthority()
+    public async Task MissingOrChangedEvidenceCannotBeUsedAsDevelopmentAuthority()
     {
         using var fixture = new Fixture(); var source = fixture.Source();
         Assert.Contains(PackagePolicyErrorCodes.PolicyRequired, (await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Store.ResolveAsync(source, default))).Message);
@@ -272,6 +278,13 @@ public sealed class DevelopmentImportAuthorityTests
         var changed = JsonNode.Parse(File.ReadAllBytes(fixture.ManifestPath))!; changed["name"] = "Changed source manifest"; File.WriteAllText(fixture.ManifestPath, changed.ToJsonString());
         CanonicalPackageTestBuilder.WriteContentIndex(fixture.Folder);
         await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Store.ResolveAsync(fixture.Source(), default));
+    }
+
+    [SymbolicLinkFact(directory: false)]
+    public async Task LinkedEvidenceCannotBeUsedAsDevelopmentAuthority()
+    {
+        using var fixture = new Fixture(); var source = fixture.Source();
+        var result = await fixture.Prepare(); var path = fixture.Store.PathFor(result.ManifestSha256); var bytes = File.ReadAllBytes(path);
         var outside = fixture.Temp.GetPath("outside.json"); File.WriteAllBytes(outside, bytes); File.Delete(path); File.CreateSymbolicLink(path, outside);
         await Assert.ThrowsAnyAsync<Exception>(() => fixture.Store.ResolveAsync(source, default)); Assert.Equal(bytes, File.ReadAllBytes(outside));
     }

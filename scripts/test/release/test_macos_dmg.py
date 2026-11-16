@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """DMG retry/ownership and real Bash failure paths; no native mounts or Finder."""
 import importlib.util
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import plistlib
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -15,6 +17,12 @@ from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(ROOT / "scripts/ci"))
+import bash_runtime
+
+# Windows needs this OS variable even for an otherwise isolated child process
+# (including Python's cryptographic initialization). Do not inherit credentials.
+SYSTEM_ENVIRONMENT = {"SystemRoot": os.environ["SystemRoot"]} if sys.platform == "win32" else {}
 BUILDER = ROOT / "scripts/release/macos/create-sunder-dmg.sh"
 SPEC = importlib.util.spec_from_file_location("dmg_image", ROOT / "scripts/release/macos/dmg_image.py")
 dmg = importlib.util.module_from_spec(SPEC)
@@ -28,6 +36,11 @@ class DmgImageTests(unittest.TestCase):
         self.root = Path(temporary.name).resolve()
         self.image, self.mount = self.root / "image.dmg", self.root / "mount"
         self.mount.mkdir()
+        # The disk-image state is simulated on every developer OS. In particular,
+        # WindowsPath.is_mount is unsupported by Python 3.11, not a native probe.
+        mount_probe = patch.object(type(self.mount), "is_mount", return_value=False)
+        mount_probe.start()
+        self.addCleanup(mount_probe.stop)
         self.entities = [{"dev-entry": "/dev/disk42"},
                          {"dev-entry": "/dev/disk42s1", "mount-point": str(self.mount)}]
         self.images = [{"image-path": str(self.image), "system-entities": self.entities}]
@@ -85,7 +98,7 @@ class DmgImageTests(unittest.TestCase):
             {"dev-entry": "/dev/disk42", "mount-point": str(self.root / "elsewhere")}]}]
         missing_device = [{"image-path": str(self.image), "system-entities": [self.entities[1]]}]
         for images in (foreign, wrong_mount, missing_device, self.images * 2):
-            with self.subTest(images=images), patch.object(Path, "is_mount", return_value=True):
+            with self.subTest(images=images), patch.object(type(self.mount), "is_mount", return_value=True):
                 self.images = images
                 self.calls.clear()
                 with self.assertRaises(dmg.ImageError):
@@ -131,9 +144,23 @@ class DmgCommandTests(unittest.TestCase):
 
 
 TOOLS = r'''#!/usr/bin/env python3
-import json, os, pathlib, plistlib, shutil, sys
+import json, os, pathlib, plistlib, runpy, shutil, subprocess, sys
+from unittest.mock import patch
 root = pathlib.Path(os.environ["DMG_FIXTURE"])
-name, args = pathlib.Path(sys.argv[0]).name, sys.argv[1:]
+name, args = sys.argv[1], sys.argv[2:]
+if name == "python3":
+    # The production helper still runs as a real child. Only the simulated
+    # macOS native boundary is adapted: Windows cannot execute shebang scripts.
+    native_run = subprocess.run
+    def run_native(arguments, **kwargs):
+        if arguments[0] not in ("hdiutil", "lsof"):
+            raise AssertionError(arguments)
+        return native_run([sys.executable, __file__, *arguments], **kwargs)
+    sys.argv = args
+    with patch.object(subprocess, "run", side_effect=run_native), \
+            patch.object(type(pathlib.Path()), "is_mount", return_value=False):
+        runpy.run_path(args[0], run_name="__main__")
+    sys.exit(0)
 with (root / "calls").open("a") as output:
     output.write(json.dumps([name, *args]) + "\n")
 state = root / "attached.json"
@@ -141,9 +168,11 @@ def plist(entities):
     return plistlib.dumps({"system-entities": entities})
 if name == "uname": print("Darwin")
 elif name == "ditto": shutil.copytree(args[-2], args[-1])
+elif name == "ln": pathlib.Path(args[-1]).symlink_to(args[-2], target_is_directory=True)
 elif name == "swift": pass
 elif name == "tiffutil": pathlib.Path(args[-1]).write_text("fixture artwork")
 elif name == "osascript": pass
+elif name == "lsof": print("fixture-holder 123 file")
 elif name == "hdiutil":
     operation = args[0]
     if operation == "create": pathlib.Path(args[-1]).touch()
@@ -169,32 +198,54 @@ else: sys.exit("Unexpected fixture tool: " + name)
 '''
 
 
+@contextmanager
+def builder_fixture():
+    root = Path(tempfile.mkdtemp(prefix="dmg-builder-")).resolve()
+    try:
+        yield root
+    except BaseException:
+        print(f"Failed DMG fixture retained at {root}", file=sys.stderr)
+        raise
+    else:
+        shutil.rmtree(root)
+
+
 class DmgBuilderTests(unittest.TestCase):
     def test_failed_or_partial_attachment_never_publishes_and_retains_uncertain_mount(self):
         for partial in (False, True):
             for cleanup_succeeds in (False, True):
-                with self.subTest(partial=partial, cleanup=cleanup_succeeds), tempfile.TemporaryDirectory(prefix="dmg-builder-") as directory:
-                    root = Path(directory).resolve()
+                with self.subTest(partial=partial, cleanup=cleanup_succeeds), builder_fixture() as root:
                     tools = root / "bin"
                     tools.mkdir()
                     mock = tools / "mock"
-                    mock.write_text(TOOLS)
-                    mock.chmod(0o755)
-                    for tool in ("uname", "ditto", "swift", "tiffutil", "osascript", "hdiutil"):
-                        (tools / tool).symlink_to(mock)
+                    mock.write_text(TOOLS, encoding="utf-8", newline="\n")
+                    for tool in ("uname", "ditto", "ln", "swift", "tiffutil", "osascript", "hdiutil", "python3"):
+                        launcher = tools / tool
+                        launcher.write_text('#!/usr/bin/env bash\n'
+                            f'exec "$DMG_FIXTURE_PYTHON" "$DMG_FIXTURE_TOOL" {tool} "$@"\n', encoding="utf-8", newline="\n")
+                        launcher.chmod(0o755)
                     app = root / "Sunder.app/Contents"
                     app.mkdir(parents=True)
                     (app / "Info.plist").write_text("fixture app")
                     output = root / "Sunder.dmg"
                     output.write_bytes(b"previous output")
-                    result = subprocess.run(["bash", str(BUILDER), "--app", str(app.parent), "--output", str(output)],
-                        env={"PATH": str(tools) + os.pathsep + os.environ["PATH"], "HOME": str(root),
-                             "TMPDIR": str(root), "DMG_FIXTURE": str(root), "PYTHONDONTWRITEBYTECODE": "1",
+                    # Git Bash prepends its system tools during initial startup.
+                    # Bind the fixture tools afterward, before the actual builder.
+                    result = subprocess.run(bash_runtime.command("-c",
+                        'export PATH="$(cd "$DMG_FIXTURE_BIN" && pwd):$PATH"; exec "$BASH" --noprofile --norc "$@"',
+                        "dmg-builder", BUILDER.as_posix(), "--app", app.parent.as_posix(), "--output", output.as_posix()),
+                        env={**SYSTEM_ENVIRONMENT, "PATH": str(tools) + os.pathsep + os.environ["PATH"], "HOME": root.as_posix(),
+                             "TMPDIR": root.as_posix(), "DMG_FIXTURE": str(root), "PYTHONDONTWRITEBYTECODE": "1",
+                             "DMG_FIXTURE_PYTHON": Path(sys.executable).as_posix(), "DMG_FIXTURE_TOOL": mock.as_posix(),
+                             "DMG_FIXTURE_BIN": tools.as_posix(),
                              "DMG_PARTIAL_ATTACH": str(int(partial)), "DMG_CLEANUP_SUCCEEDS": str(int(cleanup_succeeds))},
                         text=True, capture_output=True, timeout=15)
+                    (root / "stdout.log").write_text(result.stdout, encoding="utf-8")
+                    (root / "stderr.log").write_text(result.stderr, encoding="utf-8")
                     self.assertEqual(1, result.returncode, result.stdout + result.stderr)
                     self.assertEqual(b"previous output", output.read_bytes())
                     self.assertFalse((root / "converted").exists())
+                    self.assertTrue((root / "calls").is_file(), result.stdout + result.stderr)
                     calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
                     detach = [call for call in calls if call[:2] == ["hdiutil", "detach"]]
                     self.assertIn(["hdiutil", "detach", "/dev/disk42", "-force"], detach)
@@ -217,13 +268,15 @@ python3() { return "$CLEANUP_STATUS"; }
 hdiutil() { return "$CLEANUP_STATUS"; }
 mounted=true
 read_write_dmg=unused image_tool=unused mount_root=unused mount_dir=unused
+printf 'cleanup-fixture-started\n'
 trap cleanup EXIT
 exit "$ORIGINAL_STATUS"
 '''
-                    result = subprocess.run(["bash", "-euo", "pipefail", "-c", script],
-                        env={"PATH": os.environ["PATH"], root_variable: str(root),
+                    result = subprocess.run(bash_runtime.command("-euo", "pipefail", "-c", script),
+                        env={**SYSTEM_ENVIRONMENT, "PATH": os.environ["PATH"], root_variable: str(root),
                              "CLEANUP_STATUS": str(cleanup_status), "ORIGINAL_STATUS": str(status)},
                         text=True, capture_output=True, timeout=5)
+                    self.assertIn("cleanup-fixture-started", result.stdout)
                     self.assertEqual(status or cleanup_status, result.returncode, result.stdout + result.stderr)
                     self.assertEqual(bool(cleanup_status), root.exists())
 

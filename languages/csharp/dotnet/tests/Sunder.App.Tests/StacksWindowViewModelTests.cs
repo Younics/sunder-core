@@ -1179,8 +1179,8 @@ public sealed partial class StacksWindowViewModelTests
             AppSessionLog.Snapshot().Skip(logStart),
             entry => entry.Message == "Failed to discard a Stack import preview plan."
                      && (cancellation
-                         ? entry.Exception is OperationCanceledException
-                         : ReferenceEquals(entry.Exception, failure)));
+                          ? entry.ExceptionText?.StartsWith(typeof(TaskCanceledException).FullName!, StringComparison.Ordinal) == true
+                          : entry.ExceptionText == failure.ToString()));
     }
 
     [Fact]

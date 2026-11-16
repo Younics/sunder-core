@@ -14,8 +14,17 @@
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\MissingExternal\MissingExternal.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\MissingSdkDependency\MissingSdkDependency.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\SourceReferencePackage\SourceReferencePackage.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\SourceReferenceSdk\SourceReferenceSdk.csproj" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV1Executable\WorkerV1Executable.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Update="..\Sunder.Package.Build.TestFixtures\**\*.csproj" OutputItemType="_ManifestFixtureTargetPath" />
   </ItemGroup>
+
+  <Target Name="RecordManifestFixtureBuildOutputs" BeforeTargets="GetAssemblyAttributes" DependsOnTargets="ResolveProjectReferences">
+    <ItemGroup>
+      <AssemblyMetadata Include="Sunder.ManifestFixture.%(_ManifestFixtureTargetPath.Filename)" Value="%(_ManifestFixtureTargetPath.FullPath)" />
+      <AssemblyMetadata Include="Sunder.Test.Configuration" Value="$(Configuration)" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Build.Framework" />
@@ -27,6 +36,7 @@
 
   <ItemGroup>
     <Compile Remove="PackedAppActivationProbe.cs" />
+    <Compile Include="..\Shared\Platform\SymbolicLinkFactAttribute.cs" Link="TestSupport\SymbolicLinkFactAttribute.cs" />
     <None Include="PackedAppActivationProbe.cs" />
     <EmbeddedResource Include="..\Sunder.Sdk.Worker.Tests\TestSupport\WorkerHarness.cs" LogicalName="WorkerHarnessSources.WorkerHarness.cs" />
     <EmbeddedResource Include="..\Sunder.Sdk.Worker.Tests\TestSupport\AsyncByteStream.cs" LogicalName="WorkerHarnessSources.AsyncByteStream.cs" />

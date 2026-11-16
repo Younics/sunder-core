@@ -55,7 +55,7 @@ class NativeSelectionTests(unittest.TestCase):
             git("clone", "--quiet", "--depth=1", source.as_uri(), str(checkout), cwd=root)
             head = git("rev-parse", "HEAD", cwd=checkout)
             self.assertEqual("true", git("rev-parse", "--is-shallow-repository", cwd=checkout))
-            result = subprocess.run(["bash", str(native.ROOT / "scripts/test/release/verify-release-tag.fixture.sh")],
+            result = subprocess.run(native.assets.bash_runtime.command(native.ROOT / "scripts/test/release/verify-release-tag.fixture.sh"),
                                     cwd=checkout, env=env, capture_output=True, text=True, timeout=30)
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertIn("Release tag fixture passed", result.stdout)

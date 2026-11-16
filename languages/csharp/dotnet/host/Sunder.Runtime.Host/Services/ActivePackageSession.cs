@@ -1316,21 +1316,6 @@ internal sealed partial class ActivePackageSession
         }
     }
 
-    private void TryDeleteSessionFolder()
-    {
-        try
-        {
-            if (!string.IsNullOrWhiteSpace(SessionFolder) && Directory.Exists(SessionFolder))
-            {
-                Directory.Delete(SessionFolder, recursive: true);
-            }
-        }
-        catch
-        {
-            // Process teardown may retain a session file briefly; stale-session cleanup retries later.
-        }
-    }
-
     private static async Task ObserveAsync(Task task)
     {
         try

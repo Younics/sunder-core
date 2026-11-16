@@ -44,11 +44,11 @@ internal static partial class SunderRpcContractCache
             "v1",
             "sha256");
 
-    public static SunderRpcResolvedContractCache Resolve(SunderRpcContractLock contractLock, string cacheRoot)
+    public static SunderRpcResolvedContractCache Resolve(SunderRpcContractLock contractLock, string cacheRoot, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(contractLock);
-        var all = Resolve(GetVerificationRequirements(contractLock), cacheRoot);
-        var projections = ResolveProjectionContracts(contractLock.PackageArtifacts.Values.ToArray(), cacheRoot, all);
+        var all = Resolve(GetVerificationRequirements(contractLock), cacheRoot, token);
+        var projections = ResolveProjectionContracts(contractLock.PackageArtifacts.Values.ToArray(), cacheRoot, all, token);
         var selected = GetMaterializationRequirements(contractLock, projections.ToDictionary(pair => pair.Key,
             pair => pair.Value.ModelProjection, StringComparer.Ordinal));
         var materialized = all.EntriesByDescriptorSha256.Where(pair => selected.ContainsKey(pair.Key))
@@ -70,10 +70,11 @@ internal static partial class SunderRpcContractCache
                 projected.ToDictionary(entry => entry.ContractId, entry => entry.MethodPolicies, StringComparer.Ordinal)) };
     }
 
-    internal static SunderRpcResolvedContractCache Resolve(IReadOnlyDictionary<string, SunderRpcContractCacheRequirement> requirements, string cacheRoot)
+    internal static SunderRpcResolvedContractCache Resolve(IReadOnlyDictionary<string, SunderRpcContractCacheRequirement> requirements, string cacheRoot, CancellationToken token = default)
     {
         ArgumentNullException.ThrowIfNull(requirements);
         ArgumentException.ThrowIfNullOrWhiteSpace(cacheRoot);
+        token.ThrowIfCancellationRequested();
         if (requirements.Count == 0)
         {
             return new(new Dictionary<string, SunderRpcResolvedContractCacheEntry>(StringComparer.Ordinal));
@@ -108,11 +109,12 @@ internal static partial class SunderRpcContractCache
 
         // Copy complete verified values while holding the same cross-language lease
         // as cache publication. Compilation uses detached bytes after this lease ends.
-        using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30));
+        using var lease = GeneratedOutputLock.Acquire([root], TimeSpan.FromSeconds(30), token);
         SunderRpcContractCacheStore.ValidateRoot(root, requireComplete: true);
         var entries = new Dictionary<string, SunderRpcResolvedContractCacheEntry>(StringComparer.Ordinal);
         foreach (var requirement in requirements.Values.OrderBy(static item => item.DescriptorSha256, StringComparer.Ordinal))
         {
+            token.ThrowIfCancellationRequested();
             var descriptorPath = GetDescriptorPath(root, requirement.DescriptorSha256);
             var receiptPath = GetReceiptPath(root, requirement.DescriptorSha256);
             bool descriptorExists;

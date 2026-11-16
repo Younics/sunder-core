@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -168,12 +169,12 @@ public sealed partial class ProcessRuntimeWorkerTests
                 rid,
                 ephemeralRuntimeBindingResolver: TestExecutionRuntimeLaunchResolver.Instance).PrepareDevPackageAsync(
                 0,
-                GetWorkerSdkFixtureOutput(rid),
+                GetWorkerSdkFixtureOutput(),
                 Path.Combine(root, "session"),
                 errors,
                 CancellationToken.None);
-            Assert.NotNull(prepared);
             Assert.Empty(errors);
+            Assert.NotNull(prepared);
             prepared = prepared with { Version = GetMaximumSemanticVersion() };
             Assert.Equal(256, prepared.Version.Length);
             Assert.Equal(SunderPackageFormat.WorkerTargetKind, prepared.SelectedTarget?.Kind);
@@ -3246,20 +3247,15 @@ public sealed partial class ProcessRuntimeWorkerTests
     [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
     private static extern int MakeFifo(string path, uint mode);
 
-    private static string GetWorkerSdkFixtureOutput(string rid)
-        => Path.Combine(
-            WorkerFixture.FindRepositoryRoot(),
-            "languages",
-            "csharp",
-            "dotnet",
-            "tests",
-            "Sunder.Package.Build.TestFixtures",
-            "WorkerV1Executable",
-            "bin",
-            WorkerFixture.ResolveConfiguration(),
-            "net10.0",
-            rid,
-            "sunder-dev");
+    private static string GetWorkerSdkFixtureOutput()
+    {
+        var path = typeof(ProcessRuntimeWorkerTests).Assembly.GetCustomAttributes<AssemblyMetadataAttribute>()
+            .SingleOrDefault(attribute => attribute.Key == "Sunder.WorkerSdk.PackagePath")?.Value;
+        if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)
+            || !File.Exists(Path.Combine(path, "manifest", "sunder-package.json")))
+            throw new DirectoryNotFoundException("Build the owning Worker SDK fixture to produce its exact development output.");
+        return path;
+    }
 
     private static string GetMaximumSemanticVersion()
     {

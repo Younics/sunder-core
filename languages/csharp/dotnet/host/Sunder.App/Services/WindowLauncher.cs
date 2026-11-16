@@ -234,6 +234,11 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         if (!await model.OpenPackageViewPanelAsync(viewId))
             throw new InvalidOperationException("The package view could not be opened.");
         token.ThrowIfCancellationRequested();
+        // Selection commits the presenter content; its template may not have
+        // attached the view yet. Materialize that layout before exact binding.
+        if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime { MainWindow: { } window })
+            window.UpdateLayout();
+        token.ThrowIfCancellationRequested();
         _ = _packageViewHostService.OpenDevelopmentView(packageId, viewId, revision);
     }
 

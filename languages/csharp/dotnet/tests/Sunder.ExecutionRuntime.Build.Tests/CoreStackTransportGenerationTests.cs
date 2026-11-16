@@ -186,13 +186,12 @@ public sealed partial class CoreStackTransportGenerationTests
         Assert.False(Directory.Exists(tree.Output()));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: false)]
     [InlineData("regular")]
     [InlineData("symbolic")]
     [InlineData("hard")]
     public void PrivateWriter_CreateNewNeverChangesAnExistingFileOrLinkTarget(string kind)
     {
-        if (OperatingSystem.IsWindows() && kind == "symbolic") return;
         using var tree = new CoreTree();
         var writer = tree.Writer();
         var path = (string)RequestWriter.Value.GetProperty("RequestPath")!.GetValue(writer)!;
@@ -208,7 +207,7 @@ public sealed partial class CoreStackTransportGenerationTests
         if (kind == "symbolic") Assert.NotNull(new FileInfo(path).LinkTarget);
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: false)]
     [InlineData("regular", false)]
     [InlineData("regular", true)]
     [InlineData("symbolic", false)]
@@ -217,7 +216,6 @@ public sealed partial class CoreStackTransportGenerationTests
     [InlineData("hard", true)]
     public void RequestProofAndCleanup_PreserveReplacementsBeforeReadingOrDuringGeneration(string kind, bool duringGeneration)
     {
-        if (OperatingSystem.IsWindows() && kind == "symbolic") return;
         using var tree = new CoreTree();
         var request = tree.Request();
         var target = tree.Temp.WriteAllText("foreign request replacement", "not the request writer's bytes");
@@ -347,12 +345,11 @@ public sealed partial class CoreStackTransportGenerationTests
         Assert.Equal("keep partial", File.ReadAllText(Path.Combine(partial, CoreStackTransportGeneration.SourceName)));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: true)]
     [InlineData(false)]
     [InlineData(true)]
     public void ImmutablePublication_NeverRollsBackOrDeletesAForeignDestinationAppearingAtMove(bool symbolic)
     {
-        if (OperatingSystem.IsWindows() && symbolic) return;
         using var tree = new CoreTree();
         var foreign = tree.Temp.CreateDirectory("foreign destination");
         File.WriteAllText(Path.Combine(foreign, "sentinel"), "preserve winner");
@@ -411,14 +408,13 @@ public sealed partial class CoreStackTransportGenerationTests
         Assert.False(Directory.Exists(tree.Output()));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: false)]
     [InlineData("unmarked")]
     [InlineData("extra")]
     [InlineData("modified")]
     [InlineData("link")]
     public void Producer_RejectsForeignOrUnsafeOutputsWithoutDeletingThem(string mutation)
     {
-        if (OperatingSystem.IsWindows() && mutation == "link") return;
         using var tree = new CoreTree();
         var path = CoreStackTransportGeneration.Generate(tree.Root, tree.Request());
         var output = Path.GetDirectoryName(path)!;

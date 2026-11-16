@@ -18,8 +18,11 @@ public sealed partial class PackageViewHostService
         {
             var root = current.ViewRegistry.GetCachedPackageView(packageId, view.ViewId);
             var open = root is { IsEffectivelyVisible: true } && Avalonia.Controls.TopLevel.GetTopLevel(root) is not null;
-            return new PackageDevelopmentView(view.ViewId, view.Title, open) { CanCapture = open && (OperatingSystem.IsMacOS()
-                || !Avalonia.VisualTree.VisualExtensions.GetSelfAndVisualDescendants(root!).Any(control => control is IAppDevelopmentDocumentOwner)) };
+            return new PackageDevelopmentView(view.ViewId, view.Title, open)
+            {
+                CanCapture = open && Avalonia.VisualTree.VisualExtensions.GetSelfAndVisualDescendants(root!)
+                    .OfType<IAppDevelopmentDocumentOwner>().All(owner => owner.CanCapture),
+            };
         }).ToArray();
     }
 

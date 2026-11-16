@@ -52,6 +52,11 @@ export function csharpTestDeclarations(content) {
       const namespace = [fileNamespace, ...scopes.filter((scope) => scope.kind === "namespace").map((scope) => scope.name)]
         .filter(Boolean).join(".");
       const className = scopes.filter((scope) => scope.kind === "type").map((scope) => scope.name).join("+");
+      const bodyStart = balancedEnd(tokens, method, "(", ")");
+      const body = tokens[bodyStart]?.text === "{"
+        ? tokens.slice(bodyStart + 1, balancedEnd(tokens, bodyStart, "{", "}") - 1)
+          .map(token => token.identifier || token.text.length === 1 ? token.text : "<literal>").join(" ")
+        : "";
       // Data/Skip strings can contain arbitrary C# fixture text. Only actual
       // attribute names and Trait arguments may classify a declaration's lane.
       const policyAttributes = attributes.map((attribute) => attribute.name.replace(/Attribute$/u, "") === "Trait"
@@ -62,6 +67,7 @@ export function csharpTestDeclarations(content) {
         attributes: attributes.map((attribute) => attribute.text).join(""),
         policyAttributes,
         attributeNames: attributes.map((attribute) => attribute.name),
+        body,
         externalAttribute: attributes.find((attribute) => /^ExternalArtifact(?:Fact|Theory)(?:Attribute)?$/u.test(attribute.name))?.text,
       });
     }

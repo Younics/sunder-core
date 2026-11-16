@@ -17,7 +17,7 @@ internal sealed record ExecutionRuntimeGuardianPayloadReportV1(
     public const int CurrentSchemaVersion = 2;
 }
 
-internal sealed class SystemExecutionRuntimeProcessContainmentController(
+internal sealed partial class SystemExecutionRuntimeProcessContainmentController(
     IExecutionRuntimeProcessController processes) : IExecutionRuntimeProcessContainmentController
 {
     private enum UnixAnchorProbe
@@ -61,6 +61,8 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             : null;
         SafeFileHandle? jobHandle = null;
         Process? guardian = null;
+        ExecutionRuntimeProcessOutput? standardOutput = null;
+        ExecutionRuntimeProcessOutput? standardError = null;
         var containmentEstablished = false;
         try
         {
@@ -99,6 +101,11 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
                 containmentEstablished = true;
             }
 
+            if (OperatingSystem.IsWindows())
+            {
+                standardOutput = new ExecutionRuntimeProcessOutput(guardian.StandardOutput.BaseStream, "sunder-worker-stdout");
+                standardError = new ExecutionRuntimeProcessOutput(guardian.StandardError.BaseStream, "sunder-worker-stderr");
+            }
             var observation = processes.Observe(guardian);
             var pending = new SystemPendingContainedProcess(
                 this,
@@ -110,13 +117,19 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
                 payloadStartInfo.FileName,
                 payloadReportPath,
                 guardian,
-                jobHandle);
+                jobHandle,
+                standardOutput,
+                standardError);
             guardian = null;
             jobHandle = null;
+            standardOutput = null;
+            standardError = null;
             return pending;
         }
         catch
         {
+            standardOutput?.Stop();
+            standardError?.Stop();
             if (jobHandle is not null && containmentEstablished)
             {
                 TryTerminateWindowsJob(jobHandle);
@@ -146,6 +159,8 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             }
             guardian?.Dispose();
             jobHandle?.Dispose();
+            if (standardOutput is not null) await standardOutput.Drained.ConfigureAwait(false);
+            if (standardError is not null) await standardError.Drained.ConfigureAwait(false);
             throw;
         }
     }
@@ -559,6 +574,31 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
         }
     }
 
+    internal static async Task<ExecutionRuntimeGuardianPayloadReportV1> ReadPayloadReportAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            // The published name can be observed before the guardian's atomic
+            // rename closes its DELETE handle. Keep that rename compatible while
+            // retaining this exact read handle and still denying concurrent writes.
+            FileShare.Read | FileShare.Delete,
+            4096,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
+        if (stream.Length is <= 0 or > 16 * 1024)
+        {
+            throw new InvalidDataException("The execution-runtime guardian payload report has an invalid size.");
+        }
+        return await JsonSerializer.DeserializeAsync<ExecutionRuntimeGuardianPayloadReportV1>(
+                   stream,
+                   ExecutionRuntimeStore.JsonOptions,
+                   cancellationToken).ConfigureAwait(false)
+               ?? throw new InvalidDataException("The execution-runtime guardian payload report is empty.");
+    }
+
     private sealed class SystemPendingContainedProcess :
         IExecutionRuntimePendingContainedProcess,
         IExecutionRuntimeContainedProcess
@@ -570,8 +610,11 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
         private readonly string _payloadReportPath;
         private readonly Process _guardian;
         private readonly SafeFileHandle? _job;
+        private readonly ExecutionRuntimeProcessOutput? _standardOutput;
+        private readonly ExecutionRuntimeProcessOutput? _standardError;
         private readonly object _terminationGate = new();
         private Task? _termination;
+        private Task? _disposal;
         private Process? _payload;
         private ExecutionRuntimeProcessObservation? _payloadObservation;
         private int _disposed;
@@ -586,7 +629,9 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             string expectedPayloadExecutable,
             string payloadReportPath,
             Process guardian,
-            SafeFileHandle? job)
+            SafeFileHandle? job,
+            ExecutionRuntimeProcessOutput? standardOutput,
+            ExecutionRuntimeProcessOutput? standardError)
         {
             _controller = controller;
             _processes = processes;
@@ -598,6 +643,8 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             _payloadReportPath = payloadReportPath;
             _guardian = guardian;
             _job = job;
+            _standardOutput = standardOutput;
+            _standardError = standardError;
         }
 
         public string Kind { get; }
@@ -606,8 +653,8 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
         public Process Process => _payload
                                   ?? throw new InvalidOperationException("The contained payload has not started.");
         public Stream StandardInput => _guardian.StandardInput.BaseStream;
-        public Stream StandardOutput => _guardian.StandardOutput.BaseStream;
-        public Stream StandardError => _guardian.StandardError.BaseStream;
+        public Stream StandardOutput => _standardOutput?.Stream ?? _guardian.StandardOutput.BaseStream;
+        public Stream StandardError => _standardError?.Stream ?? _guardian.StandardError.BaseStream;
 
         public async Task<IExecutionRuntimeContainedProcess> AuthorizePayloadAsync(
             CancellationToken cancellationToken = default)
@@ -654,9 +701,13 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
             }
             catch (ArgumentException exception)
             {
-                var diagnostic = _guardian.HasExited
-                    ? await _guardian.StandardError.ReadToEndAsync(cancellationToken).ConfigureAwait(false)
-                    : string.Empty;
+                var diagnostic = string.Empty;
+                if (_guardian.HasExited)
+                {
+                    using var reader = new StreamReader(StandardError, _guardian.StandardError.CurrentEncoding,
+                        detectEncodingFromByteOrderMarks: true, leaveOpen: true);
+                    diagnostic = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                }
                 throw new IOException(
                     $"The execution-runtime payload exited before durable attachment. {diagnostic}".Trim(),
                     exception);
@@ -769,36 +820,24 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
 
         public ValueTask DisposeAsync()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            lock (_terminationGate)
             {
-                return ValueTask.CompletedTask;
+                return new ValueTask(_disposal ??= DisposeCoreAsync());
             }
+        }
+
+        private async Task DisposeCoreAsync()
+        {
+            Interlocked.Exchange(ref _disposed, 1);
+            _standardOutput?.Stop();
+            _standardError?.Stop();
             _payload?.Dispose();
             _guardian.Dispose();
             _job?.Dispose();
-            return ValueTask.CompletedTask;
-        }
-
-        private static async Task<ExecutionRuntimeGuardianPayloadReportV1> ReadPayloadReportAsync(
-            string path,
-            CancellationToken cancellationToken)
-        {
-            await using var stream = new FileStream(
-                path,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                4096,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            if (stream.Length is <= 0 or > 16 * 1024)
-            {
-                throw new InvalidDataException("The execution-runtime guardian payload report has an invalid size.");
-            }
-            return await JsonSerializer.DeserializeAsync<ExecutionRuntimeGuardianPayloadReportV1>(
-                       stream,
-                       ExecutionRuntimeStore.JsonOptions,
-                       cancellationToken).ConfigureAwait(false)
-                   ?? throw new InvalidDataException("The execution-runtime guardian payload report is empty.");
+            // Closing the exact containment ends native pipe reads. Do not detach
+            // their tasks or call a canceled consumer read proof of pump retirement.
+            if (_standardOutput is not null) await _standardOutput.Drained.ConfigureAwait(false);
+            if (_standardError is not null) await _standardError.Drained.ConfigureAwait(false);
         }
 
         private static bool PathsEqual(string left, string right)
@@ -808,316 +847,4 @@ internal sealed class SystemExecutionRuntimeProcessContainmentController(
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
     }
 
-    private static class WindowsJob
-    {
-        private const uint JobObjectQuery = 0x0004;
-        private const uint JobObjectTerminate = 0x0008;
-        private const uint JobObjectLimitKillOnJobClose = 0x00002000;
-        private const int JobObjectBasicAccountingInformationClass = 1;
-        private const int JobObjectExtendedLimitInformationClass = 9;
-        private const int ErrorFileNotFound = 2;
-        private const int ErrorInvalidHandle = 6;
-        private const int ErrorAlreadyExists = 183;
-
-        public static SafeFileHandle Create(string name)
-        {
-            var handle = CreateJobObject(IntPtr.Zero, name);
-            if (handle.IsInvalid)
-            {
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Windows could not create a Worker Job.");
-            }
-            if (Marshal.GetLastWin32Error() == ErrorAlreadyExists)
-            {
-                handle.Dispose();
-                throw new IOException($"Execution-runtime Worker Job '{name}' already exists.");
-            }
-
-            var information = new JobObjectExtendedLimitInformation
-            {
-                BasicLimitInformation = new JobObjectBasicLimitInformation
-                {
-                    LimitFlags = JobObjectLimitKillOnJobClose,
-                },
-            };
-            var size = Marshal.SizeOf<JobObjectExtendedLimitInformation>();
-            var buffer = Marshal.AllocHGlobal(size);
-            try
-            {
-                Marshal.StructureToPtr(information, buffer, fDeleteOld: false);
-                if (!SetInformationJobObject(
-                        handle,
-                        JobObjectExtendedLimitInformationClass,
-                        buffer,
-                        (uint)size))
-                {
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "Windows could not configure the Worker Job lifetime policy.");
-                }
-            }
-            catch
-            {
-                handle.Dispose();
-                throw;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
-            return handle;
-        }
-
-        public static SafeFileHandle? TryOpen(string name, out bool unavailable)
-        {
-            var handle = OpenJobObject(JobObjectQuery | JobObjectTerminate, false, name);
-            if (!handle.IsInvalid)
-            {
-                unavailable = false;
-                return handle;
-            }
-            var error = Marshal.GetLastWin32Error();
-            handle.Dispose();
-            unavailable = error is not (ErrorFileNotFound or ErrorInvalidHandle);
-            return null;
-        }
-
-        public static void Assign(SafeFileHandle job, SafeProcessHandle process)
-        {
-            if (!AssignProcessToJobObject(job, process))
-            {
-                throw new Win32Exception(
-                    Marshal.GetLastWin32Error(),
-                    "Windows could not assign the execution-runtime guardian to its Worker Job.");
-            }
-        }
-
-        public static int GetActiveProcessCount(SafeFileHandle job)
-        {
-            var size = Marshal.SizeOf<JobObjectBasicAccountingInformation>();
-            var buffer = Marshal.AllocHGlobal(size);
-            try
-            {
-                if (!QueryInformationJobObject(
-                        job,
-                        JobObjectBasicAccountingInformationClass,
-                        buffer,
-                        (uint)size,
-                        out _))
-                {
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "Windows could not inspect the execution-runtime Worker Job.");
-                }
-                return checked((int)Marshal.PtrToStructure<JobObjectBasicAccountingInformation>(buffer).ActiveProcesses);
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
-        }
-
-        public static bool ContainsProcess(SafeFileHandle job, int processId)
-        {
-            try
-            {
-                using var process = Process.GetProcessById(processId);
-                if (!IsProcessInJob(process.SafeHandle, job, out var inJob))
-                {
-                    throw new Win32Exception(
-                        Marshal.GetLastWin32Error(),
-                        "Windows could not verify execution-runtime Worker Job membership.");
-                }
-                return inJob;
-            }
-            catch (ArgumentException)
-            {
-                return false;
-            }
-        }
-
-        public static void Terminate(SafeFileHandle job)
-        {
-            if (!TerminateJobObject(job, 1))
-            {
-                throw new Win32Exception(
-                    Marshal.GetLastWin32Error(),
-                    "Windows could not terminate the execution-runtime Worker Job.");
-            }
-        }
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern SafeFileHandle CreateJobObject(IntPtr jobAttributes, string? name);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern SafeFileHandle OpenJobObject(uint desiredAccess, bool inheritHandle, string name);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool SetInformationJobObject(
-            SafeFileHandle job,
-            int informationClass,
-            IntPtr information,
-            uint informationLength);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool QueryInformationJobObject(
-            SafeFileHandle job,
-            int informationClass,
-            IntPtr information,
-            uint informationLength,
-            out uint returnLength);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool AssignProcessToJobObject(
-            SafeFileHandle job,
-            SafeProcessHandle process);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool IsProcessInJob(
-            SafeProcessHandle process,
-            SafeFileHandle job,
-            [MarshalAs(UnmanagedType.Bool)] out bool result);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool TerminateJobObject(SafeFileHandle job, uint exitCode);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct JobObjectBasicAccountingInformation
-        {
-            public long TotalUserTime;
-            public long TotalKernelTime;
-            public long ThisPeriodTotalUserTime;
-            public long ThisPeriodTotalKernelTime;
-            public uint TotalPageFaultCount;
-            public uint TotalProcesses;
-            public uint ActiveProcesses;
-            public uint TotalTerminatedProcesses;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct JobObjectBasicLimitInformation
-        {
-            public long PerProcessUserTimeLimit;
-            public long PerJobUserTimeLimit;
-            public uint LimitFlags;
-            public nuint MinimumWorkingSetSize;
-            public nuint MaximumWorkingSetSize;
-            public uint ActiveProcessLimit;
-            public nuint Affinity;
-            public uint PriorityClass;
-            public uint SchedulingClass;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct IoCounters
-        {
-            public ulong ReadOperationCount;
-            public ulong WriteOperationCount;
-            public ulong OtherOperationCount;
-            public ulong ReadTransferCount;
-            public ulong WriteTransferCount;
-            public ulong OtherTransferCount;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct JobObjectExtendedLimitInformation
-        {
-            public JobObjectBasicLimitInformation BasicLimitInformation;
-            public IoCounters IoInfo;
-            public nuint ProcessMemoryLimit;
-            public nuint JobMemoryLimit;
-            public nuint PeakProcessMemoryUsed;
-            public nuint PeakJobMemoryUsed;
-        }
-    }
-}
-
-internal static class UnixProcessGroups
-{
-    public const int SignalKill = 9;
-    private const int ErrorNoSuchProcess = 3;
-
-    public static int CreateSession()
-    {
-        var result = setsid();
-        return result >= 0
-            ? result
-            : throw new Win32Exception(Marshal.GetLastPInvokeError(), "The process guardian could not create a Unix session.");
-    }
-
-    public static int GetParentProcessId() => getppid();
-
-    public static int GetProcessGroupId(int processId)
-    {
-        var result = getpgid(processId);
-        if (result >= 0)
-        {
-            return result;
-        }
-        var error = Marshal.GetLastPInvokeError();
-        return error == ErrorNoSuchProcess
-            ? -1
-            : throw new Win32Exception(error, "The execution-runtime process group could not be inspected.");
-    }
-
-    public static bool IsAlive(int processGroupId)
-        => HasMemberOtherThan(processGroupId, excludedProcessId: null);
-
-    public static bool HasMemberOtherThan(int processGroupId, int? excludedProcessId)
-    {
-        foreach (var process in Process.GetProcesses())
-        {
-            using (process)
-            {
-                try
-                {
-                    if (process.Id != excludedProcessId
-                        && GetProcessGroupId(process.Id) == processGroupId
-                        && !process.HasExited)
-                    {
-                        return true;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                }
-                catch (InvalidOperationException)
-                {
-                }
-                catch (Win32Exception exception) when (exception.NativeErrorCode == ErrorNoSuchProcess)
-                {
-                }
-            }
-        }
-        return false;
-    }
-
-    public static void Signal(int processGroupId, int signal)
-    {
-        if (kill(-processGroupId, signal) == 0)
-        {
-            return;
-        }
-        var error = Marshal.GetLastPInvokeError();
-        if (error != ErrorNoSuchProcess)
-        {
-            throw new Win32Exception(error, "The execution-runtime process group could not be signaled.");
-        }
-    }
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int setsid();
-
-    [DllImport("libc")]
-    private static extern int getppid();
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int getpgid(int processId);
-
-    [DllImport("libc", SetLastError = true)]
-    private static extern int kill(int processId, int signal);
 }

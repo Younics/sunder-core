@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const directory = resolve(root, ".github/workflows");
-const owned = name => readFile(resolve(root, name), "utf8");
+const owned = async name => (await readFile(resolve(root, name), "utf8")).replaceAll("\r\n", "\n");
 const workflow = await owned(".github/workflows/sunder-sdk-release.yml");
 const jobs = Object.fromEntries([...workflow.slice(workflow.indexOf("\njobs:\n")).matchAll(/\n  ([\w-]+):\n([\s\S]*?)(?=\n  [\w-]+:\n|$)/gu)]
   .map(([, name, definition]) => [name, definition]));
@@ -65,7 +65,7 @@ test("one workflow retains publisher identity, valid Bash and pinned actions", a
   assert.match(workflow, /^name: Release\n/u);
   assert.doesNotMatch(workflow, /uses: \.\/\.github\/workflows\/|workflow_call:|tags:|dispatches|rerun-failed|--clobber|overwrite:\s*true/u);
   for (const { line, script } of shellBlocks(workflow)) {
-    const result = spawnSync("bash", ["-n", "-s"], { input: script, encoding: "utf8" });
+    const result = spawnSync("python3", ["-B", resolve(root, "scripts/ci/bash_runtime.py"), "--run", "-n", "-s"], { input: script, encoding: "utf8" });
     assert.equal(result.status, 0, `line ${line}: ${result.stderr}`);
   }
   for (const [, action] of workflow.matchAll(/uses:\s+([^\s#]+)/gu)) {
@@ -216,6 +216,15 @@ test("native validation preserves all partitions, vendor runtimes and the six-ru
   assert.ok(preflight < jobs.platform.indexOf("actions/setup-dotnet@"));
   assert.ok(preflight < jobs.platform.indexOf("Build and test selected native component"));
   assert.match(jobs.platform, /owned-test-process.test.mjs/u);
+  const keystore = workflowStep(jobs.platform, "Install Linux Secret Service prerequisites");
+  assert.match(keystore, /runner.os == 'Linux' && matrix.scope == 'host' && matrix.partition == 'main'/u);
+  assert.match(keystore, /apt-get install --yes dbus gnome-keyring libsecret-tools libglib2.0-bin/u);
+  assert.ok(jobs.platform.indexOf(keystore) < jobs.platform.indexOf("Build and test selected native component"));
+  const browser = workflowStep(jobs.platform, "Install Linux App browser prerequisites");
+  assert.match(browser, /runner.os == 'Linux' && matrix.scope == 'app' && matrix.partition == 'main'/u);
+  assert.match(browser, /libwebkit2gtk-4\.1-0/u);
+  assert.match(browser, /dbus xvfb xauth/u);
+  assert.ok(jobs.platform.indexOf(browser) < jobs.platform.indexOf("Build and test selected native component"));
   const smoke = await owned("scripts/test/release/smoke-app-packaging.sh");
   assert.match(smoke, /--strict-release/u);
   assert.match(smoke, /create-sunder-dmg.sh/u);

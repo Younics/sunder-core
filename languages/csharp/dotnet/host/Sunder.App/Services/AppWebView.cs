@@ -10,6 +10,7 @@ internal interface IAppWebView : IDisposable
 {
     Control Control { get; }
     Rect CaptureViewport => new(Control.Bounds.Size);
+    bool CanCapture => false;
 
     event EventHandler<AppWebNavigationStartingEventArgs>? NavigationStarting;
 
@@ -28,6 +29,8 @@ internal interface IAppWebView : IDisposable
         => throw new NotSupportedException("This native browser backend does not support package capture.");
 
     void Stop();
+
+    Task DrainNativeRetirementAsync() => Task.CompletedTask;
 }
 
 internal interface IAppWebViewFactory
@@ -84,16 +87,26 @@ internal sealed class AppNativeWebView : IAppWebView
     private readonly IUiDispatcher _uiDispatcher;
     private int _disposed;
     private long _adapterGeneration;
+    private bool _captureInProgress;
+    private readonly List<Task> _nativeRetirements = [];
+    private readonly TaskCompletionSource _firstWindowsAdapter = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private bool _windowsEnvironmentRequested;
 
     public AppNativeWebView(string userDataDirectory, IUiDispatcher? uiDispatcher = null)
     {
+        // GTK is the supported Linux backend. WPE's wrapper cannot keep its
+        // compositor adapter alive through asynchronous capture/retirement.
+        if (OperatingSystem.IsLinux()) _webView.AdapterPreference = [WebViewAdapterType.WebKitGtk];
         _viewport = new(_webView);
         _userDataDirectory = Path.GetFullPath(userDataDirectory);
+        if (OperatingSystem.IsWindows()) AppWebViewProfile.ValidateWindowsPath(_userDataDirectory);
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         Directory.CreateDirectory(_userDataDirectory);
         _webView.EnvironmentRequested += OnEnvironmentRequested;
         _webView.AdapterCreated += OnAdapterCreated;
         _webView.AdapterDestroyed += OnAdapterDestroyed;
+        _webView.DetachedFromVisualTree += OnNativeDetached;
+        _webView.PropertyChanged += OnNativeGeometryChanged;
         _webView.NavigationStarted += OnNavigationStarted;
         _webView.NavigationCompleted += OnNavigationCompleted;
         _webView.NewWindowRequested += OnNewWindowRequested;
@@ -118,6 +131,14 @@ internal sealed class AppNativeWebView : IAppWebView
     public Task<string?> InvokeScriptAsync(string script)
         => _uiDispatcher.InvokeAsync(() => _webView.InvokeScript(script));
 
+    public bool CanCapture => _webView.TryGetPlatformHandle() switch
+    {
+        IWindowsWebView2PlatformHandle => OperatingSystem.IsWindows(),
+        IAppleWKWebViewPlatformHandle => OperatingSystem.IsMacOS(),
+        IGtkWebViewPlatformHandle => OperatingSystem.IsLinux(),
+        _ => false,
+    };
+
     public void Stop() => _webView.Stop();
 
     public Task<byte[]> CaptureAsync(Rect bounds, int maximumEdge, CancellationToken token)
@@ -125,27 +146,53 @@ internal sealed class AppNativeWebView : IAppWebView
         {
             token.ThrowIfCancellationRequested();
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            if (_captureInProgress) throw new InvalidOperationException("A native browser capture is already in progress.");
             var handle = _webView.TryGetPlatformHandle();
-            if (!OperatingSystem.IsMacOS() || handle is not IAppleWKWebViewPlatformHandle apple)
-                throw new NotSupportedException("Native capture is not supported by this browser backend.");
             var viewport = CaptureViewport;
-            if (!viewport.Contains(bounds) || bounds.Width <= 0 || bounds.Height <= 0) throw new ArgumentException("The native capture region left its viewport.");
-            var retained = apple.GetWKWebViewRetained();
+            var localBounds = bounds.Translate(new Vector(-viewport.X, -viewport.Y));
+            AppNativeWebViewCapture.ValidateRegion(localBounds, viewport.Size, maximumEdge);
+            if (TopLevel.GetTopLevel(_webView) is not { } owner || !_webView.IsEffectivelyVisible)
+                throw new InvalidOperationException("The native capture viewport is not attached and visible.");
             var generation = Volatile.Read(ref _adapterGeneration);
+            _captureInProgress = true;
             try
             {
+                // Keep the native wrapper alive even if its visual detaches.
+                // A native object reference alone does not defer adapter teardown.
+                using var nativeLifetime = _webView.BeginReparenting(yieldOnLayoutBeforeExiting: false);
                 // Once submitted, await the real native callback even on cancellation.
                 // Owner retirement drains this task before releasing the browser.
-                var png = await MacOsWebViewCapture.CaptureAsync(retained, bounds.Translate(new Vector(-viewport.X, -viewport.Y)), maximumEdge);
+                byte[] png;
+                if (OperatingSystem.IsWindows() && handle is IWindowsWebView2PlatformHandle windows)
+                    png = await WindowsWebViewCapture.CaptureAsync(windows, localBounds, viewport.Size, maximumEdge);
+                else if (OperatingSystem.IsMacOS() && handle is IAppleWKWebViewPlatformHandle apple)
+                {
+                    var retained = apple.GetWKWebViewRetained();
+                    try { png = await MacOsWebViewCapture.CaptureAsync(retained, localBounds, maximumEdge); }
+                    finally { MacOsWebViewCapture.Release(retained); }
+                }
+                else if (OperatingSystem.IsLinux() && handle is IGtkWebViewPlatformHandle gtk)
+                    png = await GtkWebViewCapture.CaptureAsync(gtk.WebKitWebView, localBounds, viewport.Size, maximumEdge);
+                else throw new NotSupportedException("Native capture is not supported by this browser backend.");
                 token.ThrowIfCancellationRequested();
                 ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0 || generation != Volatile.Read(ref _adapterGeneration), this);
-                if (viewport != CaptureViewport) throw new InvalidOperationException("The native viewport changed during capture. Capture its current geometry again.");
+                if (viewport != CaptureViewport || !ReferenceEquals(owner, TopLevel.GetTopLevel(_webView)) || !_webView.IsEffectivelyVisible)
+                    throw new InvalidOperationException("The native viewport changed during capture. Capture its current geometry again.");
                 return png;
             }
-            finally { MacOsWebViewCapture.Release(retained); }
+            finally { _captureInProgress = false; }
         });
 
     public Rect CaptureViewport => _webView.Bounds;
+
+    public Task DrainNativeRetirementAsync() => _uiDispatcher.InvokeAsync(async () =>
+    {
+        // A pending environment/controller creation is not an empty native
+        // lifetime. If it cannot settle, the owner's existing deadline fails
+        // closed instead of reclaiming a profile still being initialized.
+        if (_windowsEnvironmentRequested) await _firstWindowsAdapter.Task;
+        await Task.WhenAll(_nativeRetirements);
+    });
 
     public void Dispose()
     {
@@ -156,28 +203,52 @@ internal sealed class AppNativeWebView : IAppWebView
         _webView.EnvironmentRequested -= OnEnvironmentRequested;
         _webView.AdapterCreated -= OnAdapterCreated;
         _webView.AdapterDestroyed -= OnAdapterDestroyed;
+        _webView.DetachedFromVisualTree -= OnNativeDetached;
+        _webView.PropertyChanged -= OnNativeGeometryChanged;
         _webView.NavigationStarted -= OnNavigationStarted;
         _webView.NavigationCompleted -= OnNavigationCompleted;
         _webView.NewWindowRequested -= OnNewWindowRequested;
         _webView.WebResourceRequested -= OnWebResourceRequested;
         _webView.WebMessageReceived -= OnWebMessageReceived;
-        _viewport.Dispose();
         _webView.Stop();
+        _viewport.Dispose();
+        // ContentControl clearing can defer its visual update until layout. Detach
+        // the actual native host now; capture's reparenting lease still protects
+        // any submitted callback until it settles.
+        _viewport.Child = null;
     }
 
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs args)
-    { Interlocked.Increment(ref _adapterGeneration); _viewport.SetPlatformHandle(args.TryGetPlatformHandle()); }
+    {
+        Interlocked.Increment(ref _adapterGeneration);
+        var handle = args.TryGetPlatformHandle();
+        if (OperatingSystem.IsWindows() && handle is IWindowsWebView2PlatformHandle windows)
+        {
+            _nativeRetirements.Add(WindowsWebViewLifetime.Observe(windows).DrainAsync(_uiDispatcher));
+            _firstWindowsAdapter.TrySetResult();
+        }
+        _viewport.SetPlatformHandle(handle);
+    }
 
     private void OnAdapterDestroyed(object? sender, WebViewAdapterEventArgs args)
     { Interlocked.Increment(ref _adapterGeneration); _viewport.SetPlatformHandle(null); }
 
+    private void OnNativeDetached(object? sender, VisualTreeAttachmentEventArgs args)
+        => Interlocked.Increment(ref _adapterGeneration);
+
+    private void OnNativeGeometryChanged(object? sender, AvaloniaPropertyChangedEventArgs args)
+    {
+        if (args.Property == Visual.BoundsProperty || args.Property == Visual.IsVisibleProperty)
+            Interlocked.Increment(ref _adapterGeneration);
+    }
+
     private void OnEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs args)
     {
         args.EnableDevTools = false;
-        _viewport.UsesCompositedRendering = args is LinuxWpeWebViewEnvironmentRequestedEventArgs;
         switch (args)
         {
             case WindowsWebView2EnvironmentRequestedEventArgs windows:
+                _windowsEnvironmentRequested = true;
                 windows.UserDataFolder = _userDataDirectory;
                 windows.ProfileName = "sunder-package";
                 windows.AllowSingleSignOnUsingOSPrimaryAccount = false;
@@ -194,11 +265,6 @@ internal sealed class AppNativeWebView : IAppWebView
                 gtk.SharedProcessModel = false;
                 gtk.BaseDataDirectory = Path.Combine(_userDataDirectory, "data");
                 gtk.BaseCacheDirectory = Path.Combine(_userDataDirectory, "cache");
-                break;
-            case LinuxWpeWebViewEnvironmentRequestedEventArgs linux:
-                // WPE is composited by Avalonia and already obeys its rounded clips.
-                linux.DataDirectory = Path.Combine(_userDataDirectory, "data");
-                linux.CacheDirectory = Path.Combine(_userDataDirectory, "cache");
                 break;
         }
     }

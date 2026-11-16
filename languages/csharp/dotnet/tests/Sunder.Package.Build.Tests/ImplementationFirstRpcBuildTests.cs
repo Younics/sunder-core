@@ -466,8 +466,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
                 .. properties,
             ]);
 
-    private static async Task<ProcessResult> RunDotnetAsync(string workingDirectory, IReadOnlyList<string> arguments)
+    internal static async Task<ProcessResult> RunDotnetAsync(string workingDirectory, IReadOnlyList<string> arguments)
     {
+        BuildFixtureSdk.EnsureRepositorySelection(workingDirectory, FindRepositoryRoot());
         var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
             WorkingDirectory = workingDirectory,
@@ -597,5 +598,5 @@ public sealed partial class ImplementationFirstRpcBuildTests
         throw new DirectoryNotFoundException("Could not locate the Sunder Core repository root.");
     }
 
-    private sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
+    internal sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 }

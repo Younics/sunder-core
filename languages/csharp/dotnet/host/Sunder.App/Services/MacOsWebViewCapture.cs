@@ -40,7 +40,7 @@ internal static class MacOsWebViewCapture
             var window = Send(view, Selector("window"));
             var scaling = window == 0 ? 1 : GetDouble(window, Selector("backingScaleFactor"));
             if (!double.IsFinite(scaling) || scaling < 1) scaling = 1;
-            var width = SendDouble(GetClass("NSNumber"), Selector("numberWithDouble:"), Math.Min(bounds.Width, edge * bounds.Width / Math.Max(bounds.Width, bounds.Height) / scaling));
+            var width = SendDouble(GetClass("NSNumber"), Selector("numberWithDouble:"), Math.Min(bounds.Width, edge * bounds.Width / Math.Max(bounds.Width, bounds.Height)) / scaling);
             SendPointer(configuration, Selector("setSnapshotWidth:"), width);
             Marshal.StructureToPtr(new Block { Isa = StackBlock, Flags = 1 << 25, Invoke = Marshal.GetFunctionPointerForDelegate(Invoke), Descriptor = Descriptor, Context = context.Handle }, source, false);
             copied = BlockCopy(source);

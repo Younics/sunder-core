@@ -1,3 +1,4 @@
+using System.IO.Enumeration;
 using System.Text;
 using System.Text.RegularExpressions;
 using Sunder.Runtime.Contracts;
@@ -24,7 +25,6 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     private readonly Dictionary<string, FileTailState> _files = new(PathComparer);
     private readonly HashSet<string> _pendingContinuations = new(PathComparer);
     private FileSystemWatcher? _watcher;
-    private bool _starting;
     private bool _disposed;
     private bool _directoryScanRunning;
     private bool _directoryScanRequested;
@@ -49,19 +49,14 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_watcher is not null || _starting)
+            if (_watcher is not null)
             {
                 return;
             }
-            _starting = true;
-        }
 
-        try
-        {
-            Directory.CreateDirectory(_packageRootPath);
-            lock (_gate)
+            try
             {
-                ObjectDisposedException.ThrowIf(_disposed, this);
+                Directory.CreateDirectory(_packageRootPath);
                 // Directory events are essential: Linux can lose child-file
                 // events before installing a new recursive inotify watch.
                 _watcher = new FileSystemWatcher(_packageRootPath)
@@ -75,32 +70,19 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
                 _watcher.Deleted += OnDeleted;
                 _watcher.Error += OnError;
                 _watcher.EnableRaisingEvents = true;
-            }
 
-            foreach (var file in SelectInitialReplayFiles(cancellationToken))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                lock (_gate)
+                // Establish replay and skipped-file offsets before native events
+                // can tail those files. The same gate already serializes live reads.
+                foreach (var file in SelectInitialReplayFiles(cancellationToken))
                 {
-                    ObjectDisposedException.ThrowIf(_disposed, this);
                     ReadFile(file.Path, initialRead: true, file.MaxBytes, cancellationToken);
                 }
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-        catch
-        {
-            lock (_gate)
+            catch
             {
                 DisposeWatcher();
-            }
-            throw;
-        }
-        finally
-        {
-            lock (_gate)
-            {
-                _starting = false;
+                throw;
             }
         }
     }
@@ -178,6 +160,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
 
     private void ReadChangedPath(string path)
     {
+        if (!IsLogDiscoveryPath(path)) return;
         if (Directory.Exists(path)) RequestDirectoryReconciliation();
         else ReadChangedFile(path);
     }
@@ -210,7 +193,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             try
             {
                 var entries = 0;
-                foreach (var path in Directory.EnumerateFileSystemEntries(_packageRootPath, "*", LogEnumerationOptions()))
+                foreach (var path in EnumerateLogEntries())
                 {
                     lock (_gate)
                     {
@@ -248,14 +231,40 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
             MatchCasing = MatchCasing.CaseInsensitive,
         };
 
+    internal IEnumerable<string> EnumerateLogEntries()
+        => new FileSystemEnumerable<string>(
+            _packageRootPath,
+            static (ref FileSystemEntry entry) => entry.ToFullPath(),
+            LogEnumerationOptions())
+        {
+            // Windows queues open directory handles during recursive enumeration.
+            // Never enter workspace/files/backups: those handles block activation
+            // snapshots even when the enumerator permits delete sharing.
+            ShouldRecursePredicate = (ref FileSystemEntry entry) => IsLogDiscoveryPath(entry.ToFullPath()),
+            ShouldIncludePredicate = (ref FileSystemEntry entry) => IsLogDiscoveryPath(entry.ToFullPath()),
+        };
+
+    private bool IsLogDiscoveryPath(string fullPath, bool includePackageDirectory = true)
+    {
+        var rootPrefix = _packageRootPath + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, PathComparison)) return false;
+        var relative = fullPath.AsSpan(rootPrefix.Length);
+        var separator = relative.IndexOf(Path.DirectorySeparatorChar);
+        if (separator < 0) return includePackageDirectory;
+        var packageRelative = relative[(separator + 1)..];
+        return packageRelative.Equals("logs", PathComparison)
+               || packageRelative.StartsWith("logs" + Path.DirectorySeparatorChar, PathComparison);
+    }
+
     private IReadOnlyList<InitialReplayFile> SelectInitialReplayFiles(CancellationToken cancellationToken)
     {
         var newest = new PriorityQueue<InitialReplayCandidate, DateTime>();
         try
         {
-            foreach (var path in Directory.EnumerateFiles(_packageRootPath, "*.log", LogEnumerationOptions()))
+            foreach (var path in EnumerateLogEntries())
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (!IsLogPath(path)) continue;
                 try
                 {
                     var file = new FileInfo(path);
@@ -308,20 +317,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
     }
 
     private void TrackSkippedFile(InitialReplayCandidate file)
-    {
-        lock (_gate)
-        {
-            ObjectDisposedException.ThrowIf(_disposed, this);
-            if (_files.TryGetValue(file.Path, out var state))
-            {
-                state.Offset = Math.Max(state.Offset, file.Length);
-            }
-            else
-            {
-                _files[file.Path] = new FileTailState { Offset = file.Length };
-            }
-        }
-    }
+        => _files[file.Path] = new FileTailState { Offset = file.Length };
 
     private FileReadResult ReadFile(
         string filePath,
@@ -525,8 +521,7 @@ internal sealed partial class PackageLogStreamService : IAsyncDisposable
         }
 
         var fullPath = Path.GetFullPath(filePath);
-        var rootPrefix = _packageRootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        if (!fullPath.StartsWith(rootPrefix, PathComparison)) return false;
+        if (!IsLogDiscoveryPath(fullPath, includePackageDirectory: false)) return false;
         try
         {
             // Discovery must not follow package-controlled links outside the data

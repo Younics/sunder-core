@@ -9,7 +9,7 @@ namespace Sunder.Sdk.PublicApi.Tests;
 
 public sealed class RuntimeExecutionRuntimeContractTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true, NewLine = "\n" };
     private static readonly DateTimeOffset Observed = DateTimeOffset.Parse("2026-10-08T10:00:00Z");
     private static string Hash(char value) => new(value, 64);
 

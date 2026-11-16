@@ -8,6 +8,52 @@ namespace Sunder.App.Tests;
 
 public sealed class NotificationCenterServiceTests
 {
+    [Theory]
+    [InlineData(PackageNotificationSeverity.Information, true, false, false)]
+    [InlineData(PackageNotificationSeverity.Success, true, false, false)]
+    [InlineData(PackageNotificationSeverity.Warning, true, false, false)]
+    [InlineData(PackageNotificationSeverity.Error, true, false, true)]
+    [InlineData(PackageNotificationSeverity.Information, false, true, false)]
+    [InlineData(PackageNotificationSeverity.Success, false, true, false)]
+    [InlineData(PackageNotificationSeverity.Warning, false, true, false)]
+    [InlineData(PackageNotificationSeverity.Error, false, true, true)]
+    public async Task PreferencesControlPopupsButPreserveErrorsAndTrayHistory(
+        PackageNotificationSeverity severity, bool showToasts, bool showCategory, bool expectedToast)
+    {
+        var statePath = Path.Combine(CreateTempDirectory(), "notifications.json");
+        var service = new NotificationCenterService(statePath);
+        await service.PublishAsync("agent", "Agent", new PackageNotificationRequest("Existing", "Keep history."));
+        var preferences = new NotificationPreferences(showToasts, showCategory, showCategory, showCategory);
+        service.SavePreferences(preferences);
+        service = new NotificationCenterService(statePath);
+        Assert.Equal(preferences, service.Preferences);
+        var toasts = new List<AppToastNotification>();
+        service.ToastQueued += toasts.Add;
+
+        await service.PublishAsync("agent", "Agent", new PackageNotificationRequest("New", "Result", Severity: severity));
+
+        Assert.Equal(expectedToast ? 1 : 0, toasts.Count);
+        Assert.Equal(2, service.ListNotifications().Count);
+        service.ClearAll();
+        Assert.Equal(preferences, new NotificationCenterService(statePath).Preferences);
+    }
+
+    [Fact]
+    public void SavePreferences_WhenPersistenceFails_KeepsEffectivePreferencesAndCleansTemporaryFile()
+    {
+        var root = CreateTempDirectory();
+        var statePath = Path.Combine(root, "notifications.json");
+        var service = new NotificationCenterService(statePath);
+        var before = service.Preferences;
+        Directory.CreateDirectory(statePath);
+
+        var error = Record.Exception(() => service.SavePreferences(new NotificationPreferences(ShowToasts: false)));
+
+        Assert.True(error is IOException or UnauthorizedAccessException, $"Expected a filesystem failure, received: {error}");
+        Assert.Equal(before, service.Preferences);
+        Assert.Empty(Directory.EnumerateFiles(root, "notifications.json.*.tmp"));
+    }
+
     [Fact]
     public async Task PublishAsync_TrayNotification_PersistsUnreadRecord()
     {
@@ -136,12 +182,16 @@ public sealed class NotificationCenterServiceTests
         File.Delete(statePath);
         Directory.CreateDirectory(statePath);
 
-        await Assert.ThrowsAnyAsync<IOException>(() => service.PublishAsync(
+        var changed = 0;
+        service.NotificationsChanged += () => changed++;
+        var error = await Record.ExceptionAsync(() => service.PublishAsync(
             "agent",
             "Agent",
             new PackageNotificationRequest("Second", "Must roll back.")).AsTask());
 
+        Assert.True(error is IOException or UnauthorizedAccessException, $"Expected a filesystem failure, received: {error}");
         Assert.Equal("First", Assert.Single(service.ListNotifications()).Title);
+        Assert.Equal(0, changed);
         Assert.Empty(Directory.EnumerateFiles(rootPath, "notifications.json.*.tmp"));
     }
 

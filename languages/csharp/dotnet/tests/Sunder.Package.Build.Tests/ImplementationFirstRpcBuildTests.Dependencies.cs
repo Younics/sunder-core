@@ -18,7 +18,9 @@ public sealed partial class ImplementationFirstRpcBuildTests
     public async Task SingleProject_NugetAndProjectAssetsStayWithinTheirRole(bool sourceSdk)
     {
         await using var scope = TemporaryDirectoryScope.Create("sunder-role-restore-build");
-        var root = ResolvePhysicalTemporaryPath(scope.CreateDirectory("package"));
+        // Exercise ordinary long package checkout paths too: repeating the analysis
+        // dimensions below the immutable cache used to lose Windows NuGet imports.
+        var root = ResolvePhysicalTemporaryPath(scope.CreateDirectory("Sunder.Package.Role.Restore.Fixture"));
         var backend = ResolvePhysicalTemporaryPath(scope.CreateDirectory("backend"));
         var feed = scope.CreateDirectory("offline-feed");
         var repository = FindRepositoryRoot();
@@ -97,6 +99,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
         await AssertRoleDependencyProbeAsync(scope.CreateDirectory("native probe"), worker);
         using (var plan = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(root, "obj/Debug/net10.0/sunder-analysis", RuntimeInformation.RuntimeIdentifier, "sunder-rpc/package-role-plan.v1.json"))))
         {
+            Assert.Equal(Path.Combine(root, "obj", "sunder-package-compilations"), plan.RootElement.GetProperty("compilationCacheRoot").GetString());
             Assert.Contains(plan.RootElement.GetProperty("workerDependencies").GetProperty("libraries").EnumerateArray(), value => value.GetString()!.StartsWith("SQLitePCLRaw.lib.e_sqlite3/", StringComparison.Ordinal));
             Assert.DoesNotContain(plan.RootElement.GetProperty("appDependencies").GetProperty("libraries").EnumerateArray(), value => value.GetString()!.StartsWith("Backend.Library/", StringComparison.Ordinal));
         }

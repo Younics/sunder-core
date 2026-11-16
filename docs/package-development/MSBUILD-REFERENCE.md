@@ -18,20 +18,23 @@ library generates isolated Worker/App outputs, composition and one development t
 
 ## Install
 
-```powershell
-dotnet add package Sunder.Package.Build --private-assets all
-```
-
-Typical package project reference:
+Use the versioned MSBuild SDK entry point in the canonical project:
 
 ```xml
-<ItemGroup>
-  <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.0" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.0.0" PrivateAssets="all" />
-</ItemGroup>
+<Project Sdk="Sunder.Package.Build/1.1.0">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <SunderPackageProject>true</SunderPackageProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
+  </ItemGroup>
+</Project>
 ```
 
-Use `PrivateAssets="all"` because this package is build tooling for the package project. It should not flow as a runtime dependency of your package.
+The SDK includes `Microsoft.NET.Sdk`; no additional Build `PackageReference` is needed.
+It is available on the first restore, unlike ordinary NuGet `buildTransitive` imports.
+Source consumers may import the same `build/Sunder.Package.Build.targets` directly.
 The NuGet package exposes no compile or runtime assembly asset; its task assembly and private dependencies live only under `tasks/net10.0` and are loaded by `buildTransitive/Sunder.Package.Build.targets`.
 
 Build-time C# descriptor emission is internal to this tooling assembly under
@@ -58,6 +61,8 @@ opt-in by name through `SunderPackageBuildTaskSourceGlobalProperties`.
 Lock contention uses short MSBuild dependency requests with fresh identities, not
 long `Yield` waits that can starve the holder's nested build.
 Publication reuses `_SunderStagePackageBuildTaskSet` markers, atomic copy, and validation.
+During ordinary restore, the source bootstrap first restores its own declared tool
+closure under the same lease. Compiler and no-restore requests do not restore it.
 Snapshots remain under the owner's `obj/sunder-package-build-task-sources`;
 no automatic cache garbage collection was added.
 See [task-loading details and regression coverage](https://github.com/Younics/sunder-core/blob/main/docs/package-development/IMPLEMENTATION-FIRST-RPC.md#task-loading-reliability).
@@ -363,25 +368,32 @@ Build, and failed commands preserve the prior selection and generated facade.
 For local unpublished development, add/update/implement may use
 `-p:SunderPackageCandidatePath=/path/to/exact.sunderpkg`. The canonical archive
 supplies the same inventory/content projection as Registry. Its ownership remains
-unconfirmed until Registry accepts publication. To hydrate an **existing** lock
-offline:
+unconfirmed until Registry accepts publication. Declare these paths in the project
+or repository build configuration so ordinary restore can hydrate an **existing**
+lock without a separate preparation command:
 
 ```powershell
-dotnet msbuild Package.csproj -t:RestoreSunderContracts `
+dotnet restore Package.csproj `
   -p:SunderPackageCandidatePath=/path/to/exact.sunderpkg
 ```
 
 Restore verifies exact committed metadata and leaves every lock byte unchanged.
-After preparation, `dotnet msbuild Package.csproj -t:CheckSunderContractCache`
+Normal Build/Rebuild uses its ordinary restore prepass. The SDK joins each canonical
+project's NuGet restore graph, including solution restore, and acquires only missing
+evidence. A verified warm selection needs neither local source files nor network.
+`SunderRestoreContracts=false` opts out. Design-time, generated-role, export and
+prebuilt-input requests do not acquire evidence.
+`dotnet msbuild Package.csproj -t:CheckSunderContractCache`
 verifies the same selected descriptors, receipts, model projections and platform
 catalogs used by Build without publishing cache evidence or changing locks. Missing
 input diagnostics report the effective cache root and all missing selected file
-kinds. NuGet restore is separate and does not hydrate this cache; local recovery
-requires the exact locked candidate and, where selected, `SunderPlatformCatalogPath`.
-Normal Build never fetches evidence or infers a Registry to repair a cache miss.
+kinds. Local acquisition requires the exact locked candidate and, where selected,
+`SunderPlatformCatalogPath`. Published acquisition uses only the locked Registry
+origin. Compilation, no-restore Build and Pack remain read-only; none infers a
+Registry, updates selections, accepts/freezes APIs or repairs corrupt evidence.
 `SunderContractCacheRoot` overrides the default `~/.sunder/contracts/v1/sha256`
 location. Readers and writers share the cross-language cache lease. Explicit
-restore recovers interrupted publication and quarantines corrupt regular files
+`RestoreSunderContracts` recovers interrupted publication and quarantines corrupt regular files
 before installing verified replacements; unmarked nonempty roots remain rejected.
 See [shared cache behavior](https://github.com/Younics/sunder-core/blob/main/docs/package-development/CONTRACT-RESTORE-CACHE.md).
 Explicit shared cache GC and equivalent Node package API commands are implemented.

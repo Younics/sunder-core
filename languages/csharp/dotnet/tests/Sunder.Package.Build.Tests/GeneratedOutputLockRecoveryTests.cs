@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json.Nodes;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Build.Tasks;
 using Xunit;
 
@@ -17,7 +18,7 @@ public sealed partial class GeneratedOutputLockRecoveryTests : IDisposable
         using var lease = GeneratedOutputLock.Acquire([output]);
         var owner = ReadOwner(output);
         var marker = owner["processMarkerPath"]!.GetValue<string>();
-        var expected = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        var expected = Path.Combine(GeneratedOutputUserProfile.Home,
             ".sunder", "generated-output", "processes", owner["processMarkerToken"]!.GetValue<string>() + ".json");
         Assert.Equal(GeneratedOutputPathSafety.NormalizeTrustedSystemAliases(expected), marker);
         Assert.Equal(2, owner["schemaVersion"]!.GetValue<int>());
@@ -46,10 +47,16 @@ public sealed partial class GeneratedOutputLockRecoveryTests : IDisposable
     [InlineData("missing")]
     [InlineData("tampered")]
     [InlineData("arbitrary-path")]
-    [InlineData("symlink")]
     [InlineData("foreign-host")]
     [InlineData("temp-root")]
     public void UnverifiableEvidenceFailsPromptlyWithoutChangingLockOrOutput(string damage)
+        => AssertUnverifiableEvidence(damage);
+
+    [SymbolicLinkFact(directory: false)]
+    public void UnverifiableLinkedEvidenceFailsPromptlyWithoutChangingLockOrOutput()
+        => AssertUnverifiableEvidence("symlink");
+
+    private void AssertUnverifiableEvidence(string damage)
     {
         var output = Path.Combine(_root, "output");
         var owner = OwnerTemplate();

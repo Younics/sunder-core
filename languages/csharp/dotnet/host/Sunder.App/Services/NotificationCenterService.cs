@@ -14,6 +14,7 @@ public sealed class NotificationCenterService
     private readonly object _syncRoot = new();
     private List<AppNotificationRecord> _notifications = [];
     private DateTimeOffset _lastReadAtUtc = DateTimeOffset.MinValue;
+    private NotificationPreferences _preferences = new();
 
     public NotificationCenterService(string? stateFilePath = null)
     {
@@ -24,6 +25,23 @@ public sealed class NotificationCenterService
     public event Action? NotificationsChanged;
 
     public event Action<AppToastNotification>? ToastQueued;
+
+    public NotificationPreferences Preferences
+    {
+        get { lock (_syncRoot) return _preferences; }
+    }
+
+    public void SavePreferences(NotificationPreferences preferences)
+    {
+        ArgumentNullException.ThrowIfNull(preferences);
+        lock (_syncRoot)
+        {
+            var previous = _preferences;
+            _preferences = preferences;
+            try { SaveStateCore(); }
+            catch { _preferences = previous; throw; }
+        }
+    }
 
     public DateTimeOffset LastReadAtUtc
     {
@@ -86,7 +104,8 @@ public sealed class NotificationCenterService
             PublishNotificationsChanged();
         }
 
-        if (request.DisplayMode is PackageNotificationDisplayMode.ToastOnly or PackageNotificationDisplayMode.ToastAndTray)
+        if ((request.DisplayMode is PackageNotificationDisplayMode.ToastOnly or PackageNotificationDisplayMode.ToastAndTray)
+            && Preferences.AllowsToast(request.Severity))
         {
             PublishToastQueued(new AppToastNotification(
                 notification.NotificationId,
@@ -154,6 +173,7 @@ public sealed class NotificationCenterService
             {
                 var state = JsonSerializer.Deserialize<PersistedNotificationState>(File.ReadAllText(_stateFilePath), JsonOptions);
                 _lastReadAtUtc = state?.LastReadAtUtc ?? DateTimeOffset.MinValue;
+                _preferences = state?.Preferences ?? new();
                 _notifications = state?.Notifications?.Where(notification => notification is not null).ToList() ?? [];
                 TrimNotificationsCore(DateTimeOffset.UtcNow);
                 SaveStateCore();
@@ -162,6 +182,7 @@ public sealed class NotificationCenterService
             {
                 QuarantineCorruptState();
                 _lastReadAtUtc = DateTimeOffset.MinValue;
+                _preferences = new();
                 _notifications = [];
             }
         }
@@ -193,6 +214,7 @@ public sealed class NotificationCenterService
             {
                 LastReadAtUtc = _lastReadAtUtc,
                 Notifications = _notifications,
+                Preferences = _preferences,
             }, JsonOptions));
             File.Move(tempFilePath, _stateFilePath, overwrite: true);
         }
@@ -280,5 +302,7 @@ public sealed class NotificationCenterService
         public DateTimeOffset LastReadAtUtc { get; set; } = DateTimeOffset.MinValue;
 
         public List<AppNotificationRecord> Notifications { get; set; } = [];
+
+        public NotificationPreferences? Preferences { get; set; }
     }
 }

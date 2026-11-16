@@ -39,6 +39,33 @@ executable, exact opt-in variable, file, and directory before reporting READY.
 A lane with no runnable declaration fails. A READY-selected result that is
 missing or skipped also fails.
 
+App, Runtime and Build symbolic-link security facts/theories belong to `host-platform` and
+probe the local Windows creation privilege during ordinary local runs. They report
+an exact capability skip when it is unavailable. `core_ci.py platform` and the
+reporter's `--native-partition` selection set `SUNDER_REQUIRE_TEST_PREREQUISITES=1`:
+the fixtures execute and fail if the privilege is missing. Native evidence also
+rejects skipped symbolic-link fixtures independently of that flag. Other explicit
+security qualification must set the flag too. Ordinary invalid-path and malformed
+evidence assertions run independently of symbolic-link availability.
+
+Platform eligibility belongs in conditional attributes, not successful early returns.
+The declaration checker rejects direct OS-return bypasses and prerequisite catches
+that immediately return; fixture strings/comments do not count as executable guards.
+Windows DPAPI and Windows/macOS hidden-attribute/case-alias assertions run in their
+native lane rather than being reported as passing by the portable Linux lane.
+Native qualification also requires the matching Linux Secret Service/macOS Keychain
+integration. Linux Host uses a disposable private bus/keyring, with required
+prerequisites documented in [CI setup](../../scripts/ci/README.md). Scheduling this
+integration is not evidence that it passed on either Linux architecture.
+
+Tests launching local Node declare `[Trait("Prerequisite", "Node")]` or a
+`Node24Fact`/`Node24Theory` attribute. Test names such as `CrossLanguage` or `Interop`
+do not imply a tool dependency; corpus-only .NET checks need no Node process.
+Shell fixture execution uses Python's shared native-Bash launcher, so its declared
+prerequisites include both Python and Bash.
+Python release fixtures require 3.11 or newer, matching the release helpers. The
+readiness gate checks the minor version rather than accepting any `python3` alias.
+
 Component scopes are independent of those lanes. The disjoint owners are `npm`,
 `dotnet`, `app`, `host`, `cli` and `repository` (CI/release tooling); their union is
 `all`. `sdk` is a validation bundle of npm/.NET libraries, Host/CLI consumers and
@@ -167,6 +194,17 @@ the Host test assembly. Shared build dependencies retain caller globals such as
 `GeneratePackageOnBuild=false` and `BuildProjectReferences`; only source-lock lease
 properties are removed when resolving their project references.
 
+The normal-entry-point Windows WebView regression launches the real App executable
+with an isolated profile and a policy-admitted development package. Its observer
+neither replaces `Main` nor sets an apartment; it checks native page interaction,
+reopen, secondary-process forwarding and ordered cleanup. CLI/Host installer payloads
+are omitted from its private App copy and the test supplies an explicit external
+Runtime, so it does not modify the developer's PATH or persistent Host deployment.
+Dedicated STA capture probes and pre-Main RPC hooks cover different boundaries.
+Shared Host test support records its exact Worker project output in assembly metadata
+rather than guessing a build configuration from the test-output folder, including
+when alternate output paths are used.
+
 Only parallelize independent checks. The Node matrix and `core_ci.py module` build
 private source/dependency trees with workspace links redirected into each copy.
 Matrix runs remove successful copies and retain failed ones for diagnosis; the
@@ -181,6 +219,18 @@ from `languages/typescript/node`, run `npm run build` and
 Node/npm versions. Run the required interop selection without another cleanup of
 those outputs in parallel. After a prerequisite failure, rerun the affected cases
 rather than repeating already-passed full suites.
+
+Canonical JSON uses UTF-8 without a BOM and LF line endings. `.gitattributes` keeps
+exact input bytes across checkouts; `.editorconfig` guides editable JSON without
+save-time formatting rules for frozen evidence. The existing checkout-byte test
+also inspects the actual tracked and non-ignored new contract, template, schema,
+compatibility and test inputs, not just Git's checkout filters. Run the same quick
+check directly with `node scripts/test-oracles/checkout-bytes.mjs`. The Node matrix
+and shared producer preparation run it before copying/building package inputs,
+report every affected path together, and never repair or regenerate files. Meaningful
+LF source edits and invalid conformance JSON remain testable. Ordinary app settings,
+NuGet `packages.lock.json`, ignored dependency/output files and authored deletions
+do not acquire a new canonical-byte gate. Existing byte/hash assertions remain.
 
 ### Owning-job CI evidence
 
@@ -197,6 +247,18 @@ packed closure and service scenarios. The optional-reference Worker child case
 belongs to the package-tool `service-resources` tests: both TS and JS parents
 generate their provider and require exactly one passing child case with no skips.
 The standalone SDK run does not register that fixture-only child case.
+
+Node inspector fixtures invoke the native Node executable with an entry-point-scoped
+preload; `.cjs` files are not Windows executables. Watch fixtures retain the real CLI
+and require its graceful zero exit and staging/lock cleanup. Unix sends OS SIGINT;
+Windows dispatches the installed signal handler through test-only IPC because Node's
+`child.kill("SIGINT")` uses forced termination there. This tests watch shutdown, not
+native Windows console Ctrl+C delivery, and adds no production IPC or inspector hook.
+Packed fixtures share `scripts/npm-command.mjs`; isolated producers copy that helper
+alongside their source tree. Direct package-tool runs that select Worker-transport
+cases also require `tsc -p packages/sdk/tsconfig.test.json` first, as in workspace test order.
+The matrix prepares that SDK harness automatically for a separately selected
+package-tool test job too; the all-in-one run compiles it only once.
 
 ```text
 node scripts/test-oracles/run-dotnet-tests-with-results.mjs --configuration Release
@@ -344,10 +406,31 @@ Core consumers can select the reviewed checkout with `SUNDER_AGENT_CURRENT_BASEL
 The existing `SUNDER_REQUIRE_AGENT_PACKAGE_RELEASE` and
 `SUNDER_REQUIRE_AGENT_UI_SNAPSHOT` required-input gates remain. Universal archives
 must have the exact six-RID roles and current dependencies; their descriptor bytes
-and runtime provider tuples are checked against the reviewed current input through
-install/reload/reinstall. App snapshot metadata binds both current-input hashes to
-the runtime-produced snapshot. Stale snapshots must be recollected, not relabeled.
-Existing SQLite native loading, Worker exit and App activation coverage remains.
+and runtime provider tuples are checked against the reviewed current input.
+
+The pre-publication `agent-family` scenario uses production **local development
+imports**, official execution-runtime acquisition and native App IPC, without
+publication/read credentials or invented installed/Registry policy. Its explicit
+`projectOrder` runs the Runtime exporter before `Sunder.App.Integration.Tests`;
+preview and execution share that order, and a failed producer stops the consumer.
+The Runtime gate loads/unloads/reloads/replaces all fifteen families, checks their
+providers/App membership and SQLite bytes, then writes schema-2 snapshot metadata
+bound to both reviewed-input hashes, every archive's exact bytes and the Core catalog.
+Select `SUNDER_AGENT_PACKAGE_ARCHIVE_DIR`, `SUNDER_AGENT_PLATFORM_CATALOG` and a fresh
+`SUNDER_AGENT_UI_SNAPSHOT_DIR`, plus the standalone Maker inputs documented below.
+
+The App artifact gate validates the exported bytes, then reacquires genuine admission
+in a new Runtime from the identical inputs: aliases, generations and permits from an
+expired Runtime cannot be relabeled. A real App OS peer materializes the exported
+snapshot and activates its module under production policy. Its pre-Main test hook
+does **not** qualify ordinary startup, package-view construction, Maker UI, or
+installed acceptance. Stale snapshots must be recollected, not relabeled.
+
+The retained installed lifecycle has the separate `agent-family-installed` scenario
+and `SUNDER_REQUIRE_AGENT_INSTALLED_FAMILY=1` selection. Pre-publication development
+results do not qualify it. Authenticated published-installed native acceptance remains
+mandatory after publication; neither a build nor managed six-RID projections establish
+native acceptance on the six supported platforms.
 
 The Agent owner has supplied the reviewed 31-record input after local current-RID
 qualification. `AgentCurrentInputsTests` selects that scope explicitly with
@@ -432,10 +515,10 @@ because each sequences lifecycle work.
 ## Deterministic harnesses
 
 The source-channel standalone Maker probe is a separate explicit artifact scope:
-select `SUNDER_REQUIRE_MAKER_STANDALONE=1`, `SUNDER_MAKER_DEV_PACKAGE` (current-RID
-canonical development directory), `SUNDER_MAKER_IMPORT_CANDIDATE` (its exact local
+select `SUNDER_REQUIRE_MAKER_STANDALONE=1`, `SUNDER_MAKER_PACKAGE_ARCHIVE` (the exact
+current-RID `.sunderpkg` to validate and extract), `SUNDER_MAKER_IMPORT_CANDIDATE` (its exact local
 Agent API archive selection), and `SUNDER_MAKER_PLATFORM_CATALOG` (the selected Core
-catalog). Run `AgentPackageReleaseSmokeTests.MakerStandalone_CurrentDevelopmentOutputActivatesAndRejectsInvalidArgumentsWithoutAgent`.
+catalog). Run `AgentPackageReleaseSmokeTests.MakerStandalone_CurrentArchiveActivatesAndRejectsInvalidArgumentsWithoutAgent`.
 Only Maker is loaded into the disposable Host. The Agent archive supplies metadata,
 not an installed/running Agent. The probe retains import/permission guards, launches
 the actual Worker and checks its provider-side argument rejection and clean exit.

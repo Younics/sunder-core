@@ -22,27 +22,38 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var original = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new("", "7.6.5", [new(sourcePath, ImplementationFirstSource)], references)).Contracts);
             WriteSourceAuthoringState(root, original);
             File.WriteAllText(sourcePath, ImplementationFirstSource + RoleView);
-            var task = CreateSourceTask(root, Path.Combine(root, "obj"), sourcePath, references);
+            var task = CreateSourceTask(root, Path.Combine(root, "obj/Debug/net10.0/sunder-analysis/win-x64"), sourcePath, references);
+            task.ProjectExtensionsPath = Path.Combine(root, "obj");
             task.GeneratePackageRoles = true;
             Assert.True(task.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)task.BuildEngine).Errors));
             var plan = Assert.Single(task.PackageRolePlans);
             using var json = JsonDocument.Parse(File.ReadAllBytes(plan.ItemSpec));
             Assert.Equal(1, json.RootElement.GetProperty("schemaVersion").GetInt32());
             Assert.True(json.RootElement.GetProperty("hasApp").GetBoolean());
+            var cache = Path.Combine(root, "obj", "sunder-package-compilations");
+            Assert.Equal(cache, json.RootElement.GetProperty("compilationCacheRoot").GetString());
+            foreach (var role in new[] { "Worker", "App" })
+            {
+                var compilation = plan.GetMetadata(role + "CompilationRoot");
+                Assert.Equal(cache, Path.GetDirectoryName(compilation));
+                var descriptor = File.ReadAllBytes(Path.Combine(compilation, SunderRoleCompilationSnapshot.DescriptorName));
+                Assert.Equal(role.ToLowerInvariant() + "-" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(descriptor)), Path.GetFileName(compilation));
+            }
             Assert.NotEmpty(task.WorkerCompileItems); Assert.NotEmpty(task.AppCompileItems);
             Assert.Contains(task.WorkerCompileItems, item => item.ItemSpec.EndsWith("worker-entry.g.cs", StringComparison.Ordinal));
             Assert.Contains(task.AppCompileItems, item => item.ItemSpec.EndsWith("app-module.g.cs", StringComparison.Ordinal));
             Assert.DoesNotContain(task.AppCompileItems, item => item.ItemSpec.EndsWith("authoring.g.cs", StringComparison.Ordinal));
             Assert.All(task.WorkerCompileItems.Concat(task.AppCompileItems), item => Assert.True(File.Exists(item.ItemSpec)));
-            var before = ReadOwnedSet(Path.Combine(root, "obj/sunder-rpc"));
-            var timestamps = ReadOwnedTimestamps(Path.Combine(root, "obj/sunder-rpc"));
-            Assert.True(task.Execute()); Assert.Equal(before, ReadOwnedSet(Path.Combine(root, "obj/sunder-rpc")));
-            Assert.Equal(timestamps, ReadOwnedTimestamps(Path.Combine(root, "obj/sunder-rpc")));
+            var generated = Path.Combine(task.IntermediateOutputPath, "sunder-rpc");
+            var before = ReadOwnedSet(generated);
+            var timestamps = ReadOwnedTimestamps(generated);
+            Assert.True(task.Execute()); Assert.Equal(before, ReadOwnedSet(generated));
+            Assert.Equal(timestamps, ReadOwnedTimestamps(generated));
             File.WriteAllText(sourcePath, ImplementationFirstSource + RoleView.Replace("global::Sunder.Generated.Packages.Example_Generated_Services.IGreetingService service", "GreetingService service", StringComparison.Ordinal)
                 .Replace("service.GreetAsync(new() { Name = \"hello\" }, default)", "service.GreetAsync(new() { Name = \"hello\" }, null!, default)", StringComparison.Ordinal));
             Assert.False(task.Execute()); Assert.Empty(task.PackageRolePlans); Assert.Empty(task.WorkerCompileItems); Assert.Empty(task.AppCompileItems);
             Assert.Contains(((TestBuildEngine)task.BuildEngine).Errors, error => error.Contains("role-conflict", StringComparison.Ordinal));
-            Assert.Equal(before, ReadOwnedSet(Path.Combine(root, "obj/sunder-rpc")));
+            Assert.Equal(before, ReadOwnedSet(generated));
         }
         finally { Directory.Delete(root, recursive: true); }
     }
@@ -59,7 +70,7 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             File.WriteAllText(path, ImplementationFirstSource + RoleView);
             var task = CreateSourceTask(root, Path.Combine(root, "obj"), path, references); task.GeneratePackageRoles = true;
             Assert.True(task.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)task.BuildEngine).Errors));
-            var oldAppFiles = task.AppCompileItems.Where(item => item.ItemSpec.Contains("/roles/app/", StringComparison.Ordinal)).Select(item => item.ItemSpec).ToArray();
+            var oldAppFiles = task.AppCompileItems.Where(item => item.ItemSpec.Replace('\\', '/').Contains("/roles/app/", StringComparison.Ordinal)).Select(item => item.ItemSpec).ToArray();
             Assert.NotEmpty(oldAppFiles);
             File.WriteAllText(path, ImplementationFirstSource);
             Assert.True(task.Execute(), string.Join(Environment.NewLine, ((TestBuildEngine)task.BuildEngine).Errors));
@@ -93,6 +104,10 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                 ProjectIdentity = "ImplementationFirstRpc", Role = "app",
             };
             Assert.False(denied.Execute()); Assert.Empty(denied.CompileItems);
+            var shortImport = Path.Combine(root, "input.props");
+            var longImport = Path.Combine(root, new string('a', 80), new string('b', 80), "input.props");
+            Directory.CreateDirectory(Path.GetDirectoryName(longImport)!);
+            File.WriteAllText(shortImport, "<Project />"); File.WriteAllText(longImport, "<Project />");
             var assembly = SecurityElement.Escape(typeof(ReadSunderPackageRoleInputsTask).Assembly.Location);
             File.WriteAllText(Path.Combine(root, "Read.proj"), $$"""
                 <Project DefaultTargets="Read">
@@ -104,10 +119,16 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
                       <Output TaskParameter="LeaseId" PropertyName="_Lease" />
                     </ManageSunderRpcGeneratedOutputLockTask>
                     <ReadSunderPackageRoleInputsTask PlanPath="{{SecurityElement.Escape(plan.ItemSpec)}}" ExpectedSha256="{{plan.GetMetadata("Sha256")}}"
-                        ProjectIdentity="ImplementationFirstRpc" ProjectDirectory="$(MSBuildProjectDirectory)" Role="app" OutputLockLeaseId="$(_Lease)">
+                        ProjectIdentity="ImplementationFirstRpc" ProjectDirectory="$(MSBuildProjectDirectory)" Role="app" OutputLockLeaseId="$(_Lease)"
+                        ProjectImports="{{SecurityElement.Escape(shortImport)}};{{SecurityElement.Escape(longImport)}}">
                       <Output TaskParameter="CompileItems" ItemName="_Compile" />
                       <Output TaskParameter="AssemblyName" PropertyName="_Assembly" />
+                      <Output TaskParameter="CompilerProjectImports" PropertyName="_CompilerProjectImports" />
                     </ReadSunderPackageRoleInputsTask>
+                    <ItemGroup><_CompilerProjectInput Include="$(_CompilerProjectImports)" /></ItemGroup>
+                    <Error Condition="'@(_CompilerProjectInput->Count())' != '2'"
+                           Text="Native compiler imports must remain distinct file inputs, not one escaped semicolon-delimited path." />
+                    <Error Condition="!Exists('%(_CompilerProjectInput.Identity)')" Text="Native compiler import '%(_CompilerProjectInput.Identity)' does not exist." />
                     <Error Condition="'@(_Compile)' == '' or '$(_Assembly)' != 'Sunder.Rpc.Authoring.App'" Text="Role inputs were not returned." />
                     <ManageSunderRpcGeneratedOutputLockTask Action="Release" ProjectDirectory="$(MSBuildProjectDirectory)" LeaseId="$(_Lease)" />
                   </Target>

@@ -1,30 +1,33 @@
 using Avalonia;
 using Avalonia.Media;
+using Sunder.App.Models;
 using Sunder.App.Themes;
 using Sunder.Sdk.Avalonia.Theming;
 
 namespace Sunder.App.Services;
 
-public sealed class ThemeManager(Application application) : IThemeManager
+public sealed class ThemeManager(Application application, ShellState? shellState = null) : IThemeManager
 {
     private readonly Application _application = application;
 
     public IReadOnlyList<SunderThemeDefinition> AvailableThemes { get; } =
     [
         SunderThemeDefinition.GraphiteDark,
+        SunderThemeDefinition.GraphiteLight,
     ];
 
     public SunderThemeDefinition ActiveTheme { get; private set; } = SunderThemeDefinition.GraphiteDark;
 
     public void Initialize()
     {
-        ApplyTheme(SunderThemeDefinition.GraphiteDark.Id);
+        ApplyTheme(shellState?.ThemeId ?? SunderThemeDefinition.GraphiteDark.Id);
     }
 
     public void ApplyTheme(string themeId)
     {
         var theme = AvailableThemes.FirstOrDefault(x => x.Id == themeId) ?? SunderThemeDefinition.GraphiteDark;
         ActiveTheme = theme;
+        _application.RequestedThemeVariant = theme.Variant;
 
         SetBrush(SunderThemeKeys.BackgroundAppBrush, theme.BackgroundApp);
         SetBrush(SunderThemeKeys.SurfaceBaseBrush, theme.SurfaceBase);
@@ -104,14 +107,15 @@ public sealed class ThemeManager(Application application) : IThemeManager
 
     private void SetThemeShadowResources(SunderThemeDefinition theme)
     {
-        SetShadow(SunderThemeKeys.ShadowWorkspacePanel, CreateShadow(0, 22, 70, 0, WithAlpha(theme.BackgroundApp, 0x54)));
-        SetShadow(SunderThemeKeys.ShadowShellPanel, CreateShadow(0, 18, 52, 0, WithAlpha(theme.BackgroundApp, 0x42)));
-        SetShadow(SunderThemeKeys.ShadowToast, CreateShadow(0, 10, 28, 0, WithAlpha(theme.BackgroundApp, 0x7A)));
-        SetShadow(SunderThemeKeys.ShadowPrompt, CreateShadow(0, 18, 42, 0, WithAlpha(theme.BackgroundApp, 0x92)));
-        SetShadow(SunderThemeKeys.ShadowWelcomeLogo, CreateShadow(0, 14, 36, 0, WithAlpha(theme.BackgroundApp, 0x70)));
-        SetShadow(SunderThemeKeys.ShadowPackagePanel, CreateShadow(0, 18, 48, 0, WithAlpha(theme.BackgroundApp, 0x58)));
-        SetShadow(SunderThemeKeys.ShadowPackageCard, CreateShadow(0, 10, 30, 0, WithAlpha(theme.BackgroundApp, 0x42)));
-        SetShadow(SunderThemeKeys.ShadowOverlay, CreateShadow(0, 28, 100, 0, WithAlpha(theme.BackgroundApp, 0x90)));
+        var shadow = theme.Variant == Avalonia.Styling.ThemeVariant.Light ? SunderThemeDefinition.GraphiteDark.BackgroundApp : theme.BackgroundApp;
+        SetShadow(SunderThemeKeys.ShadowWorkspacePanel, CreateShadow(0, 22, 70, 0, WithAlpha(shadow, 0x54)));
+        SetShadow(SunderThemeKeys.ShadowShellPanel, CreateShadow(0, 18, 52, 0, WithAlpha(shadow, 0x42)));
+        SetShadow(SunderThemeKeys.ShadowToast, CreateShadow(0, 10, 28, 0, WithAlpha(shadow, 0x7A)));
+        SetShadow(SunderThemeKeys.ShadowPrompt, CreateShadow(0, 18, 42, 0, WithAlpha(shadow, 0x92)));
+        SetShadow(SunderThemeKeys.ShadowWelcomeLogo, CreateShadow(0, 14, 36, 0, WithAlpha(shadow, 0x70)));
+        SetShadow(SunderThemeKeys.ShadowPackagePanel, CreateShadow(0, 18, 48, 0, WithAlpha(shadow, 0x58)));
+        SetShadow(SunderThemeKeys.ShadowPackageCard, CreateShadow(0, 10, 30, 0, WithAlpha(shadow, 0x42)));
+        SetShadow(SunderThemeKeys.ShadowOverlay, CreateShadow(0, 28, 100, 0, WithAlpha(shadow, 0x90)));
     }
 
     private static string CreateShadow(int offsetX, int offsetY, int blur, int spread, Color color)

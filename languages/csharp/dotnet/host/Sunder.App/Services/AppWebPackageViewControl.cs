@@ -2,12 +2,13 @@ using Avalonia.Controls;
 
 namespace Sunder.App.Services;
 
-internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IAppDevelopmentDocumentOwner
+internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IAsyncDisposable, IAppDevelopmentDocumentOwner
 {
     private readonly IAppWebView _webView;
     private readonly AppWebBridge _bridge;
     private readonly AppWebContentServer _contentServer;
     private readonly CancellationTokenSource _lifetime = new();
+    private readonly TaskCompletionSource _retired = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _disposed;
 
     public AppWebPackageViewControl(
@@ -39,6 +40,7 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IA
     }
 
     internal AppWebBridge Bridge => _bridge;
+    public bool CanCapture => _webView.CanCapture;
     public IAppDevelopmentDocument DevelopmentDocument { get; }
 
     public void Dispose()
@@ -47,32 +49,48 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IA
         {
             return;
         }
-        _lifetime.Cancel();
-        _webView.NavigationStarting -= OnNavigationStarting;
-        _webView.NavigationCompleted -= OnNavigationCompleted;
-        _webView.NewWindowRequested -= OnNewWindowRequested;
-        _webView.ResourceRequested -= OnResourceRequested;
-        _webView.MessageReceived -= OnMessageReceived;
-        var cleanup = DisposeBridgeAndViewAsync();
-        if (!cleanup.IsCompletedSuccessfully)
+        _ = DisposeBridgeAndViewAsync();
+        if (!_retired.Task.IsCompletedSuccessfully)
         {
-            AppCleanupQuarantine.Retain(cleanup, "disposing a package browser bridge");
+            AppCleanupQuarantine.Retain(_retired.Task, "disposing a package browser bridge");
         }
     }
+
+    public ValueTask DisposeAsync()
+    {
+        Dispose();
+        return new(_retired.Task);
+    }
+
+    internal Task DrainNativeRetirementAsync() => _webView.DrainNativeRetirementAsync();
 
     private async Task DisposeBridgeAndViewAsync()
     {
         try
         {
-            // Notify the live document before destroying its WebView. Each bridge
-            // owns its requests; the non-disposing client preserves sibling views.
-            await _bridge.DisposeAsync();
+            try
+            {
+                _lifetime.Cancel();
+                _webView.NavigationStarting -= OnNavigationStarting;
+                _webView.NavigationCompleted -= OnNavigationCompleted;
+                _webView.NewWindowRequested -= OnNewWindowRequested;
+                _webView.ResourceRequested -= OnResourceRequested;
+                _webView.MessageReceived -= OnMessageReceived;
+                // Notify the live document before destroying its WebView. Each bridge
+                // owns its requests; the non-disposing client preserves sibling views.
+                await _bridge.DisposeAsync();
+            }
+            finally
+            {
+                Content = null;
+                _webView.Dispose();
+                _lifetime.Dispose();
+            }
+            _retired.TrySetResult();
         }
-        finally
+        catch (Exception error)
         {
-            Content = null;
-            _webView.Dispose();
-            _lifetime.Dispose();
+            _retired.TrySetException(error);
         }
     }
 

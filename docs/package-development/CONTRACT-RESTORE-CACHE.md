@@ -5,7 +5,7 @@ Restore preserves the lock and generated source. Explicit add/update operations
 own selection changes.
 
 ```powershell
-dotnet msbuild Package.csproj -t:RestoreSunderContracts
+dotnet restore Package.csproj
 sunder-package contracts restore --project ./package
 ```
 
@@ -17,6 +17,47 @@ PATH. Platform hydration accepts exact canonical catalog content without catalog
 signing keys or trust bundles. Local selections omit `registryOrigin` and never
 infer a default Registry. Explicit Development-Registry transport is described below.
 Present null or malformed origins remain invalid; absence alone denotes local selection.
+
+## Ordinary .NET Development
+
+Use `<Project Sdk="Sunder.Package.Build/1.1.0">` (it includes `Microsoft.NET.Sdk`).
+`dotnet restore`, Build's normal restore prepass and solution restore fill missing
+evidence for each canonical project's existing lock. Direct source-target imports
+use the same restore hook. A Build `PackageReference` alone cannot provide this
+cold path: NuGet excludes ordinary package build imports during restore.
+
+For unpublished local selections, declare the exact byte sources. For example,
+in repository `Directory.Build.props`:
+
+```xml
+<Project>
+  <PropertyGroup Condition="'$(MSBuildIsRestoring)' == 'true'">
+    <SunderPackageCandidatePath>$(MSBuildThisFileDirectory)dependencies/dependency.sunderpkg</SunderPackageCandidatePath>
+    <SunderPlatformCatalogPath>$(MSBuildThisFileDirectory)dependencies/sunder-platform-contracts.v1.json</SunderPlatformCatalogPath>
+  </PropertyGroup>
+</Project>
+```
+
+The restore-only condition keeps these sources separate from explicit API selection
+commands. Multiple archive paths may be semicolon-separated in XML. Exact hashes
+verify bytes; they do not locate missing files. Restoring published selections uses
+only the Registry origins already in the lock. No preparation script, implicit API
+selection, lock refresh or Accept/Freeze operation is involved.
+
+Warm restore verifies the complete cache without requiring its original sources or
+network. Compilation, `--no-restore`, design-time builds, Pack and generated/prebuilt
+role requests never acquire contract inputs. `SunderRestoreContracts=false` disables
+the automatic hook. Corrupt, unowned or interrupted cache evidence fails without
+automatic repair; `RestoreSunderContracts` remains the explicit recovery command.
+
+MSBuild resolves the tooling SDK before evaluating project properties. To isolate
+its NuGet cache, set `globalPackagesFolder` in `NuGet.Config` or `NUGET_PACKAGES` for
+both SDK resolution and package restore; project-local `RestorePackagesPath` alone
+is too late for SDK resolution. A cold tooling SDK still needs its normal NuGet
+source; offline builds require that SDK and the NuGet closure already restored.
+
+## Shared Restore Verification
+
 Loading an unpublished package with imports also requires
 [Runtime development import evidence](DEVELOPMENT-IMPORTS.md). Current C# local builds
 emit the reviewed selection's manifest-bound handoff beside `sunder-dev`; other outputs
@@ -76,7 +117,7 @@ After selection, restore exact inputs into a cold cache:
 
 ```powershell
 sunder-package contracts restore --project ./consumer --candidate ./dependency.sunderpkg
-dotnet msbuild Consumer.csproj -t:RestoreSunderContracts -p:SunderPackageCandidatePath=./dependency.sunderpkg
+dotnet restore Consumer.csproj -p:SunderPackageCandidatePath=./dependency.sunderpkg
 ```
 
 The candidate must reproduce an existing lock's package/version/content identity,
@@ -124,9 +165,10 @@ An incomplete publication produces an actionable restore diagnostic.
 For C#, `dotnet msbuild Package.csproj -t:CheckSunderContractCache` uses those same
 verified readers without publishing cache evidence. Build and check report the
 effective cache root and all missing selected descriptors/receipts, model projections
-and catalogs, including inventory members a provider does not directly call. NuGet
-restore does not populate this cache. Supply the exact candidate/catalog to explicit
-contract restore; same-version rebuilt bytes and inferred Registries are not substitutes.
+and catalogs, including inventory members a provider does not directly call. Supply
+the exact candidate/catalog to ordinary SDK restore; same-version rebuilt bytes and
+inferred Registries are not substitutes. Explicit contract restore also remains
+available for recovery and diagnostic orchestration.
 
 Cache bytes establish integrity only. Registry publication, compatible installation,
 development preparation and Runtime grants have their own admission checks.

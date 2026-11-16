@@ -856,10 +856,22 @@ public sealed partial class AppWebBridgeTests
                 webView.OnDispose = () => Assert.Null(view.Content);
                 view.Dispose();
                 view.Dispose();
+                var retirement = view.DisposeAsync().AsTask();
+                Assert.Same(retirement, view.DisposeAsync().AsTask());
                 Assert.Single(webView.Scripts);
                 Assert.False(webView.Disposed.Task.IsCompleted);
+                Assert.False(retirement.IsCompleted);
+                var nativeExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                webView.NativeRetirement = nativeExit.Task;
                 notification.SetResult("true");
-                await webView.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                await retirement.WaitAsync(TimeSpan.FromSeconds(5));
+                Assert.True(webView.Disposed.Task.IsCompletedSuccessfully);
+                // A single view can dispose while a sibling still owns the same
+                // browser group. Only profile-owner retirement joins native exit.
+                var nativeRetirement = view.DrainNativeRetirementAsync();
+                Assert.False(nativeRetirement.IsCompleted);
+                nativeExit.SetResult();
+                await nativeRetirement;
             }
         }
         finally
@@ -872,6 +884,7 @@ public sealed partial class AppWebBridgeTests
     [Trait("Category", "Conformance")]
     [Trait("Capability", "Process")]
     [Trait("Size", "Medium")]
+    [Trait("Prerequisite", "Node")]
     public async Task BootstrapJavaScriptCrossLanguageVm_ExecutesExactNativeContractAcrossNavigation()
     {
         await RunBootstrapVmOracleAsync(static script => script);
@@ -881,6 +894,7 @@ public sealed partial class AppWebBridgeTests
     [Trait("Category", "Mutation")]
     [Trait("Capability", "Process")]
     [Trait("Size", "Medium")]
+    [Trait("Prerequisite", "Node")]
     public async Task BootstrapJavaScriptCrossLanguageVm_RejectsSeededNonceOwnershipMutation()
     {
         var exception = await Assert.ThrowsAsync<AppWebBridgeVmOracleException>(() =>
@@ -1633,6 +1647,7 @@ public sealed partial class AppWebBridgeTests
 
         public Func<string, Task<string?>>? EvaluateScript { get; set; }
         public Action? OnDispose { get; set; }
+        public Task NativeRetirement { get; set; } = Task.CompletedTask;
         public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Control Control { get; } = new Border();
@@ -1688,6 +1703,8 @@ public sealed partial class AppWebBridgeTests
         public void Stop()
         {
         }
+
+        public Task DrainNativeRetirementAsync() => NativeRetirement;
 
         public void ClearScripts()
         {

@@ -5,6 +5,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
 import { testProcessEnvironment } from "./test-process-environment.mjs";
+import { missingPrerequisites } from "./test-lane-prerequisites.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const args = process.argv.slice(2);
@@ -14,6 +15,8 @@ if (args.length !== 0 && (args.length !== 4 || args[0] !== "--scope" || args[2] 
 const { policy, declarations } = loadCoreTestModel(repositoryRoot, undefined, args[1] ?? "all");
 const tests = declarations.filter((test) => test.framework === "python" || test.framework === "shell");
 if (tests.length === 0) throw new Error("Release fixture discovery selected no Python or shell tests.");
+const missing = missingPrerequisites(tests);
+if (missing.length > 0) throw new Error(`Release fixture prerequisites unavailable: ${missing.map(item => item.reason).join("; ")}`);
 const outputDirectory = resolve(repositoryRoot, args[3] ?? "artifacts/test-results");
 const outputPath = resolve(outputDirectory, policy.reports.releaseFixtures);
 mkdirSync(outputDirectory, { recursive: true });
@@ -27,10 +30,10 @@ for (const group of groups.values()) {
   const test = group[0];
   const report = resolve(temporary, "results.json");
   rmSync(report, { force: true });
-  const command = test.framework === "python" ? "python3" : "bash";
+  const command = "python3";
   const arguments_ = test.framework === "python"
     ? ["-B", "scripts/test-oracles/run-python-fixture.py", test.source, report, ...group.map(item => item.runnerSelector)]
-    : [test.source];
+    : ["-B", "scripts/ci/bash_runtime.py", "--run", test.source];
   const started = process.hrtime.bigint();
   const result = spawnSync(command, arguments_, {
     cwd: repositoryRoot,

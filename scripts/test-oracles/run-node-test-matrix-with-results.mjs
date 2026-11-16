@@ -5,15 +5,18 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { loadCoreTestModel } from "./core-test-policy.mjs";
 import { createNodeTestWorkspace } from "./node-test-workspace.mjs";
+import { npmCommand } from "../npm-command.mjs";
+import { verifyCheckoutBytes } from "./checkout-bytes.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const wrapper = resolve(repositoryRoot, "scripts/test-oracles/run-node-tests-with-results.mjs");
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npm = "npm";
 const { values } = parseArgs({ options: { scope: { type: "string", default: "all" },
   "results-directory": { type: "string", default: "artifacts/test-results" },
   action: { type: "string", default: "all" }, work: { type: "string" }, project: { type: "string" } } });
 if (!["all", "scripts", "build", "test", "templates"].includes(values.action)) throw new Error("Unknown npm stage.");
 if (["build", "test", "templates"].includes(values.action) && !values.work) throw new Error("Staged npm execution requires --work.");
+verifyCheckoutBytes(repositoryRoot);
 const { declarations } = loadCoreTestModel(repositoryRoot, undefined, values.scope);
 const tests = declarations.filter(test => test.framework === "node");
 const selectedProjects = new Set(tests.map(test => test.project));
@@ -36,6 +39,7 @@ if (values.action === "build") {
   writeFileSync(statePath, JSON.stringify(workspace), { flag: "wx" });
 }
 const nodeRoot = workspace?.nodeRoot;
+const compiledTestProjects = new Set();
 let completed = false;
 try {
   // Packed package-tool cases consume the scaffolder as well as the SDK/tool.
@@ -56,16 +60,25 @@ try {
 }
 
 function runWorkspace(workspace, project, report) {
-  runRequired(
-    npm,
-    ["exec", "--", "tsc", "-p", `${project}/tsconfig.test.json`],
-    nodeRoot,
-    `${workspace} test compilation`,
-  );
+  // Package-tool Worker consumers execute the SDK's compiled protocol harness,
+  // including when this workspace is selected without a preceding SDK test job.
+  if (workspace === "@younics/sunder-package-tool") compileTests("packages/sdk");
+  compileTests(project);
   runNodeReport(report, testFiles(resolve(nodeRoot, project, "dist-test/test"), ".test.js"),
     workspace === "@younics/sunder-package-tool"
       ? { SUNDER_TEST_PACKED_CLOSURE: "1", SUNDER_TEST_PACKED_SERVICES: "1" }
       : {});
+}
+
+function compileTests(project) {
+  if (compiledTestProjects.has(project)) return;
+  runRequired(
+    npm,
+    ["exec", "--", "tsc", "-p", `${project}/tsconfig.test.json`],
+    nodeRoot,
+    `${project} test compilation`,
+  );
+  compiledTestProjects.add(project);
 }
 
 function runNodeReport(report, files, environment = {}) {
@@ -83,6 +96,7 @@ function testFiles(directory, suffix) {
 
 function runRequired(command, arguments_, cwd, label, environment = {}) {
   process.stdout.write(`\n=== ${label} ===\n`);
+  if (command === "npm") ({ command, arguments: arguments_ } = npmCommand(arguments_));
   const result = spawnSync(command, arguments_, {
     cwd,
     env: { ...process.env, ...environment, NO_COLOR: "1" },

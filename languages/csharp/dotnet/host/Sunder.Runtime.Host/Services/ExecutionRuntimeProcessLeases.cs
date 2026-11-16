@@ -1217,42 +1217,7 @@ internal sealed partial class ExecutionRuntimeLeaseRegistry
 internal static class ExecutionRuntimeProcessBirthIdentity
 {
     public static string Capture(Process process)
-    {
-        if (OperatingSystem.IsLinux())
-        {
-            var stat = File.ReadAllText($"/proc/{process.Id}/stat");
-            var closingParenthesis = stat.LastIndexOf(')');
-            if (closingParenthesis < 0)
-            {
-                throw new InvalidDataException($"Process {process.Id} has invalid Linux start metadata.");
-            }
-            var fields = stat[(closingParenthesis + 1)..]
-                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (fields.Length <= 19
-                || !ulong.TryParse(fields[19], NumberStyles.None, CultureInfo.InvariantCulture, out _))
-            {
-                throw new InvalidDataException($"Process {process.Id} has invalid Linux start metadata.");
-            }
-            var bootId = File.ReadAllText("/proc/sys/kernel/random/boot_id").Trim().ToLowerInvariant();
-            if (!Guid.TryParseExact(bootId, "D", out _))
-            {
-                throw new InvalidDataException("The Linux boot identity is invalid.");
-            }
-            return $"linux:{bootId}:{fields[19]}";
-        }
-
-        var startedAtUtc = process.StartTime.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture);
-        if (OperatingSystem.IsWindows())
-        {
-            return "windows:" + startedAtUtc;
-        }
-        if (OperatingSystem.IsMacOS())
-        {
-            return "darwin:" + startedAtUtc;
-        }
-        throw new PlatformNotSupportedException(
-            "Execution-runtime process birth identity is unavailable on this operating system.");
-    }
+        => RuntimeLeaseProcessIdentity.Capture(process);
 
     public static void Validate(string value)
     {

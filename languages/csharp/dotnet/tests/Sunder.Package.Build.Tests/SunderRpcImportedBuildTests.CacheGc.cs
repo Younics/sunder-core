@@ -14,6 +14,7 @@ public sealed partial class SunderRpcImportedBuildTests
 {
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task CacheGc_CrossLanguageCrashRecoveryAndRestoreContentionUseOneProtocol()
     {
         var helper = Path.Combine(RepositoryRoot(), "languages/typescript/node/packages/package-tool/dist-test/test/contract-cache-child.js");
@@ -187,13 +188,19 @@ public sealed partial class SunderRpcImportedBuildTests
     [Theory]
     [InlineData("missing-lock")]
     [InlineData("malformed-lock")]
-    [InlineData("linked-entry")]
     [InlineData("grace-zero")]
     [InlineData("no-locks")]
     [InlineData("wrong-recovery-locks")]
     [InlineData("unexpected-tombstone-file")]
     [InlineData("intent-traversal")]
     public void CacheGc_InvalidInputsAndPathsDoNotDeleteCacheBytes(string failure)
+        => AssertCacheGcRejectsInvalidInputsAndPaths(failure);
+
+    [SymbolicLinkFact(directory: false)]
+    public void CacheGc_LinkedEntryDoesNotDeleteCacheOrTargetBytes()
+        => AssertCacheGcRejectsInvalidInputsAndPaths("linked-entry");
+
+    private void AssertCacheGcRejectsInvalidInputsAndPaths(string failure)
     {
         var unused = AddUnusedCacheEntry("example.unused"); AgeEntry(unused);
         var reviewed = LockPath;

@@ -11,6 +11,7 @@ public sealed class AppWebDevelopmentScriptTests
     // Executes the actual generated scripts against a deterministic DOM boundary,
     // not a browser/native-capture qualification or a page-authored script fixture.
     [Fact]
+    [Trait("Prerequisite", "Node")]
     public async Task FixedDocumentScriptsBoundAndRedactInspectionAndRejectStaleOrProtectedInput()
     {
         using var temporary = TemporaryDirectoryScope.Create("development-document-script");

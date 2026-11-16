@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.Sdk.Logging;
@@ -8,20 +9,43 @@ namespace Sunder.App.Tests;
 public sealed class DeveloperLogServiceTests
 {
     [Fact]
-    public void Enable_IncludesRecentApplicationErrors()
+    public async Task Enable_IncludesRecentApplicationErrors()
     {
         var marker = $"app-error-{Guid.NewGuid():N}";
-        AppSessionLog.WriteError(marker, new InvalidOperationException("expected developer log exception"));
+        var (exception, text) = WriteApplicationError(marker);
         using var developerLog = new DeveloperLogService();
 
         developerLog.Enable();
 
-        Assert.Contains(
+        var entry = Assert.Single(
             developerLog.Snapshot(),
             entry => entry.Scope == DeveloperLogEntryScope.Application
                      && entry.Source == "application"
-                     && entry.Message.Contains(marker, StringComparison.Ordinal)
-                     && entry.Message.Contains("expected developer log exception", StringComparison.Ordinal));
+                     && entry.Message.Contains(marker, StringComparison.Ordinal));
+        Assert.Equal($"{marker}{Environment.NewLine}{text}", entry.Message);
+        await AppSessionLog.FlushAsync();
+        for (var attempt = 0; attempt < 20 && exception.IsAlive; attempt++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            await Task.Delay(25);
+        }
+        Assert.False(exception.IsAlive, "Recent and queued logs must retain exception text, not live package objects or stacks.");
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (WeakReference Exception, string Text) WriteApplicationError(string marker)
+    {
+        try
+        {
+            throw new InvalidOperationException("expected developer log exception", new FormatException("inner developer log exception"));
+        }
+        catch (Exception error)
+        {
+            AppSessionLog.WriteError(marker, error);
+            return (new WeakReference(error), error.ToString());
+        }
     }
 
     [Fact]

@@ -38,7 +38,8 @@ public sealed partial class RegistryRuntimeArchitectureTests
             Assert.DoesNotContain(secret, persisted, StringComparison.Ordinal);
             Assert.Equal(secret, (await store.GetAsync(first))?.AccessToken);
             Assert.Null(await store.GetAsync(second));
-            Assert.Contains(Path.Combine("credentials", "registry"), paths.RegistryCredentialFilePath, StringComparison.Ordinal);
+            Assert.Equal(Path.Combine("credentials", "registry", "credentials.enc.json"),
+                Path.GetRelativePath(paths.RootPath, paths.RegistryCredentialFilePath));
         }
         finally
         {

@@ -59,6 +59,18 @@ if (mode == "containment-hang")
 }
 if (mode == "containment-echo")
 {
+    if (OperatingSystem.IsWindows())
+    {
+        var members = new uint[8];
+        var count = GetConsoleProcessList(members, (uint)members.Length);
+        await File.WriteAllTextAsync(Path.Combine(Environment.CurrentDirectory, "containment-console.json"), JsonSerializer.Serialize(new
+        {
+            codePage = GetConsoleCP(),
+            visible = IsWindowVisible(GetConsoleWindow()),
+            count,
+            processIds = members.Take((int)Math.Min(count, (uint)members.Length)).ToArray(),
+        }));
+    }
     await input.CopyToAsync(output);
     await output.FlushAsync();
     return 0;
@@ -139,6 +151,16 @@ if (mode is "containment-child" or "containment-child-ignore-term" or "containme
 
 [DllImport("libc", SetLastError = true)]
 static extern int setsid();
+
+[DllImport("kernel32.dll")]
+static extern uint GetConsoleCP();
+[DllImport("kernel32.dll")]
+static extern nint GetConsoleWindow();
+[DllImport("kernel32.dll")]
+static extern uint GetConsoleProcessList([Out] uint[] processList, uint count);
+[DllImport("user32.dll")]
+[return: MarshalAs(UnmanagedType.Bool)]
+static extern bool IsWindowVisible(nint window);
 
 var hello = await ReadFrameAsync(input);
 if (hello.RootElement.GetProperty("type").GetString() != "host.hello") return 64;

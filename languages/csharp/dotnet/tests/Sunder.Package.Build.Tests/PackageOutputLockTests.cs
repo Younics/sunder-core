@@ -194,6 +194,7 @@ public sealed class PackageOutputLockTests
 
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task SharedOutputLock_InteroperatesWithNodeProducerWhenAvailable()
     {
         var helper = Path.Combine(
@@ -502,6 +503,10 @@ public sealed class PackageOutputLockTests
         {
             Directory.CreateDirectory(tempRoot);
             foreach (var name in new[] { "TMPDIR", "TMP", "TEMP" }) startInfo.Environment[name] = tempRoot;
+            var profile = Path.Combine(tempRoot, "isolated-profile");
+            Directory.CreateDirectory(profile);
+            startInfo.Environment["HOME"] = profile;
+            startInfo.Environment["USERPROFILE"] = profile;
         }
         startInfo.ArgumentList.Add(helper);
         foreach (var argument in arguments) startInfo.ArgumentList.Add(argument);

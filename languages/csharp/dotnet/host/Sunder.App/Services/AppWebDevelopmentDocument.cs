@@ -8,6 +8,7 @@ namespace Sunder.App.Services;
 
 internal interface IAppDevelopmentDocumentOwner
 {
+    bool CanCapture => false;
     IAppDevelopmentDocument DevelopmentDocument { get; }
 }
 

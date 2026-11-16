@@ -68,11 +68,6 @@ public sealed partial class GenerateSunderRpcBindingsTask
         => [Path.Combine(generatedDirectory, SunderRpcAuthoringDocuments.AuthoringReceiptFileName),
             Path.Combine(generatedDirectory, SunderRpcAuthoringDocuments.PackageExportFileName), GetOwnershipMarkerPath(generatedDirectory)];
 
-    private static void VerifyFreshAuthoringEvidence(string projectDirectory, string generatedDirectory)
-    {
-        if (HasPriorAuthoringEvidence(projectDirectory, generatedDirectory, publicOnly: false)) throw MissingBaseline();
-    }
-
     internal static void VerifyNoLostPublicBaseline(string projectDirectory, string generatedDirectory, Action<string>? beforeDirectoryRead = null)
     {
         if (HasPriorAuthoringEvidence(projectDirectory, generatedDirectory, publicOnly: true, beforeDirectoryRead)) throw MissingBaseline();

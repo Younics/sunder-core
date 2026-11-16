@@ -1,6 +1,6 @@
 {
   "name": "@younics/sunder-package-tool",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Generate typed APIs, build Node services and web views, watch source changes, and package Sunder extensions for distribution.",
   "keywords": ["sunder", "build", "tooling", "typescript", "javascript", "extensions"],
   "license": "GPL-3.0-only",

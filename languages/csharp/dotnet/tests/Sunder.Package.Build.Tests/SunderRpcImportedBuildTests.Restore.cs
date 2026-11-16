@@ -14,8 +14,127 @@ namespace Sunder.Package.Build.Tests;
 
 public sealed partial class SunderRpcImportedBuildTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Artifact")]
+    [Trait("Capability", "Process")]
+    [Trait("Capability", "Filesystem")]
+    public async Task PackedSdk_FirstBuildRestoresSelectedContractsWithEmptyNuGetAndContractCaches(bool conditionalImport)
+    {
+        _ = await CreateLockedCandidateAsync();
+        var selected = ReadJson(LockPath);
+        selected["packageArtifacts"]![DependencyId]!.AsObject().Remove("registryOrigin");
+        WriteJson(LockPath, selected);
+        var version = "1.1.0-restore.g" + Guid.NewGuid().ToString("N");
+        var feed = Path.Combine(_root, "feed");
+        var thirdParty = Path.Combine(_root, "third-party-feed");
+        Directory.CreateDirectory(feed);
+        Directory.CreateDirectory(thirdParty);
+        await ImplementationFirstRpcBuildTests.PackEditorSdkAsync(feed, version, ImplementationFirstRpcBuildTests.RunDotnetAsync);
+        var prepared = ImplementationFirstRpcBuildTests.PrepareEditorWorkspacePackages(feed, thirdParty, version);
+        var packages = Path.Combine(_root, "isolated-packages");
+        var project = await ImplementationFirstRpcBuildTests.CreateEditorWorkspaceFixtureAsync(
+            Path.Combine(_root, "public-author"), version, feed, thirdParty, packages);
+        var directory = Path.GetDirectoryName(project)!;
+        File.Copy(LockPath, Path.Combine(directory, "sunder-contracts.lock.json"), overwrite: true);
+        File.WriteAllText(Path.Combine(directory, "Consumer.cs"), ConsumerSource);
+        var cache = Path.Combine(_root, "isolated-contracts");
+        var document = XDocument.Load(project);
+        document.Root!.SetAttributeValue("Sdk", "Sunder.Package.Build/" + version);
+        if (conditionalImport)
+        {
+            // First-party source/NuGet dual-mode repos keep Microsoft.NET.Sdk
+            // and their reviewed PackageReference graph. An explicit SDK import
+            // in Directory.Build.targets supplies the cold restore-only path.
+            document.Root.SetAttributeValue("Sdk", "Microsoft.NET.Sdk");
+            document.Root.Element("ItemGroup")!.Add(new XElement("PackageReference", new XAttribute("Include", "Sunder.Package.Build"),
+                new XAttribute("Version", "[" + version + "]"), new XAttribute("PrivateAssets", "all")));
+            new XDocument(new XElement("Project", new XElement("Import",
+                new XAttribute("Project", "../buildTransitive/Sunder.Package.Build.targets"),
+                new XAttribute("Sdk", "Sunder.Package.Build"),
+                new XAttribute("Condition", "'$(SunderPackageProject)' == 'true' and '$(_SunderPackageBuildTargetsImported)' != 'true'"))))
+                .Save(Path.Combine(Path.GetDirectoryName(directory)!, "Directory.Build.targets"));
+            File.WriteAllText(Path.Combine(Path.GetDirectoryName(directory)!, "global.json"),
+                new JsonObject { ["msbuild-sdks"] = new JsonObject { ["Sunder.Package.Build"] = version } }.ToJsonString());
+        }
+        document.Root.Element("PropertyGroup")!.Add(
+            new XElement("SunderContractCacheRoot", cache),
+            new XElement("SunderPackageCandidatePath", Path.GetRelativePath(directory, Path.Combine(_root, "candidate.sunderpkg"))));
+        document.Save(project);
+        var locked = File.ReadAllBytes(Path.Combine(directory, "sunder-contracts.lock.json"));
+        Assert.False(Directory.Exists(packages));
+        Assert.False(Directory.Exists(cache));
+
+        await RunDotnet("build", project, "--disable-build-servers", "--nologo");
+        ImplementationFirstRpcBuildTests.AssertEditorWorkspaceRestore(project, packages, prepared, conditionalImport);
+        Assert.Single(SunderRpcContractCache.Resolve(SunderRpcAuthoringDocuments.ReadContractLock(LockPath), cache).EntriesByDescriptorSha256);
+        Assert.Equal(locked, File.ReadAllBytes(Path.Combine(directory, "sunder-contracts.lock.json")));
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(Path.Combine(directory, "bin/Debug/net10.0/sunder-dev"));
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        Assert.Equal(DependencyId, Assert.Single(validation.Manifest!.PackageApiImports!)!.PackageId);
+        Assert.False(File.Exists(Path.Combine(directory, "sunder-contracts.owned.json")));
+        var before = Snapshot(cache);
+        await RunDotnet("build", project, "--no-restore", "--disable-build-servers", "--nologo", "-t:Rebuild");
+        Assert.Equal(before, Snapshot(cache));
+        Assert.Equal(locked, File.ReadAllBytes(Path.Combine(directory, "sunder-contracts.lock.json")));
+    }
+
     [Fact]
-    public async Task OnlineRestoreReproducesTheLockAndPreservesCacheMtimesOnReplay()
+    [Trait("Category", "Artifact")]
+    [Trait("Capability", "Process")]
+    [Trait("Capability", "Filesystem")]
+    public async Task Msbuild_NormalBuildRestoresDeclaredLocalInputsButNoRestoreRemainsOffline()
+    {
+        _ = await CreateLockedCandidateAsync();
+        var selected = ReadJson(LockPath);
+        selected["packageArtifacts"]![DependencyId]!.AsObject().Remove("registryOrigin");
+        WriteJson(LockPath, selected);
+        var locked = File.ReadAllBytes(LockPath);
+        var owned = File.ReadAllBytes(Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName));
+        var cache = Path.Combine(_root, "automatic-cache");
+        var project = CreateMsbuildImportProject(cache);
+        var document = XDocument.Load(project);
+        document.Root!.Element("PropertyGroup")!.Add(new XElement("SunderPackageCandidatePath", "candidate.sunderpkg"));
+        document.Save(project);
+
+        var absent = await RunDotnet(false, "restore", project, "-p:SunderPackageCandidatePath=absent.sunderpkg", "--nologo");
+        Assert.Contains("absent.sunderpkg", absent, StringComparison.Ordinal);
+        Assert.False(Directory.Exists(cache));
+        Assert.Equal(locked, File.ReadAllBytes(LockPath));
+
+        // No preparation script, explicit contract target, warm authoring cache,
+        // or Registry is available. Build owns its normal restore prepass.
+        await RunDotnet("build", project, "--disable-build-servers", "--nologo");
+        Assert.Single(SunderRpcContractCache.Resolve(SunderRpcAuthoringDocuments.ReadContractLock(LockPath), cache).EntriesByDescriptorSha256);
+        Assert.Equal(locked, File.ReadAllBytes(LockPath));
+        Assert.Equal(owned, File.ReadAllBytes(Path.Combine(_root, SunderRpcAuthoringDocuments.OwnedContractsFileName)));
+        var cacheBefore = Snapshot(cache);
+        var timestamps = Directory.GetFiles(cache, "*", SearchOption.AllDirectories).ToDictionary(path => path, File.GetLastWriteTimeUtc);
+        // A verified warm selection needs neither its source archive nor a
+        // reachable Registry, even during another ordinary restore.
+        var candidate = Path.Combine(_root, "candidate.sunderpkg");
+        File.Move(candidate, candidate + ".offline");
+        await RunDotnet("restore", project, "--nologo");
+        await RunDotnet("build", project, "--no-restore", "--disable-build-servers", "--nologo");
+        Assert.Equal(cacheBefore, Snapshot(cache));
+        Assert.All(timestamps, entry => Assert.Equal(entry.Value, File.GetLastWriteTimeUtc(entry.Key)));
+        File.Move(candidate + ".offline", candidate);
+
+        var descriptor = SunderRpcContractCache.GetDescriptorPath(cache, _descriptor.Sha256);
+        File.Delete(descriptor);
+        var failure = await RunDotnet(false, "build", project, "--no-restore", "--disable-build-servers", "--nologo");
+        Assert.Contains("contract-cache.entry-missing", failure, StringComparison.Ordinal);
+        Assert.False(File.Exists(descriptor));
+        await RunDotnet("restore", project, "--disable-parallel", "--nologo");
+        Assert.True(File.Exists(descriptor));
+        Assert.Equal(locked, File.ReadAllBytes(LockPath));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OnlineRestoreReproducesTheLockAndPreservesCacheMtimesOnReplay(bool onlyMissing)
     {
         _ = await CreateLockedCandidateAsync();
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(LockPath);
@@ -26,10 +145,10 @@ public sealed partial class SunderRpcImportedBuildTests
         var root = Path.Combine(_root, "restored-cache");
         var before = File.ReadAllBytes(LockPath);
         var restore = new SunderRpcContractRestore(http);
-        Assert.Equal(1, await restore.RestoreAsync(LockPath, root, []));
+        Assert.Equal(1, await restore.RestoreAsync(LockPath, root, [], onlyMissing: onlyMissing));
         Assert.Equal(_descriptor.GetCanonicalUtf8(), File.ReadAllBytes(SunderRpcContractCache.GetDescriptorPath(root, _descriptor.Sha256)));
         var timestamps = Directory.GetFiles(root).Select(path => (path, File.GetLastWriteTimeUtc(path))).ToArray();
-        Assert.Equal(0, await restore.RestoreAsync(LockPath, root, []));
+        Assert.Equal(0, await restore.RestoreAsync(LockPath, root, [], onlyMissing: onlyMissing));
         Assert.All(timestamps, entry => Assert.Equal(entry.Item2, File.GetLastWriteTimeUtc(entry.path)));
         Assert.Equal(before, File.ReadAllBytes(LockPath));
         Assert.Single(SunderRpcContractCache.Resolve(contractLock, root).EntriesByDescriptorSha256);

@@ -10,11 +10,13 @@ public sealed partial class SunderRpcImportedBuildTests
 {
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task NodePackageApi_CandidateCliBuildPackAndRoleIsolationPassCanonicalInspection()
         => await VerifyNodeCandidateImportsAsync(provider: false);
 
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task NodePackageApi_ProviderCandidateCliBuildPackAndRoleIsolationPassCanonicalInspection()
         => await VerifyNodeCandidateImportsAsync(provider: true);
 

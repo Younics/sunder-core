@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Sunder.Core.TestSupport;
+using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
 using Sunder.Sdk.Rpc;
@@ -11,13 +12,17 @@ public sealed partial class AgentPackageReleaseSmokeTests
 {
     // A real generated Maker Worker in the real Host, without any Agent package,
     // test tool provider, model call, page resolution or live user state.
-    [ExternalArtifactFact("SUNDER_REQUIRE_MAKER_STANDALONE", "SUNDER_MAKER_DEV_PACKAGE", "SUNDER_MAKER_IMPORT_CANDIDATE", "SUNDER_MAKER_PLATFORM_CATALOG")]
+    [ExternalArtifactFact("SUNDER_REQUIRE_MAKER_STANDALONE", "SUNDER_MAKER_PACKAGE_ARCHIVE", "SUNDER_MAKER_IMPORT_CANDIDATE", "SUNDER_MAKER_PLATFORM_CATALOG")]
     [Trait("Category", "ExternalArtifact")]
-    public async Task MakerStandalone_CurrentDevelopmentOutputActivatesAndRejectsInvalidArgumentsWithoutAgent()
+    public async Task MakerStandalone_CurrentArchiveActivatesAndRejectsInvalidArgumentsWithoutAgent()
     {
         const string makerId = "younics.sunder.package.maker";
-        var folder = Path.GetFullPath(Environment.GetEnvironmentVariable("SUNDER_MAKER_DEV_PACKAGE")!);
         using var root = TemporaryDirectoryScope.Create("maker-standalone-host");
+        var folder = root.GetPath("maker");
+        var archive = await SunderPackageArchiveInspector.ExtractAndValidateAsync(
+            Environment.GetEnvironmentVariable("SUNDER_MAKER_PACKAGE_ARCHIVE")!, folder);
+        Assert.True(archive.Success, string.Join(Environment.NewLine, archive.Errors));
+        Assert.Equal(makerId, archive.Manifest!.Id);
         var paths = new RuntimePackagePaths(root.GetPath("runtime"));
         var logger = new ReleaseSmokeLogger();
         var policy = new PackageLifecyclePolicyCache(paths, new MutablePolicyClock());
@@ -70,8 +75,8 @@ public sealed partial class AgentPackageReleaseSmokeTests
             Assert.Equal("package-maker", description.GetProperty("sourceId").GetString());
             var rejected = await handler.InvokeUnaryAsync(invocation, "tool-source", "validate-arguments", JsonSerializer.SerializeToElement(new
             {
-                toolId = "maker_build_package",
-                argumentsJson = JsonSerializer.Serialize(new { entryPoint = root.GetPath("project/app/index.html") }),
+                toolId = "maker_package",
+                argumentsJson = JsonSerializer.Serialize(new { package = root.GetPath("project/app/index.html") }),
             }), deadline.Token);
             Assert.True(rejected.GetProperty("isError").GetBoolean());
             Assert.Equal("maker.invalid-request", rejected.GetProperty("errorCode").GetString());

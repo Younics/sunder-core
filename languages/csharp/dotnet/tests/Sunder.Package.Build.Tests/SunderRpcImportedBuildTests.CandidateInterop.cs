@@ -10,6 +10,7 @@ public sealed partial class SunderRpcImportedBuildTests
 {
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task CandidateInterop_NodeUsesTheCanonicalCliInspectorAndReproducesCSharpCacheBytes()
     {
         var archive = await CreateLockedCandidateAsync();

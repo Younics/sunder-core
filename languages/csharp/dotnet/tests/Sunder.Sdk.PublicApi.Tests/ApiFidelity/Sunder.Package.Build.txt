@@ -254,6 +254,7 @@ type Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask
   property Microsoft.Build.Framework.ITaskItem[] BindingSnapshots { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] CompileAssetPaths { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] CompileItems { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] CompilerProjectImports { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String Configuration { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ContractBundles { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String DefineConstants { public get; public set; }
@@ -270,6 +271,7 @@ type Sunder.Package.Build.Tasks.ReadSunderPackageRoleInputsTask
   property System.String ProjectDirectory { public get; public set; }
   property System.String ProjectExtensionsPath { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String ProjectIdentity { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
+  property Microsoft.Build.Framework.ITaskItem[] ProjectImports { public get; public set; }
   property Microsoft.Build.Framework.ITaskItem[] ReferencePaths { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property Microsoft.Build.Framework.ITaskItem[] ResourceItems { public get; private set; } [Microsoft.Build.Framework.OutputAttribute]
   property System.String Role { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
@@ -287,6 +289,7 @@ type Sunder.Package.Build.Tasks.RestoreSunderContractsTask
   property Microsoft.Build.Framework.ITaskItem[] CandidateArchives { public get; public set; }
   property System.String ContractCacheRoot { public get; public set; }
   property System.String ContractLockPath { public get; public set; }
+  property System.Boolean OnlyMissing { public get; public set; }
   property System.String PlatformCatalogPath { public get; public set; }
   property System.String ProjectDirectory { public get; public set; } [Microsoft.Build.Framework.RequiredAttribute]
   property System.Boolean VerifyOnly { public get; public set; }

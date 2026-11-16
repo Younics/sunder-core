@@ -1,8 +1,10 @@
 using Avalonia.Controls;
+using Avalonia;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
 using Sunder.App.ViewModels;
 using Sunder.App.Views.Controls;
+using Sunder.App.Themes;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using static Sunder.App.Tests.TestSupport.AsyncAssert;
@@ -12,6 +14,20 @@ namespace Sunder.App.Tests;
 
 public sealed class SettingsWindowViewModelTests
 {
+    [Fact]
+    public async Task AppearancePersistenceFailureIsReportedWithoutApplyingAnUnsavedTheme()
+    {
+        var themeManager = new ThemeManager(new Application());
+        var appearance = new SettingsAppearanceViewModel(themeManager, _ => throw new IOException("Cannot save theme."));
+        using var runtime = new FakeRuntimeApiClient();
+        using var settings = new SettingsWindowViewModel(runtime, PackageViewHostService.Empty, new CliInstallationService(), appearance: appearance);
+        appearance.SelectedTheme = SunderThemeDefinition.GraphiteLight;
+
+        Assert.False(await settings.ApplyAsync());
+        Assert.Contains("Cannot save theme", settings.StatusText, StringComparison.Ordinal);
+        Assert.Same(SunderThemeDefinition.GraphiteDark, themeManager.ActiveTheme);
+    }
+
     [Fact]
     public async Task PackageRuntimesDeepLinkSelectsRealPageAndStopsItsLifetimeWhenHidden()
     {

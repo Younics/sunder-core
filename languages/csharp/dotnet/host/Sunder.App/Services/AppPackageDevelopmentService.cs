@@ -311,7 +311,11 @@ internal sealed partial class AppPackageDevelopmentService : IPackageDevelopment
         {
             _lifetime.Cancel();
             await _gate.WaitAsync().ConfigureAwait(false);
-            try { await service.Backend.ReleaseOwnerAsync(owner, CancellationToken.None).ConfigureAwait(false); }
+            try
+            {
+                _viewOperations.RetireSnapshots();
+                await service.Backend.ReleaseOwnerAsync(owner, CancellationToken.None).ConfigureAwait(false);
+            }
             finally { _gate.Release(); }
         }
     }

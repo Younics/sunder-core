@@ -61,7 +61,7 @@
     },
     {
       "lane": "host-platform",
-      "attributes": "(?:MacOs|Windows|Linux|Unix)[A-Za-z0-9_]*(?:Fact|Theory)|Trait\\(\\s*\"Capability\"\\s*,\\s*\"Process\""
+      "attributes": "(?:MacOs|Windows|Linux|Unix)[A-Za-z0-9_]*(?:Fact|Theory)|SymbolicLink(?:Fact|Theory)|Trait\\(\\s*\"Capability\"\\s*,\\s*\"Process\""
     }
   ],
   "defaultDotnetLane": "dotnet-linux",
@@ -76,7 +76,7 @@
     }
   ],
   "projectLanes": {
-    "Sunder.App.Integration.Tests": ["dotnet-linux", "host-platform"],
+    "Sunder.App.Integration.Tests": ["dotnet-linux", "host-platform", "release-artifact"],
     "Sunder.App.Tests": ["app-packaging", "dotnet-linux", "host-platform", "release-artifact"],
     "Sunder.Cli.Tests": ["dotnet-linux"],
     "Sunder.Core.TestSupport.Tests": ["dotnet-linux", "host-platform"],
@@ -108,6 +108,114 @@
     "releaseFixtures": "release-fixtures.junit.xml"
   },
   "expectedSkips": [
+    {
+      "id": "declared-symbolic-link-privilege",
+      "framework": "dotnet",
+      "condition": "symbolicLinkPrivilegeUnavailable",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "Optional local execution cannot create the declared symbolic-link fixture; native qualification requires it.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "build-cache-gc-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.CacheGc_LinkedEntryDoesNotDeleteCacheOrTargetBytes",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "build-cache-store-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.CacheStore_LinkedDescriptorCannotBeRepaired",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "build-catalog-body-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.PlatformCacheGc_RejectsLinkedBodyWithoutChangingTarget",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "build-catalog-repair-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.PlatformCacheGc_RejectsLinkedRepairWithoutChangingTarget",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "build-authoring-receipt-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Package.Build.Tests.SunderRpcImportedBuildTests.ReceiptSymlink_IsRejectedEvenWithExactBytesAndHash",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "build-output-ownership-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Package.Build.Tests.GeneratedOutputLockRecoveryTests.UnverifiableLinkedEvidenceFailsPromptlyWithoutChangingLockOrOutput",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "runtime-handoff-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.DevelopmentImportAuthorityTests.GeneratedHandoffRejectsLinkedEvidenceBeforeRetention",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "runtime-retained-evidence-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.DevelopmentImportAuthorityTests.LinkedEvidenceCannotBeUsedAsDevelopmentAuthority",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "runtime-storage-document-file-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.PackageStorageServicesTests.JsonPackageKeyValueStore_SymbolicLinkDocumentIsRejectedWithoutMutatingTarget",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "runtime-storage-directory-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.PackageStorageContractTests.LocalFileStore_RejectsSymbolicLinkTraversal",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
+    {
+      "id": "runtime-transaction-directory-link-privilege",
+      "framework": "dotnet",
+      "declarationId": "Sunder.Runtime.Host.Tests.PackageStoreCoordinatorTests.Commit_WhenTransactionDirectoryIsSymbolicLink_RejectsWithoutWritingOutsideRoot",
+      "owner": "host-platform",
+      "skipOn": ["Windows"],
+      "reason": "The local Windows user cannot create the symbolic-link fixture.",
+      "runnerReasonPattern": "^Windows symbolic-link creation privilege is unavailable\\.$"
+    },
     {
       "id": "macos-keychain-opt-in",
       "framework": "dotnet",
@@ -175,7 +283,7 @@
       "condition": "unsupportedOperatingSystem",
       "owner": "host-platform",
       "reason": "The conditional platform test is owned by another supported runner.",
-      "runnerReasonPattern": "^Requires (?:macOS|Windows|Linux|a Unix platform|Linux process identity metadata)\\.$"
+      "runnerReasonPattern": "^Requires (?:macOS|Windows|Windows or macOS|Linux|a Unix platform|Linux process identity metadata)\\.$"
     }
   ]
 }

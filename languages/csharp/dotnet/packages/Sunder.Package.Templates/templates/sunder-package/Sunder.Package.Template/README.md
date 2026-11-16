@@ -18,6 +18,12 @@ sunder runtime ensure sunder.runtime.dotnet ">=10.0.0 <11.0.0" sunder.dotnet-wor
 dotnet run --project Sunder.Package.Template.csproj --no-build
 ```
 
+The versioned Build SDK includes ordinary .NET restore. Selected package APIs and
+platform contracts restore automatically from their declared exact local inputs or
+locked Registry origin. No preparation script is required. Keep local candidate
+and catalog paths in your repository build configuration; a content hash cannot
+locate missing source bytes. `--no-restore` uses existing verified evidence only.
+
 With the Avalonia option, open the package's view in Sunder and choose **Create
 greeting**. The view calls `Services/SampleService.cs` through its generated
 `ISampleService` API. The default headless preset runs the service without adding

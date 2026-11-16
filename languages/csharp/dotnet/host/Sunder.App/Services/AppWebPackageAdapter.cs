@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
@@ -120,6 +121,9 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
     private readonly AppPackageViewRegistry _viewRegistry;
     private readonly IAppWebViewFactory _webViewFactory;
     private readonly ExternalBrowserService _externalBrowser;
+    private readonly object _gate = new();
+    private readonly List<AppWebPackageViewControl> _views = [];
+    private readonly Lazy<Task> _disposal;
     private int _disposed;
 
     public AppWebPackageLifetime(
@@ -133,16 +137,15 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
         ExternalBrowserService externalBrowser)
     {
         _packageId = packageId;
-        _userDataRoot = AppLocalState.GetPath(
-            "webview-data",
-            SanitizePathSegment(packageId),
-            appGenerationId.ToString("N"));
+        _userDataRoot = AppWebViewProfile.ForPackage(
+            AppLocalState.RootPath, packageId, appGenerationId, OperatingSystem.IsWindows());
         _contentServer = contentServer;
         _rpcClient = rpcClient;
         _contracts = contracts;
         _viewRegistry = viewRegistry;
         _webViewFactory = webViewFactory;
         _externalBrowser = externalBrowser;
+        _disposal = new(DisposeCoreAsync);
     }
 
     public void Register(SunderPackageWebViewManifest view)
@@ -156,25 +159,62 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
         _viewRegistry.RegisterPackageView(
             _packageId,
             registration,
-            () => new AppWebPackageViewControl(
-                _contentServer.GetRouteUri(view.Route!),
-                _userDataRoot,
-                _contentServer,
-                _webViewFactory,
-                new NonDisposingAppWebRpcClient(_rpcClient),
-                _contracts,
-                _externalBrowser));
+            () => CreateView(view));
     }
 
-    public async ValueTask DisposeAsync()
+    private AppWebPackageViewControl CreateView(SunderPackageWebViewManifest view)
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        lock (_gate)
         {
-            return;
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            var control = new AppWebPackageViewControl(
+                _contentServer.GetRouteUri(view.Route!), _userDataRoot, _contentServer,
+                _webViewFactory, new NonDisposingAppWebRpcClient(_rpcClient), _contracts, _externalBrowser);
+            _views.Add(control);
+            return control;
         }
-        await _rpcClient.DisposeAsync().ConfigureAwait(false);
-        await _contentServer.DisposeAsync().ConfigureAwait(false);
-        DeleteOrQuarantineUserData(_userDataRoot);
+    }
+
+    public ValueTask DisposeAsync() => new(_disposal.Value);
+
+    private async Task DisposeCoreAsync()
+    {
+        var started = Stopwatch.GetTimestamp();
+        AppWebPackageViewControl[] views;
+        lock (_gate)
+        {
+            _disposed = 1;
+            views = _views.ToArray();
+            _views.Clear();
+        }
+        try
+        {
+            // Registry disposal starts synchronous controls' cleanup, but a browser
+            // bridge can still be notifying its document. Drain every owned view
+            // before releasing its shared transport, server or private profile.
+            if (views.Length != 0) await AvaloniaUiDispatcher.Instance.InvokeAsync(async () =>
+            {
+                var drains = views.Select(view => view.DisposeAsync().AsTask()).ToArray();
+                await Task.WhenAll(drains);
+            }).ConfigureAwait(false);
+        }
+        finally
+        {
+            try { await _rpcClient.DisposeAsync().ConfigureAwait(false); }
+            finally { await _contentServer.DisposeAsync().ConfigureAwait(false); }
+        }
+        if (views.Length != 0)
+        {
+            var nativeDrain = AvaloniaUiDispatcher.Instance.InvokeAsync(() =>
+                Task.WhenAll(views.Select(view => view.DrainNativeRetirementAsync())));
+            try { await nativeDrain.WaitAsync(RemainingCleanupBudget(started)).ConfigureAwait(false); }
+            catch (TimeoutException error)
+            {
+                AppCleanupQuarantine.Retain(nativeDrain, $"observing native browser exit for '{_packageId}'");
+                throw new TimeoutException($"Package '{_packageId}' did not prove native browser exit within its UI cleanup budget.", error);
+            }
+        }
+        await DeleteOrQuarantineUserDataAsync(_userDataRoot, started).ConfigureAwait(false);
     }
 
     private static PackageViewPlacement ParsePlacement(string value)
@@ -188,37 +228,47 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             _ => throw new InvalidDataException($"Unknown package web view placement '{value}'."),
         };
 
-    private static string SanitizePathSegment(string value)
+    private static TimeSpan RemainingCleanupBudget(long started)
     {
-        var invalid = Path.GetInvalidFileNameChars();
-        return new string(value.Select(character => invalid.Contains(character) ? '_' : character).ToArray());
+        var remaining = AppShutdownBudgets.UiCleanup - Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException("Package browser retirement exceeded its UI cleanup budget.");
+        return remaining;
     }
 
-    private static void DeleteOrQuarantineUserData(string path)
+    private static async Task DeleteOrQuarantineUserDataAsync(string path, long started)
     {
-        if (!Directory.Exists(path))
-        {
-            return;
-        }
-        try
-        {
-            Directory.Delete(path, recursive: true);
-        }
-        catch (Exception exception)
+        while (Directory.Exists(path))
         {
             try
             {
-                var quarantineRoot = AppLocalState.GetPath("webview-quarantine");
-                Directory.CreateDirectory(quarantineRoot);
-                Directory.Move(path, Path.Combine(
-                    quarantineRoot,
-                    $"webview-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}"));
+                Directory.Delete(path, recursive: true);
+                return;
             }
-            catch (Exception quarantineException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                AppSessionLog.WriteError(
-                    "Failed to delete or quarantine package WebView user data.",
-                    new AggregateException(exception, quarantineException));
+                // Native exit was observed before reclamation. An external file
+                // owner can still delay deletion, but never restart the budget.
+                var remaining = AppShutdownBudgets.UiCleanup - Stopwatch.GetElapsedTime(started);
+                if (remaining > TimeSpan.Zero)
+                {
+                    await Task.Delay(remaining < TimeSpan.FromMilliseconds(50) ? remaining : TimeSpan.FromMilliseconds(50)).ConfigureAwait(false);
+                    continue;
+                }
+                try
+                {
+                    var quarantineRoot = AppLocalState.GetPath("webview-quarantine");
+                    Directory.CreateDirectory(quarantineRoot);
+                    Directory.Move(path, Path.Combine(
+                        quarantineRoot,
+                        $"webview-{DateTimeOffset.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}"));
+                }
+                catch (Exception quarantineException) when (quarantineException is IOException or UnauthorizedAccessException)
+                {
+                    // This is not proven retirement. Let the owning activation
+                    // retain its resources/admission rather than acknowledge it.
+                    throw new AggregateException("Failed to delete or quarantine package WebView user data.", exception, quarantineException);
+                }
+                throw new IOException("Package WebView user data was quarantined, not reclaimed.", exception);
             }
         }
     }

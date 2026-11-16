@@ -317,7 +317,7 @@ class SdkReleaseDocumentationTests(unittest.TestCase):
         packer = (d.ROOT / "scripts/release/sdk_release.py").read_text().split("def pack(plan, directory, kind=None):", 1)[1].split("def feed(", 1)[0]
         self.assertIn('documentation.pack_context(ROOT, plan["artifactSourceCommit"], [row["name"] for row in rows])', packer)
         self.assertLess(packer.index("with context:"), packer.index('["dotnet", "pack"'))
-        self.assertLess(packer.index("with context:"), packer.index('["npm", "pack"'))
+        self.assertLess(packer.index("with context:"), packer.index('["node", str(ROOT / "scripts/npm-command.mjs"), "pack"'))
         self.assertLess(packer.index("verify-node-package-artifacts.mjs"), packer.index("documentation.verify("))
         self.assertIn('if release:', packer)
 

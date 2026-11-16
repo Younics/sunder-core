@@ -51,8 +51,11 @@
       "maximumBytes": 8388608,
       "maximumBytesReason": "Retained 8 MiB package-build ceiling. Registry-authoritative catalogs remove the former BouncyCastle task dependency; deterministic artifact tests enforce the complete current task inventory and size.",
       "requiredEntries": [
+        "Sdk/Sdk.props",
+        "Sdk/Sdk.targets",
         "buildTransitive/Sunder.Package.Build.props",
         "buildTransitive/Sunder.Package.Build.targets",
+        "buildTransitive/Sunder.Package.Build.Contracts.Restore.targets",
         "buildTransitive/Sunder.Package.Build.SourceLock.targets",
         "buildTransitive/Sunder.Package.Build.Authoring.targets",
         "buildTransitive/Sunder.Package.Build.Authoring.Outer.targets",

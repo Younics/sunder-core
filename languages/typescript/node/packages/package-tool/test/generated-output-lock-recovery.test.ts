@@ -16,13 +16,13 @@ async function fixture() {
   const home = resolve(root, "profile");
   await mkdir(home, { mode: 0o700 });
   const children: Probe[] = [];
-  async function start(mode: string, job: string, ready: string, timeout?: number): Promise<Probe> {
+  async function start(mode: string, job: string, ready: string, timeout?: number, profile = home): Promise<Probe> {
     const temp = resolve(root, job);
     await mkdir(temp, { recursive: true });
     const args = [resolve(__dirname, "generated-output-lock-child.js"), mode, resolve(root, "output"), resolve(root, ready), resolve(root, "release")];
     if (timeout !== undefined) args.push(String(timeout));
     const child = spawn(process.execPath, args, {
-      env: { ...process.env, HOME: home, USERPROFILE: home, TMPDIR: temp, TMP: temp, TEMP: temp },
+      env: { ...process.env, SUNDER_TEST_ACCOUNT_HOME: home, HOME: profile, USERPROFILE: profile, TMPDIR: temp, TMP: temp, TEMP: temp },
       stdio: ["ignore", "ignore", "pipe"],
     });
     let error = "";
@@ -48,7 +48,7 @@ async function ready(path: string): Promise<Record<string, unknown>> {
   throw new Error(`Lock probe did not become ready: ${path}`);
 }
 
-test("generated output lock survives Worker temp-root replacement without reclaiming a current holder", { timeout: 120_000 }, async () => {
+test("generated output lock survives isolated Maker profiles and Worker temp-root replacement without reclaiming a current holder", { timeout: 120_000 }, async () => {
   const f = await fixture();
   try {
     const holder = await f.start("hold", "job-a", "held");
@@ -59,20 +59,54 @@ test("generated output lock survives Worker temp-root replacement without reclai
       assert.equal((await stat(dirname(marker))).mode & 0o077, 0);
       assert.equal((await stat(marker)).mode & 0o077, 0);
     }
-    const contender = await f.start("recover", "job-b", "contended", 1_400);
+    const makerProfile = resolve(f.root, "maker-profile");
+    await mkdir(makerProfile, { mode: 0o700 });
+    const contender = await f.start("recover", "job-b", "contended", 1_400, makerProfile);
     const pendingResult = await contender.result;
     assert.equal(pendingResult.code, 1, pendingResult.error);
     assert.match(pendingResult.error, /Timed out/);
+    assert.match(pendingResult.error, new RegExp(`Waiting for generated output lock.*Owner PID ${holder.child.pid}:`));
+    const waitLines = pendingResult.error.split("\n").filter(line => line.startsWith("Waiting for generated output lock"));
+    assert.equal(waitLines.length, new Set(waitLines.map(line => /Owner PID \d+: (alive|unknown)/u.exec(line)?.[1])).size,
+      "Each owner state should be reported once, without flooding redirected output.");
     assert.deepEqual(JSON.parse(await readFile(resolve(f.root, "output.sunder-output.lock/owner.json"), "utf8")), owner);
     holder.child.kill("SIGKILL");
     await holder.result;
     await rm(resolve(f.root, "job-a"), { recursive: true });
     await stat(marker); // Evidence is independent of the removed job tree.
-    const restarted = await f.start("recover", "job-c", "recovered");
+    const restarted = await f.start("recover", "job-c", "recovered", undefined, makerProfile);
     const recovered = await restarted.result;
     assert.equal(recovered.code, 0, recovered.error);
     await assert.rejects(stat(resolve(f.root, "output.sunder-output.lock")), { code: "ENOENT" });
   } finally { await f.close(); }
+});
+
+test("denied dead-owner renames fail promptly with the filesystem cause and retain output; transient failures recover", { timeout: 120_000 }, async () => {
+  for (const code of ["EACCES", "EPERM"] as const) {
+    const f = await fixture();
+    try {
+      const abandoned = await f.start("abandon", "old-temp", "abandoned");
+      assert.equal((await abandoned.result).code, 23);
+      const owner = await ready(resolve(f.root, "abandoned"));
+      const lockOwner = resolve(f.root, "output.sunder-output.lock/owner.json");
+      const before = await readFile(lockOwner);
+      await writeFile(resolve(f.root, "output"), "last successful output");
+      const denied = await f.start(`recover-denied-${code}`, "denied-temp", "not-acquired", 10_000);
+      const result = await denied.result;
+      assert.equal(result.code, 1, result.error);
+      assert.match(result.error, new RegExp(`Cannot retire generated output lock.*${code}`));
+      assert.match(result.error, /open handle.*retry/);
+      assert.doesNotMatch(result.error, /Timed out after/);
+      assert.deepEqual(await readFile(lockOwner), before);
+      await stat(owner.processMarkerPath as string);
+      assert.equal(await readFile(resolve(f.root, "output"), "utf8"), "last successful output");
+      const transient = await f.start("recover-transient", "retry-temp", "recovered");
+      const retried = await transient.result;
+      assert.equal(retried.code, 0, retried.error);
+      await assert.rejects(stat(resolve(f.root, "output.sunder-output.lock")), { code: "ENOENT" });
+      assert.equal(await readFile(resolve(f.root, "output"), "utf8"), "last successful output");
+    } finally { await f.close(); }
+  }
 });
 
 test("normal shutdown cleans unused evidence but an unreleased lease retains evidence across restart", { timeout: 120_000 }, async () => {

@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Bridge;
 using Sunder.Sdk.Abstractions;
@@ -15,7 +16,10 @@ internal class AppBridgeServiceChannel(
     SunderContent? content = null,
     bool ownsRpc = false) : IAppServiceChannelV1
 {
-    protected static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    protected static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+    };
     protected static JsonElement Encode<T>(T value) => JsonSerializer.SerializeToElement(value, Json);
     protected static T Decode<T>(JsonElement value) => value.Deserialize<T>(Json)!;
     protected static T Arg<T>(JsonElement value, string name) => Decode<T>(value.GetProperty(name));

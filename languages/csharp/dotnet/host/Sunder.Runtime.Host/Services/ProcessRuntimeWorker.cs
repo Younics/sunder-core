@@ -3,13 +3,11 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
-using Microsoft.Win32.SafeHandles;
 using Sunder.Package.Format;
 using Sunder.Package.Projections;
 using Sunder.Runtime.Host.Infrastructure.Storage;
@@ -2827,15 +2825,7 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 throw new SunderWorkerProtocolException(
                     "Process worker content path must identify a regular file.");
             }
-            var stream = OperatingSystem.IsWindows()
-                ? new FileStream(
-                    filePath,
-                    FileMode.Open,
-                    FileAccess.Read,
-                    FileShare.Read,
-                    128 * 1024,
-                    FileOptions.Asynchronous | FileOptions.SequentialScan)
-                : OpenUnixWorkerOwnedContentFile(filePath);
+            var stream = WorkerContentFile.OpenRead(filePath);
             var canSeek = stream.CanSeek;
             if (canSeek) return stream;
             stream.Dispose();
@@ -2854,33 +2844,6 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 exception);
         }
     }
-
-    private static FileStream OpenUnixWorkerOwnedContentFile(string filePath)
-    {
-        var flags = OperatingSystem.IsMacOS()
-            ? 0x0004 | 0x0100 | 0x01000000
-            : 0x0800 | 0x20000 | 0x80000;
-        var descriptor = OpenUnixFile(filePath, flags);
-        if (descriptor < 0)
-        {
-            throw new IOException(
-                "The worker content file could not be opened.",
-                new Win32Exception(Marshal.GetLastPInvokeError()));
-        }
-        var handle = new SafeFileHandle((IntPtr)descriptor, ownsHandle: true);
-        try
-        {
-            return new FileStream(handle, FileAccess.Read, 128 * 1024, isAsync: false);
-        }
-        catch
-        {
-            handle.Dispose();
-            throw;
-        }
-    }
-
-    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
-    private static extern int OpenUnixFile(string path, int flags);
 
     private static bool IsWithinDirectory(string path, string directory)
     {

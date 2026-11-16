@@ -1,5 +1,6 @@
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using Sunder.App.Bridge;
 using Sunder.Sdk.Rpc;
 
@@ -7,7 +8,12 @@ namespace Sunder.Sdk.Avalonia.Hosting;
 
 internal sealed class AppChannel(IAppServiceChannelV1 channel)
 {
-    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+    // Equivalent options share metadata caches. A package-local resolver prevents
+    // host or sibling options from keeping this collectible SDK's DTO types alive.
+    internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
+    {
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver(),
+    };
     internal static JsonElement Encode<T>(T value) => JsonSerializer.SerializeToElement(value, Json);
     internal static T Decode<T>(JsonElement value) => value.Deserialize<T>(Json)!;
     internal T Get<T>(string operation, object? args = null)

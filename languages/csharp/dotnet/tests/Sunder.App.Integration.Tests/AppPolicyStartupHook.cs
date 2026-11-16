@@ -40,11 +40,12 @@ internal static class StartupHook
             await using var policy = new AppProcessPolicySupervisor(direct, () => Environment.Exit(0));
             var snapshot = config.GetProperty("snapshot").Deserialize<PackageUiSnapshotDescriptor>(new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            await policy.RequireLoadAsync(snapshot, deadline.Token);
+            var activationId = Guid.NewGuid();
+            var admission = await policy.AcquireLoadAsync(snapshot, activationId, deadline.Token);
             var root = config.GetProperty("projectionPath").GetString()!;
             var manifestHash = Convert.ToHexStringLower(SHA256.HashData(await File.ReadAllBytesAsync(Path.Combine(root, "manifest", "sunder-package.json"), deadline.Token)));
             var stamp = new ActivePackageWebStamp(snapshot.PackageId, snapshot.PolicySubject!.Version, manifestHash,
-                snapshot.Target, snapshot.SessionGeneration, Guid.NewGuid());
+                snapshot.Target, snapshot.SessionGeneration, activationId) { LoadPermitId = admission.PermitId };
             await using var rpc = await new RuntimeAppWebRpcClientFactory(direct.Transport.GetConnectionInfo).CreateAsync(stamp, deadline.Token);
             var assembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(Path.Combine(root, snapshot.Target.EntryPoint.Replace('/', Path.DirectorySeparatorChar)));
             var method = assembly.GetType("Example.Generated.App.UsesGeneratedClient", throwOnError: true)!.GetMethod("InvokeAsync", BindingFlags.Public | BindingFlags.Static)!;

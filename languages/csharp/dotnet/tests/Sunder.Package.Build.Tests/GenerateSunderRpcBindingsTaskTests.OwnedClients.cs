@@ -48,9 +48,10 @@ public sealed partial class GenerateSunderRpcBindingsTaskTests
             var contract = Assert.Single(new SunderRpcCSharpSourceCompiler().Compile(new(
                 "", "7.6.5", [new(path, ImplementationFirstSource)], references)).Contracts);
             WriteSourceAuthoringState(root, contract);
-            var changed = ImplementationFirstSource.Replace("public sealed partial class GreetingService\n{", "public sealed partial class GreetingService\n{\n"
+            var current = ImplementationFirstSource.ReplaceLineEndings("\n");
+            var changed = current.Replace("public sealed partial class GreetingService\n{", "public sealed partial class GreetingService\n{\n"
                 + "    public ValueTask<GreetingResult> SecondAsync(GreetingRequest request, CancellationToken token) => ValueTask.FromResult(new GreetingResult { Message = request.Name });", StringComparison.Ordinal);
-            Assert.NotEqual(ImplementationFirstSource, changed);
+            Assert.NotEqual(current, changed);
             File.WriteAllText(path, changed + OwnedCaller.Replace(".GreetAsync(", ".SecondAsync(", StringComparison.Ordinal));
             var accept = CreateSourceTask(root, Path.Combine(root, "obj"), path, references);
             accept.ContractOperation = "Accept";

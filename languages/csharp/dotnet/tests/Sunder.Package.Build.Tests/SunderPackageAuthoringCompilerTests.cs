@@ -91,7 +91,8 @@ public sealed class SunderPackageAuthoringCompilerTests
     [Fact]
     public void Analyze_GeneratedInterfaceOmitsHostContextAndPreservesTaskAndStreamShapes()
     {
-        var source = Service.Replace("public Task<Note> GetAsync(NoteRequest request, CancellationToken token = default)",
+        var source = Service.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace("public Task<Note> GetAsync(NoteRequest request, CancellationToken token = default)",
             "public Task<Note> GetAsync(NoteRequest request, SunderRpcInvocationContext invocation, CancellationToken token = default)", StringComparison.Ordinal)
             .Replace("public sealed partial class NotesService\n{", "public sealed partial class NotesService\n{\n"
                 + "public System.Collections.Generic.IAsyncEnumerable<Note> WatchAsync(CancellationToken token = default) => throw new System.NotSupportedException();", StringComparison.Ordinal);

@@ -297,6 +297,7 @@ export function validateResultCoverage(reports, results, model, options = {}) {
       throw new Error(`Native partition '${partition}' requires exactly one TRX per selected project.`);
     }
     requireDotnetDeclarations(selected, results);
+    requireSelectedTests(selected.filter(test => test.requiredInNativeQualification).map(test => test.id), model, results);
   }
   if (allowPartial && partition === undefined && requiredTests.length === 0 && requiredPrimaryLanes.length === 0) {
     throw new Error("Partial result coverage requires at least one --require-test or --require-primary-lane selection.");
@@ -342,6 +343,9 @@ export function validateResultCoverage(reports, results, model, options = {}) {
     requireProjectLanePairs(expectedPairs, projectLanePairs(results), "selected primary lane");
     requireDotnetDeclarations(selectedDeclarations.filter((item) => item.framework === "dotnet"), results);
     requireNodeSources(selectedDeclarations, results);
+    if (options.requireTestPrerequisites) {
+      requireSelectedTests(selectedDeclarations.filter(test => test.requiredInNativeQualification).map(test => test.id), model, results);
+    }
   }
 }
 
@@ -363,6 +367,7 @@ export function materializeExpectedSkip(result, policy, operatingSystem) {
     if (expected.declarationId !== undefined && expected.declarationId !== result.declaration?.id) continue;
     if (expected.source !== undefined && expected.source !== result.source) continue;
     if (expected.name !== undefined && expected.name !== result.name) continue;
+    if (expected.condition === "symbolicLinkPrivilegeUnavailable" && result.declaration?.nativePrerequisite !== "symbolic-link") continue;
     if (expected.skipOn !== undefined && !expected.skipOn.includes(operatingSystem)) continue;
     if (expected.condition === "externalArtifactNotSelected" && result.declaration?.externalEnvironment === undefined) continue;
     if (expected.condition === "unsupportedOperatingSystem"
@@ -440,7 +445,8 @@ function main() {
     throw new Error("Usage: summarize-core-test-results.mjs [directory] [--aggregate | --allow-partial (--require-test <id> | --require-primary-lane <lane>) ...].");
   }
   const directory = resolve(repositoryRoot, arguments_[0] ?? "artifacts/test-results");
-  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes, requiredNativePartition, githubSummary, componentLayout });
+  summarizeResults(directory, model, { aggregate, allowPartial, requiredTests, requiredPrimaryLanes, requiredNativePartition, githubSummary, componentLayout,
+    requireTestPrerequisites: process.env.SUNDER_REQUIRE_TEST_PREREQUISITES === "1" });
 }
 
 export function summarizeResults(directory, model, options = {}) {

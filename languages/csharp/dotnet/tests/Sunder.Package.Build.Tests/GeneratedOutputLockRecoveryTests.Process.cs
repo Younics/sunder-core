@@ -15,9 +15,8 @@ public sealed partial class GeneratedOutputLockRecoveryTests
     [InlineData("writable-ancestor")]
     [InlineData("public-root")]
     [InlineData("symlink-ancestor")]
-    [Trait("Capability", "Process")]
     [UnsupportedOSPlatform("windows")]
-    public async Task FreshUserProfileWithGroupWritableUmaskCreatesPrivateAncestorsWithoutAdoptingUnsafePaths(string scenario)
+    public void MarkerRootCreatesPrivateAncestorsWithoutAdoptingUnsafePaths(string scenario)
     {
         const UnixFileMode privateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
         const UnixFileMode readableMode = privateMode | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
@@ -47,91 +46,41 @@ public sealed partial class GeneratedOutputLockRecoveryTests
             }
         }
         if (scenario != "fresh") File.WriteAllText(sentinel, "preserve existing state");
-        var output = Path.Combine(_root, "output");
-        var ownerCopy = Path.Combine(_root, "acquired-owner.json");
-        var project = Path.Combine(_root, "private-marker.proj");
-        // Exercise a new process and real lock task, without restore or producer
-        // builds. The test process's cached marker and actual home are untouched.
-        File.WriteAllText(project, $$"""
-            <Project>
-              <UsingTask TaskName="Sunder.Package.Build.Tasks.ManageSunderRpcGeneratedOutputLockTask"
-                         AssemblyFile="{{Xml(typeof(ManageSunderRpcGeneratedOutputLockTask).Assembly.Location)}}" />
-              <Target Name="Check">
-                <ItemGroup><LockOutput Include="{{Xml(output)}}"><DiscoveryRoot>{{Xml(_root)}}</DiscoveryRoot></LockOutput></ItemGroup>
-                <ManageSunderRpcGeneratedOutputLockTask Action="Acquire" ProjectDirectory="{{Xml(_root)}}" OutputDirectories="@(LockOutput)">
-                  <Output TaskParameter="LeaseId" PropertyName="Lease" />
-                </ManageSunderRpcGeneratedOutputLockTask>
-                <Copy SourceFiles="{{Xml(Path.Combine(output + GeneratedOutputLock.LockSuffix, "owner.json"))}}" DestinationFiles="{{Xml(ownerCopy)}}" />
-                <ManageSunderRpcGeneratedOutputLockTask Action="Release" ProjectDirectory="{{Xml(_root)}}" LeaseId="$(Lease)" />
-              </Target>
-            </Project>
-            """);
-        var start = new ProcessStartInfo("/bin/sh")
+        // These roots are test-owned. The separate process test verifies the OS
+        // account lookup without changing permissions in the real user profile.
+        if (scenario is "fresh" or "existing-safe")
         {
-            WorkingDirectory = _root,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        foreach (var argument in new[] { "-c", "umask 0002; exec \"$@\"", "_",
-                     Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet", "msbuild", project,
-                     "-t:Check", "-nr:false", "-nologo", "-v:minimal" }) start.ArgumentList.Add(argument);
-        start.Environment["HOME"] = home;
-        start.Environment["DOTNET_CLI_HOME"] = Path.Combine(_root, "dotnet-cli");
-        start.Environment["DOTNET_NOLOGO"] = "1";
-        start.Environment["DOTNET_GENERATE_ASPNET_CERTIFICATE"] = "false";
-        using var child = Process.Start(start) ?? throw new IOException("Could not start the fresh-profile lock owner.");
-        var stdout = child.StandardOutput.ReadToEndAsync();
-        var stderr = child.StandardError.ReadToEndAsync();
-        try
+            Assert.Equal(markerRoot, GeneratedOutputLock.PrepareProcessMarkerRoot(home));
+            Assert.Equal(scenario == "fresh" ? privateMode : readableMode, File.GetUnixFileMode(sunder));
+            Assert.Equal(scenario == "fresh" ? privateMode : readableMode, File.GetUnixFileMode(generated));
+            Assert.Equal(privateMode, File.GetUnixFileMode(markerRoot));
+        }
+        else
         {
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(45));
-            var diagnostics = await stdout + "\n" + await stderr;
-            if (scenario is "fresh" or "existing-safe")
+            var error = Assert.Throws<IOException>(() => GeneratedOutputLock.PrepareProcessMarkerRoot(home));
+            if (scenario == "writable-ancestor")
             {
-                Assert.True(child.ExitCode == 0, diagnostics);
-                var owner = JsonNode.Parse(File.ReadAllBytes(ownerCopy))!;
-                Assert.Equal(Path.Combine(markerRoot, owner["processMarkerToken"]!.GetValue<string>() + ".json"),
-                    owner["processMarkerPath"]!.GetValue<string>());
-                Assert.Equal(scenario == "fresh" ? privateMode : readableMode, File.GetUnixFileMode(sunder));
-                Assert.Equal(scenario == "fresh" ? privateMode : readableMode, File.GetUnixFileMode(generated));
-                Assert.Equal(privateMode, File.GetUnixFileMode(markerRoot));
-                Assert.False(Directory.Exists(output + GeneratedOutputLock.LockSuffix));
+                Assert.Contains("must not be writable by other users", error.Message);
+                Assert.Equal(readableMode | UnixFileMode.GroupWrite, File.GetUnixFileMode(sunder));
+            }
+            else if (scenario == "public-root")
+            {
+                Assert.Contains("must be private to the current user", error.Message);
+                Assert.Equal(readableMode, File.GetUnixFileMode(markerRoot));
             }
             else
             {
-                Assert.NotEqual(0, child.ExitCode);
-                Assert.False(File.Exists(ownerCopy));
-                if (scenario == "writable-ancestor")
-                {
-                    Assert.Contains("must not be writable by other users", diagnostics);
-                    Assert.Equal(readableMode | UnixFileMode.GroupWrite, File.GetUnixFileMode(sunder));
-                }
-                else if (scenario == "public-root")
-                {
-                    Assert.Contains("must be private to the current user", diagnostics);
-                    Assert.Equal(readableMode, File.GetUnixFileMode(markerRoot));
-                }
-                else
-                {
-                    Assert.Contains("process marker ancestor", diagnostics);
-                    Assert.NotNull(new DirectoryInfo(sunder).LinkTarget);
-                    Assert.Equal(["sentinel"], Directory.GetFileSystemEntries(Path.Combine(_root, "foreign")).Select(Path.GetFileName));
-                }
+                Assert.Contains("process marker ancestor", error.Message);
+                Assert.NotNull(new DirectoryInfo(sunder).LinkTarget);
+                Assert.Equal(["sentinel"], Directory.GetFileSystemEntries(Path.Combine(_root, "foreign")).Select(Path.GetFileName));
             }
-            if (scenario != "fresh") Assert.Equal("preserve existing state", File.ReadAllText(sentinel));
         }
-        finally
-        {
-            if (!child.HasExited) child.Kill(entireProcessTree: true);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-            await Task.WhenAll(stdout, stderr).WaitAsync(TimeSpan.FromSeconds(10));
-        }
+        if (scenario != "fresh") Assert.Equal("preserve existing state", File.ReadAllText(sentinel));
     }
 
     [Fact]
     [Trait("Capability", "Process")]
-    public async Task DotNetHolderInDifferentWorkerTempRootRemainsExclusiveAndRecoversAfterWorkerCleanup()
+    public async Task DotNetHolderInIsolatedMakerProfileRemainsExclusiveAndRecoversAfterWorkerCleanup()
     {
         Directory.CreateDirectory(_root);
         var discovery = Path.Combine(_root, "discovery");
@@ -166,6 +115,11 @@ public sealed partial class GeneratedOutputLockRecoveryTests
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         foreach (var argument in new[] { "msbuild", project, "-t:Hold", "-nr:false", "-nologo", "-v:minimal" }) start.ArgumentList.Add(argument);
         foreach (var variable in new[] { "TMPDIR", "TMP", "TEMP" }) start.Environment[variable] = jobTemp;
+        var profile = Path.Combine(_root, "maker-profile");
+        Directory.CreateDirectory(profile);
+        start.Environment["HOME"] = profile;
+        start.Environment["USERPROFILE"] = profile;
+        start.Environment["DOTNET_CLI_HOME"] = profile;
         using var child = Process.Start(start) ?? throw new IOException("Could not start the isolated lock owner.");
         var stdout = child.StandardOutput.ReadToEndAsync();
         var stderr = child.StandardError.ReadToEndAsync();
@@ -182,6 +136,7 @@ public sealed partial class GeneratedOutputLockRecoveryTests
             var marker = owner["processMarkerPath"]!.GetValue<string>();
             _markers.Add(marker);
             Assert.False(GeneratedOutputPathSafety.IsDescendantOf(marker, jobTemp));
+            Assert.Equal(Path.Combine(GeneratedOutputUserProfile.Home, ".sunder", "generated-output", "processes"), Path.GetDirectoryName(marker));
             var before = File.ReadAllBytes(Path.Combine(output + GeneratedOutputLock.LockSuffix, "owner.json"));
             Assert.Throws<TimeoutException>(() => GeneratedOutputLock.Acquire([output], TimeSpan.FromMilliseconds(1400)));
             Assert.Equal(before, File.ReadAllBytes(Path.Combine(output + GeneratedOutputLock.LockSuffix, "owner.json")));

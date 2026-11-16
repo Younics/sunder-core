@@ -10,9 +10,9 @@ namespace Sunder.App.Tests;
 public sealed partial class PackageViewHostServiceTests
 {
     [Fact]
-    public async Task RepeatedRetirementFenceDoesNotSupersedeTheNextUnrelatedPresentation()
+    public Task RepeatedRetirementFenceDoesNotSupersedeTheNextUnrelatedPresentation()
+        => RunPackageTestAsync("app-retirement-fence-once", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retirement-fence-once");
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, CreateAppPackageSource(temporary.RootPath, "agent"));
         var package = CreateActiveAgentPackage();
         await using var host = new PackageViewHostService(new(), [], [], [], temporary.GetPath("session"),
@@ -32,14 +32,15 @@ public sealed partial class PackageViewHostServiceTests
         }, default);
         await host.WaitForRetirementsAsync();
         Assert.Equal(0, host.LoadedPackageCount);
-    }
+    });
 
     [Theory]
+    [Trait("Capability", "Process")]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task MissingPackageSourceDoesNotBlockHealthyPresentationButReadmissionStillRequiresSettledState(bool uncertainMutation)
+    public Task MissingPackageSourceDoesNotBlockHealthyPresentationButReadmissionStillRequiresSettledState(bool uncertainMutation)
+        => RunPackageTestAsync("app-missing-source-isolation", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-missing-source-isolation");
         var agent = CreateActiveAgentPackage();
         var sibling = CreateActivePackage("project") with { Views = [] };
         var agentSource = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, CreateAppPackageSource(temporary.GetPath("agent"), "agent")) with
@@ -71,12 +72,13 @@ public sealed partial class PackageViewHostServiceTests
         await host.WaitForRetirementsAsync();
         Assert.Equal(uncertainMutation ? 1 : 2, host.LoadedPackageCount);
         Assert.Same(healthy.ServiceProvider, RetentionGeneration(host).State.GetLoadedPackage("project")!.ServiceProvider);
-    }
+    }, untilProcessExit: uncertainMutation, arguments: [uncertainMutation]);
 
     [Fact]
-    public async Task ReplacedUnprovenOwnerRemainsAvailableForExactRetirementAfterCollection()
+    [Trait("Capability", "Process")]
+    public Task ReplacedUnprovenOwnerRemainsAvailableForExactRetirementAfterCollection()
+        => RunPackageTestAsync("app-retirement-owner-proof", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retirement-owner-proof");
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, CreateAppPackageSource(temporary.RootPath, "agent")) with
             { PolicySubject = new("agent", "1.0.0", new('b', 64)) };
         var policy = new ExactRetentionPolicy(source);
@@ -92,7 +94,7 @@ public sealed partial class PackageViewHostServiceTests
         await host.RetireRequestedActivationsAsync([requirement], null, default);
         Assert.Empty(policy.RetiredActivationIds);
         Assert.Equal(0, host.LoadedPackageCount);
-    }
+    }, untilProcessExit: true);
 
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
     private static async Task<(RuntimeAppActivationRetirementRequirement, WeakReference<AppPackageGeneration>)> ReplaceUnprovenOwnerAsync(
@@ -111,9 +113,10 @@ public sealed partial class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task TerminalLocalCleanupFailureIsQuarantinedOnceAndNeverAcknowledgedAsRetired()
+    [Trait("Capability", "Process")]
+    public Task TerminalLocalCleanupFailureIsQuarantinedOnceAndNeverAcknowledgedAsRetired()
+        => RunPackageTestAsync("app-terminal-retirement", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-terminal-retirement");
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, CreateAppPackageSource(temporary.RootPath, "agent")) with
             { PolicySubject = new("agent", "1.0.0", new('b', 64)) };
         var policy = new ExactRetentionPolicy(source);
@@ -135,7 +138,7 @@ public sealed partial class PackageViewHostServiceTests
         Assert.Equal(1, failing.Disposals);
         Assert.Empty(policy.RetiredActivationIds);
         Assert.False(owner.Composition.ServicesPublished);
-    }
+    }, untilProcessExit: true);
 
     private sealed class FailedRetirementLifetime(IAsyncDisposable inner) : IAsyncDisposable
     {
@@ -149,9 +152,9 @@ public sealed partial class PackageViewHostServiceTests
     }
 
     [Fact]
-    public async Task RevokedRetainedActivationSupersedesPreparationInsteadOfAcquiringPendingAuthority()
+    public Task RevokedRetainedActivationSupersedesPreparationInsteadOfAcquiringPendingAuthority()
+        => RunPackageTestAsync("app-retained-revocation-preparation", async temporary =>
     {
-        using var temporary = TemporaryDirectoryScope.Create("app-retained-revocation-preparation");
         var folder = CreateAppPackageSource(temporary.RootPath, "agent");
         var package = CreateActiveAgentPackage();
         var source = RuntimeContractTestData.Snapshot("agent", PackageSourceKind.Dev, folder) with
@@ -172,5 +175,5 @@ public sealed partial class PackageViewHostServiceTests
             }, default));
         await host.WaitForRetirementsAsync();
         Assert.False(owner.Composition.ServicesPublished);
-    }
+    });
 }

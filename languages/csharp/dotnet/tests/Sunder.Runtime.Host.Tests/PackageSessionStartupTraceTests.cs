@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using Sunder.Package.Format;
@@ -714,10 +715,10 @@ public sealed class PackageSessionStartupTraceTests
         Assert.Null(writer.BeginAttempt(0));
     }
 
-    [Fact]
+    [UnixFact]
+    [UnsupportedOSPlatform("windows")]
     public void Open_OnUnixRestrictsTraceFileToTheCurrentUser()
     {
-        if (OperatingSystem.IsWindows()) return;
         using var directory = TemporaryDirectoryScope.Create("sunder-startup-trace-tests");
         var path = directory.WriteAllText("trace.jsonl", "pre-existing");
         File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);

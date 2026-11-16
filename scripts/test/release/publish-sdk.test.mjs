@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -57,10 +57,10 @@ exit "\${MOCK_PUBLISH_STATUS:-0}"`);
   } else {
     await writeFile(archive, "retained NuGet bytes");
   }
-  const result = spawnSync("bash", [publisherPath, kind, name, version, archive, source], {
-    encoding: "utf8", timeout: 10_000,
+  const result = spawnSync(python, ["-B", resolve(repositoryRoot, "scripts/ci/bash_runtime.py"), "--run", publisherPath, kind, name, version, relative(root, archive), source], {
+    cwd: root, encoding: "utf8", timeout: 10_000,
     env: {
-      ...process.env, PATH: `${bin}:${process.env.PATH}`, REAL_PYTHON: python, MOCK_LOG: log,
+      ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, REAL_PYTHON: python, MOCK_LOG: log,
       MOCK_HISTORY: JSON.stringify(history), NODE_AUTH_TOKEN: "fixture-token", NUGET_API_KEY: "fixture-key",
       GITHUB_SHA: source, GITHUB_REPOSITORY: "Younics/sunder-core", GITHUB_REF: "refs/heads/main",
       GITHUB_WORKFLOW_REF: "Younics/sunder-core/.github/workflows/sunder-sdk-release.yml@refs/heads/main",

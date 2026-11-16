@@ -1103,12 +1103,13 @@ Canonical package lock migration and deployment/release qualification remain sep
 
 For C# build/cache readiness failures, `contract-cache.entry-missing` reports the
 effective `SunderContractCacheRoot` and the missing descriptor, receipt, model
-projection and catalog inputs for the complete selected inventory. Run explicit
-`RestoreSunderContracts` with the exact local candidate/catalog, then use
+projection and catalog inputs for the complete selected inventory. Run ordinary
+SDK restore with the exact declared local candidate/catalog, then use
 `CheckSunderContractCache` to verify readiness without publishing evidence. A
 provider-only import still verifies the selected artifact's complete inventory.
-NuGet restore, a same-version rebuilt archive or a default Registry cannot replace
-those locked inputs. The diagnostic IDs remain the shared machine-readable contract;
+A same-version rebuilt archive or a default Registry cannot replace those locked
+inputs. Compilation and no-restore remain read-only; corrupt or incomplete evidence
+needs deliberate `RestoreSunderContracts` recovery. The diagnostic IDs remain the shared machine-readable contract;
 frontend-specific recovery text is not a new authority or selection mechanism.
 
 Package/lock/cache frontends share these stable IDs:

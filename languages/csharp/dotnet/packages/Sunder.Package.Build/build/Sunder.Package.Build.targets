@@ -22,6 +22,9 @@
   </PropertyGroup>
 
   <PropertyGroup>
+    <_SunderPackageBuildTargetsImported>true</_SunderPackageBuildTargetsImported>
+    <SunderRestoreContracts Condition="'$(SunderRestoreContracts)' == ''">true</SunderRestoreContracts>
+    <SunderPackageBuildTaskRestore Condition="'$(SunderPackageBuildTaskRestore)' == '' and '$(MSBuildIsRestoring)' == 'true'">true</SunderPackageBuildTaskRestore>
     <_SunderPackageBuildTaskAssemblyWasSpecified Condition="'$(SunderPackageBuildTaskAssembly)' != ''">true</_SunderPackageBuildTaskAssemblyWasSpecified>
     <SunderPackageBuildTaskTargetFramework Condition="'$(SunderPackageBuildTaskTargetFramework)' == ''">net10.0</SunderPackageBuildTaskTargetFramework>
     <SunderPackageBuildTaskSourceIsImmutable Condition="'$(SunderPackageBuildTaskSourceIsImmutable)' == '' and '$(SunderPackageBuildTaskAssembly)' == '' and Exists('$(MSBuildThisFileDirectory)..\tasks\$(SunderPackageBuildTaskTargetFramework)\Sunder.Package.Build.dll')">true</SunderPackageBuildTaskSourceIsImmutable>
@@ -50,6 +53,10 @@
     <_SunderPackageBuildTaskShadowDirectoryFullPath>$([MSBuild]::EnsureTrailingSlash($([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskShadowDirectory)', '$(MSBuildProjectDirectory)'))))</_SunderPackageBuildTaskShadowDirectoryFullPath>
     <SunderPackageBuildTaskShadowAssembly Condition="'$(SunderPackageBuildTaskShadowAssembly)' == ''">$([System.IO.Path]::Combine('$(_SunderPackageBuildTaskShadowDirectoryFullPath)', 'Sunder.Package.Build.dll'))</SunderPackageBuildTaskShadowAssembly>
     <_SunderPackageBuildTaskShadowAssemblyFullPath>$([System.IO.Path]::GetFullPath('$(SunderPackageBuildTaskShadowAssembly)', '$(MSBuildProjectDirectory)'))</_SunderPackageBuildTaskShadowAssemblyFullPath>
+    <!-- Exists and task loading use Windows native APIs; keep long task-shadow
+         paths usable without requiring a machine-wide long-path policy change. -->
+    <_SunderPackageBuildTaskShadowAssemblyFullPath Condition="'$(OS)' == 'Windows_NT' and $(_SunderPackageBuildTaskShadowAssemblyFullPath.Length) &gt;= 260 and !$(_SunderPackageBuildTaskShadowAssemblyFullPath.StartsWith('\\?\')) and $(_SunderPackageBuildTaskShadowAssemblyFullPath.StartsWith('\\'))">\\?\UNC\$(_SunderPackageBuildTaskShadowAssemblyFullPath.Substring(2))</_SunderPackageBuildTaskShadowAssemblyFullPath>
+    <_SunderPackageBuildTaskShadowAssemblyFullPath Condition="'$(OS)' == 'Windows_NT' and $(_SunderPackageBuildTaskShadowAssemblyFullPath.Length) &gt;= 260 and !$(_SunderPackageBuildTaskShadowAssemblyFullPath.StartsWith('\\?\'))">\\?\$(_SunderPackageBuildTaskShadowAssemblyFullPath)</_SunderPackageBuildTaskShadowAssemblyFullPath>
     <SunderPackageBuildTaskSourceLockPath Condition="'$(SunderPackageBuildTaskSourceLockPath)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine($([System.IO.Path]::GetDirectoryName('$(_SunderPackageBuildProjectFullPath)')), 'obj', '.sunder-package-build-task-source.lock'))))</SunderPackageBuildTaskSourceLockPath>
     <SunderPackageRuntimeIdentifiers Condition="'$(SunderPackageRuntimeIdentifiers)' == ''">win-x64;win-arm64;linux-x64;linux-arm64;osx-x64;osx-arm64</SunderPackageRuntimeIdentifiers>
     <SunderPackageAssetsDirectory Condition="'$(SunderPackageAssetsDirectory)' == ''">$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', 'Assets'))))</SunderPackageAssetsDirectory>
@@ -691,10 +698,18 @@
                                              AttemptSignalFile="$(_SunderPackageBuildTaskSourceLockAttemptSignalFile)">
       <Output TaskParameter="LeaseId" PropertyName="_SunderPackageBuildTaskSourceSnapshotLeaseId" />
     </_SunderManagePackageBuildTaskSourceLock>
+    <!-- Source consumers may be entering their first restore. Restore the tool's
+         own declared closure before compiling it, with a distinct evaluation so
+         Build reloads the newly written NuGet imports. This never runs in a
+         no-restore/ordinary compiler request. -->
+    <MSBuild Projects="$(_SunderPackageBuildProjectFullPath)" Targets="Restore"
+             Properties="Configuration=$(SunderPackageBuildTaskBootstrapConfiguration);TargetFramework=net10.0;GeneratePackageOnBuild=false;SunderPackageBuildTaskSourceRestore=true;SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);SunderPackageBuildSourceLockTargetsPath=$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets"
+             RemoveProperties="SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable;SunderPackageBuildTaskRestore"
+             BuildInParallel="false" StopOnFirstFailure="true" Condition="'$(SunderPackageBuildTaskRestore)' == 'true'" />
     <MSBuild Projects="$(_SunderPackageBuildProjectFullPath)"
              Targets="Build"
              Properties="Configuration=$(SunderPackageBuildTaskBootstrapConfiguration);TargetFramework=net10.0;BuildProjectReferences=true;GeneratePackageOnBuild=false;SunderPackageBuildTaskSourceLockAlreadyHeld=true;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);SunderPackageBuildSourceLockTargetsPath=$(MSBuildThisFileDirectory)Sunder.Package.Build.SourceLock.targets"
-             RemoveProperties="SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable"
+              RemoveProperties="SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable;SunderPackageBuildTaskRestore"
              BuildInParallel="false"
              StopOnFirstFailure="true" />
     <CallTarget Targets="_CollectSunderPackageBuildTaskDependencyFiles">
@@ -750,13 +765,13 @@
     <!-- Owner compiler inputs and fixture hooks must opt in by name; all other
          caller globals, including unknown future properties, are removed. -->
     <_SunderGetPackageBuildTaskCallerProperties
-        KeepProperties="Configuration;TargetFramework;SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable;SunderPackageBuildTaskSourceLockPath;$(SunderPackageBuildTaskSourceGlobalProperties)"
+        KeepProperties="Configuration;TargetFramework;SunderPackageBuildProject;SunderPackageBuildTaskAssembly;SunderPackageBuildTaskSourceIsImmutable;SunderPackageBuildTaskSourceLockPath;SunderPackageBuildTaskRestore;$(SunderPackageBuildTaskSourceGlobalProperties)"
         Condition="'$(_SunderPackageBuildTaskBuildFromSource)' == 'true'">
       <Output TaskParameter="RemoveProperties" PropertyName="_SunderPackageBuildTaskCallerPropertiesToRemove" />
     </_SunderGetPackageBuildTaskCallerProperties>
     <MSBuild Projects="$(MSBuildThisFileFullPath)"
              Targets="_BuildSunderPackageBuildTaskSourceSnapshot"
-             Properties="Configuration=$(SunderPackageBuildTaskBootstrapConfiguration);TargetFramework=net10.0;SunderPackageBuildProject=$(_SunderPackageBuildProjectFullPath);SunderPackageBuildTaskAssembly=$(_SunderPackageBuildTaskAssemblyFullPath);SunderPackageBuildTaskSourceIsImmutable=false;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath)"
+              Properties="Configuration=$(SunderPackageBuildTaskBootstrapConfiguration);TargetFramework=net10.0;SunderPackageBuildProject=$(_SunderPackageBuildProjectFullPath);SunderPackageBuildTaskAssembly=$(_SunderPackageBuildTaskAssemblyFullPath);SunderPackageBuildTaskSourceIsImmutable=false;SunderPackageBuildTaskSourceLockPath=$(_SunderPackageBuildTaskSourceLockFullPath);SunderPackageBuildTaskRestore=$(SunderPackageBuildTaskRestore)"
              RemoveProperties="$(_SunderPackageBuildTaskCallerPropertiesToRemove)"
              BuildInParallel="false"
              StopOnFirstFailure="true"
@@ -846,6 +861,8 @@
                                ContractCacheRoot="$(SunderContractCacheRoot)" CandidateArchives="@(_SunderContractRestoreCandidate)"
                                PlatformCatalogPath="$(SunderPlatformCatalogPath)" />
   </Target>
+
+  <Import Project="$(MSBuildThisFileDirectory)Sunder.Package.Build.Contracts.Restore.targets" />
 
   <UsingTask TaskName="Sunder.Package.Build.Tasks.CollectSunderContractCacheTask"
              AssemblyFile="$(_SunderPackageBuildTaskShadowAssemblyFullPath)"

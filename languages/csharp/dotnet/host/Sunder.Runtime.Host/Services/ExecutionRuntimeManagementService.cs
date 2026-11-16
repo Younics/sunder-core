@@ -362,6 +362,4 @@ internal sealed class ExecutionRuntimeManagementService(
     private static bool BindingMatches(InstalledPackageExecutionRuntimeBindingRecord binding, RuntimeExecutionRuntimeIdentity identity)
         => binding.Runtime == identity;
 
-    private static PackageTargetExecutionRuntimeBinding ToContractBinding(InstalledPackageExecutionRuntimeBindingRecord binding)
-        => new(binding.Role, binding.Rid, binding.Requirement, binding.Runtime, binding.InstalledArtifact, binding.ResolvedAtUtc);
 }

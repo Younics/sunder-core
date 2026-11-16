@@ -1,0 +1,19 @@
+root = true
+
+# Git preserves JSON bytes; editors should not introduce Windows newline drift.
+[*.json]
+charset = utf-8
+end_of_line = lf
+
+# Evidence is not editable configuration. Do not apply save-time normalization.
+[{specs,compatibility}/**]
+charset = unset
+end_of_line = unset
+
+[eng/compatibility/**]
+charset = unset
+end_of_line = unset
+
+[**/{test,tests}/**]
+charset = unset
+end_of_line = unset

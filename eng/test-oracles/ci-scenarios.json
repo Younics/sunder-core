@@ -38,7 +38,16 @@
     "environment": { "SUNDER_REQUIRE_NODE24_HOST_INTEGRATION": "1", "SUNDER_REQUIRE_DOTNET_WORKER_ARTIFACT": "1" }
   },
   "agent-family": {
-    "selectors": ["Sunder.Runtime.Host.Tests.AgentPackageReleaseSmokeTests.", "Sunder.App.Tests.AgentPackageReleaseSmokeTests."],
-    "environment": { "SUNDER_REQUIRE_AGENT_PACKAGE_RELEASE": "1", "SUNDER_REQUIRE_AGENT_UI_SNAPSHOT": "1" }
+    "projectOrder": ["Sunder.Runtime.Host.Tests", "Sunder.App.Integration.Tests"],
+    "selectors": [
+      "Sunder.Runtime.Host.Tests.AgentPackageReleaseSmokeTests.DevelopmentArchives_ActivateUnloadReloadAndReplaceAsOneFamily",
+      "Sunder.Runtime.Host.Tests.AgentPackageReleaseSmokeTests.MakerStandalone_CurrentArchiveActivatesAndRejectsInvalidArgumentsWithoutAgent",
+      "Sunder.App.Integration.Tests.AgentPackageReleaseSmokeTests.RuntimeProducedAgentSnapshot_MaterializesAndActivatesInSupervisedApp"
+    ],
+    "environment": { "SUNDER_REQUIRE_AGENT_PACKAGE_RELEASE": "1", "SUNDER_REQUIRE_AGENT_UI_SNAPSHOT": "1", "SUNDER_REQUIRE_MAKER_STANDALONE": "1" }
+  },
+  "agent-family-installed": {
+    "selectors": ["Sunder.Runtime.Host.Tests.AgentPackageReleaseSmokeTests.ReleaseArchives_InstallActivateUnloadReloadAndReinstallAsOneFamily"],
+    "environment": { "SUNDER_REQUIRE_AGENT_INSTALLED_FAMILY": "1" }
   }
 }

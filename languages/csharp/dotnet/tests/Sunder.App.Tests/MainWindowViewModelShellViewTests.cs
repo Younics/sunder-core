@@ -3943,6 +3943,11 @@ public sealed class ShellLifecycleThreadAffinedPackageView
         IPackageViewNavigationTarget
 {
     private static readonly SunderRpcEndpointReference RuntimePingEndpoint = new("rpc1_test_runtime_ping");
+    // Keep package-local DTO metadata out of the process-wide default JSON cache.
+    private static readonly System.Text.Json.JsonSerializerOptions DevelopmentProbeJson = new()
+    {
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
+    };
     private readonly TaskCompletionSource _attachedOrLoaded = new(
         TaskCreationOptions.RunContinuationsAsynchronously
     );
@@ -3966,7 +3971,7 @@ public sealed class ShellLifecycleThreadAffinedPackageView
     public async Task<(IAsyncDisposable Lifetime, Func<Task<string>> Status, Func<bool, Task> SetWatch)> LoadDevelopmentAsync(string folder, bool watch)
     {
         var session = await ServiceProvider.GetRequiredService<IPackageDevelopmentService>().LoadAsync(folder, watch);
-        return (session, async () => System.Text.Json.JsonSerializer.Serialize(await session.GetStatusAsync()),
+        return (session, async () => System.Text.Json.JsonSerializer.Serialize(await session.GetStatusAsync(), DevelopmentProbeJson),
             enabled => session.SetWatchAsync(enabled));
     }
 

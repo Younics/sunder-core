@@ -91,7 +91,6 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     private readonly PackageOperationFinalizer _operationFinalizer;
     private readonly Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? _confirmLocalPackage;
     private readonly object _operationGate = new();
-    private readonly Dictionary<Guid, string> _temporaryLocalArchives = [];
     private readonly CancellationTokenSource _lifetime = new();
     private readonly CancellationToken _lifetimeToken;
     private readonly TimeProvider _uploadRetentionClock;
@@ -523,51 +522,11 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     private void ThrowIfDisposed()
         => ObjectDisposedException.ThrowIf(_disposed, this);
 
-    private static void ReportRegistryProgress(BackgroundTaskContext context, RegistryPackageInstallProgress progress)
-    {
-        if (progress.ProgressPercent is null)
-        {
-            context.ReportIndeterminate(progress.StatusText);
-            return;
-        }
-
-        context.ReportProgress(progress.ProgressPercent.Value, progress.StatusText);
-    }
-
     private void BackgroundTasks_OnTaskChanged(object? sender, BackgroundTaskChangedEventArgs e)
     {
-        if (!e.Snapshot.IsActive)
-        {
-            CleanupTemporaryLocalArchive(e.Snapshot.TaskId);
-        }
         if (!_disposed && IsPackageOperation(e.Snapshot))
         {
             OperationChanged?.Invoke(this, new PackageOperationChangedEventArgs(e.Snapshot));
-        }
-    }
-
-    private void TrackTemporaryLocalArchive(Guid processId, string packagePath)
-    {
-        lock (_operationGate)
-        {
-            _temporaryLocalArchives[processId] = packagePath;
-        }
-        if (_backgroundTasks.GetTask(processId) is not { IsActive: true })
-        {
-            CleanupTemporaryLocalArchive(processId);
-        }
-    }
-
-    private void CleanupTemporaryLocalArchive(Guid processId)
-    {
-        string? packagePath;
-        lock (_operationGate)
-        {
-            _temporaryLocalArchives.Remove(processId, out packagePath);
-        }
-        if (packagePath is not null)
-        {
-            PackageArchivePicker.DeleteReviewSnapshot(packagePath);
         }
     }
 

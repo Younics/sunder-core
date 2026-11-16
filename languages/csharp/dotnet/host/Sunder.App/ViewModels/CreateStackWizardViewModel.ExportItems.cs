@@ -208,13 +208,4 @@ public sealed partial class CreateStackExportItemViewModel(RuntimeStackExportIte
             : string.Join(", ", names);
     }
 
-    private static string Shorten(string value, int maxLength)
-    {
-        if (string.IsNullOrWhiteSpace(value) || value.Length <= maxLength)
-        {
-            return value;
-        }
-
-        return value[..Math.Max(4, maxLength - 3)] + "...";
-    }
 }

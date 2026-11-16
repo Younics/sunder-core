@@ -21,6 +21,13 @@ internal sealed partial class AppDevelopmentViewOperations(TimeProvider? timePro
     private readonly Dictionary<string, Snapshot> _snapshots = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Receipt> _receipts = new(StringComparer.Ordinal);
 
+    internal void RetireSnapshots()
+    {
+        // Accepted operations are drained by the session gate. Retain replay
+        // receipts, but never root old Controls/documents through a disposed owner.
+        lock (_sync) _snapshots.Clear();
+    }
+
     internal Task<PackageDevelopmentViewSnapshot> InspectAsync(AppDevelopmentViewBinding binding, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();

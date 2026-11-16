@@ -280,10 +280,9 @@ public sealed partial class AppProcessPolicySessionsTests
         Assert.Throws<PackagePolicyDeniedException>(() => AppPolicyPeerIdentity.Read(new DefaultHttpContext()));
     }
 
-    [Fact]
+    [UnixFact]
     public async Task KestrelPreservesKernelPeerIdentityThroughLocalHttp()
     {
-        if (OperatingSystem.IsWindows()) return; // The named-pipe feature is covered by the native child lane.
         var address = "/tmp/sap-http-" + Guid.NewGuid().ToString("N");
         using var fixture = new Fixture(new(Environment.ProcessId, OperatingSystem.IsMacOS() ? RuntimeProcessIdentity.CurrentAuditToken() : null));
         await fixture.Policy.RefreshAsync();
@@ -341,6 +340,11 @@ public sealed partial class AppProcessPolicySessionsTests
             if (pipe is not null)
             {
                 await pipe.WaitForConnectionAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                // Windows impersonates the sender of the last message read, not
+                // merely the connected endpoint. Match the HTTP server boundary.
+                var ready = new byte[1];
+                await pipe.ReadExactlyAsync(ready).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                Assert.Equal(1, ready[0]);
                 context.Features.Set<IConnectionNamedPipeFeature>(new PipeFeature(pipe));
             }
             else context.Features.Set<IConnectionSocketFeature>(new SocketFeature(accepted!));

@@ -17,6 +17,7 @@ sys.dont_write_bytecode = True
 import release_coordinates as c
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci"))
 from metadata import platforms
+import bash_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 RIDS = tuple(row["rid"] for row in platforms()["include"])
@@ -177,6 +178,9 @@ class GitHubRelease:
                     # Link gives no-replace publication on the same filesystem.
                     os.link(temporary, destination)
             finally:
+                # Windows cannot unlink the still-open NamedTemporaryFile. Keep
+                # verification/publication under its handle, then close for cleanup.
+                stream.close()
                 temporary.unlink(missing_ok=True)
 
     def upload(self, release_id, paths):
@@ -279,7 +283,7 @@ def core_stage(store, directory, component, channel, finalize=False):
     c.require(plan["component"] == component and plan["tag"] == store.tag, "Native reservation differs from publication")
     native_release.guard(plan, retained=finalize)
     source = plan["artifactSourceCommit"]
-    subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag, source], check=True, cwd=ROOT)
+    subprocess.run(bash_runtime.command(ROOT / "scripts/release/verify-release-tag.sh", store.tag, source), check=True, cwd=ROOT)
     version = store.tag.split("/v", 1)[1]
     expected = core_names(component, version, channel) | {native_release.PLAN}
     release = store.resolve() if finalize else store.create(source, f"Sunder {component.title()} {version}")
@@ -304,7 +308,7 @@ def core_stage(store, directory, component, channel, finalize=False):
             with tempfile.TemporaryDirectory(dir=directory) as temporary:
                 for name in sorted(expected):
                     os.link(files[name], Path(temporary) / name)
-                subprocess.run(["bash", str(ROOT / "scripts/release/generate-release-evidence.sh"), temporary, "sunder-core=" + source],
+                subprocess.run(bash_runtime.command(ROOT / "scripts/release/generate-release-evidence.sh", temporary, "sunder-core=" + source),
                                env=environment, check=True)
                 for name in EVIDENCE - files.keys():
                     with (Path(directory) / name).open("xb") as output:
@@ -325,7 +329,7 @@ def core_stage(store, directory, component, channel, finalize=False):
         store.upload(release_id, list(files.values()))
     verified = store.verify(release_id, files)
     if finalize and release["draft"]:
-        subprocess.run(["bash", str(ROOT / "scripts/release/verify-release-tag.sh"), store.tag, source], check=True, cwd=ROOT)
+        subprocess.run(bash_runtime.command(ROOT / "scripts/release/verify-release-tag.sh", store.tag, source), check=True, cwd=ROOT)
         before = store.get(release_id, draft=True)
         c.require(before["assets"] == verified["assets"] and before["target_commitish"] == source
                   and before["prerelease"] is ("-" in version), "Release changed after byte verification")

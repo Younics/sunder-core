@@ -456,20 +456,6 @@ internal sealed class InstalledPackageStore(RuntimePackagePaths paths)
                 binding.ResolvedAtUtc);
         }).ToArray();
 
-    private static bool IsCanonicalRegistryOrigin(string? value)
-    {
-        try
-        {
-            return value is not null
-                   && value.Length <= 2048
-                   && string.Equals(RegistryOrigin.Normalize(value).AbsoluteUri, value, StringComparison.Ordinal);
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
-    }
-
     private static bool IsCanonicalUtc(DateTimeOffset value)
         => value != default && value.Offset == TimeSpan.Zero;
 

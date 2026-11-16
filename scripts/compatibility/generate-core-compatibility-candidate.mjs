@@ -3,6 +3,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, extname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmCommand } from "../npm-command.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 // The migration ledger is protected history. No mode of this generator writes it.
@@ -1078,13 +1079,14 @@ function buildCandidateInputs() {
     "CLI build",
   );
   runRequired(
-    process.platform === "win32" ? "npm.cmd" : "npm",
+    "npm",
     ["run", "build", "--prefix", nodeWorkspaceRelativePath],
     "TypeScript declaration build",
   );
 }
 
 function runRequired(command, args, label) {
+  if (command === "npm") ({ command, arguments: args } = npmCommand(args));
   const result = spawnSync(command, args, {
     cwd: repositoryRoot,
     encoding: "utf8",

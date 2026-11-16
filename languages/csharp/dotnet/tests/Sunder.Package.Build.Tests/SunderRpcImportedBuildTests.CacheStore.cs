@@ -11,6 +11,7 @@ public sealed partial class SunderRpcImportedBuildTests
 {
     [ExternalArtifactFact("SUNDER_REQUIRE_NODE_OUTPUT_LOCK_INTEROP")]
     [Trait("Category", "ExternalArtifact")]
+    [Trait("Prerequisite", "Node")]
     public async Task CacheStore_CSharpAndNodeShareReaderLeasesAndRecoverEachOthersInterruptedPublications()
     {
         var helper = Path.Combine(RepositoryRoot(), "languages/typescript/node/packages/package-tool/dist-test/test/contract-cache-child.js");
@@ -154,10 +155,16 @@ public sealed partial class SunderRpcImportedBuildTests
 
     [Theory]
     [InlineData("marker")]
-    [InlineData("descriptor-link")]
     [InlineData("pending-extra")]
     [InlineData("pending-changed")]
     public void CacheStore_UnprovenPathsOrPendingBytesCannotBeRepaired(string failure)
+        => AssertCacheStoreRejectsUnprovenPathsOrPendingBytes(failure);
+
+    [SymbolicLinkFact(directory: false)]
+    public void CacheStore_LinkedDescriptorCannotBeRepaired()
+        => AssertCacheStoreRejectsUnprovenPathsOrPendingBytes("descriptor-link");
+
+    private void AssertCacheStoreRejectsUnprovenPathsOrPendingBytes(string failure)
     {
         var contractLock = SunderRpcAuthoringDocuments.ReadContractLock(LockPath);
         var required = SunderRpcContractCache.GetRequirements(contractLock);

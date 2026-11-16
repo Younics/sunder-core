@@ -5,6 +5,7 @@ using System.Text.Json;
 using Avalonia.Controls;
 using Sunder.App.Bridge;
 using Sunder.App.Services;
+using Sunder.Core.TestSupport;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -96,24 +97,28 @@ public sealed partial class AppBridgeIsolationTests
     }
 
     [Fact]
-    public void MissingLocalSdkCannotFallBackToTheShellSdk()
-    {
-        using var shared = new AppSharedAssemblyRegistry();
-        var folder = Path.Combine(Path.GetTempPath(), "sunder-missing-app-sdk-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(folder);
-        try
+    public Task MissingLocalSdkCannotFallBackToTheShellSdk()
+        => TemporaryDirectoryScope.RunAsync("sunder-missing-app-sdk", scope =>
         {
+            var folder = scope.RootPath;
             File.Copy(Path.Combine(AppContext.BaseDirectory, "bridge-fixtures", "one", "Package.dll"), Path.Combine(folder, "Package.dll"));
             WriteDeps(folder, 1);
-            var context = new AppPackageLoadContext("test.missing", Path.Combine(folder, "Package.dll"), AppPackageTargetEnvironment.CurrentRid, shared, (_, _) => { });
-            try
-            {
-                var entry = (IAppPackageEntryPointV1)Activator.CreateInstance(context.LoadPackageEntryAssembly().GetType("EntryPoint")!)!;
-                Assert.Throws<FileLoadException>(() => entry.CreateAsync(new ProbeHost(folder, "test.missing"), new Sink()).GetAwaiter().GetResult());
-            }
-            finally { context.Unload(); }
+            CollectContext(ActivateWithMissingSdk(folder));
+            return Task.CompletedTask;
+        });
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static WeakReference ActivateWithMissingSdk(string folder)
+    {
+        using var shared = new AppSharedAssemblyRegistry();
+        var context = new AppPackageLoadContext("test.missing", Path.Combine(folder, "Package.dll"), AppPackageTargetEnvironment.CurrentRid, shared, (_, _) => { });
+        try
+        {
+            var entry = (IAppPackageEntryPointV1)Activator.CreateInstance(context.LoadPackageEntryAssembly().GetType("EntryPoint")!)!;
+            Assert.Throws<FileLoadException>(() => entry.CreateAsync(new ProbeHost(folder, "test.missing"), new Sink()).GetAwaiter().GetResult());
+            return new WeakReference(context, trackResurrection: true);
         }
-        finally { Directory.Delete(folder, recursive: true); }
+        finally { context.Unload(); }
     }
 
     private static void WriteDeps(string folder, int major) => File.WriteAllText(Path.Combine(folder, "Package.deps.json"), """

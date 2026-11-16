@@ -456,6 +456,7 @@ public sealed class SunderRpcContractLockTests
         => document.ToJsonString(new JsonSerializerOptions
         {
             WriteIndented = true,
+            NewLine = "\n",
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         }) + "\n";
 

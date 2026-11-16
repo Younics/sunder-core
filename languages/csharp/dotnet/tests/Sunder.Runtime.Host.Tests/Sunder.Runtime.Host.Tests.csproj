@@ -10,12 +10,24 @@
     <ProjectReference Include="..\Sunder.Runtime.Host.InteropWorker\Sunder.Runtime.Host.InteropWorker.csproj"
                       ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\Sunder.Package.Build.TestFixtures\WorkerV1Executable\WorkerV1Executable.csproj"
-                      ReferenceOutputAssembly="false" />
+                       ReferenceOutputAssembly="false" OutputItemType="_WorkerSdkTargetPath" />
   </ItemGroup>
+
+  <Target Name="RecordWorkerSdkPackageOutput" BeforeTargets="GetAssemblyAttributes" DependsOnTargets="ResolveProjectReferences">
+    <Error Condition="'@(_WorkerSdkTargetPath->Count())' != '1'" Text="Worker lifecycle tests require one exact source-built SDK fixture." />
+    <ReadLinesFromFile File="@(_WorkerSdkTargetPath->'%(RootDir)%(Directory)sunder-worker-sdk-package-path.txt')">
+      <Output TaskParameter="Lines" ItemName="_WorkerSdkPackagePath" />
+    </ReadLinesFromFile>
+    <Error Condition="'@(_WorkerSdkPackagePath->Count())' != '1'" Text="The owning Worker SDK fixture must record its exact development output." />
+    <ItemGroup>
+      <AssemblyMetadata Include="Sunder.WorkerSdk.PackagePath" Value="@(_WorkerSdkPackagePath)" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
     <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
+    <Compile Include="..\Shared\Platform\SymbolicLinkFactAttribute.cs" Link="TestSupport\SymbolicLinkFactAttribute.cs" />
     <None Update="Fixtures\*.json" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="SyntheticExecutionRuntimeLauncher.cs" />
     <None Include="SyntheticExecutionRuntimeLauncher.cs" />

@@ -1,6 +1,4 @@
 using System.Text;
-using Microsoft.CodeAnalysis;
-using Sunder.Sdk.Rpc;
 
 namespace Sunder.Package.Build.Rpc.Authoring.CSharp;
 
@@ -44,68 +42,6 @@ internal static partial class SunderRpcCSharpServiceApiEmitter
         return files;
     }
 
-    private static void EmitClientMethod(StringBuilder output, SunderRpcCSharpCompiledContract contract, SunderRpcCSharpMethodModel method, string packageId, string packageVersion)
-    {
-        var names = method.Source.Parameters.Select(value => value.Name).ToHashSet(StringComparer.Ordinal);
-        string Local(string value) { while (!names.Add(value)) value += "_"; return value; }
-        var scope = Local("__scope"); var token = Local("__token"); var core = Local("__call");
-        var api = Local("__api"); var provider = Local("__provider"); var request = Local("__request"); var response = Local("__response");
-        var cancellation = method.Source.Parameters.FirstOrDefault(IsToken);
-        var caller = cancellation is null ? "default" : SunderRpcCSharpSyntax.EscapeIdentifier(cancellation.Name);
-        var resultType = method.ReturnsUnit ? null : ((INamedTypeSymbol)method.Source.ReturnType).TypeArguments[0];
-        var result = resultType?.ToDisplayString(SignatureFormat) ?? "bool";
-        var nullable = resultType?.NullableAnnotation == NullableAnnotation.Annotated || resultType is INamedTypeSymbol { OriginalDefinition.SpecialType: SpecialType.System_Nullable_T };
-        var stream = method.Kind == "server-stream";
-        output.Append("    public ").Append(stream ? "" : "async ").Append(Signature(method.Source)).AppendLine(" {");
-        if (stream)
-        {
-            output.Append("        return this.__lifetime.Subscribe(").Append(core).Append(", ").Append(caller).AppendLine(");")
-                .Append("        async global::System.Collections.Generic.IAsyncEnumerable<").Append(result).Append("> ").Append(core)
-                .Append("(global::Sunder.Sdk.Rpc.ISunderRpcCallScope ").Append(scope)
-                .Append(", [global::System.Runtime.CompilerServices.EnumeratorCancellation] global::System.Threading.CancellationToken ").Append(token).AppendLine(") {");
-        }
-        else output.Append(method.ReturnsUnit ? "        await this.__lifetime.Invoke(async (" : "        return await this.__lifetime.Invoke(async (").Append(scope).Append(", ").Append(token).AppendLine(") => { ");
-        output.Append("            var ").Append(provider).AppendLine(" = this.__selectedProvider;")
-            .Append("            if (").Append(provider).AppendLine(" is null) {")
-            .Append("            var ").Append(api).Append(" = new global::").Append(contract.GeneratedLogicalName).Append(".Api.Contract(").Append(scope).Append(", ")
-            .Append(Literal(packageId)).Append(", ").Append(Literal("=" + packageVersion)).AppendLine(", true);")
-            .Append("            ").Append(provider).Append(" = (await ").Append(api).Append(".ResolveSelectedPackageAsync(").Append(token).AppendLine(").ConfigureAwait(false)).Snapshot;")
-            .Append("            if (").Append(provider).Append(".PackageVersion != ").Append(Literal(packageVersion))
-            .AppendLine(") throw new global::Sunder.Sdk.Rpc.SunderRpcException(new(global::Sunder.Sdk.Rpc.SunderRpcErrorKind.StaleEndpoint, \"rpc.stale-endpoint\", \"The owning package version changed.\"));")
-            .AppendLine("            }")
-            .Append("            await ServiceClientLifetime.EnsureCurrent(").Append(scope).Append(", ").Append(provider).Append(", ").Append(token).AppendLine(").ConfigureAwait(false);");
-        var parameters = method.Source.Parameters.Where(value => !IsContext(value) && !IsToken(value)).ToArray();
-        if (parameters.Length == 1)
-            output.Append("            var ").Append(request).Append(" = global::System.Text.Json.JsonSerializer.SerializeToElement<")
-                .Append(parameters[0].Type.ToDisplayString(SignatureFormat)).Append(">(").Append(SunderRpcCSharpSyntax.EscapeIdentifier(parameters[0].Name)).AppendLine(", JsonOptions);");
-        else
-        {
-            output.Append("            var ").Append(request).AppendLine(" = global::System.Text.Json.JsonSerializer.SerializeToElement(new global::System.Collections.Generic.Dictionary<string, global::System.Text.Json.JsonElement> {");
-            foreach (var parameter in parameters)
-            {
-                if (!SunderRpcCSharpNaming.TryCreate(parameter.Name, null, out var wire)) throw new InvalidOperationException("Validated parameter has no wire name.");
-                output.Append("                [").Append(Literal(wire!.Camel)).Append("] = global::System.Text.Json.JsonSerializer.SerializeToElement<")
-                    .Append(parameter.Type.ToDisplayString(SignatureFormat)).Append(">(").Append(SunderRpcCSharpSyntax.EscapeIdentifier(parameter.Name)).AppendLine(", JsonOptions),");
-            }
-            output.AppendLine("            });");
-        }
-        if (stream) output.Append("            await foreach (var ").Append(response).Append(" in ").Append(scope).Append(".SubscribeAsync(");
-        else output.Append("            var ").Append(response).Append(" = await ").Append(scope).Append(".InvokeAsync(");
-        output.Append(provider).Append(".Endpoint, ").Append(Literal(contract.Descriptor.Services.Single().ServiceId)).Append(", ")
-            .Append(Literal(method.MethodId)).Append(", ").Append(request).Append(", cancellationToken: ").Append(token)
-            .AppendLine(stream ? ").ConfigureAwait(false)) {" : ").ConfigureAwait(false);")
-            .Append("            await ServiceClientLifetime.EnsureCurrent(").Append(scope).Append(", ").Append(provider).Append(", ").Append(token).AppendLine(").ConfigureAwait(false);")
-            .Append("            ").Append(stream ? "yield return " : "return ");
-        if (method.ReturnsUnit) output.AppendLine("true;");
-        else output.Append("Deserialize<").Append(result).Append(">(").Append(response)
-            .Append(", allowsNull: ").Append(nullable ? "true" : "false").AppendLine(");");
-        if (stream)
-            output.AppendLine("            }")
-                .Append("            await ServiceClientLifetime.EnsureCurrent(").Append(scope).Append(", ").Append(provider).Append(", ").Append(token).AppendLine(").ConfigureAwait(false); }");
-        else output.Append("        }, ").Append(caller).AppendLine(").ConfigureAwait(false);");
-        output.AppendLine("    }");
-    }
-
     private static string Literal(string value) => Microsoft.CodeAnalysis.CSharp.SymbolDisplay.FormatLiteral(value, quote: true);
 
     internal static string EmitImportedLifetime(string packageId) => EmitLifetime(packageId)
@@ -113,7 +49,9 @@ internal static partial class SunderRpcCSharpServiceApiEmitter
         .Replace("GeneratedServiceProviders", "ImportedServiceProviders", StringComparison.Ordinal);
 
     private static string EmitLifetime(string packageId)
-        => (LifetimeSource + "\n" + CatalogRuntimeSource).Replace("__SUNDER_INTERNAL_NAMESPACE__", Editor.GeneratedPackageNames.Internal(packageId), StringComparison.Ordinal) + "\n";
+        => (LifetimeSource + "\n" + CatalogRuntimeSource)
+            .Replace("__SUNDER_INTERNAL_NAMESPACE__", Editor.GeneratedPackageNames.Internal(packageId), StringComparison.Ordinal)
+            .Replace("\r\n", "\n", StringComparison.Ordinal) + "\n";
 
     private const string LifetimeSource = """
         // <auto-generated />
@@ -240,32 +178,6 @@ internal static partial class SunderRpcCSharpServiceApiEmitter
                             throw translated;
                         }
                     }
-                }
-                finally { Exit(); }
-            }
-            internal async ValueTask<T> Invoke<T>(Func<ISunderRpcCallScope, CancellationToken, ValueTask<T>> call, CancellationToken token)
-            {
-                var retirement = Enter(token);
-                try
-                {
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, retirement);
-                    await using var scope = await rpc.CreateCallScopeAsync(cancellationToken: linked.Token).ConfigureAwait(false);
-                    var result = await call(scope, linked.Token).ConfigureAwait(false);
-                    linked.Token.ThrowIfCancellationRequested();
-                    return result;
-                }
-                finally { Exit(); }
-            }
-            internal async IAsyncEnumerable<T> Subscribe<T>(Func<ISunderRpcCallScope, CancellationToken, IAsyncEnumerable<T>> call,
-                [global::System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken token)
-            {
-                var retirement = Enter(token);
-                try
-                {
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, retirement);
-                    await using var scope = await rpc.CreateCallScopeAsync(cancellationToken: linked.Token).ConfigureAwait(false);
-                    await foreach (var value in call(scope, linked.Token).WithCancellation(linked.Token).ConfigureAwait(false))
-                    { linked.Token.ThrowIfCancellationRequested(); yield return value; }
                 }
                 finally { Exit(); }
             }

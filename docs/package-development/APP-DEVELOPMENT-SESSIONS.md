@@ -165,6 +165,12 @@ fences queued work, and Unload waits for its actual settlement before owner rele
 Callers remain responsible for permissions and for preventing package-supplied labels
 from being interpreted as instructions.
 
+View discovery advertises capture from the live backend, not just the operating
+system: supported native handles are WebView2, WKWebView and WebKitGTK. Discovery
+does not inspect document contents. Session disposal clears control/document snapshot
+references after accepted operations drain, while retaining anti-replay input receipts.
+Native profile reclamation must also complete before the App acknowledges retirement.
+
 ### Services which start without a view
 
 Implement `IPackageAppActivationService` for activation-owned App work which must

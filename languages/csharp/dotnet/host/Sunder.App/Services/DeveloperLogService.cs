@@ -359,12 +359,12 @@ public sealed class DeveloperLogService : IDisposable
             entry.Level,
             entry.Scope,
             Normalize(entry.Source, "application"),
-            Normalize(FormatApplicationMessage(entry.Message, entry.Exception), string.Empty));
+            Normalize(FormatApplicationMessage(entry.Message, entry.ExceptionText), string.Empty));
 
-    private static string FormatApplicationMessage(string message, Exception? exception)
-        => exception is null
+    private static string FormatApplicationMessage(string message, string? exceptionText)
+        => exceptionText is null
             ? message
-            : $"{message}{Environment.NewLine}{exception}";
+            : $"{message}{Environment.NewLine}{exceptionText}";
 
     public void Dispose()
     {

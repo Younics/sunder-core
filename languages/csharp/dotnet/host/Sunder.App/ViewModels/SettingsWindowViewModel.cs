@@ -38,10 +38,14 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         Action<double, double>? persistBackgroundTaskPopoverSize = null,
         AppRuntimeResourcePolicySettingsService? runtimeResourcePolicySettingsService = null,
         IRuntimeResourcePolicyStatusSource? runtimeResourcePolicyStatusSource = null,
-        SettingsPackageRuntimesViewModel? packageRuntimes = null)
+        SettingsPackageRuntimesViewModel? packageRuntimes = null,
+        SettingsAppearanceViewModel? appearance = null,
+        SettingsNotificationsViewModel? notifications = null)
     {
         _runtimeApiClient = runtimeApiClient;
         PackageRuntimes = packageRuntimes;
+        Appearance = appearance;
+        Notifications = notifications;
         _packageViewHostService = packageViewHostService;
         var resolvedUpdateService = updateService ?? new SunderUpdateService();
         _cli = new SettingsCliViewModel(new SettingsCliCoordinator(cliInstallationService));
@@ -72,12 +76,11 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         CoreSections =
         [
-            new("appearance", "Appearance", "Theme, startup behavior, and shell presentation.", false),
+            new("appearance", "Appearance", "Choose the theme used by Sunder and its package views.", false),
             new(PackageRuntimesSectionId, "Package Runtimes", ".NET and Node.js runtimes used by your packages.", false),
             new("cli", "CLI", "Terminal command installation and shell profile instructions.", false),
-            new("updates", "Updates", "Package updates and future managed rollout behavior.", false),
-            new("notifications", "Notifications", "Notification preferences and attention management.", false),
-            new("privacy", "Privacy", "Local-first data handling and package trust decisions.", false),
+            new("updates", "Updates", "App update preferences and version checks.", false),
+            new("notifications", "Notifications", "Choose which notification pop-ups appear while you work.", false),
             new("advanced", "Advanced", "Runtime resource policy and power-user controls.", false),
         ];
 
@@ -99,6 +102,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public SettingsRuntimeResourcesViewModel RuntimeResources => _runtimeResources;
 
     public SettingsPackageRuntimesViewModel? PackageRuntimes { get; }
+
+    public SettingsAppearanceViewModel? Appearance { get; }
+
+    public SettingsNotificationsViewModel? Notifications { get; }
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private bool _isPackageRuntimesSelection;
@@ -134,6 +141,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public bool IsCoreSelection => !IsPackageSelection;
 
     public bool ShowPlainCoreSelection => IsCoreSelection
+                                          && !IsAppearanceSelection
+                                          && !IsNotificationsSelection
                                           && !IsPackageRuntimesSelection
                                           && !IsCliSelection
                                           && !IsUpdatesSelection
@@ -144,6 +153,10 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public bool ShowUpdateSettings => IsUpdatesSelection;
 
     public bool ShowAdvancedSettings => IsAdvancedSelection;
+
+    public bool ShowAppearanceSettings => IsCoreSelection && IsAppearanceSelection;
+
+    public bool ShowNotificationSettings => IsCoreSelection && IsNotificationsSelection;
 
     public bool HasHostedSettingsView => HostedSettingsView is not null;
 
@@ -159,7 +172,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     private string _selectedTitle = "Appearance";
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
-    private string _selectedDescription = "Theme, startup behavior, and shell presentation.";
+    private string _selectedDescription = "Choose the theme used by Sunder and its package views.";
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private string _detailsTitle = "Selection Details";
@@ -178,6 +191,12 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private bool _isAdvancedSelection;
+
+    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
+    private bool _isAppearanceSelection;
+
+    [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
+    private bool _isNotificationsSelection;
 
     [CommunityToolkit.Mvvm.ComponentModel.ObservableProperty]
     private bool _isBusy;
@@ -230,6 +249,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowPlainCoreSelection));
         OnPropertyChanged(nameof(ShowGenericPackageSettings));
         OnPropertyChanged(nameof(ShowApplySaveButtons));
+        OnPropertyChanged(nameof(ShowAppearanceSettings));
+        OnPropertyChanged(nameof(ShowNotificationSettings));
     }
 
     partial void OnIsCliSelectionChanged(bool value)
@@ -251,11 +272,41 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(ShowAdvancedSettings));
     }
 
+    partial void OnIsAppearanceSelectionChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowPlainCoreSelection));
+        OnPropertyChanged(nameof(ShowAppearanceSettings));
+    }
+
+    partial void OnIsNotificationsSelectionChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowPlainCoreSelection));
+        OnPropertyChanged(nameof(ShowNotificationSettings));
+    }
+
     public async Task<bool> ApplyAsync()
     {
         if (_disposed)
         {
             return false;
+        }
+
+        if (IsCoreSelection && (IsAppearanceSelection || IsNotificationsSelection))
+        {
+            try
+            {
+                if (IsAppearanceSelection)
+                    (Appearance ?? throw new InvalidOperationException("Appearance settings are unavailable.")).Save();
+                else
+                    (Notifications ?? throw new InvalidOperationException("Notification settings are unavailable.")).Save();
+                StatusText = $"Saved {SelectedTitle.ToLowerInvariant()} settings.";
+                return true;
+            }
+            catch (Exception ex) when (AppPackageUiFaultPolicy.IsRecoverable(ex))
+            {
+                StatusText = $"Could not save settings: {ex.Message}";
+                return false;
+            }
         }
 
         if (IsUpdatesSelection)
@@ -571,6 +622,8 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsCliSelection = string.Equals(item.Id, "cli", StringComparison.OrdinalIgnoreCase);
         IsUpdatesSelection = string.Equals(item.Id, "updates", StringComparison.OrdinalIgnoreCase);
         IsAdvancedSelection = string.Equals(item.Id, "advanced", StringComparison.OrdinalIgnoreCase);
+        IsAppearanceSelection = string.Equals(item.Id, "appearance", StringComparison.OrdinalIgnoreCase);
+        IsNotificationsSelection = string.Equals(item.Id, "notifications", StringComparison.OrdinalIgnoreCase);
         SelectedTitle = item.Title;
         SelectedDescription = item.Description;
         DetailsTitle = item.Title;
@@ -579,6 +632,17 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
         PackageSettings.SelectedPackageSections.Clear();
         SelectedCoreLines.Clear();
+
+        if (IsAppearanceSelection)
+        {
+            Appearance?.LoadSettings();
+            return;
+        }
+        if (IsNotificationsSelection)
+        {
+            Notifications?.LoadSettings();
+            return;
+        }
 
         if (IsUpdatesSelection)
         {

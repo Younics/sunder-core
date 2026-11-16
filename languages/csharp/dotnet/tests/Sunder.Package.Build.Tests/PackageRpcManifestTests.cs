@@ -420,7 +420,7 @@ public sealed class PackageRpcManifestTests
         Assert.Contains(buildEngine.Errors, error => error.Contains("immutable binding snapshot metadata", StringComparison.Ordinal));
     }
 
-    [Fact]
+    [Sunder.Core.TestSupport.SymbolicLinkFact(directory: true)]
     public void GenerateManifest_RejectsBundleDescriptorWithUnsafeAncestorOutsideProjectDirectory()
     {
         var root = CreateTempDirectory();
@@ -431,14 +431,7 @@ public sealed class PackageRpcManifestTests
         Directory.CreateDirectory(realDirectory);
         var descriptorPath = Path.Combine(realDirectory, "snapshot.rpc.json");
         WriteSnapshotDescriptor(descriptorPath, "value");
-        try
-        {
-            Directory.CreateSymbolicLink(linkDirectory, realDirectory);
-        }
-        catch (Exception exception) when (exception is UnauthorizedAccessException or PlatformNotSupportedException or IOException)
-        {
-            return;
-        }
+        Directory.CreateSymbolicLink(linkDirectory, realDirectory);
         var buildEngine = new TestBuildEngine();
         var task = CreateTask(Path.Combine(root, "sunder-package.json"), buildEngine);
         task.ProjectDirectory = projectDirectory;

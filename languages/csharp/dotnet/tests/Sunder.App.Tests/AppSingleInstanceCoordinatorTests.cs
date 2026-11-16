@@ -6,6 +6,26 @@ namespace Sunder.App.Tests;
 public sealed class AppSingleInstanceCoordinatorTests
 {
     [Fact]
+    public void ExplicitAppProfilesHaveSeparateNormalizedLaunchScopesWithoutChangingDefaultScope()
+    {
+        var normal = AppSingleInstanceCoordinator.BuildCurrentUserScope(null);
+        Assert.Equal(string.Join('\n', Environment.UserName,
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)), normal);
+        Assert.Equal(normal, AppSingleInstanceCoordinator.BuildCurrentUserScope(" "));
+        Assert.Equal(normal, AppSingleInstanceCoordinator.BuildCurrentUserScope(AppLocalState.ResolveRootPath(null)));
+        var first = Path.Combine(Path.GetTempPath(), "sunder-profile-one");
+        var second = Path.Combine(Path.GetTempPath(), "sunder-profile-two");
+        var scope = AppSingleInstanceCoordinator.BuildCurrentUserScope(first);
+        Assert.NotEqual(normal, scope);
+        Assert.NotEqual(scope, AppSingleInstanceCoordinator.BuildCurrentUserScope(second));
+        Assert.Equal(scope, AppSingleInstanceCoordinator.BuildCurrentUserScope(first + Path.DirectorySeparatorChar));
+        Assert.Equal(scope, AppSingleInstanceCoordinator.BuildCurrentUserScope(Path.Combine(first, ".")));
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(scope, AppSingleInstanceCoordinator.BuildCurrentUserScope(first.ToUpperInvariant()));
+    }
+
+    [Fact]
     public async Task TryForwardLaunchArgumentsAsync_WhenPrimaryIsListening_ForwardsParsedRequest()
     {
         var scope = $"Sunder.App.Tests.{Guid.NewGuid():N}";

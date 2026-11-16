@@ -8,6 +8,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Sunder.Core.TestSupport;
 using Sunder.Package.Format;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -19,13 +20,9 @@ namespace Sunder.Runtime.Host.Tests;
 public sealed class ExecutionRuntimeStoreTests
 {
     [WindowsFact]
+    [SupportedOSPlatform("windows")]
     public void WindowsSealedTreeBecomesWritableWithoutChangingOwner()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         VerifyWindowsSealedTreeBecomesWritableWithoutChangingOwner();
     }
 
@@ -192,14 +189,10 @@ public sealed class ExecutionRuntimeStoreTests
         AssertRuntimeRootSealed(root, receipt);
     }
 
-    [Fact]
+    [UnixFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Verify_WritablePermissionDriftFailsWarmAndDeepVerification()
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         using var fixture = await StoreFixture.CreateAsync();
         var receipt = (await fixture.Store.EnsureAsync(fixture.Plan, fixture.ArchivePath)).Receipt;
         var launcher = GetLauncherPath(fixture.Layout.GetContentRootPath(receipt.ContentIdentity), receipt.LauncherPath);
@@ -549,17 +542,12 @@ public sealed class ExecutionRuntimeStoreTests
         Assert.True(File.Exists(fixture.Layout.GetArchivePath(receipt.ArchiveSha256)));
     }
 
-    [Theory]
+    [SymbolicLinkTheory(directory: true)]
     [InlineData("roots")]
     [InlineData("archives")]
     [InlineData("receipts")]
     public async Task GarbageCollection_RejectsLinkedStoreSubtreeWithoutTouchingTarget(string subtree)
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         using var fixture = await StoreFixture.CreateAsync();
         var target = Path.Combine(fixture.RootPath, "outside-target");
         Directory.CreateDirectory(target);
@@ -1010,7 +998,7 @@ public sealed class ExecutionRuntimeStoreTests
             using var zip = ZipFile.Open(archivePath, ZipArchiveMode.Create);
             foreach (var (name, bytes) in files.OrderBy(static item => item.Key, StringComparer.Ordinal))
             {
-                var entry = zip.CreateEntry(name.Replace('/', Path.DirectorySeparatorChar), CompressionLevel.NoCompression);
+                var entry = zip.CreateEntry(name, CompressionLevel.NoCompression);
                 await using var output = entry.Open();
                 await output.WriteAsync(bytes);
             }

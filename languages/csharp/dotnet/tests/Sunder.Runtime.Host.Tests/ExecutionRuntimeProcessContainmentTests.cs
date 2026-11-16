@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text.Json;
+using Microsoft.Win32.SafeHandles;
 using Sunder.Core.TestSupport;
 using Sunder.Package.Projections;
 using Sunder.Runtime.Host.Services;
@@ -11,6 +13,38 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed class ExecutionRuntimeProcessContainmentTests
 {
+    [WindowsFact]
+    public async Task PayloadReport_ReadsPublishedBytesWhileAtomicRenameHandleRemainsOpen()
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-guardian-report-rename");
+        var temporary = scope.GetPath("payload.tmp");
+        var published = scope.GetPath("payload.report");
+        var report = new ExecutionRuntimeGuardianPayloadReportV1(
+            ExecutionRuntimeGuardianPayloadReportV1.CurrentSchemaVersion, Guid.NewGuid(), 123, "exact-birth");
+        await File.WriteAllBytesAsync(temporary, JsonSerializer.SerializeToUtf8Bytes(report, ExecutionRuntimeStore.JsonOptions));
+
+        // Windows exposes the new name before the atomic mover closes its DELETE
+        // handle. Retain that access deterministically instead of timing a race.
+        using var moving = OpenRenameHandle(temporary, 0x00010000 /* DELETE */,
+            FileShare.Read | FileShare.Write | FileShare.Delete, 0, FileMode.Open, 0, 0);
+        if (moving.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        File.Move(temporary, published);
+
+        Assert.Equal(report, await SystemExecutionRuntimeProcessContainmentController.ReadPayloadReportAsync(published, default));
+        moving.Dispose();
+        Assert.False(File.Exists(temporary));
+        Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(report, ExecutionRuntimeStore.JsonOptions), await File.ReadAllBytesAsync(published));
+
+        using var writing = OpenRenameHandle(published, 0x40000000 /* GENERIC_WRITE */,
+            FileShare.Read | FileShare.Write | FileShare.Delete, 0, FileMode.Open, 0, 0);
+        if (writing.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+        await Assert.ThrowsAsync<IOException>(() => SystemExecutionRuntimeProcessContainmentController.ReadPayloadReportAsync(published, default));
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle OpenRenameHandle(string path, uint access, FileShare share, nint security,
+        FileMode creation, uint flags, nint template);
+
     [Fact]
     [Trait("Capability", "Process")]
     public async Task GuardianStartFailure_PreservesNativeErrorBeforeProcessAssociation()
@@ -749,6 +783,18 @@ public sealed class ExecutionRuntimeProcessContainmentTests
                 await contained.StandardOutput.ReadExactlyAsync(actual, timeout.Token);
             }
             Assert.Equal(expected, actual);
+
+            if (OperatingSystem.IsWindows())
+            {
+                // One guardian-owned headless console must be shared, rather
+                // than creating a second conhost beneath each package Worker.
+                using var console = JsonDocument.Parse(await File.ReadAllBytesAsync(Path.Combine(root, "containment-console.json")));
+                Assert.NotEqual(0u, console.RootElement.GetProperty("codePage").GetUInt32());
+                Assert.False(console.RootElement.GetProperty("visible").GetBoolean());
+                Assert.Equal(2, console.RootElement.GetProperty("count").GetInt32());
+                Assert.Equal(new[] { pending.ContainmentProcess.ProcessId, contained.Process.Id }.Order(),
+                    console.RootElement.GetProperty("processIds").EnumerateArray().Select(value => value.GetInt32()).Order());
+            }
 
             await contained.TerminateAndDrainAsync();
             contained.Process.Refresh();

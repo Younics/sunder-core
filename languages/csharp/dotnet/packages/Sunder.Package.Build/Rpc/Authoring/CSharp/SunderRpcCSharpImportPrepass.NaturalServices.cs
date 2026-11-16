@@ -125,32 +125,6 @@ internal static partial class SunderRpcCSharpImportPrepass
             + "global::System.Threading.CancellationToken cancellationToken = default)", request, result, empty, completion, stream);
     }
 
-    private static void EmitNaturalClientMethod(StringBuilder output, SunderRpcCSharpImportedContract contract,
-        SunderRpcCSharpGeneratorModel model, SunderRpcCSharpServiceModel service, Generation.SunderRpcCSharpMethodModel method)
-    {
-        var shape = NaturalMethod(contract, model, service, method);
-        output.Append("    public ").Append(shape.Stream ? "" : "async ").Append(shape.Signature).AppendLine(" {");
-        if (shape.Stream)
-            output.AppendLine("        return __lifetime.Subscribe(Call, cancellationToken);")
-                .Append("        async global::System.Collections.Generic.IAsyncEnumerable<").Append(shape.OutputType).AppendLine("> Call(global::Sunder.Sdk.Rpc.ISunderRpcCallScope scope, [global::System.Runtime.CompilerServices.EnumeratorCancellation] global::System.Threading.CancellationToken token) {");
-        else output.Append(shape.Completion ? "        await " : "        return await ").AppendLine("__lifetime.Invoke(async (scope, token) => {");
-        EmitNaturalProviderSelection(output, contract, "scope");
-        output.AppendLine("            await ImportedServiceClientLifetime.EnsureCurrent(scope, provider, token).ConfigureAwait(false);")
-            .Append("            var client = new global::").Append(contract.GeneratedLogicalName).Append('.').Append(service.ClientTypeName).AppendLine("(scope, provider.Endpoint);");
-        var call = "client." + method.MethodName + "(" + (shape.Empty ? "new " + shape.RequestType + "()" : "request") + ", token)";
-        if (shape.Stream)
-            output.Append("            await foreach (var item in ").Append(call).AppendLine(".WithCancellation(token).ConfigureAwait(false)) {")
-                .AppendLine("                await ImportedServiceClientLifetime.EnsureCurrent(scope, provider, token).ConfigureAwait(false);")
-                .AppendLine("                yield return item;").AppendLine("            }")
-                .AppendLine("            await ImportedServiceClientLifetime.EnsureCurrent(scope, provider, token).ConfigureAwait(false);")
-                .AppendLine("        }");
-        else output.Append("            var value = await ").Append(call).AppendLine(".ConfigureAwait(false);")
-                .AppendLine("            await ImportedServiceClientLifetime.EnsureCurrent(scope, provider, token).ConfigureAwait(false);")
-                .Append("            return ").Append(shape.Completion ? "true" : "value").AppendLine(";")
-                .AppendLine("        }, cancellationToken).ConfigureAwait(false);");
-        output.AppendLine("    }");
-    }
-
     private static void EmitNaturalProviderSelection(StringBuilder output, SunderRpcCSharpImportedContract contract, string client)
     {
         output.AppendLine("            var provider = __provider;")

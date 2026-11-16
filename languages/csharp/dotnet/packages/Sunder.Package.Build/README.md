@@ -23,18 +23,19 @@ source in one normal .NET project.
 
 Requires the **.NET 10 SDK**. Running the result also requires Sunder and its CLI.
 
-```sh
-dotnet add package Sunder.Package.Build --private-assets all
-```
-
-Keep `PrivateAssets="all"`: this is build-time tooling for your project. A typical
-generated package uses:
+Use its versioned MSBuild SDK entry point. It includes `Microsoft.NET.Sdk` and
+loads the package tooling on the first restore, before NuGet build imports exist:
 
 ```xml
-<ItemGroup>
-  <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
-  <PackageReference Include="Sunder.Package.Build" Version="1.0.4" PrivateAssets="all" />
-</ItemGroup>
+<Project Sdk="Sunder.Package.Build/1.1.0">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <SunderPackageProject>true</SunderPackageProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Sunder.Sdk.Worker" Version="1.0.2" />
+  </ItemGroup>
+</Project>
 ```
 
 For the complete project setup, use [Sunder.Package.Templates](../Sunder.Package.Templates/README.md).
@@ -62,6 +63,8 @@ dotnet build
 The folder `bin/Debug/net10.0/sunder-dev` is the loadable development package.
 It contains generated metadata and payload files for your current platform.
 Edit your C# source and assets; generated manifests are build outputs.
+Ordinary restore (including Build's restore prepass) fills missing contract-cache
+inputs for the existing lock. No preparation script or API acceptance is required.
 
 ### 3. Run and rebuild on changes
 
@@ -135,6 +138,9 @@ version of this build-tool NuGet.
 | `SunderPackageAssetsDirectory` | Source asset directory; defaults to `Assets`. |
 | `SunderPackageFileName` | Overrides the generated archive filename. |
 | `SunderPackageOutputPath` | Overrides the explicit Pack target's output path. |
+| `SunderRestoreContracts` | Defaults to `true`; `false` disables restore-time contract acquisition. |
+| `SunderPackageCandidatePath` | Exact local dependency archive(s); semicolon-separated paths in project XML. |
+| `SunderPlatformCatalogPath` | Exact local catalog for selected platform contracts. |
 
 Use the [MSBuild reference](../../../../../docs/package-development/MSBUILD-REFERENCE.md)
 for advanced properties, API selection, generated-role test references, native
@@ -147,6 +153,16 @@ Sunder package is a separate concept. Select a package API through the build tar
 and keep `sunder-contracts.lock.json` in source control; the tooling generates
 the corresponding clients and package requirements.
 
+Published selections restore from their locked Registry origin. For local
+unpublished selections, declare the exact archive and catalog paths in the project
+or repository build configuration. Hashes cannot locate absent source bytes, and
+a freshly rebuilt same-version archive is not a substitute for the locked input.
+Warm restores verify existing evidence without needing those sources. Compilation,
+`--no-restore`, design-time builds and Pack never fetch contract inputs, update
+selections, accept APIs or repair corruption. Explicit `RestoreSunderContracts`
+remains available for deliberate cache recovery. See the
+[restore reference](../../../../../docs/package-development/CONTRACT-RESTORE-CACHE.md).
+
 Private starter services build directly. Public service contracts use the explicit
 accept/check/freeze workflow described in the
 [service authoring guide](../../../../../docs/package-development/ORDINARY-SERVICES.md).
@@ -156,8 +172,9 @@ accept/check/freeze workflow described in the
 | Symptom | Next step |
 | --- | --- |
 | No development package appears | Confirm `SunderPackageProject=true` and use the template's complete project configuration. |
+| Generated-output lock is blocked | Stop or observe the owning build. Recovery requires its matching private process marker and exact process-start identity; PID or lock age alone is insufficient. C# and Node tooling share markers under the OS account's `.sunder/generated-output/processes`, independent of Maker's isolated settings home. Unverifiable historical markers remain protected; follow the reported recovery guidance without deleting generated output. |
 | Editing source does not reload | Run both `dotnet watch build` and the Sunder output watcher. |
-| Contract cache input is missing | Restore the selected contracts explicitly; ordinary builds use the existing selection. |
+| Contract cache input is missing | Run ordinary restore with the declared exact local inputs or locked Registry origin; check the reported effective cache root. |
 | A platform's native library is missing | Supply that RID's asset or narrow your declared supported platforms. |
 
 ## More resources

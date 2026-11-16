@@ -6,9 +6,15 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
     <ProjectReference Include="..\..\host\Sunder.Runtime.Host\Sunder.Runtime.Host.csproj" />
     <ProjectReference Include="..\Sunder.Core.TestSupport\Sunder.Core.TestSupport.csproj" />
-    <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\Sunder.Runtime.Host.TestWorker\Sunder.Runtime.Host.TestWorker.csproj" ReferenceOutputAssembly="false" OutputItemType="_TestWorkerTargetPath" />
     <PackageReference Include="xunit" PrivateAssets="all" />
     <InternalsVisibleTo Include="Sunder.Runtime.Host.Tests" />
     <InternalsVisibleTo Include="Sunder.App.Integration.Tests" />
   </ItemGroup>
+  <Target Name="RecordTestWorkerBuildOutput" BeforeTargets="GetAssemblyAttributes" DependsOnTargets="ResolveProjectReferences">
+    <Error Condition="'@(_TestWorkerTargetPath->Count())' != '1'" Text="Test support requires one exact source-built Worker output." />
+    <ItemGroup>
+      <AssemblyMetadata Include="Sunder.TestWorker.AssemblyPath" Value="@(_TestWorkerTargetPath->'%(FullPath)')" />
+    </ItemGroup>
+  </Target>
 </Project>

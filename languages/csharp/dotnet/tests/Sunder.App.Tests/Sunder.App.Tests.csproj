@@ -3,13 +3,14 @@
     <PackageReference Include="Avalonia.Headless" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
-    <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
+    <Compile Include="..\Shared\Platform\SymbolicLinkFactAttribute.cs" Link="TestSupport\SymbolicLinkFactAttribute.cs" />
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_SunderAppTargetPath" />
     <Compile Remove="SdkCorpusAppProbe.cs" />
     <None Include="SdkCorpusAppProbe.cs" />
     <Compile Remove="PolicyHeartbeatProcessProbe.cs" />
     <None Include="PolicyHeartbeatProcessProbe.cs" />
+    <Compile Remove="PackageLifetimeProcessProbe.cs" />
+    <None Include="PackageLifetimeProcessProbe.cs" />
     <Compile Remove="MacOsWindowDelegateProcessProbe.cs" />
     <Compile Remove="Fixtures/AppBridge/*.cs" />
     <None Include="MacOsWindowDelegateProcessProbe.cs" />
@@ -42,6 +43,17 @@
     <MakeDir Directories="$(TargetDir)policy-heartbeat-probe" />
     <Csc Sources="PolicyHeartbeatProcessProbe.cs" References="@(ReferencePathWithRefAssemblies)"
          OutputAssembly="$(TargetDir)policy-heartbeat-probe/Sunder.App.Tests.dll"
+         TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
+         NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
+         ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
+  </Target>
+
+  <Target Name="BuildPackageLifetimeProcessProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/PackageLifetimeProcessProbe.cs;@(ReferencePathWithRefAssemblies)"
+          Outputs="$(TargetDir)package-lifetime-probe/Sunder.App.PackageLifetimeProbe.dll">
+    <MakeDir Directories="$(TargetDir)package-lifetime-probe" />
+    <Csc Sources="PackageLifetimeProcessProbe.cs" References="@(ReferencePathWithRefAssemblies)"
+         OutputAssembly="$(TargetDir)package-lifetime-probe/Sunder.App.PackageLifetimeProbe.dll"
          TargetType="Exe" TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
          NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"
          ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />

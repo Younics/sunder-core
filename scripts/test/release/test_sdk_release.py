@@ -165,7 +165,8 @@ class PackageReleaseTests(unittest.TestCase):
             store.tag = store.value["tag_name"] = row["tag"]
             stores[row["name"]] = store
         def evidence(command, **kwargs):
-            folder = Path(command[2])
+            script_index = command.index(str(sdk.ROOT / "scripts/release/generate-release-evidence.sh"))
+            folder = Path(command[script_index + 1])
             store = next(store for row in sdk.selected(plan) for store in [stores[row["name"]]] if (folder / row["archive"]).exists())
             records = [dict(path=path.name, size=path.stat().st_size, sha256=sdk.c.digest(path.read_bytes())) for path in sorted(folder.iterdir())]
             invocation = dict(repository=sdk.c.REPOSITORY, releaseId=12, sha=SOURCE, ref="refs/heads/main", refName="main", runId="123", runAttempt="1",
@@ -207,8 +208,10 @@ class PackageReleaseTests(unittest.TestCase):
                  patch.object(sdk, "registry_json", side_effect=AssertionError("Finalization must not query registries")):
                 sdk.download(plan, root / "recovered")
                 sdk.publish(plan, root / "recovered", "npm")
-                self.assertEqual("@younics/sunder-package-tool", publish.call_args.args[0][3])
-                self.assertEqual(SOURCE, publish.call_args.args[0][-1])
+                row = next(row for row in sdk.selected(plan, "npm"))
+                folder = sdk.release_directory(root / "recovered", row)
+                self.assertEqual(sdk.bash_runtime.command(sdk.ROOT / "scripts/release/publish-sdk.sh", "npm", row["name"],
+                    row["version"], folder / row["archive"], SOURCE), publish.call_args.args[0])
                 sdk.finalize(plan, root / "recovered")
                 sdk.finalize(plan, root / "recovered")
                 sdk.publish(plan, root / "recovered", "npm")
