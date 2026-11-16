@@ -274,6 +274,10 @@ public sealed partial class TaskShadowStagingTests
             "TaskShadowCleanBuild");
         var fixture = scope.GetPath("fixture");
         CopyDirectory(fixtureSource, fixture);
+        var sdk = await RunDotnetAsync(scope.RootPath, "--version");
+        AssertSuccess(sdk);
+        using (var selection = System.Text.Json.JsonDocument.Parse(File.ReadAllBytes(Path.Combine(repositoryRoot, "global.json"))))
+            Assert.Equal(selection.RootElement.GetProperty("sdk").GetProperty("version").GetString(), sdk.StandardOutput.Trim());
         var taskProject = Path.Combine(fixture, "Sunder.Package.Build", "Sunder.Package.Build.csproj");
         var consumerProject = Path.Combine(fixture, "TaskShadowCleanBuild.proj");
         var targetsPath = Path.Combine(
@@ -1745,6 +1749,7 @@ public sealed partial class TaskShadowStagingTests
 
     private static async Task<ProcessResult> RunDotnetAsync(string workingDirectory, params string[] arguments)
     {
+        BuildFixtureSdk.EnsureRepositorySelection(workingDirectory, FindRepositoryRoot());
         var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
             WorkingDirectory = workingDirectory,

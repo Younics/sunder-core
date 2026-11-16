@@ -468,6 +468,7 @@ public sealed partial class ImplementationFirstRpcBuildTests
 
     internal static async Task<ProcessResult> RunDotnetAsync(string workingDirectory, IReadOnlyList<string> arguments)
     {
+        BuildFixtureSdk.EnsureRepositorySelection(workingDirectory, FindRepositoryRoot());
         var startInfo = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet")
         {
             WorkingDirectory = workingDirectory,
