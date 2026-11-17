@@ -1037,7 +1037,15 @@ while (true)
         {
             if (mode == "stream-queue-overflow")
             {
-                for (var sequence = 1; sequence <= 34; sequence++)
+                // Deliver the first event before deliberately overflowing the
+                // paused consumer. Scheduling must not decide the test's phase.
+                await WriteFrameAsync(output, new { type = "worker.event", id, value = new { accepted = true } });
+                var releasePath = Path.Combine(WorkerTemporaryPath(), "stream-queue-overflow.release");
+                while (!File.Exists(releasePath))
+                {
+                    await Task.Delay(25);
+                }
+                for (var sequence = 2; sequence <= 34; sequence++)
                 {
                     await WriteFrameAsync(output, new { type = "worker.event", id, value = new { accepted = true } });
                 }
