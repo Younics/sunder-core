@@ -26,13 +26,16 @@ public sealed class WindowsBrowserViewTests
     [SupportedOSPlatform("windows")]
     public void UnscopedWorkersCannotSilentlyCountAsRetired()
     {
-        foreach (var ownership in new[] { "{}", "{\"browserContextId\":null}", "{\"browserContextId\":\"\"}" })
+        foreach (var ownership in new[] { "{}", "{\"browserContextId\":null}", "{\"browserContextId\":\"\"}",
+            "{\"pid\":0,\"attached\":false}", "{\"pid\":123,\"attached\":false}" })
         {
             using var owner = JsonDocument.Parse(ownership);
             var target = new Dictionary<string, object?> { ["type"] = "service_worker" };
             foreach (var property in owner.RootElement.EnumerateObject()) target[property.Name] = property.Value.Clone();
             using var targets = JsonDocument.Parse(JsonSerializer.Serialize(new { targetInfos = new[] { target } }));
-            Assert.Throws<InvalidDataException>(() => WindowsBrowserView.HasWorkersInContext(targets.RootElement, "retiring"));
+            // Unknown ownership is still pending, never proof of retirement.
+            // Do not infer native death from pid=0 or an unattached debugger.
+            Assert.True(WindowsBrowserView.HasWorkersInContext(targets.RootElement, "retiring"));
         }
     }
 }

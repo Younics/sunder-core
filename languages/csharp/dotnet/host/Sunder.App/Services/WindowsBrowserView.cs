@@ -318,7 +318,10 @@ internal sealed class WindowsBrowserView : IAppWebView
         {
             if (target.GetProperty("type").GetString() is not ("worker" or "shared_worker" or "service_worker")) continue;
             if (!target.TryGetProperty("browserContextId", out var owner) || string.IsNullOrEmpty(owner.GetString()))
-                throw new InvalidDataException("A native worker target has no ownership context.");
+                // Ownership can disappear briefly before a stopped target is
+                // removed. Remain pending, not retired; do not infer native
+                // death from pid=0, debugger attachment or a missing context.
+                return true;
             if (owner.GetString() == context) return true;
         }
         return false;

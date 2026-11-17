@@ -154,7 +154,7 @@ internal static class SharedBrowserProcessProbe
             throw new InvalidDataException("The retired native document still accepted script execution.");
         }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
-        await RequireWorkersAsync(created[1], aContext, present: false);
+        await RequireWorkersAsync(created[1], aContext, present: false, retirementStarted: started);
         Console.WriteLine($"shared-browser: in-flight-controller-closed; callbacks-drained; sibling-preserved; resetMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
         CoreWebView2? reusedNative = null;
         for (var cycle = 0; cycle < 12; cycle++)
@@ -190,7 +190,7 @@ internal static class SharedBrowserProcessProbe
             panel.Children.Remove(reopened);
             var resetStarted = Stopwatch.GetTimestamp();
             await reopened.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
-            await RequireCleanAsync(created[0], aContext);
+            await RequireCleanAsync(created[0], aContext, resetStarted);
             Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "A repeated reset changed its sibling.");
             Console.WriteLine($"shared-browser-cycle: cycle={cycle}; resetMs={Stopwatch.GetElapsedTime(resetStarted).TotalMilliseconds:0.###}; sessions={manager.NativeSessionCount}");
             retiredNonce = currentNonce;
@@ -219,7 +219,7 @@ internal static class SharedBrowserProcessProbe
             try { await busy; } catch (Exception error) when (error is OperationCanceledException or COMException) { }
             try { await capture; throw new InvalidDataException("A closed native owner returned an image."); }
             catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
-            await RequireWorkersAsync(created[1], closingContext, present: false);
+            await RequireWorkersAsync(created[1], closingContext, present: false, retirementStarted: closeStarted);
             Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "Final owner closure disturbed its sibling.");
             Console.WriteLine($"shared-browser: capture-owner-closed; callbacks-drained; sibling-preserved; retirementMs={Stopwatch.GetElapsedTime(closeStarted).TotalMilliseconds:0.###}");
         }
@@ -283,28 +283,40 @@ internal static class SharedBrowserProcessProbe
         await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
     }
 
-    private static async Task RequireCleanAsync(WindowsBrowserView view, string context)
+    private static async Task RequireCleanAsync(WindowsBrowserView view, string context, long retirementStarted)
     {
-        await RequireWorkersAsync(view, context, present: false);
+        await RequireWorkersAsync(view, context, present: false, retirementStarted);
         using var history = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Page.getNavigationHistory", "{}"));
         var entries = history.RootElement.GetProperty("entries");
         Require(entries.GetArrayLength() == 1 && entries[0].GetProperty("url").GetString() == "about:blank", "A cleaned controller retained old document history.");
     }
 
-    private static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present)
+    private static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present, long? retirementStarted = null)
     {
-        using var targets = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}"));
-        var workers = targets.RootElement.GetProperty("targetInfos").EnumerateArray()
-            // browserContextId is optional on TargetInfo, including browser and
-            // other non-worker targets. Audit only workers, but do not silently
-            // ignore an unscoped worker whose isolation cannot be established.
-            .Where(item => item.GetProperty("type").GetString() is "worker" or "shared_worker" or "service_worker")
-            .Select(item => item.TryGetProperty("browserContextId", out _) ? item
-                : throw new InvalidDataException("A native worker target has no ownership context: " + targets.RootElement.GetRawText()))
-            .Where(item => item.GetProperty("browserContextId").GetString() == context)
-            .Select(item => item.GetProperty("type").GetString()).ToArray();
-        Require(present ? workers.Distinct().Count() == 3 : workers.Length == 0,
-            present ? "The fixture did not start all three real worker types." : "A retired view retained worker work.");
+        if (!present && retirementStarted is null) throw new InvalidOperationException("Worker retirement requires its original budget start.");
+        while (true)
+        {
+            var remaining = present ? TimeSpan.FromSeconds(3) : TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(retirementStarted!.Value);
+            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Native worker retirement exceeded its original three-second budget.");
+            using var targets = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}").WaitAsync(remaining));
+            var nativeWorkers = targets.RootElement.GetProperty("targetInfos").EnumerateArray()
+                .Where(item => item.GetProperty("type").GetString() is "worker" or "shared_worker" or "service_worker").ToArray();
+            var unscoped = nativeWorkers.Any(item => !item.TryGetProperty("browserContextId", out var owner) || string.IsNullOrEmpty(owner.GetString()));
+            var workers = nativeWorkers.Where(item => item.TryGetProperty("browserContextId", out var owner) && owner.GetString() == context)
+                .Select(item => item.GetProperty("type").GetString()).ToArray();
+            if (present)
+            {
+                Require(!unscoped && workers.Distinct().Count() == 3, "The fixture did not unambiguously start all three real worker types: " + targets.RootElement.GetRawText());
+                return;
+            }
+            remaining = TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(retirementStarted!.Value);
+            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Native worker retirement exceeded its original three-second budget: " + targets.RootElement.GetRawText());
+            if (!unscoped && workers.Length == 0) return;
+            // A stopped service-worker target can briefly lose its context while
+            // the browser removes it. Wait for conclusive absence; neither pid=0
+            // nor detached debugger state is proof. Never grant a fresh budget.
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(20, remaining.TotalMilliseconds)));
+        }
     }
 
     private static async Task PendingAsync(IClassicDesktopStyleApplicationLifetime desktop, string root, bool closeOwner)
