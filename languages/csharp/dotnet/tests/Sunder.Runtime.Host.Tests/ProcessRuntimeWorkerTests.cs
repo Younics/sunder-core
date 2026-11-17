@@ -1285,17 +1285,9 @@ public sealed partial class ProcessRuntimeWorkerTests
     public async Task WorkerV1_RejectsOversizedInlinePackageDataValue()
     {
         await using var fixture = await WorkerFixture.CreateAsync("v1-oversized-inline");
-        try
-        {
-            await fixture.StartAndActivateAsync();
-        }
-        catch (SunderWorkerProtocolException)
-        {
-            // The protocol fault can race the activation acknowledgement.
-        }
-
-        await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+        var fault = await AssertActivationProtocolFaultAsync(fixture);
+        Assert.Equal("Process worker inline package-data value exceeds the inline transport limit.", fault.Message);
+        Assert.Null(await fixture.Context.Storage.State.GetValueAsync("state.value"));
     }
 
     [Fact]
@@ -1320,18 +1312,42 @@ public sealed partial class ProcessRuntimeWorkerTests
         await using var fixture = await WorkerFixture.CreateAsync(
             "v1-stale-malformed-payload",
             enforcePackageSessionLease: true);
-        try
-        {
-            await fixture.StartAndActivateAsync();
-        }
-        catch (SunderWorkerProtocolException)
-        {
-            // The expected integrity fault can race the activation acknowledgement.
-        }
-
-        await Assert.ThrowsAnyAsync<Exception>(async () =>
-            await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+        var fault = await AssertActivationProtocolFaultAsync(fixture);
+        Assert.Equal("Process worker package-data payload hash does not match its descriptor.", fault.Message);
         Assert.Equal(0, fixture.WorkerPayloadHandleCount());
+    }
+
+    private static async Task<SunderWorkerProtocolException> AssertActivationProtocolFaultAsync(WorkerFixture fixture)
+    {
+        var fault = await AssertAttemptAsync(fixture.StartAndActivateAsync);
+        // Deterministically exercise the already-faulted ordering too: it must
+        // fail closed with the same cause, never reactivate or hide another error.
+        Assert.Same(fault, await AssertAttemptAsync(() => fixture.Worker.ActivateGenerationAsync()));
+        return fault;
+
+        async Task<SunderWorkerProtocolException> AssertAttemptAsync(Func<Task> activate)
+        {
+            SunderWorkerProtocolException? activationFault = null;
+            try
+            {
+                await activate();
+            }
+            catch (SunderWorkerProtocolException error)
+            {
+                activationFault = error;
+            }
+            catch (InvalidOperationException error) when (error.InnerException is SunderWorkerProtocolException)
+            {
+                // worker.activated can settle before the malformed next frame
+                // faults the state; the activation continuation then rechecks it.
+                activationFault = (SunderWorkerProtocolException)error.InnerException;
+            }
+
+            var cause = await Assert.ThrowsAsync<SunderWorkerProtocolException>(() =>
+                fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
+            if (activationFault is not null) Assert.Same(cause, activationFault);
+            return cause;
+        }
     }
 
     [Fact]
