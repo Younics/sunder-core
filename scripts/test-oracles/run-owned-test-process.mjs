@@ -44,6 +44,7 @@ export async function runOwnedTestProcess(command, args, {
   let signal = null;
   let error = null;
   let cleanupComplete = false;
+  let unixCleanup = null;
   let outputBytes = 0;
   let endWait;
   const interrupted = new Promise((resolve) => { endWait = resolve; });
@@ -120,23 +121,8 @@ export async function runOwnedTestProcess(command, args, {
     } else if (child.pid === undefined) {
       cleanupComplete = true; // spawn failed: no process group was created.
     } else {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch (failure) {
-        if (failure.code !== "ESRCH") throw failure;
-      }
-      const deadline = performance.now() + 10_000;
-      do {
-        const { stdout } = await executeFile("ps", ["-axo", "pid=,pgid=,stat="], { timeout: 2_000, killSignal: "SIGKILL" });
-        // Reparented zombies cannot execute or hold outputs; init owns their
-        // eventual reap. The direct child is still reaped through Node's exit.
-        const live = stdout.trim().split("\n").some((line) => {
-          const [, group, state] = line.trim().split(/\s+/u);
-          return Number(group) === child.pid && !state.startsWith("Z");
-        });
-        if (!live) { cleanupComplete = true; break; }
-        await delay(50);
-      } while (performance.now() < deadline);
+      unixCleanup = await cleanupUnixProcessGroup(child.pid);
+      cleanupComplete = unixCleanup.cleanupComplete;
     }
     const drained = await settlesWithin(closed, 2_000);
     if (!drained) {
@@ -157,9 +143,52 @@ export async function runOwnedTestProcess(command, args, {
   }
   const result = { command, args, startedAt, elapsedMilliseconds: Math.round(performance.now() - started),
     timeoutMilliseconds, pid: child?.pid ?? null, commandPid, status, signal, error, cleanupComplete, outputBytes,
-    memoryBefore, memoryAfter: linuxMemory(), diskBefore, diskAfter: diskSpace([cwd, dirname(logStem), process.env.RUNNER_TEMP ?? tmpdir()]) };
+    memoryBefore, memoryAfter: linuxMemory(), diskBefore, diskAfter: diskSpace([cwd, dirname(logStem), process.env.RUNNER_TEMP ?? tmpdir()]),
+    ...(unixCleanup === null ? {} : { unixCleanup }) };
   writeFileSync(`${logStem}.process.json`, `${JSON.stringify(result, null, 2)}\n`);
   return result;
+}
+
+export async function cleanupUnixProcessGroup(processGroupId, {
+  platform = process.platform,
+  signalGroup = (group) => process.kill(-group, "SIGKILL"),
+  listProcesses = async () => (await executeFile("ps", ["-axo", "pid=,pgid=,stat="], { timeout: 2_000, killSignal: "SIGKILL" })).stdout,
+} = {}) {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId <= 1) throw new Error("Invalid owned process group.");
+  let signalError = null;
+  try { signalGroup(processGroupId); }
+  catch (failure) {
+    // XNU may return EPERM when only unreaped zombies remain. The error is
+    // never proof of exit: require the same independent liveness check below.
+    if (failure.code !== "ESRCH" && !(platform === "darwin" && failure.code === "EPERM")) throw failure;
+    signalError = failure;
+  }
+  const deadline = performance.now() + 10_000;
+  let members = [];
+  do {
+    const snapshot = await listProcesses();
+    if (typeof snapshot !== "string" || snapshot.trim() === "") throw new Error("Owned process cleanup has no process snapshot.");
+    members = snapshot.trim().split(/\r?\n/u).map((line) => {
+      const row = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*$/u.exec(line);
+      if (row === null || !Number.isSafeInteger(Number(row[1])) || !Number.isSafeInteger(Number(row[2]))) {
+        throw new Error("Owned process cleanup received a malformed process snapshot.");
+      }
+      return { pid: Number(row[1]), group: Number(row[2]), state: row[3] };
+    }).filter((row) => row.group === processGroupId);
+    // Zombies cannot execute or hold outputs; init owns their eventual reap.
+    // The direct child and output pipes are still joined separately by Node.
+    if (members.every((row) => row.state.startsWith("Z"))) {
+      return { processGroupId, cleanupComplete: true,
+        signalError: signalError && { code: signalError.code, message: signalError.message }, members };
+    }
+    if (signalError?.code === "EPERM") {
+      signalError.message += `; owned group ${processGroupId} still has live members: ${JSON.stringify(members)}`;
+      throw signalError;
+    }
+    await delay(50);
+  } while (performance.now() < deadline);
+  return { processGroupId, cleanupComplete: false,
+    signalError: signalError && { code: signalError.code, message: signalError.message }, members };
 }
 
 async function settlesWithin(promise, milliseconds) {
