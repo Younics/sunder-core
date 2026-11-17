@@ -495,7 +495,8 @@ test(".NET reporter refuses to start the next project when process cleanup is un
         process.nextTick(() => { child.emit('exit', 0, null); child.stdout.end(); child.stderr.end(); child.emit('close', 0, null); });
         return child;
       };
-      process.kill = () => { throw Object.assign(new Error('seeded cleanup failure'), { code: 'EPERM' }); };
+      // macOS EPERM can be verified clean for an absent group; seed a fatal cleanup failure.
+      process.kill = () => { throw Object.assign(new Error('seeded cleanup failure'), { code: 'EIO' }); };
       syncBuiltinESMExports();
     `;
     const runner = resolve(repositoryRoot, "scripts/test-oracles/run-dotnet-tests-with-results.mjs");
