@@ -98,20 +98,29 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
 
     private async Task CloseAsync()
     {
+        var started = Stopwatch.GetTimestamp();
+        void Stage(string stage) => AppSessionLog.WriteInfo($"Shared browser engine retirement: stage={stage}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; utc={DateTime.UtcNow:O}; threadPoolThreads={ThreadPool.ThreadCount}; pendingThreadPoolWork={ThreadPool.PendingWorkItemCount}.", visibleInDeveloperLog: false);
         _closing = true;
+        Stage("environment-drain-started");
         Exception? initializationFailure = null;
         if (_environment is { } creation)
         {
             try { await creation; }
             catch (Exception error) { initializationFailure = error; }
         }
+        Stage("environment-drained");
         // Profiles/controllers have already drained. Empty GetProcessInfos or a
         // missing SDK exit event is not accepted in place of held process exit.
         AppSessionLog.WriteInfo($"Shared browser final exit observation started; processes={string.Join(',', _processes.Keys)}.", visibleInDeveloperLog: false);
         if (_environment is { IsCompletedSuccessfully: true } ready)
             AppSessionLog.WriteInfo("Shared browser native process snapshot: " + string.Join(',', ready.Result.GetProcessInfos().Select(process => $"{process.Kind}:{process.ProcessId}")), visibleInDeveloperLog: false);
+        Stage("process-exit-drain-started");
         await Task.WhenAll(_processes.Values.ToArray().Select(process => process.WaitForExitAsync()));
+        Stage("process-exit-drained");
+        foreach (var process in _processes.Values)
+            AppSessionLog.WriteInfo($"Shared browser held process exited: pid={process.Id}; nativeExitUtc={process.ExitTime.ToUniversalTime():O}.", visibleInDeveloperLog: false);
         AppSessionLog.WriteInfo("Shared browser native processes exited; reclaiming its data root.", visibleInDeveloperLog: false);
+        Stage("data-reclamation-started");
         await Task.Run(async () =>
         {
             while (Directory.Exists(_root))
@@ -120,9 +129,11 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
                 catch (Exception error) when (error is IOException or UnauthorizedAccessException) { await Task.Delay(50); }
             }
         });
+        Stage("data-reclaimed");
         foreach (var process in _processes.Values) process.Dispose();
         _processes.Clear();
         if (_parking != 0) { DestroyWindow(_parking); _parking = 0; }
+        Stage("native-owner-released");
         if (_observationFailures.Count != 0)
             throw new AggregateException("Shared browser process ownership could not be proven.", _observationFailures);
         if (initializationFailure is not null)

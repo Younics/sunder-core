@@ -369,8 +369,15 @@ internal static class SharedBrowserProcessProbe
         void Report()
         {
             var environment = (Task?)typeof(WindowsBrowserEngine).GetField("_environment", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(engine);
+            var engineRetirement = (Task?)typeof(WindowsBrowserEngine).GetField("_disposal", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(engine);
+            var owned = (Dictionary<int, Process>)typeof(WindowsBrowserEngine).GetField("_processes", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(engine)!;
+            var nativeExits = string.Join(',', owned.Select(pair =>
+            {
+                var exited = pair.Value.HasExited;
+                return $"{pair.Key}:{exited}:{(exited ? pair.Value.ExitTime.ToUniversalTime().ToString("O") : "pending")}";
+            }));
             var child = (nint)typeof(WindowsBrowserView).GetField("_child", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(native)!;
-            Console.WriteLine($"shared-browser-pending: stage={stage}; closedOwner={closeOwner}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; environment={environment?.Status}; initialization={native.Initialization?.Status}; childValid={IsWindow(child)}; parent={WindowsBrowserEngine.ParentOf(child)}; sessions={manager.NativeSessionCount}; browsers={string.Join(',', engine.BrowserProcessIds)}; dataRoot={Directory.Exists(engine.DataDirectory)}; thread={Environment.CurrentManagedThreadId}");
+            Console.WriteLine($"shared-browser-pending: stage={stage}; closedOwner={closeOwner}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; environment={environment?.Status}; initialization={native.Initialization?.Status}; childValid={IsWindow(child)}; parent={WindowsBrowserEngine.ParentOf(child)}; sessions={manager.NativeSessionCount}; browsers={string.Join(',', engine.BrowserProcessIds)}; dataRoot={Directory.Exists(engine.DataDirectory)}; thread={Environment.CurrentManagedThreadId}; engineRetirement={engineRetirement?.Status}; nativeExits={nativeExits}; utc={DateTime.UtcNow:O}; threadPoolThreads={ThreadPool.ThreadCount}; pendingThreadPoolWork={ThreadPool.PendingWorkItemCount}");
         }
     }
     private static Task UntilAsync(Func<bool> test) => UntilAsync(() => Task.FromResult(test()));
