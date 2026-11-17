@@ -63,6 +63,8 @@ Host-mediated package state/RPC for shared or persistent data.
   cleanup, at most one cleaned controller is retained App-wide for **60 seconds**,
   reusable only for the original activation and view. It retains no document or
   bridge authority. Package retirement deletes its profiles, not the shared engine.
+  Pending controllers are acquired under the engine's stable hidden window, then
+  attached to the view; closing a presenting window cannot replace that acquisition root.
 - **macOS/Linux:** WKWebView/WebKitGTK own their native process-sharing model.
   Each view has an isolated ephemeral data store/context. Sunder clears that store
   and destroys the native view rather than advertising unqualified controller reuse.

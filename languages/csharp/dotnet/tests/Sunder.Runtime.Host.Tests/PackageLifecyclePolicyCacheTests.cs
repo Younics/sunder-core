@@ -255,6 +255,53 @@ public sealed class PackageLifecyclePolicyCacheTests
         context.Require();
     }
 
+    [Theory]
+    [InlineData("intent")]
+    [InlineData("snapshot")]
+    public async Task AdmittedClockCheckpointSettlesCallerCancellationWithoutPoisoningOrRenewingPermission(string point)
+    {
+        using var context = new ActivePolicyTestContext();
+        await context.RefreshAsync();
+        using var cancellation = new CancellationTokenSource();
+        var fault = new CancelCheckpoint(cancellation, point == "intent"
+            ? PackagePolicyPersistencePoint.IntentDurable : PackagePolicyPersistencePoint.SnapshotDurable);
+        var cache = new PackageLifecyclePolicyCache(context.Paths, context.Clock, fault);
+        await cache.RequireActivationAsync(Origin, Package, default);
+        var originalLease = cache.PackageLease(Origin, Package);
+        var path = cache.FilePath(Origin);
+        var before = await File.ReadAllBytesAsync(path);
+        using (var preCanceled = new CancellationTokenSource())
+        {
+            preCanceled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cache.CheckpointClockAsync(Origin, preCanceled.Token));
+        }
+        Assert.Equal(before, await File.ReadAllBytesAsync(path));
+        cache.RequireActivation(Origin, Package);
+
+        context.Clock.Advance(TimeSpan.FromSeconds(1));
+        fault.Armed = true;
+        await cache.CheckpointClockAsync(Origin, cancellation.Token);
+        Assert.True(cancellation.IsCancellationRequested);
+        cache.RequireActivation(Origin, Package);
+        Assert.Equal(originalLease, cache.PackageLease(Origin, Package));
+        var current = await File.ReadAllBytesAsync(path);
+        Assert.Equal(current, await File.ReadAllBytesAsync(PackageLifecyclePolicyCache.IntentPath(path)));
+        var snapshot = JsonSerializer.Deserialize<PackagePolicyOriginFile>(current, RegistryActivePolicyClient.Json)!;
+        Assert.Equal(context.Clock.Value.Ticks, snapshot.HighWater.Ticks);
+        var restarted = new PackageLifecyclePolicyCache(context.Paths, context.Clock);
+        await restarted.RequireActivationAsync(Origin, Package, default);
+        Assert.Equal(originalLease, restarted.PackageLease(Origin, Package));
+        context.Clock.Value = context.Clock.Value with { Ticks = originalLease.Clock!.DeadlineTicks };
+        Assert.Equal(PackagePolicyErrorCodes.PolicyExpired,
+            Assert.Throws<PackagePolicyDeniedException>(() => cache.RequireActivation(Origin, Package)).Code);
+    }
+
+    private sealed class CancelCheckpoint(CancellationTokenSource cancellation, PackagePolicyPersistencePoint point) : IPackagePolicyFaultInjector
+    {
+        internal bool Armed { get; set; }
+        public void Hit(PackagePolicyPersistencePoint current) { if (Armed && current == point) cancellation.Cancel(); }
+    }
+
     private static RegistryPolicySynchronizationResponse Blocked(RegistryPolicySynchronizationRequest request, long revision)
         => Allowed(request, revision) with { Packages = [new(Package, "SecurityBlocked", "Listed", "Denied", PackagePolicyErrorCodes.SecurityBlocked, "Security block.", [])] };
 }

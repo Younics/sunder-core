@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -251,18 +252,41 @@ internal static class SharedBrowserProcessProbe
         Require(native!.Initialization is { IsCompleted: false }, "The fixture missed pending native creation.");
         var originalThread = Environment.CurrentManagedThreadId;
         var started = Stopwatch.GetTimestamp();
-        if (closeOwner) owner.Close(); // Genuine parent destruction, without a preparatory detach.
-        else owner.Content = null;
-        await manager.RetireActivationAsync(key).WaitAsync(TimeSpan.FromSeconds(3));
-        Require(native.Initialization!.IsCompletedSuccessfully && Environment.CurrentManagedThreadId == originalThread,
-            "Native retirement abandoned acquisition or its original STA.");
-        foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
-        var remaining = TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(started);
-        Require(remaining > TimeSpan.Zero, "Pending native retirement exceeded its original budget.");
-        await manager.DisposeAsync().AsTask().WaitAsync(remaining);
-        Require(!Directory.Exists(engine.DataDirectory), "Pending native retirement retained its engine profile.");
-        owner.Close();
-        Console.WriteLine($"shared-browser: pending-initialization-settled; original-sta; native-exit; profile-removed; closedOwner={closeOwner}; retirementMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+        var stage = "detach-owner";
+        try
+        {
+            Report();
+            if (closeOwner) owner.Close(); // Genuine parent destruction, without a preparatory detach.
+            else owner.Content = null;
+            stage = "retire-activation";
+            Report();
+            await manager.RetireActivationAsync(key).WaitAsync(TimeSpan.FromSeconds(3));
+            Require(native.Initialization!.IsCompletedSuccessfully && Environment.CurrentManagedThreadId == originalThread,
+                "Native retirement abandoned acquisition or its original STA.");
+            foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
+            var remaining = TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(started);
+            Require(remaining > TimeSpan.Zero, "Pending native retirement exceeded its original budget.");
+            stage = "retire-engine";
+            Report();
+            await manager.DisposeAsync().AsTask().WaitAsync(remaining);
+            Require(!Directory.Exists(engine.DataDirectory), "Pending native retirement retained its engine profile.");
+            owner.Close();
+            Console.WriteLine($"shared-browser: pending-initialization-settled; original-sta; native-exit; profile-removed; closedOwner={closeOwner}; retirementMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+        }
+        catch
+        {
+            Report();
+            foreach (var entry in AppSessionLog.Snapshot())
+                Console.Error.WriteLine(entry.Message + Environment.NewLine + entry.ExceptionText);
+            throw;
+        }
+
+        void Report()
+        {
+            var environment = (Task?)typeof(WindowsBrowserEngine).GetField("_environment", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(engine);
+            var child = (nint)typeof(WindowsBrowserView).GetField("_child", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(native)!;
+            Console.WriteLine($"shared-browser-pending: stage={stage}; closedOwner={closeOwner}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; environment={environment?.Status}; initialization={native.Initialization?.Status}; childValid={IsWindow(child)}; parent={WindowsBrowserEngine.ParentOf(child)}; sessions={manager.NativeSessionCount}; browsers={string.Join(',', engine.BrowserProcessIds)}; dataRoot={Directory.Exists(engine.DataDirectory)}; thread={Environment.CurrentManagedThreadId}");
+        }
     }
     private static Task UntilAsync(Func<bool> test) => UntilAsync(() => Task.FromResult(test()));
     private static async Task UntilAsync(Func<Task<bool>> test)
@@ -271,4 +295,5 @@ internal static class SharedBrowserProcessProbe
         while (!await test()) { if (timer.Elapsed > TimeSpan.FromSeconds(10)) throw new TimeoutException("Native fixture condition did not become ready."); await Task.Delay(20); }
     }
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+    [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(nint window);
 }

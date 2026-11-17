@@ -38,9 +38,15 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
         var options = environment.CreateCoreWebView2ControllerOptions();
         options.ProfileName = profile;
         options.IsInPrivateModeEnabled = true;
-        var controller = await environment.CreateCoreWebView2ControllerAsync(parent, options);
+        // WebView2 also uses the root HWND during asynchronous acquisition. A
+        // surviving child is insufficient if its transient top-level is closed
+        // or reparented meanwhile. Acquire under the engine's stable hidden root,
+        // then attach the completed controller to its session-owned child.
+        var controller = await environment.CreateCoreWebView2ControllerAsync(ParkingWindow, options);
         try
         {
+            controller.IsVisible = false;
+            controller.ParentWindow = parent;
             ObserveProcess(controller.CoreWebView2.BrowserProcessId);
             return (environment, controller);
         }
