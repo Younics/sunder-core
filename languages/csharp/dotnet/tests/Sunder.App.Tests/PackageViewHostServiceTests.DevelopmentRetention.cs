@@ -250,6 +250,12 @@ public sealed partial class PackageViewHostServiceTests
         await host.ApplyPackageDeltaAsync([package], [source]);
         var managedView = host.GetOrCreateView("agent.chat");
         var managedOwner = RetentionGeneration(host).State.GetLoadedPackage("agent")!;
+        using var developerLog = new DeveloperLogService();
+        await using var events = new RuntimeEventSubscriptionService(new RuntimeApiClientFactory(transport), developerLog);
+        events.InitializePresentation(CreateRuntimeSnapshot(package, source, 1), [source], async (snapshot, sources, retry, token) =>
+        {
+            await host.ApplyPackageGenerationAsync(snapshot, sources, retry, null, token);
+        });
         var webFolder = temporary.GetPath("node-output");
         Directory.CreateDirectory(Path.Combine(webFolder, "manifest"));
         var webViews = new[] { new PackageWebViewDescriptor("local.node.main", "Node", "/", null, "middle", true) };
@@ -299,7 +305,10 @@ public sealed partial class PackageViewHostServiceTests
             Assert.False(string.IsNullOrWhiteSpace(view.Glyph));
             Assert.DoesNotContain(view.ViewId, state.HiddenHotbarViewIds);
             var webOwner = RetentionGeneration(host).State.GetLoadedPackage("local.node")!;
-            await host.ApplyPackageDeltaAsync([package, webPackage], [source, web]);
+            // Explicit reload reconciliation can publish before the event reader
+            // sees that same revision. Its older source cache must not force a
+            // second activation of already-admitted, byte-identical web content.
+            await events.ApplySnapshotAsync(snapshot, [source, web]);
             await host.WaitForRetirementsAsync();
             Assert.Same(webOwner.TargetLifetime, RetentionGeneration(host).State.GetLoadedPackage("local.node")!.TargetLifetime);
             previousWeb = web;
@@ -487,6 +496,7 @@ public sealed partial class PackageViewHostServiceTests
         var requirement = new RuntimeAppActivationRetirementRequirement("test-policy", admission.ActivationId, admission.PermitId!, source.PolicySubject!);
         await host.RetireActivationsAsync([requirement with { PolicySessionId = "foreign-app" }], default);
         Assert.False(GetIsDisposed(view));
+        Assert.False(host.NeedsRetirementReconciliation);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Task? publication = null;
@@ -504,6 +514,7 @@ public sealed partial class PackageViewHostServiceTests
             await host.RetireActivationsAsync([requirement], default).WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(GetIsDisposed(view));
             Assert.Equal(0, host.LoadedPackageCount);
+            Assert.True(host.NeedsRetirementReconciliation);
             Assert.Equal(admission.ActivationId, Assert.Single(policy.RetiredActivationIds));
             await host.RetireActivationsAsync([requirement], default); // Exact acknowledgement is idempotent.
         }

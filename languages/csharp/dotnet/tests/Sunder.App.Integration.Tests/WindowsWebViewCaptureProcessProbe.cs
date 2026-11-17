@@ -27,17 +27,9 @@ internal static class WindowsWebViewCaptureProcessProbe
             var path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", name.Name + ".dll"));
             return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
         };
-        AssemblyLoadContext.Default.ResolvingUnmanagedDll += (_, name) =>
-        {
-            var parent = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
-            var library = OperatingSystem.IsWindows()
-                ? name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll"
-                : name.EndsWith(OperatingSystem.IsMacOS() ? ".dylib" : ".so", StringComparison.Ordinal) ? name
-                    : (name.StartsWith("lib", StringComparison.Ordinal) ? name : "lib" + name) + (OperatingSystem.IsMacOS() ? ".dylib" : ".so");
-            foreach (var directory in new[] { parent, Path.Combine(parent, "runtimes", RuntimeInformation.RuntimeIdentifier, "native") })
-                if (File.Exists(Path.Combine(directory, library))) return NativeLibrary.Load(Path.Combine(directory, library));
-            return 0;
-        };
+        // The launcher supplies the owning test project's deps.json. Let .NET
+        // select its exact native assets (including macOS's universal osx asset),
+        // not an unrelated library copied beside another fixture or on PATH.
         return Start(args);
     }
 

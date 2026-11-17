@@ -813,7 +813,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
     }
 
     [Fact]
-    public async Task ApplySnapshotAsync_RetriesDisabledPackageOnlyForChangedContentOrExplicitRetry()
+    public async Task ApplySnapshotAsync_ContentChangesDoNotManufactureExplicitQuarantineRetries()
     {
         var runtimeInstanceId = Guid.NewGuid();
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), new DeveloperLogService());
@@ -834,9 +834,79 @@ public sealed class RuntimeEventSubscriptionServiceTests
             [CreateSource("hash-b", 4)],
             ["agent"]);
 
-        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyCollection<string>>(retries[0]));
-        Assert.Contains("agent", Assert.IsAssignableFrom<IReadOnlyCollection<string>>(retries[1]));
+        Assert.Null(retries[0]);
+        Assert.Null(retries[1]);
         Assert.Contains("agent", Assert.IsAssignableFrom<IReadOnlyCollection<string>>(retries[2]));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetirementReconciliationJoinsEventPublicationAndRestoresOnlyFencedCurrentStamp(bool eventFirst)
+    {
+        var runtime = Guid.NewGuid();
+        var initial = CreateSnapshot(runtime, 1);
+        var next = CreateSnapshot(runtime, 2);
+        var source = CreateSource("hash-b", 2);
+        using var log = new DeveloperLogService();
+        await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), log);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fenced = true;
+        var writes = new List<RuntimePackageSnapshot>();
+        service.InitializePresentation(initial, [CreateSource("hash-a", 1)], async (snapshot, _, retry, token) =>
+        {
+            Assert.Null(retry);
+            writes.Add(snapshot);
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+            fenced = false;
+        });
+        Task Reconcile() => service.ReconcileRetirementAsync(next, [source], () => fenced, default);
+        var first = eventFirst ? service.ApplySnapshotAsync(next, [source]) : Reconcile();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var second = eventFirst ? Reconcile() : service.ApplySnapshotAsync(next, [source]);
+        Assert.False((eventFirst ? second : first).IsCompleted);
+        release.TrySetResult();
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.Equal([next], writes);
+
+        // A terminal failed/discarded stage can require restoration even though
+        // the Host stamp did not change. Subsequent reconciliation is idempotent.
+        fenced = true;
+        await Task.WhenAll(Reconcile(), Reconcile());
+        Assert.Equal([next, next], writes);
+        await service.ReconcileRetirementAsync(initial, [CreateSource("hash-a", 1)], () => true, default);
+        Assert.Equal([next, next], writes);
+        var replacementRuntime = CreateSnapshot(Guid.NewGuid(), 1);
+        await service.ApplySnapshotAsync(replacementRuntime, [CreateSource("hash-c", 1)]);
+        await service.ReconcileRetirementAsync(next, [source], () => true, default);
+        Assert.Equal([next, next, replacementRuntime], writes);
+    }
+
+    [Fact]
+    public async Task ShutdownDrainsActiveAndQueuedRetirementReconciliationWithoutReopeningViews()
+    {
+        var runtime = Guid.NewGuid();
+        var next = CreateSnapshot(runtime, 2);
+        var source = CreateSource("hash-b", 2);
+        using var log = new DeveloperLogService();
+        await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), log);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writes = 0;
+        service.InitializePresentation(CreateSnapshot(runtime, 1), [CreateSource("hash-a", 1)], async (_, _, _, token) =>
+        {
+            writes++;
+            entered.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        });
+        var active = service.ReconcileRetirementAsync(next, [source], () => true, default);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        var queued = service.ReconcileRetirementAsync(next, [source], () => true, default);
+        await service.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
+        Assert.Equal(1, writes);
     }
 
     [Fact]
@@ -994,7 +1064,7 @@ public sealed class RuntimeEventSubscriptionServiceTests
 
         await service.WaitUntilAppliedAsync(new RuntimePackageStamp(runtimeInstanceId, 2))
             .WaitAsync(TimeSpan.FromSeconds(2));
-        Assert.Empty(Assert.IsAssignableFrom<IReadOnlyCollection<string>>(retriedPackageIds));
+        Assert.Null(retriedPackageIds);
     }
 
     [Fact]

@@ -26,6 +26,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
     private readonly Func<RuntimePackageStamp, CancellationToken, Task> _waitUntilPackagePresentationAppliedAsync;
     private readonly Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>> _waitForPackagePresentationAsync;
     private readonly IRuntimeExecutionRuntimeStatusSource? _runtimeStatusSource;
+    private readonly RuntimeEventSubscriptionService? _runtimeEventSubscription;
     private readonly SettingsWindowFactory _settingsWindowFactory;
     private readonly PackagesWindowFactory _packagesWindowFactory;
     private readonly StacksWindowFactory _stacksWindowFactory;
@@ -73,6 +74,7 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         _ownsBackgroundTaskQueue = backgroundTaskQueue is null;
         _backgroundTaskQueue = backgroundTaskQueue ?? new BackgroundTaskQueueService();
         _runtimeStatusSource = runtimeEventSubscription;
+        _runtimeEventSubscription = runtimeEventSubscription;
         _waitUntilPackagePresentationAppliedAsync = runtimeEventSubscription is null
             ? WaitForUnavailablePresentationAsync
             : runtimeEventSubscription.WaitUntilAppliedAsync;
@@ -486,7 +488,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         {
             cancellation.ThrowIfCancellationRequested();
             return CanReconcileDevelopment
-                ? ApplyPackageLifecycleSnapshotAsync(snapshot, sources, null, cancellation)
+                ? _runtimeEventSubscription?.ReconcileRetirementAsync(snapshot, sources,
+                    () => _packageViewHostService.NeedsRetirementReconciliation, cancellation)
+                    ?? ApplyPackageLifecycleSnapshotAsync(snapshot, sources, null, cancellation)
                 : Task.CompletedTask;
         });
     }

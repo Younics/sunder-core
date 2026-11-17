@@ -25,7 +25,8 @@ public sealed class NativeWebViewCaptureProcessTests
             var probe = Path.Combine(AppContext.BaseDirectory, "webview-capture-probe", "Sunder.App.Tests.dll");
             Assert.True(File.Exists(probe), "The owning build did not compile the native browser capture probe.");
             var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet") { UseShellExecute = false };
-            foreach (var argument in new[] { "exec", "--runtimeconfig", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.runtimeconfig.json"), probe, temporary.RootPath, backend })
+            foreach (var argument in new[] { "exec", "--runtimeconfig", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.runtimeconfig.json"),
+                         "--depsfile", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.deps.json"), probe, temporary.RootPath, backend })
                 start.ArgumentList.Add(argument);
             await using var process = CapturedProcess.Start(start, 128 * 1024);
             var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(60));

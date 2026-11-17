@@ -401,6 +401,8 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
     internal bool IsViewActivationRetained(string viewId) => CurrentGeneration.ViewRegistry.GetPackageId(viewId) is { } packageId
         && IsPackageActivationRetained(packageId);
 
+    internal bool NeedsRetirementReconciliation => CurrentGeneration.ActivationGroups.Any(group => group.RetirementFenced);
+
     internal Task PrewarmPackageIconsAsync(
         RuntimePackageSnapshot snapshot,
         IReadOnlyList<ActivePackageDescriptor> activePackages,

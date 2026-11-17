@@ -19,7 +19,8 @@ public sealed class WindowsWebViewCaptureProcessTests
         Assert.True(File.Exists(probe), "The owning build did not compile the native WebView2 capture probe.");
         var host = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet";
         var start = new ProcessStartInfo(host) { UseShellExecute = false };
-        foreach (var argument in new[] { "exec", "--runtimeconfig", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.runtimeconfig.json"), probe, temporary.RootPath })
+        foreach (var argument in new[] { "exec", "--runtimeconfig", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.runtimeconfig.json"),
+                     "--depsfile", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.deps.json"), probe, temporary.RootPath })
             start.ArgumentList.Add(argument);
         await using var process = CapturedProcess.Start(start, 128 * 1024);
         var result = await WindowsWebViewBrowserProcess.EnsureSuccessAndExitAsync(process, TimeSpan.FromSeconds(60));

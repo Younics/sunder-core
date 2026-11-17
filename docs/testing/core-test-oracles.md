@@ -201,6 +201,8 @@ reopen, secondary-process forwarding and ordered cleanup. CLI/Host installer pay
 are omitted from its private App copy and the test supplies an explicit external
 Runtime, so it does not modify the developer's PATH or persistent Host deployment.
 Dedicated STA capture probes and pre-Main RPC hooks cover different boundaries.
+Capture-probe executables use the owning test project's dependency manifest so
+.NET selects its native graphics assets, including the universal macOS assets.
 The owning Windows capture probe also exercises the production browser manager and
 package controls: one lazy environment, isolated profiles/storage/workers, repeated
 controller reuse, history clearing, stale bridge authority, sibling preservation,

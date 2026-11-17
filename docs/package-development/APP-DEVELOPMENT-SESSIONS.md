@@ -115,6 +115,11 @@ different owner, rebuild source, or follow a replacement Runtime. An ambiguous
 commit is not permission to replay a mutation. The returned revision acknowledges
 commit; use `GetStatusAsync().AppliedRevision` to establish application readiness.
 
+Reload reconciliation and Runtime events share one App presentation writer. A
+delayed event does not reactivate an already admitted matching revision. Failed or
+discarded stages still restore explicitly retired App owners when the Host stamp
+is unchanged; reconciliation cannot roll back a newer Runtime snapshot.
+
 `GetLogsAsync(query)` filters before selecting the latest matching entries, returned
 oldest first. Queries support inclusive `Since`, exclusive `Until`, `MinimumLevel`,
 `Source` (`all`, `runtime`, `app`), `MaximumEntries` (default 20, maximum 100),
