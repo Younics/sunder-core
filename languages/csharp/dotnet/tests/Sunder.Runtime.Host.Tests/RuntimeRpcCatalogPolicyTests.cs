@@ -120,18 +120,33 @@ public sealed class RuntimeRpcCatalogPolicyTests
         var subjects = activation.Session.LoadedPackageMap.Values.Select(value => new RegistryPackageVersionIdentity(value.Descriptor.PackageId, "1.0.0", Hash(value.Descriptor.PackageId))).ToArray();
         await policy.RefreshAsync(subjects);
         var waiting = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        policy.Send = async (_, token) => { waiting.TrySetResult(); await Task.Delay(Timeout.InfiniteTimeSpan, token); throw new InvalidOperationException(); };
+        var httpFinished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        policy.Send = async (_, token) =>
+        {
+            waiting.TrySetResult();
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); throw new InvalidOperationException(); }
+            finally { httpFinished.TrySetResult(); }
+        };
         using var network = new RegistryPackagePolicySynchronizer(policy.Client, policy.Cache);
+        var serviceTime = new Sunder.Core.TestSupport.ManualTimeProvider(ObservedAt);
         using var service = new ActivePackagePolicySynchronizer(new(policy.Paths), fixture.Owner.State, fixture.Owner, network, admission, policy.Cache,
-            policy.Clock, policy.Time, NullLogger<ActivePackagePolicySynchronizer>.Instance);
+            policy.Clock, serviceTime, NullLogger<ActivePackagePolicySynchronizer>.Instance);
         await service.StartAsync(default);
         try
         {
             await waiting.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            // HTTP entry alone does not mean expiry enforcement has registered
+            // its first delay. Wait for refresh, enforcement and persistence to
+            // arm their initial delays. This clock is service-only, so the HTTP
+            // request's deadline cannot fire or mask missing enforcement.
+            using (var readiness = new CancellationTokenSource(TimeSpan.FromSeconds(2)))
+                while (serviceTime.PendingTimerCount != 3) await Task.Delay(10, readiness.Token);
+            Assert.False(disposed.Task.IsCompleted);
             policy.Clock.Advance(TimeSpan.FromHours(24));
-            policy.Time.Advance(TimeSpan.FromSeconds(1));
+            serviceTime.Advance(TimeSpan.FromSeconds(1));
             await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
             Assert.Empty(fixture.Catalog.GetSnapshot().Providers);
+            Assert.False(httpFinished.Task.IsCompleted);
         }
         finally { await service.StopAsync(default); }
     }
