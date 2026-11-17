@@ -101,7 +101,7 @@
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "Microsoft.Extensions.DependencyInjection": {

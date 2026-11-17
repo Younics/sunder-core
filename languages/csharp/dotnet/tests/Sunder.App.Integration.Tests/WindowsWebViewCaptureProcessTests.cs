@@ -11,7 +11,7 @@ public sealed class WindowsWebViewCaptureProcessTests
     [Trait("Capability", "NativeUI")]
     [Trait("Capability", "Process")]
     public Task WebView2CapturesOnlyNativePackagePixelsAndDrainsCallbacksBeforeRetirement()
-        => TemporaryDirectoryScope.RunAsync("sunder-webview-capture", RunAsync);
+        => TemporaryDirectoryScope.RunAsync("sunder-browser", RunAsync);
 
     private static async Task RunAsync(TemporaryDirectoryScope temporary)
     {
@@ -23,8 +23,11 @@ public sealed class WindowsWebViewCaptureProcessTests
             start.ArgumentList.Add(argument);
         await using var process = CapturedProcess.Start(start, 128 * 1024);
         var result = await WindowsWebViewBrowserProcess.EnsureSuccessAndExitAsync(process, TimeSpan.FromSeconds(60));
-        Assert.Contains("native-pixels; package-only; selected-crop; cancellation-drained; detach-drained", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("native-capture; cancellation-drained; reparent-preserved; native-exit; profile-removed", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("hosted-package; fixed-document-query; composed-capture; exact-revision", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("lazy; isolated-profiles; retained-controller; sibling-preserved", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("pending-initialization-settled; original-sta; native-exit; profile-removed", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("closedOwner=True", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("native-renderer-failure; unavailable-fallback; fresh-reload; sibling-preserved", result.StandardOutput, StringComparison.Ordinal);
     }
 }

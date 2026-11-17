@@ -45,15 +45,49 @@ Each persistent V1 root contains `schema.json` with product identity `Sunder`, s
 
 Package and Registry secrets use Runtime-V1-specific DPAPI entropy and macOS Keychain/Linux Secret Service namespaces. Existing unversioned filesystem data and old credential items remain untouched.
 
-Native package-browser profiles are transient App-owned state. On Windows, compact
-names under `webview-data` bind the package and exact activation without nesting the
-authored package ID. The complete WebView2 user-data path is limited to 170 characters
-to leave room for native database/cache descendants below Windows path limits. An
-overlong configured root fails before browser creation with guidance to shorten
-`SUNDER_APP_STATE_ROOT`; profiles are never silently relocated outside that root.
-Retirement drains capture callbacks and waits for the matching WebView2 browser-process
-exit before deleting profile data. Adapter detachment alone is not retirement proof;
-a timeout or unreclaimed quarantine cannot acknowledge successful cleanup.
+### Package browser ownership
+
+One App-owned browser manager acquires native views only on presentation demand.
+Registration and hotbar preloading do not start hidden web documents. Ordinary
+switching or moving a view retains its document; explicit close, hotbar removal,
+reload and activation retirement revoke its bridge and retire that document.
+Package authors need no browser initialization or shutdown hooks.
+
+Each removable view has isolated transient browser storage and worker ownership.
+Cookies, local/session storage, IndexedDB, caches and shared/service workers are
+not a communication channel between views, even within the same package. Use
+Host-mediated package state/RPC for shared or persistent data.
+
+- **Windows:** independent WebView2 controllers and unique InPrivate profiles use
+  one lazily acquired environment per App session. After document/worker/data/history
+  cleanup, at most one cleaned controller is retained App-wide for **60 seconds**,
+  reusable only for the original activation and view. It retains no document or
+  bridge authority. Package retirement deletes its profiles, not the shared engine.
+- **macOS/Linux:** WKWebView/WebKitGTK own their native process-sharing model.
+  Each view has an isolated ephemeral data store/context. Sunder clears that store
+  and destroys the native view rather than advertising unqualified controller reuse.
+
+View retirement joins actual bridge handlers and submitted script/capture callbacks;
+cancellation, blank navigation or visual detachment alone is not cleanup proof.
+Bounded caller waits do not cancel the underlying cleanup. Failed or incomplete
+cleanup remains failed and is retained by the cleanup owner.
+
+On Windows, the compact shared user-data root is under `webview-engines` inside the
+configured App state root. The complete shared-root path is limited to **147
+characters**: the prior 170-character UDF budget additionally reserves the 23 extra
+characters in an independent profile's name. This leaves room for native database/
+cache descendants. An overlong root fails before creation
+with guidance to shorten `SUNDER_APP_STATE_ROOT`; it is never silently relocated.
+WebView2 may defer physical profile-directory removal until its shared process exits.
+Final manager shutdown observes held browser-process identities before reclaiming
+the shared root. Package unload therefore does not require a sibling's browser
+process to exit. A timeout or unreclaimed quarantine is not successful reclamation.
+
+Native renderer/browser failures show an unavailable-view message. Reload acquires
+a fresh view; if native recovery fails, restart the App. The shared engine also
+shares browser-process failure/resource boundaries; it is not per-package process
+isolation. Worker task-host isolation, RPC/Registry permissions and supervision
+deadlines remain independent and unchanged.
 
 ### Workspace restoration
 

@@ -23,10 +23,10 @@ internal static class WindowsWebViewCapture
         => CaptureCoreAsync(handle.CoreWebView2, handle.CoreWebView2Controller, bounds, viewport, edge);
 
     [SupportedOSPlatform("windows")]
-    private static async Task<byte[]> CaptureCoreAsync(nint webView, nint controller, Rect bounds, Size viewport, int edge)
+    internal static async Task<byte[]> CaptureCoreAsync(nint webView, nint controller, Rect bounds, Size viewport, int edge, PixelSize? ownedControllerPixels = null)
     {
         AppNativeWebViewCapture.ValidateRegion(bounds, viewport, edge);
-        if (webView == 0 || controller == 0) throw new InvalidOperationException("The native browser is not ready for capture.");
+        if (webView == 0 || controller == 0 && ownedControllerPixels is null) throw new InvalidOperationException("The native browser is not ready for capture.");
         var viewId = WebViewId;
         var controllerId = ControllerId;
         Marshal.ThrowExceptionForHR(Marshal.QueryInterface(webView, in viewId, out var view));
@@ -35,8 +35,12 @@ internal static class WindowsWebViewCapture
         {
             using var stream = new CaptureStream();
             using var callback = new Completion();
-            Marshal.ThrowExceptionForHR(Marshal.QueryInterface(controller, in controllerId, out retainedController));
-            var before = ReadBounds(retainedController);
+            if (controller != 0) Marshal.ThrowExceptionForHR(Marshal.QueryInterface(controller, in controllerId, out retainedController));
+            // The direct backend owns its controller through the drain and checks
+            // its native bounds/presentation epoch after completion. The wrapper
+            // path instead retains and reads the public controller COM interface.
+            var before = retainedController != 0 ? ReadBounds(retainedController)
+                : new NativeBounds(0, 0, ownedControllerPixels!.Value.Width, ownedControllerPixels.Value.Height);
             var width = checked(before.Right - before.Left);
             var height = checked(before.Bottom - before.Top);
             AppNativeWebViewCapture.RequirePixels(width, height);
@@ -45,12 +49,13 @@ internal static class WindowsWebViewCapture
             // including IUnknown. PNG is COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG (0).
             var capture = Method<CapturePreview>(view, 30);
             Marshal.ThrowExceptionForHR(capture(view, 0, streamPointer, callback.Pointer));
+            callback.MarkSubmitted();
             // No cancellation/timeout releases a stream which WebView2 can still
             // write. Owner cancellation is checked by the caller after settlement.
             var result = await callback.Result;
             if (stream.LimitExceeded) throw new InvalidDataException("Native image exceeds its 2 MiB capture budget.");
             Marshal.ThrowExceptionForHR(result);
-            if (before != ReadBounds(retainedController)) throw new InvalidOperationException("The native viewport changed during capture.");
+            if (retainedController != 0 && before != ReadBounds(retainedController)) throw new InvalidOperationException("The native viewport changed during capture.");
             var png = stream.ToArray();
             var dimensions = AppDevelopmentViewOperations.ValidatePng(png);
             if (dimensions != (width, height)) throw new InvalidDataException("Native image dimensions do not match the captured viewport.");
@@ -108,8 +113,17 @@ internal static class WindowsWebViewCapture
         private readonly TaskCompletionSource<int> _result = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly GCHandle _root;
         private int _references = 1, _owned = 1;
+        private int _submitted;
         internal nint Pointer { get; }
         internal Task<int> Result => _result.Task;
+        internal void MarkSubmitted()
+        {
+            Volatile.Write(ref _submitted, 1);
+            if (Volatile.Read(ref _references) == 1) Relinquished();
+        }
+
+        private void Relinquished()
+            => _result.TrySetException(new OperationCanceledException("The native browser relinquished capture without a result."));
 
         internal Completion()
         {
@@ -137,6 +151,8 @@ internal static class WindowsWebViewCapture
         {
             var context = Context(self);
             var references = Interlocked.Decrement(ref context._references);
+            if (references == 1 && Volatile.Read(ref context._owned) != 0 && Volatile.Read(ref context._submitted) != 0)
+                context.Relinquished();
             if (references == 0) { Marshal.FreeHGlobal(self); context._root.Free(); }
             return checked((uint)references);
         }

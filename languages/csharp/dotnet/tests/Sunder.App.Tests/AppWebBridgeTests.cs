@@ -795,6 +795,8 @@ public sealed partial class AppWebBridgeTests
             var secondCall = second.HandleMessageAsync(Request(second.SessionNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
             await Task.WhenAll(rpc.FirstStarted.Task, rpc.SecondStarted.Task).WaitAsync(TimeSpan.FromSeconds(5));
             await first.DisposeAsync();
+            var firstDrain = first.DrainAsync();
+            Assert.False(firstDrain.IsCompleted); // Revoked requests may still be executing.
             Assert.True(rpc.FirstToken.IsCancellationRequested);
             Assert.False(rpc.SecondToken.IsCancellationRequested);
             Assert.Equal(0, rpc.DisposeCalls);
@@ -805,6 +807,7 @@ public sealed partial class AppWebBridgeTests
             rpc.FirstRelease.SetResult();
             rpc.SecondRelease.SetResult();
             await Task.WhenAll(firstCall, secondCall).WaitAsync(TimeSpan.FromSeconds(5));
+            await firstDrain;
             Assert.Equal("result", ReadResponse(Assert.Single(secondView.Scripts)).GetProperty("type").GetString());
             await second.DisposeAsync();
             Assert.Equal(0, rpc.DisposeCalls);

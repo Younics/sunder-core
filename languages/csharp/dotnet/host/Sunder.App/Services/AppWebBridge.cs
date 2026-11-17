@@ -31,6 +31,8 @@ internal sealed class AppWebBridge : IAsyncDisposable
     private long _documentGeneration;
     private bool _trustedNavigation;
     private int _disposed;
+    private readonly HashSet<TaskCompletionSource> _handlers = [];
+    private Task? _disposal;
 
     public AppWebBridge(
         IAppWebView webView,
@@ -99,7 +101,9 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
-    public Task NavigationStartingAsync()
+    public Task NavigationStartingAsync() => RunOwnedAsync(NavigationStartingCoreAsync);
+
+    private Task NavigationStartingCoreAsync()
     {
         AppWebPendingRequest[] requests;
         string? retiredNonce;
@@ -118,7 +122,10 @@ internal sealed class AppWebBridge : IAsyncDisposable
         return RetireBrowserAsync(retiredNonce);
     }
 
-    public async Task EstablishAsync(Uri uri, CancellationToken cancellationToken = default)
+    public Task EstablishAsync(Uri uri, CancellationToken cancellationToken = default)
+        => RunOwnedAsync(() => EstablishCoreAsync(uri, cancellationToken));
+
+    private async Task EstablishCoreAsync(Uri uri, CancellationToken cancellationToken)
     {
         if (!AppWebNavigationPolicy.IsPackageUri(_contentServer, uri))
         {
@@ -175,7 +182,10 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
-    public async Task HandleMessageAsync(string? body, CancellationToken cancellationToken = default)
+    public Task HandleMessageAsync(string? body, CancellationToken cancellationToken = default)
+        => RunOwnedAsync(() => HandleMessageCoreAsync(body, cancellationToken));
+
+    private async Task HandleMessageCoreAsync(string? body, CancellationToken cancellationToken)
     {
         var recoveredRequest = body is null ? null : TryRecoverRequest(body);
         if (body is null)
@@ -296,12 +306,56 @@ internal sealed class AppWebBridge : IAsyncDisposable
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        TaskCompletionSource completion;
+        lock (_gate)
         {
-            return;
+            if (_disposal is not null) return new(_disposal);
+            completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _disposal = completion.Task;
+            _disposed = 1;
         }
+        // Publish the shared task under authority, but run cancellation callbacks
+        // and native work outside it. Cancellation can reenter this bridge.
+        _ = CompleteDisposalAsync(completion);
+        return new(completion.Task);
+    }
+
+    private async Task CompleteDisposalAsync(TaskCompletionSource completion)
+    {
+        try { await DisposeCoreAsync().ConfigureAwait(false); completion.TrySetResult(); }
+        catch (Exception error) { completion.TrySetException(error); }
+    }
+
+    // Cancellation/removing registry entries is not completion. Session reset and
+    // activation retirement join the actual handlers, including late native sends.
+    internal async Task DrainAsync()
+    {
+        var disposal = DisposeAsync().AsTask();
+        Task[] handlers;
+        lock (_gate) handlers = _handlers.Select(item => item.Task).ToArray();
+        await Task.WhenAll(handlers.Append(disposal)).ConfigureAwait(false);
+    }
+
+    private async Task RunOwnedAsync(Func<Task> work)
+    {
+        var settled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_gate)
+        {
+            if (_disposed != 0) return;
+            _handlers.Add(settled);
+        }
+        try { await work().ConfigureAwait(false); }
+        finally
+        {
+            lock (_gate) _handlers.Remove(settled);
+            settled.TrySetResult();
+        }
+    }
+
+    private async Task DisposeCoreAsync()
+    {
         AppWebPendingRequest[] requests;
         string? retiredNonce;
         lock (_gate)

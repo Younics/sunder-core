@@ -85,6 +85,19 @@ public sealed class WindowsWebViewCaptureTests
 
     [WindowsFact]
     [SupportedOSPlatform("windows")]
+    public async Task RelinquishedCaptureCallbackSettlesWithoutManufacturingAnImage()
+    {
+        using var callback = new WindowsWebViewCapture.Completion();
+        var id = new Guid("697e05e9-3d8f-45fa-96f4-8ffe1ededaf5");
+        Marshal.ThrowExceptionForHR(Marshal.QueryInterface(callback.Pointer, in id, out var native));
+        callback.MarkSubmitted();
+        Assert.False(callback.Result.IsCompleted);
+        Assert.Equal(1, Marshal.Release(native));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => callback.Result);
+    }
+
+    [WindowsFact]
+    [SupportedOSPlatform("windows")]
     public async Task NativeCallbackRemainsRootedUntilTheLastComReferenceReleasesIt()
     {
         var callback = new WindowsWebViewCapture.Completion();

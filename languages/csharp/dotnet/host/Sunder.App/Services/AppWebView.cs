@@ -11,6 +11,7 @@ internal interface IAppWebView : IDisposable
     Control Control { get; }
     Rect CaptureViewport => new(Control.Bounds.Size);
     bool CanCapture => false;
+    int? NativeBrowserProcessId => null;
 
     event EventHandler<AppWebNavigationStartingEventArgs>? NavigationStarting;
 
@@ -21,6 +22,7 @@ internal interface IAppWebView : IDisposable
     event EventHandler<AppWebResourceRequestedEventArgs>? ResourceRequested;
 
     event EventHandler<AppWebMessageReceivedEventArgs>? MessageReceived;
+    event EventHandler<AppWebViewFailedEventArgs>? Failed { add { } remove { } }
 
     void Navigate(Uri uri);
 
@@ -31,11 +33,18 @@ internal interface IAppWebView : IDisposable
     void Stop();
 
     Task DrainNativeRetirementAsync() => Task.CompletedTask;
+
+    bool CanReset => false;
+    Task ResetAsync() => throw new NotSupportedException("This browser backend requires a fresh native view.");
+    Task RetireAsync() { Dispose(); return Task.CompletedTask; }
+    Task RetireDocumentAsync() => Task.CompletedTask;
 }
 
 internal interface IAppWebViewFactory
 {
     IAppWebView Create(string userDataDirectory);
+
+    Task RetireActivationAsync(string userDataDirectory) => Task.CompletedTask;
 }
 
 internal sealed class AppWebNavigationStartingEventArgs(Uri? uri) : EventArgs
@@ -75,8 +84,20 @@ internal sealed class AppWebMessageReceivedEventArgs(string? body) : EventArgs
 
 internal sealed class AppNativeWebViewFactory(IUiDispatcher? uiDispatcher = null) : IAppWebViewFactory
 {
+    private readonly AppBrowserManager _manager = new(uiDispatcher ?? AvaloniaUiDispatcher.Instance);
     public IAppWebView Create(string userDataDirectory)
-        => new AppNativeWebView(userDataDirectory, uiDispatcher);
+        => _manager.Create(userDataDirectory);
+
+    public async Task RetireActivationAsync(string userDataDirectory)
+    {
+        await _manager.RetireActivationAsync(userDataDirectory);
+        await _manager.DisposeAsync();
+    }
+}
+
+internal sealed class AppWebViewFailedEventArgs(Exception error) : EventArgs
+{
+    internal Exception Error { get; } = error;
 }
 
 internal sealed class AppNativeWebView : IAppWebView
@@ -88,18 +109,21 @@ internal sealed class AppNativeWebView : IAppWebView
     private int _disposed;
     private long _adapterGeneration;
     private bool _captureInProgress;
-    private readonly List<Task> _nativeRetirements = [];
-    private readonly TaskCompletionSource _firstWindowsAdapter = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private bool _windowsEnvironmentRequested;
+    private TaskCompletionSource? _captureSettled;
+    private IDisposable? _nativeOwnership;
+    private Task? _retirement;
+    private readonly HashSet<Task> _scripts = [];
+    private bool _retiringDocument;
+    private bool _failed;
 
     public AppNativeWebView(string userDataDirectory, IUiDispatcher? uiDispatcher = null)
     {
+        if (OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Windows browsers are owned by AppBrowserManager's WebView2 backend.");
         // GTK is the supported Linux backend. WPE's wrapper cannot keep its
         // compositor adapter alive through asynchronous capture/retirement.
         if (OperatingSystem.IsLinux()) _webView.AdapterPreference = [WebViewAdapterType.WebKitGtk];
         _viewport = new(_webView);
         _userDataDirectory = Path.GetFullPath(userDataDirectory);
-        if (OperatingSystem.IsWindows()) AppWebViewProfile.ValidateWindowsPath(_userDataDirectory);
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
         Directory.CreateDirectory(_userDataDirectory);
         _webView.EnvironmentRequested += OnEnvironmentRequested;
@@ -112,6 +136,7 @@ internal sealed class AppNativeWebView : IAppWebView
         _webView.NewWindowRequested += OnNewWindowRequested;
         _webView.WebResourceRequested += OnWebResourceRequested;
         _webView.WebMessageReceived += OnWebMessageReceived;
+        _webView.ProcessTerminated += OnProcessTerminated;
     }
 
     public Control Control => _viewport;
@@ -125,15 +150,28 @@ internal sealed class AppNativeWebView : IAppWebView
     public event EventHandler<AppWebResourceRequestedEventArgs>? ResourceRequested;
 
     public event EventHandler<AppWebMessageReceivedEventArgs>? MessageReceived;
+    public event EventHandler<AppWebViewFailedEventArgs>? Failed;
 
-    public void Navigate(Uri uri) => _webView.Navigate(uri);
+    public void Navigate(Uri uri)
+    {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0 || _failed, this);
+        _webView.Navigate(uri);
+    }
 
     public Task<string?> InvokeScriptAsync(string script)
-        => _uiDispatcher.InvokeAsync(() => _webView.InvokeScript(script));
+        => _uiDispatcher.InvokeAsync(async () =>
+        {
+            ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+            var operation = _webView.InvokeScript(script);
+            _scripts.Add(operation);
+            try { return await operation; }
+            finally { _scripts.Remove(operation); }
+        });
 
-    public bool CanCapture => _webView.TryGetPlatformHandle() switch
+    public bool CanCapture => Volatile.Read(ref _disposed) == 0 && !_failed && ReferenceEquals(_viewport.Child, _webView)
+        && _webView.IsEffectivelyVisible && TopLevel.GetTopLevel(_webView) is not null
+        && _webView.TryGetPlatformHandle() switch
     {
-        IWindowsWebView2PlatformHandle => OperatingSystem.IsWindows(),
         IAppleWKWebViewPlatformHandle => OperatingSystem.IsMacOS(),
         IGtkWebViewPlatformHandle => OperatingSystem.IsLinux(),
         _ => false,
@@ -151,21 +189,23 @@ internal sealed class AppNativeWebView : IAppWebView
             var viewport = CaptureViewport;
             var localBounds = bounds.Translate(new Vector(-viewport.X, -viewport.Y));
             AppNativeWebViewCapture.ValidateRegion(localBounds, viewport.Size, maximumEdge);
-            if (TopLevel.GetTopLevel(_webView) is not { } owner || !_webView.IsEffectivelyVisible)
+            if (TopLevel.GetTopLevel(_webView) is not { } owner || !_webView.IsEffectivelyVisible
+                || !ReferenceEquals(_viewport.Child, _webView) || !ReferenceEquals(owner, TopLevel.GetTopLevel(_viewport)))
                 throw new InvalidOperationException("The native capture viewport is not attached and visible.");
             var generation = Volatile.Read(ref _adapterGeneration);
             _captureInProgress = true;
+            _captureSettled = new(TaskCreationOptions.RunContinuationsAsynchronously);
             try
             {
                 // Keep the native wrapper alive even if its visual detaches.
                 // A native object reference alone does not defer adapter teardown.
-                using var nativeLifetime = _webView.BeginReparenting(yieldOnLayoutBeforeExiting: false);
+                // The session's ownership lease also spans visual detachment.
+                // BeginReparenting scopes cannot be nested by individual captures.
+                using var nativeLifetime = _nativeOwnership is null ? _webView.BeginReparenting(yieldOnLayoutBeforeExiting: false) : null;
                 // Once submitted, await the real native callback even on cancellation.
                 // Owner retirement drains this task before releasing the browser.
                 byte[] png;
-                if (OperatingSystem.IsWindows() && handle is IWindowsWebView2PlatformHandle windows)
-                    png = await WindowsWebViewCapture.CaptureAsync(windows, localBounds, viewport.Size, maximumEdge);
-                else if (OperatingSystem.IsMacOS() && handle is IAppleWKWebViewPlatformHandle apple)
+                if (OperatingSystem.IsMacOS() && handle is IAppleWKWebViewPlatformHandle apple)
                 {
                     var retained = apple.GetWKWebViewRetained();
                     try { png = await MacOsWebViewCapture.CaptureAsync(retained, localBounds, maximumEdge); }
@@ -180,18 +220,14 @@ internal sealed class AppNativeWebView : IAppWebView
                     throw new InvalidOperationException("The native viewport changed during capture. Capture its current geometry again.");
                 return png;
             }
-            finally { _captureInProgress = false; }
+            finally { _captureInProgress = false; _captureSettled.TrySetResult(); }
         });
 
     public Rect CaptureViewport => _webView.Bounds;
 
     public Task DrainNativeRetirementAsync() => _uiDispatcher.InvokeAsync(async () =>
     {
-        // A pending environment/controller creation is not an empty native
-        // lifetime. If it cannot settle, the owner's existing deadline fails
-        // closed instead of reclaiming a profile still being initialized.
-        if (_windowsEnvironmentRequested) await _firstWindowsAdapter.Task;
-        await Task.WhenAll(_nativeRetirements);
+        if (_retirement is { } retirement) await retirement;
     });
 
     public void Dispose()
@@ -200,6 +236,86 @@ internal sealed class AppNativeWebView : IAppWebView
         {
             return;
         }
+        _retirement = _uiDispatcher.InvokeAsync(DisposeCoreAsync);
+        AppCleanupQuarantine.Retain(_retirement, "retiring a native WebKit session");
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        if (_captureSettled is { } capture) await capture.Task;
+        Task nativeRetirement = Task.CompletedTask;
+        var failures = new List<Exception>();
+        try
+        {
+            var handle = _webView.TryGetPlatformHandle();
+            _webView.Stop();
+            try { if (!_failed && handle is not null) await NavigateNeutralAsync(); }
+            catch (Exception error) { failures.Add(error); }
+            try
+            {
+                if (OperatingSystem.IsMacOS() && handle is IAppleWKWebViewPlatformHandle apple)
+                    await MacOsWebViewDataRetirement.ClearAsync(apple.WKWebView);
+                else if (OperatingSystem.IsLinux() && handle is IGtkWebViewPlatformHandle gtk)
+                    await GtkWebViewDataRetirement.ClearAsync(gtk.WebKitWebView);
+            }
+            catch (Exception error) { failures.Add(error); }
+            if (OperatingSystem.IsLinux() && handle is IGtkWebViewPlatformHandle retiringGtk)
+            {
+                // The wrapper queues GTK disposal. Observe actual native object
+                // finalization rather than treating AdapterDestroyed as its end.
+                nativeRetirement = await GtkWebViewDataRetirement.ObserveNativeRetirementAsync(retiringGtk.WebKitWebView);
+            }
+        }
+        finally { DetachNative(); }
+        await nativeRetirement;
+        foreach (var script in _scripts.ToArray())
+        {
+            try { await script; }
+            catch (Exception error)
+            {
+                AppSessionLog.WriteInfo($"Retired WebKit operation settled without a result: {error.GetType().Name}.", visibleInDeveloperLog: false);
+            }
+        }
+        if (failures.Count != 0) throw new AggregateException("Native WebKit document cleanup failed.", failures);
+    }
+
+    public Task RetireDocumentAsync()
+    {
+        Dispose();
+        return DrainNativeRetirementAsync();
+    }
+
+    private async Task NavigateNeutralAsync()
+    {
+        var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Navigated(object? sender, WebViewNavigationCompletedEventArgs args)
+        {
+            if (args.Request?.AbsoluteUri != "about:blank") return;
+            if (args.IsSuccess) completed.TrySetResult();
+            else completed.TrySetException(new InvalidOperationException("The retiring WebKit document did not reach its neutral page."));
+        }
+        _retiringDocument = true;
+        _webView.NavigationCompleted += Navigated;
+        try { _webView.Navigate(new Uri("about:blank")); await completed.Task; }
+        finally { _retiringDocument = false; _webView.NavigationCompleted -= Navigated; }
+    }
+
+    private void DetachNative()
+    {
+        _webView.Stop();
+        _viewport.Dispose();
+        // ContentControl clearing can defer its visual update until layout. Detach
+        // the actual native host now; capture's reparenting lease still protects
+        // any submitted callback until it settles.
+        _viewport.Child = null;
+        var ownership = _nativeOwnership;
+        _nativeOwnership = null;
+        ownership?.Dispose();
+        UnsubscribeNativeEvents();
+    }
+
+    private void UnsubscribeNativeEvents()
+    {
         _webView.EnvironmentRequested -= OnEnvironmentRequested;
         _webView.AdapterCreated -= OnAdapterCreated;
         _webView.AdapterDestroyed -= OnAdapterDestroyed;
@@ -210,24 +326,15 @@ internal sealed class AppNativeWebView : IAppWebView
         _webView.NewWindowRequested -= OnNewWindowRequested;
         _webView.WebResourceRequested -= OnWebResourceRequested;
         _webView.WebMessageReceived -= OnWebMessageReceived;
-        _webView.Stop();
-        _viewport.Dispose();
-        // ContentControl clearing can defer its visual update until layout. Detach
-        // the actual native host now; capture's reparenting lease still protects
-        // any submitted callback until it settles.
-        _viewport.Child = null;
+        _webView.ProcessTerminated -= OnProcessTerminated;
     }
 
     private void OnAdapterCreated(object? sender, WebViewAdapterEventArgs args)
     {
         Interlocked.Increment(ref _adapterGeneration);
         var handle = args.TryGetPlatformHandle();
-        if (OperatingSystem.IsWindows() && handle is IWindowsWebView2PlatformHandle windows)
-        {
-            _nativeRetirements.Add(WindowsWebViewLifetime.Observe(windows).DrainAsync(_uiDispatcher));
-            _firstWindowsAdapter.TrySetResult();
-        }
-        _viewport.SetPlatformHandle(handle);
+        _nativeOwnership ??= _webView.BeginReparenting(yieldOnLayoutBeforeExiting: false);
+        if (Volatile.Read(ref _disposed) == 0) _viewport.SetPlatformHandle(handle);
     }
 
     private void OnAdapterDestroyed(object? sender, WebViewAdapterEventArgs args)
@@ -240,6 +347,19 @@ internal sealed class AppNativeWebView : IAppWebView
     {
         if (args.Property == Visual.BoundsProperty || args.Property == Visual.IsVisibleProperty)
             Interlocked.Increment(ref _adapterGeneration);
+        if (args.Property == NativeWebView.AdapterInfoProperty
+            && _webView.AdapterInfo is DetailedWebViewAdapterInfo { UnavailableReason: { } reason })
+        {
+            _failed = true;
+            Failed?.Invoke(this, new(new InvalidOperationException("Native package browser initialization failed: " + reason)));
+        }
+    }
+
+    private void OnProcessTerminated(object? sender, WebViewProcessTerminatedEventArgs args)
+    {
+        _failed = true;
+        if (Volatile.Read(ref _disposed) == 0)
+            Failed?.Invoke(this, new(new InvalidOperationException("The native package browser terminated: " + args.Reason)));
     }
 
     private void OnEnvironmentRequested(object? sender, WebViewEnvironmentRequestedEventArgs args)
@@ -247,13 +367,6 @@ internal sealed class AppNativeWebView : IAppWebView
         args.EnableDevTools = false;
         switch (args)
         {
-            case WindowsWebView2EnvironmentRequestedEventArgs windows:
-                _windowsEnvironmentRequested = true;
-                windows.UserDataFolder = _userDataDirectory;
-                windows.ProfileName = "sunder-package";
-                windows.AllowSingleSignOnUsingOSPrimaryAccount = false;
-                windows.IsInPrivateModeEnabled = true;
-                break;
             case AppleWKWebViewEnvironmentRequestedEventArgs apple:
                 apple.NonPersistentDataStore = true;
                 apple.DataStoreIdentifier = Guid.NewGuid();
@@ -271,18 +384,22 @@ internal sealed class AppNativeWebView : IAppWebView
 
     private void OnNavigationStarted(object? sender, WebViewNavigationStartingEventArgs args)
     {
+        if (_retiringDocument && args.Request?.AbsoluteUri == "about:blank") return;
+        if (Volatile.Read(ref _disposed) != 0) { args.Cancel = true; return; }
         var translated = new AppWebNavigationStartingEventArgs(args.Request);
         NavigationStarting?.Invoke(this, translated);
         args.Cancel = translated.Cancel;
     }
 
     private void OnNavigationCompleted(object? sender, WebViewNavigationCompletedEventArgs args)
-        => NavigationCompleted?.Invoke(
-            this,
-            new AppWebNavigationCompletedEventArgs(args.Request, args.IsSuccess));
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+            NavigationCompleted?.Invoke(this, new AppWebNavigationCompletedEventArgs(args.Request, args.IsSuccess));
+    }
 
     private void OnNewWindowRequested(object? sender, WebViewNewWindowRequestedEventArgs args)
     {
+        if (Volatile.Read(ref _disposed) != 0) { args.Handled = true; return; }
         var translated = new AppWebNewWindowRequestedEventArgs(args.Request);
         NewWindowRequested?.Invoke(this, translated);
         args.Handled = translated.Handled;
@@ -290,6 +407,7 @@ internal sealed class AppNativeWebView : IAppWebView
 
     private void OnWebResourceRequested(object? sender, WebResourceRequestedEventArgs args)
     {
+        if (Volatile.Read(ref _disposed) != 0) { _webView.Stop(); return; }
         var translated = new AppWebResourceRequestedEventArgs(
             args.Request.Uri,
             args.Request.Method.Method);
@@ -301,7 +419,10 @@ internal sealed class AppNativeWebView : IAppWebView
     }
 
     private void OnWebMessageReceived(object? sender, WebMessageReceivedEventArgs args)
-        => MessageReceived?.Invoke(this, new AppWebMessageReceivedEventArgs(args.Body));
+    {
+        if (Volatile.Read(ref _disposed) == 0)
+            MessageReceived?.Invoke(this, new AppWebMessageReceivedEventArgs(args.Body));
+    }
 }
 
 /// <summary>

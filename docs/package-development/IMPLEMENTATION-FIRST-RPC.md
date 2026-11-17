@@ -563,6 +563,10 @@ the application owns the root context. See the working-shape
 [plain-browser and React examples](../SUNDER-NODE-PROCESS-PACKAGES.md#browser-and-react-lifetimes).
 The browser owner waits for the immutable `sunder:ready` bridge and follows its
 native lifetime signal; callers do not poll or create a transport singleton.
+These are application-root/component lifetimes, not native-browser lifecycle
+hooks. Sunder creates, hosts, retires and cleans each removable view automatically.
+Browser storage and shared workers are transient and view-local; cross-view state
+belongs in Host-owned storage or explicit RPC, not a shared browser profile.
 
 Content-bearing methods are an explicit advanced exception: create a caller-owned
 scope with `context.rpc.createCallScope()`, use

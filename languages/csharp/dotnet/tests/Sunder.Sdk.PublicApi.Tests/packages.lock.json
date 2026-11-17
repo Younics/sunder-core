@@ -138,7 +138,7 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.registry.contracts": {
@@ -159,20 +159,20 @@
         "dependencies": {
           "Avalonia": "[12.1.4, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.sdk.worker": {
         "type": "Project",
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "Avalonia": {

@@ -186,7 +186,8 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
             PersistShellState,
             PresentPackageViewAsync,
             QueueViewNavigationCancellation,
-            ObservePanelClose
+            ObservePanelClose,
+            RetireRemovedWebView
         );
         _deferredHostedViewActivator = new ShellDeferredHostedViewActivator(
             _shellState,
@@ -664,6 +665,7 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         var removed = _hotbarCoordinator.RemoveViewFromHotbar(viewId);
         if (removed)
         {
+            RetireRemovedWebView(viewId);
             if (placement is not null)
             {
                 var selectedViewId = ShellSelectionState.GetSelectedViewId(
@@ -719,6 +721,13 @@ public partial class MainWindowViewModel : ViewModelBase, IDisposable
         }
 
         return _packagePanelCoordinator.ClosePackageViewPanel(viewId);
+    }
+
+    private void RetireRemovedWebView(string viewId)
+    {
+        if (!_packageViewHostService.IsWebView(viewId)) return;
+        foreach (var slot in _shellLayout.GetSlots()) slot.Panel.RemoveHostedView(viewId);
+        _tasks.Observe(_packageViewHostService.InvalidateViewAsync(viewId).AsTask(), "retiring a removed package web view");
     }
 
     public void MovePackageView(string viewId, RailPlacement placement, int? targetIndex) =>

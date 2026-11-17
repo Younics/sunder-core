@@ -196,16 +196,17 @@ internal sealed class AppPackageHostedViewFacade(
         => RetainedView?.Invoke(viewId) is { } retained ? await retained.ReloadViewAsync(viewId, cancellationToken) : await ResetViewAsync(
             viewId,
             cancellationToken,
-            operationCancellation =>
+            async operationCancellation =>
             {
                 operationCancellation.ThrowIfCancellationRequested();
-                viewRegistry.RemoveCachedView(viewId);
+                await viewRegistry.RemoveCachedViewAndDrainAsync(viewId);
                 lock (_operationSyncRoot)
                 {
                     _warmedViewIds.Remove(viewId);
                     _presentedViewIds.Remove(viewId);
                 }
-                return Task.FromResult(GetOrCreateView(viewId));
+                operationCancellation.ThrowIfCancellationRequested();
+                return GetOrCreateView(viewId);
             });
 
     public async ValueTask<bool> InvalidateViewAsync(
@@ -214,16 +215,16 @@ internal sealed class AppPackageHostedViewFacade(
         => RetainedView?.Invoke(viewId) is { } retained ? await retained.InvalidateViewAsync(viewId, cancellationToken) : await ResetViewAsync(
             viewId,
             cancellationToken,
-            operationCancellation =>
+            async operationCancellation =>
             {
                 operationCancellation.ThrowIfCancellationRequested();
-                var invalidated = viewRegistry.RemoveCachedView(viewId);
+                var invalidated = await viewRegistry.RemoveCachedViewAndDrainAsync(viewId);
                 lock (_operationSyncRoot)
                 {
                     _warmedViewIds.Remove(viewId);
                     _presentedViewIds.Remove(viewId);
                 }
-                return Task.FromResult(invalidated);
+                return invalidated;
             });
 
     public async ValueTask<bool> NotifyViewNavigatedAsync(

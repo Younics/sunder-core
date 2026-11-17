@@ -201,6 +201,18 @@ reopen, secondary-process forwarding and ordered cleanup. CLI/Host installer pay
 are omitted from its private App copy and the test supplies an explicit external
 Runtime, so it does not modify the developer's PATH or persistent Host deployment.
 Dedicated STA capture probes and pre-Main RPC hooks cover different boundaries.
+The owning Windows capture probe also exercises the production browser manager and
+package controls: one lazy environment, isolated profiles/storage/workers, repeated
+controller reuse, history clearing, stale bridge authority, sibling preservation,
+in-flight callback drains, genuine parent-window closure during acquisition and
+final held-process/root reclamation. It also terminates the SDK/frame-selected
+owned renderer and checks unavailable fallback, fresh reload and sibling survival.
+The normal entry-point observer separately
+checks shell move, reload, rapid close/reopen and hotbar removal. These retain the
+three-second native cleanup assertions; an empty SDK process snapshot is not exit
+proof. WKWebView/WebKitGTK probes qualify their own native cleanup, not Windows
+sharing by analogy. Test-owned homes must fit the backend's native descendant path
+budget; configured roots are never silently relocated to make a run pass.
 Shared Host test support records its exact Worker project output in assembly metadata
 rather than guessing a build configuration from the test-output folder, including
 when alternate output paths are used.

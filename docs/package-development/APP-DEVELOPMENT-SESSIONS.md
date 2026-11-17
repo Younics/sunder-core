@@ -169,7 +169,12 @@ View discovery advertises capture from the live backend, not just the operating
 system: supported native handles are WebView2, WKWebView and WebKitGTK. Discovery
 does not inspect document contents. Session disposal clears control/document snapshot
 references after accepted operations drain, while retaining anti-replay input receipts.
-Native profile reclamation must also complete before the App acknowledges retirement.
+Native document/worker/data cleanup must also complete before the App acknowledges
+retirement. Sunder owns this lifecycle; packages do not supply native shutdown hooks.
+On Windows, package retirement deletes its isolated profiles while sibling views
+may keep the shared browser engine alive. Physical shared-root reclamation belongs
+to final App browser-manager shutdown, not an individual development unload. See
+[browser ownership](../SUNDER-APP.md#package-browser-ownership).
 
 ### Services which start without a view
 

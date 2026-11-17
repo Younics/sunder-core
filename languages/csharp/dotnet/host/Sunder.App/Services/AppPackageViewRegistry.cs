@@ -67,10 +67,11 @@ internal sealed class AppPackageViewRegistry
     internal void RegisterPackageView(
         string packageId,
         PackageViewRegistration registration,
-        Func<Control> factory)
+        Func<Control> factory,
+        bool isWebView = false)
     {
         ArgumentNullException.ThrowIfNull(factory);
-        RegisterPackageViewFactory(packageId, registration, factory);
+        RegisterPackageViewFactory(packageId, registration, factory, isWebView);
     }
 
     internal string? GetPackageId(string viewId)
@@ -86,7 +87,8 @@ internal sealed class AppPackageViewRegistry
     private void RegisterPackageViewFactory(
         string packageId,
         PackageViewRegistration registration,
-        Func<Control> factory)
+        Func<Control> factory,
+        bool isWebView = false)
     {
         var viewId = registration.Id;
         if (RetainedView(viewId) is { } retained)
@@ -100,7 +102,7 @@ internal sealed class AppPackageViewRegistry
                     $"Package view id '{viewId}' is already registered by package '{existingRegistration.PackageId}'.");
             }
 
-            _registeredViews[viewId] = new AppRegisteredPackageView(factory, packageId, registration);
+            _registeredViews[viewId] = new AppRegisteredPackageView(factory, packageId, registration, isWebView);
             TrackPackageViewId(packageId, viewId);
         }
     }
@@ -634,6 +636,22 @@ internal sealed class AppPackageViewRegistry
         return true;
     }
 
+    internal bool IsWebView(string viewId)
+    {
+        if (RetainedView(viewId) is { } retained) return retained.IsWebView(viewId);
+        lock (_syncRoot) return _registeredViews.TryGetValue(viewId, out var view) && view.IsWebView;
+    }
+
+    internal async Task<bool> RemoveCachedViewAndDrainAsync(string viewId)
+    {
+        if (RetainedView(viewId) is { } retained) return await retained.RemoveCachedViewAndDrainAsync(viewId);
+        AppWebPackageViewControl? web;
+        lock (_syncRoot) web = _viewCache.GetValueOrDefault(viewId) as AppWebPackageViewControl;
+        var removed = RemoveCachedView(viewId);
+        if (web is not null) await web.DisposeAsync();
+        return removed;
+    }
+
     internal bool RemoveCachedView(string packageId, string viewId)
     {
         if (RetainedPackage(packageId) is { } retained) return retained.RemoveCachedView(packageId, viewId);
@@ -858,7 +876,8 @@ internal sealed class AppPackageViewRegistry
     private sealed record AppRegisteredPackageView(
         Func<Control> Factory,
         string PackageId,
-        PackageViewRegistration Registration);
+        PackageViewRegistration Registration,
+        bool IsWebView = false);
 
     private sealed record AppRegisteredSettingsView(Func<Control> Factory, string PackageId);
 }

@@ -36,10 +36,13 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IA
         _webView.NewWindowRequested += OnNewWindowRequested;
         _webView.ResourceRequested += OnResourceRequested;
         _webView.MessageReceived += OnMessageReceived;
+        _webView.Failed += OnBrowserFailed;
         _webView.Navigate(initialUri);
     }
 
     internal AppWebBridge Bridge => _bridge;
+    internal IAppWebView Browser => _webView;
+    internal Task Retired => _retired.Task;
     public bool CanCapture => _webView.CanCapture;
     public IAppDevelopmentDocument DevelopmentDocument { get; }
 
@@ -76,14 +79,20 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IA
                 _webView.NewWindowRequested -= OnNewWindowRequested;
                 _webView.ResourceRequested -= OnResourceRequested;
                 _webView.MessageReceived -= OnMessageReceived;
+                _webView.Failed -= OnBrowserFailed;
                 // Notify the live document before destroying its WebView. Each bridge
                 // owns its requests; the non-disposing client preserves sibling views.
-                await _bridge.DisposeAsync();
+                // Revocation is synchronous; native retirement then makes
+                // progress alongside real handler settlement. Waiting for every
+                // script callback before retiring its document can deadlock.
+                var bridgeRetirement = _bridge.DisposeAsync().AsTask();
+                var documentRetirement = _webView.RetireDocumentAsync();
+                await Task.WhenAll(bridgeRetirement, documentRetirement, _bridge.DrainAsync());
             }
             finally
             {
                 Content = null;
-                _webView.Dispose();
+                await _webView.RetireAsync();
                 _lifetime.Dispose();
             }
             _retired.TrySetResult();
@@ -139,6 +148,21 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IA
         => Observe(
             _bridge.HandleMessageAsync(args.Body, _lifetime.Token),
             "handling a package browser bridge message");
+
+    private void OnBrowserFailed(object? sender, AppWebViewFailedEventArgs args)
+    {
+        AppSessionLog.WriteError("The package browser is unavailable.", args.Error);
+        Observe(ShowFailureAsync(), "retiring a failed package browser");
+    }
+
+    private async Task ShowFailureAsync()
+    {
+        try { await DisposeAsync(); }
+        finally
+        {
+            Content = new TextBlock { Text = "This package view is unavailable. Reload the view; if recovery fails, restart Sunder.", TextWrapping = Avalonia.Media.TextWrapping.Wrap };
+        }
+    }
 
     private static async void Observe(Task task, string operation)
     {

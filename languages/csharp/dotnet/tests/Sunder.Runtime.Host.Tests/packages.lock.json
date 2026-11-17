@@ -108,7 +108,7 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.package.hosting": {
@@ -116,7 +116,7 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.13, )",
           "Sunder.Package.Format": "[1.0.0, )",
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.package.projections": {
@@ -149,8 +149,8 @@
           "Sunder.Registry.Contracts": "[1.0.0, )",
           "Sunder.Runtime.Contracts": "[1.0.0, )",
           "Sunder.Runtime.LocalState": "[1.0.0, )",
-          "Sunder.Sdk": "[1.0.0, )",
-          "Sunder.Sdk.Stacks": "[1.0.0, )",
+          "Sunder.Sdk": "[1.0.2, )",
+          "Sunder.Sdk.Stacks": "[1.0.2, )",
           "System.Security.Cryptography.ProtectedData": "[10.0.13, )"
         }
       },
@@ -179,13 +179,13 @@
         "dependencies": {
           "Avalonia": "[12.1.4, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "Avalonia": {

@@ -57,6 +57,8 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
     private readonly AppPackageGenerationRetirementQueue _retirementOwner;
     private readonly AppPackageLifecycleCoordinator _lifecycleCoordinator;
     private readonly IAppPackagePolicy _packagePolicy;
+    private readonly AppBrowserManager _browsers;
+    private int _browserCleanupFailed;
     private string? _sessionFolder;
     private event EventHandler<PackageViewHostFaultEventArgs>? PackageFaultedHandlers;
     private event Action<AppPackageUiRecoveryRequest>? PackageUiRecoveryRequestedHandlers;
@@ -89,6 +91,7 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         _sessionFolder = sessionFolder;
         _packagePolicy = packagePolicy ?? UnavailableAppPackagePolicy.Instance;
         _uiDispatcher = uiDispatcher ?? AvaloniaUiDispatcher.Instance;
+        _browsers = new AppBrowserManager(_uiDispatcher);
         viewRegistry.SetUiDispatcher(_uiDispatcher);
         _propagateFatalCleanupFault = fatalCleanupFaultHandler
             ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
@@ -166,7 +169,8 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
             packagePolicy,
             developerServices,
             RegisterActivation,
-            () => _activations.Values.Select(registration => registration.Group).ToArray());
+            () => _activations.Values.Select(registration => registration.Group).ToArray(),
+            _browsers);
         var initialGeneration = _generationBuilder.CreateInitialGeneration(
             viewRegistry,
             disabledPackageIds,
@@ -218,7 +222,9 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
 
     internal int CachedSnapshotCount => _snapshotCache.Count;
 
-    internal int RetirementFailureCount => _retirementOwner.FailureCount;
+    internal int RetirementFailureCount => _retirementOwner.FailureCount + Volatile.Read(ref _browserCleanupFailed);
+    internal bool IsWebView(string viewId) => CurrentGeneration.ViewRegistry.IsWebView(viewId);
+    internal int BrowserSessionCount => _browsers.NativeSessionCount;
     internal bool IsStopping => _lifecycleGate.IsDisposed;
 
     internal int QuarantinedRetirementCount => _retirementOwner.QuarantinedCount;
@@ -816,6 +822,9 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         _retirementOwner.Enqueue(generation);
         _iconCoordinator.Dispose();
         await _retirementOwner.DisposeAsync().ConfigureAwait(false);
+        if (!await BoundedCleanup.RunAsync("draining shared package browser infrastructure",
+            () => _browsers.DisposeAsync().AsTask(), AppShutdownBudgets.UiCleanup).ConfigureAwait(false))
+            Interlocked.Exchange(ref _browserCleanupFailed, 1);
         _faultTasks.Dispose();
 
         // Keep the verified cache for the rest of the process; native finalizers can run after package unload.

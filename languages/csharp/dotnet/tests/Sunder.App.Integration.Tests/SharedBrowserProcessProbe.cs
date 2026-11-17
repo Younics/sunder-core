@@ -1,0 +1,274 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Controls.ApplicationLifetimes;
+using Avalonia.Media;
+using Microsoft.Web.WebView2.Core;
+using Sunder.App.Services;
+using Sunder.Package.Format;
+
+internal static class SharedBrowserProcessProbe
+{
+    internal static async Task RunAsync(IClassicDesktopStyleApplicationLifetime desktop, string root)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        Environment.SetEnvironmentVariable("SUNDER_APP_STATE_ROOT", Path.Combine(root, "state"));
+        var ui = AvaloniaUiDispatcher.Instance;
+        await using var engine = new WindowsBrowserEngine(ui);
+        var created = new List<WindowsBrowserView>();
+        await using var manager = new AppBrowserManager(ui, _ =>
+        {
+            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+            var native = new WindowsBrowserView(engine, ui); created.Add(native); return native;
+        }, () => OperatingSystem.IsWindows() ? engine.DisposeAsync().AsTask() : throw new PlatformNotSupportedException());
+        Require(engine.BrowserProcessIds.Count == 0 && !Directory.Exists(engine.DataDirectory), "No-demand browser started eagerly.");
+        var content = Directory.CreateDirectory(Path.Combine(root, "content")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(content, "index.html"), "<!doctype html><html><body style='margin:0;background:rgb(10,180,30)'><div style='position:absolute;left:40px;top:30px;width:100px;height:80px;background:rgb(20,40,220)'></div><script src='page.js'></script></body></html>");
+        await File.WriteAllTextAsync(Path.Combine(content, "page.js"), """
+            globalThis.ticks=0; setInterval(()=>ticks++,10);
+            globalThis.fixtureReady=false; globalThis.freshStorage=false;
+            globalThis.worker=new Worker('worker.js');
+            globalThis.shared=new SharedWorker('shared.js'); shared.port.start();
+            (async()=>{
+              const dbs=await indexedDB.databases();
+              freshStorage=localStorage.getItem('old')===null && sessionStorage.getItem('old')===null
+                && !document.cookie.includes('old=') && (await caches.keys()).length===0 && dbs.length===0;
+              localStorage.setItem('old','old'); sessionStorage.setItem('old','old'); document.cookie='old=old; SameSite=Strict';
+              const cache=await caches.open('old'); await cache.put('old',new Response('old'));
+              await new Promise((resolve,reject)=>{const request=indexedDB.open('old',1);
+                request.onupgradeneeded=()=>request.result.createObjectStore('old');
+                request.onerror=()=>reject(request.error); request.onsuccess=()=>{request.result.close(); resolve()}});
+              const r=await navigator.serviceWorker.register('service.js'); const w=r.active??r.installing??r.waiting;
+              if(w.state!=='activated')await new Promise(resolve=>w.addEventListener('statechange',()=>{if(w.state==='activated')resolve()}));
+              r.active.postMessage('start'); fixtureReady=true;
+            })();
+            """);
+        await File.WriteAllTextAsync(Path.Combine(content, "worker.js"), "setInterval(()=>fetch('page.js').catch(()=>{}),25);");
+        await File.WriteAllTextAsync(Path.Combine(content, "shared.js"), "onconnect=e=>{e.ports[0].postMessage('ready')};setInterval(()=>fetch('page.js').catch(()=>{}),25);");
+        await File.WriteAllTextAsync(Path.Combine(content, "service.js"), "self.addEventListener('install',e=>e.waitUntil(skipWaiting()));self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('message',e=>e.waitUntil(new Promise(resolve=>{const timer=setInterval(()=>fetch('page.js').catch(()=>{}),25);setTimeout(()=>{clearInterval(timer);resolve()},60000)})));");
+        var target = new SunderPackageTargetManifest { Role = "app", Rid = RuntimeInformation.RuntimeIdentifier, Kind = "web", EntryPoint = "index.html", RequiredHostCapabilities = ["core.v1"], Views = [new() { ViewId = "probe", DisplayName = "Probe", Route = "/", DefaultPlacement = "middle", ShowInHotbar = true }] };
+        await using var server = await AppWebContentServer.StartAsync(content, target, default);
+        var contracts = AppWebRpcContractCatalog.Load(content, new SunderPackageManifest { ContractBundles = [] },
+            new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, []));
+        var ownerRoot = Path.Combine(root, "activation");
+        var aKey = AppWebViewProfile.ForView(ownerRoot, "a");
+        using var aPackage = Create(aKey);
+        using var bPackage = Create(AppWebViewProfile.ForView(ownerRoot, "b"));
+        var a = aPackage.Browser;
+        var b = bPackage.Browser;
+        var panel = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*") };
+        panel.Children.Add(aPackage); Grid.SetColumn(bPackage, 1); panel.Children.Add(bPackage);
+        var shell = new DockPanel();
+        var sentinel = new Border { Width = 60, Background = Brushes.Red };
+        DockPanel.SetDock(sentinel, Dock.Left); shell.Children.Add(sentinel); shell.Children.Add(panel);
+        var window = new Window { Title = "Sunder shared browser qualification", Width = 900, Height = 340, Content = shell };
+        desktop.MainWindow = window;
+        window.Show();
+        await UntilAsync(() => a.CanCapture && b.CanCapture);
+        await UntilAsync(async () => await a.InvokeScriptAsync("typeof ticks") == "\"number\"" && await b.InvokeScriptAsync("typeof ticks") == "\"number\"");
+        await UntilAsync(async () => await a.InvokeScriptAsync("fixtureReady") == "true" && await b.InvokeScriptAsync("fixtureReady") == "true");
+        Require(await a.InvokeScriptAsync("freshStorage") == "true" && await b.InvokeScriptAsync("freshStorage") == "true", "Sibling views shared browser storage.");
+        var aInfo = await created[0].Native!.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}");
+        string aContext;
+        using (var info = JsonDocument.Parse(aInfo)) aContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
+        await RequireWorkersAsync(created[0], aContext, present: true);
+        Require(created.Count == 2 && engine.BrowserProcessIds.Count == 1, "Views did not share one browser process.");
+        foreach (var id in engine.BrowserProcessIds)
+        {
+            using var process = Process.GetProcessById(id);
+            Console.WriteLine($"owned-webview2-process:{id}:{process.StartTime.ToUniversalTime().Ticks}");
+        }
+        var pixels = await a.CaptureAsync(a.CaptureViewport, 128, default);
+        Require(Math.Max(AppDevelopmentViewOperations.ValidatePng(pixels).Width, AppDevelopmentViewOperations.ValidatePng(pixels).Height) == 128, "Capture dimensions changed.");
+        Require(WindowsWebViewCaptureProcessProbe.HasColor(WindowsWebViewCaptureProcessProbe.Pixels(pixels), 10, 180, 30)
+            && WindowsWebViewCaptureProcessProbe.HasColor(WindowsWebViewCaptureProcessProbe.Pixels(pixels), 20, 40, 220), "The capture omitted native package pixels.");
+        Require(!WindowsWebViewCaptureProcessProbe.HasColor(WindowsWebViewCaptureProcessProbe.Pixels(pixels), 255, 0, 0), "Native capture included the neighboring shell.");
+        var crop = await a.CaptureAsync(new Rect(a.CaptureViewport.X + 50, a.CaptureViewport.Y + 40, 40, 30), 128, default);
+        Require(AppDevelopmentViewOperations.ValidatePng(crop) == (40, 30), "Native crop dimensions changed.");
+        Require(WindowsWebViewCaptureProcessProbe.EveryColor(WindowsWebViewCaptureProcessProbe.Pixels(crop), 20, 40, 220), "Native crop included neighboring pixels.");
+        using (var cancel = new CancellationTokenSource())
+        {
+            var pending = a.CaptureAsync(a.CaptureViewport, 128, cancel.Token);
+            Require(!pending.IsCompleted, "The fixture missed asynchronous native capture.");
+            var concurrent = a.CaptureAsync(a.CaptureViewport, 128, default);
+            cancel.Cancel();
+            try { await concurrent; throw new InvalidDataException("Concurrent native capture was accepted."); }
+            catch (InvalidOperationException) { }
+            try { await pending; throw new InvalidDataException("Canceled capture returned an image."); }
+            catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
+        }
+        var control = a.Control;
+        await a.InvokeScriptAsync("globalThis.preserved=123");
+        panel.Children.Remove(aPackage);
+        await Task.Delay(50);
+        panel.Children.Add(aPackage);
+        await UntilAsync(() => a.CanCapture);
+        Require(await a.InvokeScriptAsync("preserved") == "123" && created.Count == 2, "Reparenting recreated the document.");
+        await b.InvokeScriptAsync("localStorage.setItem('sibling','survives');globalThis.sibling=456");
+        var started = Stopwatch.GetTimestamp();
+        var retiredNonce = aPackage.Bridge.CaptureDevelopmentDocument();
+        var script = a.InvokeScriptAsync("(()=>{const end=performance.now()+100;while(performance.now()<end){};return 1})()");
+        var pendingCapture = a.CaptureAsync(a.CaptureViewport, 128, default);
+        Require(!script.IsCompleted && !pendingCapture.IsCompleted, "The fixture missed in-flight native work.");
+        panel.Children.Remove(aPackage);
+        await aPackage.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        Require(script.IsCompleted && pendingCapture.IsCompleted, "Retirement abandoned a native callback.");
+        try { await script; } catch (Exception error) when (error is OperationCanceledException or COMException) { }
+        try { await pendingCapture; throw new InvalidDataException("A retired native viewport returned an image."); }
+        catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
+        Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "Reset changed a sibling profile.");
+        await RequireCleanAsync(created[0], aContext);
+        Console.WriteLine($"shared-browser: lazy; isolated-profiles; retained-controller; sibling-preserved; resetMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+        for (var cycle = 0; cycle < 12; cycle++)
+        {
+            using var reopened = Create(aKey);
+            Require(ReferenceEquals(control, reopened.Browser.Control) && created.Count == 2, "Cleaned controller was not reused.");
+            panel.Children.Add(reopened);
+            var current = reopened.Browser;
+            await UntilAsync(() => current.CanCapture);
+            await UntilAsync(async () => await current.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            Require(await current.InvokeScriptAsync("freshStorage && typeof preserved==='undefined'") == "true", "Reopened document retained old globals or storage.");
+            var currentNonce = reopened.Bridge.CaptureDevelopmentDocument();
+            Require(currentNonce != retiredNonce, "Reopened native view retained old bridge authority.");
+            await reopened.Bridge.HandleMessageAsync(JsonSerializer.Serialize(new
+            {
+                protocol = AppWebBridge.Protocol, version = AppWebBridge.ProtocolVersion, nonce = retiredNonce,
+                origin = server.Origin.GetLeftPart(UriPartial.Authority), requestId = "b_stale", method = "navigation.navigate",
+                deadlineUtc = (string?)null, payload = new { route = "/" },
+            }));
+            Require(reopened.Bridge.CaptureDevelopmentDocument() == currentNonce && reopened.Bridge.PendingRequestCount == 0, "A stale bridge request acquired new authority.");
+            await current.InvokeScriptAsync("history.pushState({},'',location.pathname+'#old');globalThis.preserved=123");
+            await RequireWorkersAsync(created[0], aContext, present: true);
+            panel.Children.Remove(reopened);
+            var resetStarted = Stopwatch.GetTimestamp();
+            await reopened.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            await RequireCleanAsync(created[0], aContext);
+            Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "A repeated reset changed its sibling.");
+            Console.WriteLine($"shared-browser-cycle: cycle={cycle}; resetMs={Stopwatch.GetElapsedTime(resetStarted).TotalMilliseconds:0.###}; sessions={manager.NativeSessionCount}");
+            retiredNonce = currentNonce;
+        }
+        // Kill only the renderer selected by the SDK's exact frame/process map.
+        // This is a native failure, not a synthetic Failed event or navigation.
+        using (var failed = Create(aKey))
+        {
+            panel.Children.Add(failed);
+            await UntilAsync(async () => failed.Browser.CanCapture
+                && await failed.Browser.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            var native = created[0].Native!;
+            var oldNonce = failed.Bridge.CaptureDevelopmentDocument();
+            var processes = await native.Environment.GetProcessExtendedInfosAsync();
+            var renderer = processes.Single(info => info.AssociatedFrameInfos.Any(frame => frame.FrameId == native.FrameId));
+            Require(renderer.ProcessInfo.Kind == CoreWebView2ProcessKind.Renderer
+                && renderer.AssociatedFrameInfos.All(frame => frame.FrameId != created[1].Native!.FrameId),
+                "The failure fixture did not isolate the selected view's renderer.");
+            var failure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            failed.Browser.Failed += (_, _) => failure.TrySetResult();
+            await KillOwnedAsync(renderer.ProcessInfo.ProcessId);
+            await failure.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            await failed.Retired.WaitAsync(TimeSpan.FromSeconds(3));
+            Require(!failed.CanCapture && failed.Bridge.PendingRequestCount == 0, "A failed renderer retained native capture or bridge work.");
+            Require(failed.Content is TextBlock, "A failed renderer did not show the unavailable-view fallback.");
+            panel.Children.Remove(failed);
+            using var replacement = Create(aKey);
+            panel.Children.Add(replacement);
+            await UntilAsync(async () => replacement.Browser.CanCapture
+                && await replacement.Browser.InvokeScriptAsync("fixtureReady && freshStorage && Boolean(window.sunder)") == "true");
+            Require(!ReferenceEquals(control, replacement.Browser.Control)
+                && replacement.Bridge.CaptureDevelopmentDocument() != oldNonce, "Renderer recovery reused failed native ownership or bridge authority.");
+            Require(await b.InvokeScriptAsync("sibling") == "456"
+                && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "Renderer recovery disturbed its sibling.");
+            panel.Children.Remove(replacement);
+            await replacement.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            Console.WriteLine("shared-browser: native-renderer-failure; unavailable-fallback; fresh-reload; sibling-preserved");
+        }
+        await bPackage.DisposeAsync();
+        window.Content = null;
+        await manager.RetireActivationAsync(ownerRoot).WaitAsync(TimeSpan.FromSeconds(3));
+        await WindowsWebViewCaptureProcessProbe.RunHostedPackageAsync(desktop, root, "webview2", manager);
+        window.Close(); // Match normal shutdown: no Avalonia top-level remains.
+        await manager.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        Require(!Directory.Exists(engine.DataDirectory), "Shared engine profile survived final native retirement.");
+        Console.WriteLine("shared-browser: native-capture; cancellation-drained; reparent-preserved; native-exit; profile-removed");
+        await PendingAsync(desktop, root, closeOwner: false);
+        await PendingAsync(desktop, root, closeOwner: true);
+
+        AppWebPackageViewControl Create(string key) => new(server.BaseUri, key, server, manager,
+            UnavailableAppWebRpcClient.Instance, contracts, new ExternalBrowserService(_ => throw new InvalidOperationException("The fixture must not open external browsers.")));
+    }
+
+    private static async Task KillOwnedAsync(int pid)
+    {
+        using var owner = Process.GetCurrentProcess();
+        using var process = Process.GetProcessById(pid);
+        _ = process.SafeHandle;
+        Require(process.StartTime.ToUniversalTime() >= owner.StartTime.ToUniversalTime(), "The native failure fixture selected a pre-existing process.");
+        Console.WriteLine($"owned-native-failure-process:{pid}:{process.StartTime.ToUniversalTime().Ticks}");
+        process.Kill();
+        await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(3));
+    }
+
+    private static async Task RequireCleanAsync(WindowsBrowserView view, string context)
+    {
+        await RequireWorkersAsync(view, context, present: false);
+        using var history = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Page.getNavigationHistory", "{}"));
+        var entries = history.RootElement.GetProperty("entries");
+        Require(entries.GetArrayLength() == 1 && entries[0].GetProperty("url").GetString() == "about:blank", "A cleaned controller retained old document history.");
+    }
+
+    private static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present)
+    {
+        using var targets = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}"));
+        var workers = targets.RootElement.GetProperty("targetInfos").EnumerateArray()
+            .Where(item => item.GetProperty("browserContextId").GetString() == context)
+            .Select(item => item.GetProperty("type").GetString()).Where(type => type is "worker" or "shared_worker" or "service_worker").ToArray();
+        Require(present ? workers.Distinct().Count() == 3 : workers.Length == 0,
+            present ? "The fixture did not start all three real worker types." : "A retired view retained worker work.");
+    }
+
+    private static async Task PendingAsync(IClassicDesktopStyleApplicationLifetime desktop, string root, bool closeOwner)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        var ui = AvaloniaUiDispatcher.Instance;
+        await using var engine = new WindowsBrowserEngine(ui);
+        WindowsBrowserView? native = null;
+        await using var manager = new AppBrowserManager(ui, _ =>
+        {
+            if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+            return native = new WindowsBrowserView(engine, ui);
+        }, () => OperatingSystem.IsWindows() ? engine.DisposeAsync().AsTask() : throw new PlatformNotSupportedException());
+        var key = Path.Combine(root, "pending-" + closeOwner);
+        using var view = manager.Create(key);
+        var owner = new Window { Title = "Sunder pending native owner retirement", Width = 320, Height = 240, Content = view.Control };
+        owner.Show();
+        Require(native!.Initialization is { IsCompleted: false }, "The fixture missed pending native creation.");
+        var originalThread = Environment.CurrentManagedThreadId;
+        var started = Stopwatch.GetTimestamp();
+        if (closeOwner) owner.Close(); // Genuine parent destruction, without a preparatory detach.
+        else owner.Content = null;
+        await manager.RetireActivationAsync(key).WaitAsync(TimeSpan.FromSeconds(3));
+        Require(native.Initialization!.IsCompletedSuccessfully && Environment.CurrentManagedThreadId == originalThread,
+            "Native retirement abandoned acquisition or its original STA.");
+        foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
+        var remaining = TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(started);
+        Require(remaining > TimeSpan.Zero, "Pending native retirement exceeded its original budget.");
+        await manager.DisposeAsync().AsTask().WaitAsync(remaining);
+        Require(!Directory.Exists(engine.DataDirectory), "Pending native retirement retained its engine profile.");
+        owner.Close();
+        Console.WriteLine($"shared-browser: pending-initialization-settled; original-sta; native-exit; profile-removed; closedOwner={closeOwner}; retirementMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+    }
+    private static Task UntilAsync(Func<bool> test) => UntilAsync(() => Task.FromResult(test()));
+    private static async Task UntilAsync(Func<Task<bool>> test)
+    {
+        var timer = Stopwatch.StartNew();
+        while (!await test()) { if (timer.Elapsed > TimeSpan.FromSeconds(10)) throw new TimeoutException("Native fixture condition did not become ready."); await Task.Delay(20); }
+    }
+    private static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
+}

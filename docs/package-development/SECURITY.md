@@ -86,6 +86,16 @@ Do not render untrusted HTML or execute package/Registry text as markup or scrip
 
 An App package runs in the shell process. Recoverable managed faults escaping through host-observed boundaries are quarantined automatically at view or package-App scope and produce sanitized host notifications. A package-level fault receives at most one fresh App activation attempt for the same content after cleanup is proven; repeated faults fail closed to fallback. Malicious or unsafe App code can still affect the process. Native faults, process-fatal exceptions, memory exhaustion, deadlocks, infinite loops, global state corruption, and package-created unmanaged threads cannot be isolated reliably in-process. Keep App dependencies minimal and perform privileged/destructive work through explicit owner RPC methods with validation and confirmation.
 
+Browser views have independent transient storage, document/bridge authority and
+worker cleanup, not a dedicated browser process per package. Windows shares one
+WebView2 environment; WKWebView/WebKitGTK use their native process model. Shared
+engine failures or resource pressure can affect siblings. This does not combine
+their bridge nonces, grant new RPC/Registry permissions or change Worker task-host
+isolation. Closing a view retires its work; merely switching or moving it preserves
+its document. Browser storage is view-local and transient: use Host-owned state or
+explicit RPC for persistence and cross-view coordination. See
+[App browser ownership](../SUNDER-APP.md#package-browser-ownership).
+
 ## Stacks
 
 Treat imported Stack archives as untrusted data even after format validation. Preview must be side-effect free, show accurate actions/conflicts, and require explicit input for omitted secrets. Classify every required input explicitly as public or secret; secret inputs must not declare portable defaults or appear in logs, diagnostics, telemetry, notifications, or display text. Validate contributor-owned fragment schemas and values before mutation. Contributor-local atomicity means another contributor's committed changes cannot be rolled back by the host.
