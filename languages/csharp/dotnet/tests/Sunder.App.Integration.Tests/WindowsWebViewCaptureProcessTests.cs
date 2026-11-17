@@ -27,6 +27,8 @@ public sealed class WindowsWebViewCaptureProcessTests
         Assert.Contains("native-capture; cancellation-drained; reparent-preserved; native-exit; profile-removed", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("hosted-package; fixed-document-query; composed-capture; exact-revision", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("lazy; isolated-profiles; retained-controller; sibling-preserved", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("in-flight-controller-closed; callbacks-drained; sibling-preserved", result.StandardOutput, StringComparison.Ordinal);
+        Assert.Contains("capture-owner-closed; callbacks-drained; sibling-preserved", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("pending-initialization-settled; original-sta; native-exit; profile-removed", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("closedOwner=True", result.StandardOutput, StringComparison.Ordinal);
         Assert.Contains("native-renderer-failure; unavailable-fallback; fresh-reload; sibling-preserved", result.StandardOutput, StringComparison.Ordinal);

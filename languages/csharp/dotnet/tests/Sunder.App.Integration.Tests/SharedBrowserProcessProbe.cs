@@ -126,6 +126,7 @@ internal static class SharedBrowserProcessProbe
         await b.InvokeScriptAsync("localStorage.setItem('sibling','survives');globalThis.sibling=456");
         var started = Stopwatch.GetTimestamp();
         var retiredNonce = aPackage.Bridge.CaptureDevelopmentDocument();
+        var retiredNative = created[0].Native!;
         var script = a.InvokeScriptAsync("(()=>{const end=performance.now()+100;while(performance.now()<end){};return 1})()");
         var pendingCapture = a.CaptureAsync(a.CaptureViewport, 128, default);
         Stage($"in-flight-retirement-started; script={script.Status}; capture={pendingCapture.Status}");
@@ -144,8 +145,18 @@ internal static class SharedBrowserProcessProbe
         try { await pendingCapture; throw new InvalidDataException("A retired native viewport returned an image."); }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
         Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "Reset changed a sibling profile.");
-        await RequireCleanAsync(created[0], aContext);
-        Console.WriteLine($"shared-browser: lazy; isolated-profiles; retained-controller; sibling-preserved; resetMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+        Require(created[0].Native is null, "Retirement retained the controller that owned a submitted capture.");
+        // The SDK can still expose the last Source value after Close; metadata
+        // is not proof of live document authority. Try actual native execution.
+        try
+        {
+            await WindowsBrowserScript.ExecuteAsync(retiredNative, "globalThis.retiredUsabilityProbe = 1").WaitAsync(TimeSpan.FromSeconds(3));
+            throw new InvalidDataException("The retired native document still accepted script execution.");
+        }
+        catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
+        await RequireWorkersAsync(created[1], aContext, present: false);
+        Console.WriteLine($"shared-browser: in-flight-controller-closed; callbacks-drained; sibling-preserved; resetMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
+        CoreWebView2? reusedNative = null;
         for (var cycle = 0; cycle < 12; cycle++)
         {
             using var reopened = Create(aKey);
@@ -154,6 +165,16 @@ internal static class SharedBrowserProcessProbe
             var current = reopened.Browser;
             await UntilAsync(() => current.CanCapture);
             await UntilAsync(async () => await current.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            if (reusedNative is null)
+            {
+                reusedNative = created[0].Native!;
+                Require(!ReferenceEquals(reusedNative, retiredNative), "Reopen reused the closed in-flight controller.");
+                using var info = JsonDocument.Parse(await reusedNative.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}"));
+                var newContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
+                Require(newContext != aContext, "Reopen reused the retired profile's native context.");
+                aContext = newContext;
+            }
+            Require(ReferenceEquals(reusedNative, created[0].Native), "A quiescent reset recreated its reusable controller.");
             Require(await current.InvokeScriptAsync("freshStorage && typeof preserved==='undefined'") == "true", "Reopened document retained old globals or storage.");
             var currentNonce = reopened.Bridge.CaptureDevelopmentDocument();
             Require(currentNonce != retiredNonce, "Reopened native view retained old bridge authority.");
@@ -173,6 +194,34 @@ internal static class SharedBrowserProcessProbe
             Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "A repeated reset changed its sibling.");
             Console.WriteLine($"shared-browser-cycle: cycle={cycle}; resetMs={Stopwatch.GetElapsedTime(resetStarted).TotalMilliseconds:0.###}; sessions={manager.NativeSessionCount}");
             retiredNonce = currentNonce;
+        }
+        Console.WriteLine("shared-browser: lazy; isolated-profiles; retained-controller; sibling-preserved");
+        // Final activation retirement differs from reset: it must keep a
+        // submitted preview renderable even if its real parent HWND is closed,
+        // then join native callbacks rather than cache that controller.
+        var closingKey = AppWebViewProfile.ForView(ownerRoot, "closing");
+        using (var closing = Create(closingKey))
+        {
+            var closingWindow = new Window { Title = "Sunder capture owner closure", Width = 420, Height = 300, Content = closing };
+            closingWindow.Show();
+            await UntilAsync(async () => closing.CanCapture && await closing.Browser.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            var closingNative = created[^1];
+            using var info = JsonDocument.Parse(await closingNative.Native!.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}"));
+            var closingContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
+            var busy = closing.Browser.InvokeScriptAsync("(()=>{const end=performance.now()+100;while(performance.now()<end){};return 1})()");
+            var capture = closing.Browser.CaptureAsync(closing.Browser.CaptureViewport, 128, default);
+            Require(!busy.IsCompleted && !capture.IsCompleted, "The fixture missed in-flight work before real owner closure.");
+            var closeStarted = Stopwatch.GetTimestamp();
+            closingWindow.Close();
+            var activationRetirement = manager.RetireActivationAsync(closingKey);
+            await Task.WhenAll(activationRetirement, closing.DisposeAsync().AsTask()).WaitAsync(TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(closeStarted));
+            Require(busy.IsCompleted && capture.IsCompleted && closingNative.Native is null, "Final owner closure abandoned native capture or retained its controller.");
+            try { await busy; } catch (Exception error) when (error is OperationCanceledException or COMException) { }
+            try { await capture; throw new InvalidDataException("A closed native owner returned an image."); }
+            catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
+            await RequireWorkersAsync(created[1], closingContext, present: false);
+            Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "Final owner closure disturbed its sibling.");
+            Console.WriteLine($"shared-browser: capture-owner-closed; callbacks-drained; sibling-preserved; retirementMs={Stopwatch.GetElapsedTime(closeStarted).TotalMilliseconds:0.###}");
         }
         // Kill only the renderer selected by the SDK's exact frame/process map.
         // This is a native failure, not a synthetic Failed event or navigation.
@@ -246,8 +295,14 @@ internal static class SharedBrowserProcessProbe
     {
         using var targets = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}"));
         var workers = targets.RootElement.GetProperty("targetInfos").EnumerateArray()
+            // browserContextId is optional on TargetInfo, including browser and
+            // other non-worker targets. Audit only workers, but do not silently
+            // ignore an unscoped worker whose isolation cannot be established.
+            .Where(item => item.GetProperty("type").GetString() is "worker" or "shared_worker" or "service_worker")
+            .Select(item => item.TryGetProperty("browserContextId", out _) ? item
+                : throw new InvalidDataException("A native worker target has no ownership context: " + targets.RootElement.GetRawText()))
             .Where(item => item.GetProperty("browserContextId").GetString() == context)
-            .Select(item => item.GetProperty("type").GetString()).Where(type => type is "worker" or "shared_worker" or "service_worker").ToArray();
+            .Select(item => item.GetProperty("type").GetString()).ToArray();
         Require(present ? workers.Distinct().Count() == 3 : workers.Length == 0,
             present ? "The fixture did not start all three real worker types." : "A retired view retained worker work.");
     }

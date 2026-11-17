@@ -1,6 +1,7 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
@@ -22,9 +23,9 @@ internal sealed class WindowsBrowserView : IAppWebView
     private readonly IUiDispatcher _ui;
     private readonly BrowserHost _host;
     private readonly AppNativeWebViewViewport _viewport;
-    private readonly string _profile = "view-" + Guid.NewGuid().ToString("N");
+    private string _profile = NewProfile();
     private readonly HashSet<Task> _operations = [];
-    private Task? _creation, _retirement;
+    private Task? _creation, _reset, _retirement;
     private CoreWebView2Environment? _environment;
     private CoreWebView2Controller? _controller;
     private nint _child;
@@ -74,6 +75,7 @@ internal sealed class WindowsBrowserView : IAppWebView
             controller.CoreWebView2.IsMuted = false;
             controller.CoreWebView2.Navigate(uri.AbsoluteUri);
         }
+        else if (_host.NativeParent is not null) _creation ??= CreateAsync();
         // Native acquisition is demand + attachment, not package registration.
     }
 
@@ -81,11 +83,14 @@ internal sealed class WindowsBrowserView : IAppWebView
     {
         try
         {
-            _child = _engine.CreateChild();
+            if (_child == 0) _child = _engine.CreateChild();
             if (_child == 0) throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
             var acquired = await _engine.CreateAsync(_child, _profile);
             _environment = acquired.Environment;
             _controller = acquired.Controller;
+            // A disappearing demand still owns acquisition and final deletion,
+            // but must not bootstrap an unused package document on the way out.
+            if (_disposed) return;
             var web = _controller.CoreWebView2;
             _controller.IsVisible = false;
             _controller.ShouldDetectMonitorScaleChanges = false;
@@ -183,7 +188,10 @@ internal sealed class WindowsBrowserView : IAppWebView
             "window.invokeCSharpAction ??= body => chrome.webview.postMessage(body);\n" + script));
     });
 
-    public Task<byte[]> CaptureAsync(Rect bounds, int edge, CancellationToken token) => _ui.InvokeAsync(async () =>
+    public Task<byte[]> CaptureAsync(Rect bounds, int edge, CancellationToken token)
+        => _ui.InvokeAsync(() => TrackAsync(CaptureCoreAsync(bounds, edge, token)));
+
+    private async Task<byte[]> CaptureCoreAsync(Rect bounds, int edge, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (!CanCapture) throw new InvalidOperationException("The package browser is not attached and visible.");
@@ -198,14 +206,17 @@ internal sealed class WindowsBrowserView : IAppWebView
         _capturing = true;
         try
         {
-            var png = await TrackAsync(WindowsWebViewCapture.CaptureCoreAsync(view, 0, local, viewport.Size, edge, new PixelSize(rectangle.Width, rectangle.Height)));
+            Task<byte[]> capture;
+            try { capture = WindowsWebViewCapture.CaptureCoreAsync(view, 0, local, viewport.Size, edge, new PixelSize(rectangle.Width, rectangle.Height)); }
+            finally { Marshal.Release(view); } // Submission retains its own native callback/stream, not this caller reference.
+            var png = await capture;
             token.ThrowIfCancellationRequested();
             if (!CanCapture || epoch != _presentationEpoch || viewport != CaptureViewport || rectangle != _controller.Bounds)
                 throw new InvalidOperationException("The native viewport changed during capture.");
             return png;
         }
-        finally { _capturing = false; Marshal.Release(view); }
-    });
+        finally { _capturing = false; OnLayout(null, EventArgs.Empty); }
+    }
 
     public void Stop() { if (_controller is not null && !_disposed) _controller.CoreWebView2.Stop(); }
 
@@ -216,25 +227,46 @@ internal sealed class WindowsBrowserView : IAppWebView
         return DrainNativeRetirementAsync();
     }
 
-    public Task ResetAsync() => _ui.InvokeAsync(async () =>
+    public Task ResetAsync() => _reset is { IsCompleted: false } pending
+        ? pending : _reset = _ui.InvokeAsync(ResetForReuseAsync);
+
+    private async Task ResetForReuseAsync()
     {
         ObjectDisposedException.ThrowIf(_disposed || _failed, this);
         _idle = true; _requestedUri = null;
         if (_creation is { } creation) await creation;
         if (_controller is null) return;
-        try { await ResetCoreAsync(); }
+        try
+        {
+            if (_capturing)
+            {
+                // Hiding or closing a controller can strand a submitted preview.
+                // Revoke document authority now, but preserve its native render
+                // state until the real preview settles, even after visual detach.
+                _controller.CoreWebView2.Settings.IsWebMessageEnabled = false;
+                _controller.CoreWebView2.IsMuted = true;
+                AppSessionLog.WriteInfo("Browser capture retirement: stage=render-drain-started.", visibleInDeveloperLog: false);
+                await DrainOperationsAsync();
+                AppSessionLog.WriteInfo("Browser capture retirement: stage=render-drained.", visibleInDeveloperLog: false);
+                await DeleteControllerAsync();
+                _creation = null;
+                _profile = NewProfile();
+                return; // The same view slot reacquires only on later demand.
+            }
+            await ResetCoreAsync();
+        }
         catch
         {
             _failed = true;
-            Dispose();
-            await DrainNativeRetirementAsync();
+            // The lease owns final destruction on failure. Do not await our
+            // final close from this reset: close must first join this very task.
             throw;
         }
         _controller.IsVisible = false;
         AppSessionLog.WriteInfo("Browser profile reset: stage=suspend-started.", visibleInDeveloperLog: false);
         await _controller.CoreWebView2.TrySuspendAsync(); // Best effort after real cleanup, not cleanup proof.
         AppSessionLog.WriteInfo("Browser profile reset: stage=suspend-settled.", visibleInDeveloperLog: false);
-    });
+    }
 
     private async Task ResetCoreAsync()
     {
@@ -265,6 +297,31 @@ internal sealed class WindowsBrowserView : IAppWebView
         Stage("history-cleared");
         await DrainOperationsAsync();
         Stage("operations-drained");
+        // Data clear completion is not proof that a worker's native target has
+        // exited. Keep owning retirement until this exact isolated context has
+        // no worker work, without stopping or otherwise mutating sibling targets.
+        using var target = JsonDocument.Parse(await web.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}"));
+        var context = target.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString();
+        if (string.IsNullOrEmpty(context)) throw new InvalidDataException("The retiring browser has no native ownership context.");
+        while (true)
+        {
+            using var targets = JsonDocument.Parse(await web.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}"));
+            if (!HasWorkersInContext(targets.RootElement, context)) break;
+            await Task.Delay(20);
+        }
+        Stage("workers-retired");
+    }
+
+    internal static bool HasWorkersInContext(JsonElement targets, string context)
+    {
+        foreach (var target in targets.GetProperty("targetInfos").EnumerateArray())
+        {
+            if (target.GetProperty("type").GetString() is not ("worker" or "shared_worker" or "service_worker")) continue;
+            if (!target.TryGetProperty("browserContextId", out var owner) || string.IsNullOrEmpty(owner.GetString()))
+                throw new InvalidDataException("A native worker target has no ownership context.");
+            if (owner.GetString() == context) return true;
+        }
+        return false;
     }
 
     public void Dispose()
@@ -281,6 +338,11 @@ internal sealed class WindowsBrowserView : IAppWebView
     {
         try
         {
+            if (_reset is { IsCompleted: false } reset)
+            {
+                try { await reset; }
+                catch { /* Retain the reset caller's failure and still destroy its native ownership. */ }
+            }
             if (_creation is { } creation)
             {
                 try { await creation; }
@@ -288,30 +350,18 @@ internal sealed class WindowsBrowserView : IAppWebView
             }
             if (_controller is not null)
             {
-                try { if (!_failed) await ResetCoreAsync(); }
-                finally
+                if (_capturing)
                 {
-                    try
-                    {
-                        var profile = _controller.CoreWebView2.Profile;
-                        // Delete revokes the isolated profile and closes its views.
-                        // Physical shared-UDF reclamation belongs to the engine owner.
-                        var deleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                        void Deleted(object? sender, object args) => deleted.TrySetResult();
-                        profile.Deleted += Deleted;
-                        try { profile.Delete(); await deleted.Task; }
-                        finally { profile.Deleted -= Deleted; }
-                    }
-                    finally
-                    {
-                        _controller.Close();
-                        _controller = null;
-                        // A failed process can release callbacks only on close.
-                        // Join native ownership even when profile deletion failed.
-                        await DrainOperationsAsync();
-                    }
+                    _controller.CoreWebView2.Settings.IsWebMessageEnabled = false;
+                    _controller.CoreWebView2.IsMuted = true;
+                    await DrainOperationsAsync();
                 }
+                // Final destruction does not need a reusable neutral document.
+                // Once any submitted capture has drained, profile deletion stops
+                // its views/workers independently of sibling profiles.
+                await DeleteControllerAsync();
             }
+            await DrainOperationsAsync();
         }
         finally
         {
@@ -320,6 +370,38 @@ internal sealed class WindowsBrowserView : IAppWebView
             WindowsBrowserEngine.DestroyChild(_child); _child = 0;
         }
     }
+
+    private async Task DeleteControllerAsync()
+    {
+        var controller = _controller!;
+        try
+        {
+            var profile = controller.CoreWebView2.Profile;
+            var deleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void Deleted(object? sender, object args) => deleted.TrySetResult();
+            profile.Deleted += Deleted;
+            try
+            {
+                AppSessionLog.WriteInfo("Browser profile deletion: stage=requested.", visibleInDeveloperLog: false);
+                profile.Delete(); // Revokes only this unique InPrivate profile.
+                await deleted.Task;
+                AppSessionLog.WriteInfo("Browser profile deletion: stage=deleted.", visibleInDeveloperLog: false);
+            }
+            finally { profile.Deleted -= Deleted; }
+        }
+        finally
+        {
+            controller.Close();
+            _controller = null;
+            AppSessionLog.WriteInfo($"Browser profile deletion: stage=controller-closed; operations={_operations.Count}.", visibleInDeveloperLog: false);
+            // Keep streams, COM callback roots and their real tasks owned until
+            // native completion/relinquishment, including when deletion failed.
+            await DrainOperationsAsync();
+            AppSessionLog.WriteInfo("Browser profile deletion: stage=operations-drained.", visibleInDeveloperLog: false);
+        }
+    }
+
+    private static string NewProfile() => "view-" + Guid.NewGuid().ToString("N");
 
     private async Task DrainOperationsAsync()
     {
@@ -351,6 +433,10 @@ internal sealed class WindowsBrowserView : IAppWebView
     private void OnLayout(object? sender, EventArgs args)
     {
         if (_controller is null || _disposed) return;
+        // A submitted native preview needs its original bounds and logical
+        // visibility through settlement. Presentation epochs still invalidate
+        // its result; this does not keep a detached document's authority alive.
+        if (_capturing) return;
         if (_host.NativeParent is { } parent && _host.IsEffectivelyVisible
             && WindowsBrowserEngine.ParentOf(_child) != parent.Handle)
             WindowsBrowserEngine.Reparent(_child, parent.Handle);
@@ -383,7 +469,7 @@ internal sealed class WindowsBrowserView : IAppWebView
             // Move the session-owned child out while the old parent still exists,
             // even when native controller creation has not finished yet.
             if (owner._child == 0) return;
-            if (owner._controller is { } controller) controller.IsVisible = false;
+            if (!owner._capturing && owner._controller is { } controller) controller.IsVisible = false;
             owner._engine.Park(owner._child);
             // If another handler cancels the close, normal layout reattaches the
             // same child/document. Do not create a replacement controller.
@@ -403,7 +489,7 @@ internal sealed class WindowsBrowserView : IAppWebView
         {
             NativeParent = null; owner._presentationEpoch++;
             if (owner._child == 0) return;
-            if (owner._controller is { } controller) controller.IsVisible = false;
+            if (!owner._capturing && owner._controller is { } controller) controller.IsVisible = false;
             owner._engine.Park(owner._child);
         }
         protected override void OnGotFocus(FocusChangedEventArgs e)

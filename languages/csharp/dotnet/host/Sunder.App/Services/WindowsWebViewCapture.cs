@@ -7,19 +7,20 @@ using Avalonia.Platform;
 namespace Sunder.App.Services;
 
 // Captures the WebView's own surface, never an HWND/window/desktop screenshot.
-// The caller holds NativeWebView.BeginReparenting until this real callback drains.
+// The owner preserves native render state until this real callback drains.
 internal static class WindowsWebViewCapture
 {
     private static readonly Guid WebViewId = new("76eceacb-0462-4d94-ac83-423a6793775e");
     private static readonly Guid ControllerId = new("4d00c0d1-9434-4eb6-8078-8697a560334f");
-    [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int CapturePreview(nint self, int format, nint stream, nint callback);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)] internal delegate int CapturePreview(nint self, int format, nint stream, nint callback);
     [UnmanagedFunctionPointer(CallingConvention.StdCall)] private delegate int GetBounds(nint self, out NativeBounds bounds);
     [StructLayout(LayoutKind.Sequential)] private readonly record struct NativeBounds(int Left, int Top, int Right, int Bottom);
 
     [SupportedOSPlatform("windows")]
     internal static Task<byte[]> CaptureAsync(IWindowsWebView2PlatformHandle handle, Rect bounds, Size viewport, int edge)
         // WebView 12.1.2 returns borrowed handles. CaptureCoreAsync obtains its
-        // own QueryInterface references before awaiting the real callback.
+        // own QueryInterface references for submission, releasing the view before
+        // awaiting the real callback rather than self-retaining native closure.
         => CaptureCoreAsync(handle.CoreWebView2, handle.CoreWebView2Controller, bounds, viewport, edge);
 
     [SupportedOSPlatform("windows")]
@@ -50,6 +51,11 @@ internal static class WindowsWebViewCapture
             var capture = Method<CapturePreview>(view, 30);
             Marshal.ThrowExceptionForHR(capture(view, 0, streamPointer, callback.Pointer));
             callback.MarkSubmitted();
+            // The native operation owns its submitted callback/stream. Retaining
+            // our extra view reference until that callback settles can keep the
+            // view alive precisely when closure must relinquish the callback.
+            Marshal.Release(view);
+            view = 0;
             // No cancellation/timeout releases a stream which WebView2 can still
             // write. Owner cancellation is checked by the caller after settlement.
             var result = await callback.Result;
@@ -65,7 +71,7 @@ internal static class WindowsWebViewCapture
         {
             if (streamPointer != 0) Marshal.Release(streamPointer);
             if (retainedController != 0) Marshal.Release(retainedController);
-            Marshal.Release(view);
+            if (view != 0) Marshal.Release(view);
         }
     }
 

@@ -65,6 +65,10 @@ Host-mediated package state/RPC for shared or persistent data.
   bridge authority. Package retirement deletes its profiles, not the shared engine.
   Pending controllers are acquired under the engine's stable hidden window, then
   attached to the view; closing a presenting window cannot replace that acquisition root.
+  Retirement with a submitted native capture revokes document authority, preserves
+  native render state until its real callback drains, then discards that controller/profile
+  before the view slot can be reused. A later presentation
+  acquires a fresh controller; quiescent, cleaned controllers retain the bounded reuse above.
 - **macOS/Linux:** WKWebView/WebKitGTK own their native process-sharing model.
   Each view has an isolated ephemeral data store/context. Sunder clears that store
   and destroys the native view rather than advertising unqualified controller reuse.
