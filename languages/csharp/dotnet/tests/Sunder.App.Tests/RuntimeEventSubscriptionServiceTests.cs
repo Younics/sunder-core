@@ -884,8 +884,12 @@ public sealed class RuntimeEventSubscriptionServiceTests
         Assert.Equal([next, next, replacementRuntime], writes);
     }
 
-    [Fact]
-    public async Task ShutdownDrainsActiveAndQueuedRetirementReconciliationWithoutReopeningViews()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task ShutdownDrainsActiveAndQueuedRetirementReconciliationWithoutReopeningViews(
+        bool writerThrowsOnCancellation, bool unrelatedWriterFailure)
     {
         var runtime = Guid.NewGuid();
         var next = CreateSnapshot(runtime, 2);
@@ -894,19 +898,35 @@ public sealed class RuntimeEventSubscriptionServiceTests
         await using var service = new RuntimeEventSubscriptionService(new ThrowingRuntimeClientFactory(), log);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var writes = 0;
+        var writerFailure = new ObjectDisposedException("native-view");
         service.InitializePresentation(CreateSnapshot(runtime, 1), [CreateSource("hash-a", 1)], async (_, _, _, token) =>
         {
             writes++;
             entered.TrySetResult();
-            await Task.Delay(Timeout.InfiniteTimeSpan, token);
+            try { await Task.Delay(Timeout.InfiniteTimeSpan, token); }
+            catch (OperationCanceledException) when (!writerThrowsOnCancellation && token.IsCancellationRequested)
+            {
+                // A dispatcher can finish its admitted callback without throwing
+                // after shutdown. Reconciliation must still settle as canceled,
+                // not attempt another wait against the disposed service.
+            }
+            if (unrelatedWriterFailure) throw writerFailure;
         });
         var active = service.ReconcileRetirementAsync(next, [source], () => true, default);
         await entered.Task.WaitAsync(TimeSpan.FromSeconds(2));
         var queued = service.ReconcileRetirementAsync(next, [source], () => true, default);
         await service.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active);
+        if (unrelatedWriterFailure)
+            Assert.Same(writerFailure, await Assert.ThrowsAsync<ObjectDisposedException>(() => active));
+        else
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => active);
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queued);
         Assert.Equal(1, writes);
+        Assert.Equal(unrelatedWriterFailure ? 1 : 0, service.TerminalOutcomeCount);
+        // Only already-admitted work receives shutdown cancellation. A new call
+        // after disposal is still an invalid use of the disposed service.
+        await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            service.ReconcileRetirementAsync(next, [source], () => true, default));
     }
 
     [Fact]

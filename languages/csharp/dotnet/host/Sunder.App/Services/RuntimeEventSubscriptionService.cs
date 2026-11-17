@@ -587,10 +587,24 @@ public sealed class RuntimeEventSubscriptionService(
             entered = true;
             var stamp = new RuntimePackageStamp(snapshot.RuntimeInstanceId, snapshot.SessionGeneration);
             await ApplySnapshotAsync(snapshot, packageSources, cancellationToken: cancellation.Token).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
             await WaitUntilAppliedAsync(stamp, cancellation.Token).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
             if (needsReconciliation())
                 await ApplySnapshotCoreAsync(snapshot, packageSources, null, cancellation.Token, needsReconciliation).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
             await WaitUntilAppliedAsync(stamp, cancellation.Token).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException error) when (
+            Volatile.Read(ref _disposed) != 0
+            && error.ObjectName == typeof(RuntimeEventSubscriptionService).FullName)
+        {
+            // Shutdown can mark the service disposed between these admitted
+            // phases, or cancel the writer before this linked source is notified.
+            // Preserve cancellation for this owned operation, not a disposed-use
+            // fault. New calls are rejected before admission above; unrelated
+            // writer failures must still propagate without normalization.
+            throw new OperationCanceledException("Retirement reconciliation was canceled by shell shutdown.", error, _cancellation.Token);
         }
         finally
         {
