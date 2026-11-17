@@ -723,8 +723,19 @@ public sealed partial class ProcessRuntimeWorkerTests
                 JsonSerializer.SerializeToElement(new { message = "slow-consumer" }))
             .GetAsyncEnumerator();
 
-        Assert.True(await stream.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.True(stream.Current.GetProperty("accepted").GetBoolean());
+        try
+        {
+            Assert.True(await stream.MoveNextAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.True(stream.Current.GetProperty("accepted").GetBoolean());
+        }
+        finally
+        {
+            // The worker may now fill the 32-event queue while this consumer
+            // remains paused. Also release it if the first-event assertion fails.
+            await File.WriteAllTextAsync(
+                Path.Combine(fixture.Worker.WorkerTemporaryPath, "stream-queue-overflow.release"),
+                "release");
+        }
         using (var cancelled = await fixture.WaitForWorkerStatusAsync(
                    "stream-queue-overflow-cancelled.json"))
         {

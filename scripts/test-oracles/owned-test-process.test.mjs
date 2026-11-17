@@ -7,7 +7,7 @@ import { resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
-import { runOwnedTestProcess } from "./run-owned-test-process.mjs";
+import { cleanupUnixProcessGroup, runOwnedTestProcess } from "./run-owned-test-process.mjs";
 
 const leaf = `
   const fs = require('node:fs');
@@ -27,6 +27,64 @@ const tree = `
   process.on('SIGTERM', () => {});
   setInterval(() => {}, 1000);
 `;
+
+test("macOS group permission errors require independent empty or zombie-only liveness proof", async () => {
+  for (const snapshot of ["0 0 R\n100 100 S\n", "2499 2498 Z\n100 100 S\n"]) {
+    const failure = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    const calls = [];
+    const result = await cleanupUnixProcessGroup(2498, {
+      platform: "darwin", signalGroup: (group) => { calls.push(group); throw failure; },
+      listProcesses: async () => snapshot,
+    });
+    assert.deepEqual(calls, [2498]);
+    assert.equal(result.cleanupComplete, true);
+    assert.equal(result.signalError.code, "EPERM");
+    assert.ok(result.members.every((row) => row.state.startsWith("Z")));
+  }
+});
+
+test("Unix cleanup keeps permission failures with live members and rejects unproven snapshots", async () => {
+  for (const snapshot of ["2499 2498 S\n", "2499 2498 Z\n2500 2498 R+\n", "", "2499 2498\n", "unreadable\n"]) {
+    await assert.rejects(cleanupUnixProcessGroup(2498, {
+      platform: "darwin",
+      signalGroup: () => { throw Object.assign(new Error("kill EPERM"), { code: "EPERM" }); },
+      listProcesses: async () => snapshot,
+    }), (error) => error.code === "EPERM" || /process snapshot/u.test(error.message));
+  }
+  await assert.rejects(cleanupUnixProcessGroup(2498, {
+    platform: "darwin", signalGroup: () => {},
+    listProcesses: async () => { throw new Error("ps unavailable"); },
+  }), /ps unavailable/u);
+});
+
+test("Unix cleanup does not suppress Linux permission errors or other signal failures", async () => {
+  for (const [platform, code] of [["linux", "EPERM"], ["darwin", "EIO"]]) {
+    const failure = Object.assign(new Error(code), { code });
+    await assert.rejects(cleanupUnixProcessGroup(2498, {
+      platform, signalGroup: () => { throw failure; },
+      listProcesses: async () => { assert.fail("Unexpected process probe after an unrelated signal failure."); },
+    }), (error) => error === failure);
+  }
+});
+
+test("Unix cleanup waits for signalled members without touching an unrelated group", async () => {
+  const calls = [];
+  const snapshots = ["2499 2498 S\n100 100 R\n", "2499 2498 Z\n100 100 R\n"];
+  const result = await cleanupUnixProcessGroup(2498, {
+    signalGroup: (group) => calls.push(group), listProcesses: async () => snapshots.shift(),
+  });
+  assert.deepEqual(calls, [2498]);
+  assert.equal(result.cleanupComplete, true);
+  assert.deepEqual(result.members, [{ pid: 2499, group: 2498, state: "Z" }]);
+});
+
+test("Unix cleanup refuses unsafe process group identities before signalling", async () => {
+  for (const group of [-1, 0, 1, undefined, NaN]) {
+    await assert.rejects(cleanupUnixProcessGroup(group, {
+      signalGroup: () => assert.fail("Unsafe process group was signalled."),
+    }), /Invalid owned process group/u);
+  }
+});
 
 async function fixture(action) {
   const diagnostics = process.env.SUNDER_TEST_PROCESS_DIAGNOSTICS_DIRECTORY;
