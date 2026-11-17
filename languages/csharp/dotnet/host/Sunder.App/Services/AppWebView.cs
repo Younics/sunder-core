@@ -242,21 +242,26 @@ internal sealed class AppNativeWebView : IAppWebView
 
     private async Task DisposeCoreAsync()
     {
+        void Stage(string stage) => AppSessionLog.WriteInfo($"Native WebKit retirement: stage={stage}; capturing={_captureInProgress}; scripts={_scripts.Count}.", visibleInDeveloperLog: false);
+        Stage("capture-drain-started");
         if (_captureSettled is { } capture) await capture.Task;
+        Stage("capture-drained");
         Task nativeRetirement = Task.CompletedTask;
         var failures = new List<Exception>();
         try
         {
             var handle = _webView.TryGetPlatformHandle();
             _webView.Stop();
-            try { if (!_failed && handle is not null) await NavigateNeutralAsync(); }
+            try { if (!_failed && handle is not null) { Stage("neutral-navigation-started"); await NavigateNeutralAsync(); Stage("neutral-navigation-completed"); } }
             catch (Exception error) { failures.Add(error); }
             try
             {
+                Stage("data-clear-started");
                 if (OperatingSystem.IsMacOS() && handle is IAppleWKWebViewPlatformHandle apple)
                     await MacOsWebViewDataRetirement.ClearAsync(apple.WKWebView);
                 else if (OperatingSystem.IsLinux() && handle is IGtkWebViewPlatformHandle gtk)
                     await GtkWebViewDataRetirement.ClearAsync(gtk.WebKitWebView);
+                Stage("data-cleared");
             }
             catch (Exception error) { failures.Add(error); }
             if (OperatingSystem.IsLinux() && handle is IGtkWebViewPlatformHandle retiringGtk)
@@ -266,8 +271,9 @@ internal sealed class AppNativeWebView : IAppWebView
                 nativeRetirement = await GtkWebViewDataRetirement.ObserveNativeRetirementAsync(retiringGtk.WebKitWebView);
             }
         }
-        finally { DetachNative(); }
+        finally { Stage("native-detach-started"); DetachNative(); Stage("native-detached"); }
         await nativeRetirement;
+        Stage("native-retired");
         foreach (var script in _scripts.ToArray())
         {
             try { await script; }
@@ -276,6 +282,7 @@ internal sealed class AppNativeWebView : IAppWebView
                 AppSessionLog.WriteInfo($"Retired WebKit operation settled without a result: {error.GetType().Name}.", visibleInDeveloperLog: false);
             }
         }
+        Stage("scripts-drained");
         if (failures.Count != 0) throw new AggregateException("Native WebKit document cleanup failed.", failures);
     }
 
@@ -290,6 +297,7 @@ internal sealed class AppNativeWebView : IAppWebView
         var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void Navigated(object? sender, WebViewNavigationCompletedEventArgs args)
         {
+            AppSessionLog.WriteInfo($"Retiring WebKit navigation completed: neutral={args.Request?.AbsoluteUri == "about:blank"}; missingRequest={args.Request is null}; succeeded={args.IsSuccess}.", visibleInDeveloperLog: false);
             if (args.Request?.AbsoluteUri != "about:blank") return;
             if (args.IsSuccess) completed.TrySetResult();
             else completed.TrySetException(new InvalidOperationException("The retiring WebKit document did not reach its neutral page."));

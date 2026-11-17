@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -42,13 +43,16 @@ internal static class WindowsWebViewCaptureProcessProbe
         desktop.Startup += (_, _) => Dispatcher.UIThread.Post(async () =>
         {
             try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(TimeSpan.FromSeconds(45)); desktop.Shutdown(0); }
-            catch (Exception error) { Console.Error.WriteLine(error); desktop.Shutdown(1); }
+            catch (Exception error) { ReportFailure(error); desktop.Shutdown(1); }
         });
     }).StartWithClassicDesktopLifetime(args);
 
     private static async Task RunAsync(IClassicDesktopStyleApplicationLifetime desktop, string root, string backend)
     {
+        Environment.SetEnvironmentVariable("SUNDER_APP_STATE_ROOT", Path.Combine(root, "state"));
         if (backend is "shared" or "webview2") { await SharedBrowserProcessProbe.RunAsync(desktop, root); return; }
+        var started = Stopwatch.GetTimestamp();
+        void Stage(string stage) => Console.WriteLine($"native-browser-stage: {stage}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
         using var browser = new AppNativeWebView(Path.Combine(root, "browser"));
         var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pageRequested = false;
@@ -110,24 +114,29 @@ internal static class WindowsWebViewCaptureProcessProbe
         Require(AppDevelopmentViewOperations.ValidatePng(cropped) == (40, 30), "The selected-region dimensions changed.");
         var cropPixels = Pixels(cropped);
         Require(EveryColor(cropPixels, 20, 40, 220), "The selected region included pixels outside the blue element.");
+        Stage("whole-and-crop-native-captures-passed");
         using (var cancellation = new System.Threading.CancellationTokenSource())
         {
             var pending = browser.CaptureAsync(viewport, 128, cancellation.Token);
             Require(!pending.IsCompleted, "The fixture did not exercise an asynchronous native capture.");
             var concurrent = browser.CaptureAsync(viewport, 128, default);
             cancellation.Cancel();
+            Stage($"canceled-native-capture-started; capture={pending.Status}; concurrent={concurrent.Status}");
             try { await concurrent; throw new InvalidDataException("Concurrent native capture was accepted."); }
             catch (InvalidOperationException) { }
             try { await pending; throw new InvalidOperationException("Canceled native capture returned an image."); }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         }
+        Stage("canceled-native-capture-drained");
 
         // Ordinary detach/move is not document retirement on either WebKit
         // backend. The session's native ownership spans the visual gap.
         await browser.InvokeScriptAsync("globalThis.preserved = 123");
+        Stage("reparenting-started");
         panel.Children.Remove(browser.Control);
         panel.Children.Add(browser.Control);
         Require(await browser.InvokeScriptAsync("preserved") == "123", "Moving a WebKit view discarded its document.");
+        Stage("reparenting-preserved-document");
 
         var destroyed = false;
         var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -136,14 +145,18 @@ internal static class WindowsWebViewCaptureProcessProbe
         Require(!detached.IsCompleted, "The fixture did not exercise capture during detachment.");
         window.Content = null;
         browser.Dispose();
+        Stage($"in-flight-retirement-started; capture={detached.Status}; destroyed={destroyed}");
         Require(!destroyed, "The wrapper destroyed its native adapter before the capture callback drained.");
         try { await detached; throw new InvalidDataException("A retired native viewport returned an image."); }
         catch (Exception error) when (error is InvalidOperationException or COMException) { }
+        Stage("retiring-native-capture-drained");
         // NativeControlHost may schedule actual destruction on the next layout
         // turn. Observe its real event rather than assuming synchronous teardown.
         await retired.Task;
+        Stage("native-adapter-destroyed");
         Require(destroyed, "The native adapter did not retire after capture settlement.");
         await browser.DrainNativeRetirementAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        Stage("native-retirement-settled");
         Directory.Delete(Path.Combine(root, "browser"), recursive: true);
         Require(!Directory.Exists(Path.Combine(root, "browser")), "Native profile data survived the browser-group exit.");
         GC.KeepAlive(retainedAdapter);
@@ -296,6 +309,12 @@ internal static class WindowsWebViewCaptureProcessProbe
             var output = Directory.CreateDirectory(Path.Combine(directory, "native-capture")).FullName;
             File.WriteAllBytes(Path.Combine(output, stage + ".png"), png);
         }
+    }
+    internal static void ReportFailure(Exception error)
+    {
+        Console.Error.WriteLine(error);
+        foreach (var entry in AppSessionLog.Snapshot())
+            Console.Error.WriteLine(entry.Message + Environment.NewLine + entry.ExceptionText);
     }
     internal static bool HasColor(byte[] pixels, byte red, byte green, byte blue)
     {

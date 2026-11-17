@@ -130,7 +130,13 @@ internal static class SharedBrowserProcessProbe
         Stage($"in-flight-retirement-started; script={script.Status}; capture={pendingCapture.Status}");
         Require(!script.IsCompleted && !pendingCapture.IsCompleted, "The fixture missed in-flight native work.");
         panel.Children.Remove(aPackage);
-        await aPackage.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        try { await aPackage.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3)); }
+        catch (Exception error)
+        {
+            Stage($"in-flight-retirement-failed; script={script.Status}; capture={pendingCapture.Status}; retired={aPackage.Retired.Status}");
+            WindowsWebViewCaptureProcessProbe.ReportFailure(error);
+            throw;
+        }
         Stage($"in-flight-retirement-settled; script={script.Status}; capture={pendingCapture.Status}");
         Require(script.IsCompleted && pendingCapture.IsCompleted, "Retirement abandoned a native callback.");
         try { await script; } catch (Exception error) when (error is OperationCanceledException or COMException) { }

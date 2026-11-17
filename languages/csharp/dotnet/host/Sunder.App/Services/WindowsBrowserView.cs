@@ -231,11 +231,15 @@ internal sealed class WindowsBrowserView : IAppWebView
             throw;
         }
         _controller.IsVisible = false;
+        AppSessionLog.WriteInfo("Browser profile reset: stage=suspend-started.", visibleInDeveloperLog: false);
         await _controller.CoreWebView2.TrySuspendAsync(); // Best effort after real cleanup, not cleanup proof.
+        AppSessionLog.WriteInfo("Browser profile reset: stage=suspend-settled.", visibleInDeveloperLog: false);
     });
 
     private async Task ResetCoreAsync()
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        void Stage(string stage) => AppSessionLog.WriteInfo($"Browser profile reset: stage={stage}; elapsedMs={System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; operations={_operations.Count}; capturing={_capturing}.", visibleInDeveloperLog: false);
         var web = _controller!.CoreWebView2;
         web.Resume();
         web.Settings.IsWebMessageEnabled = false;
@@ -252,11 +256,15 @@ internal sealed class WindowsBrowserView : IAppWebView
             else completed.TrySetException(new InvalidOperationException("Neutral browser navigation failed."));
         }
         web.NavigationCompleted += Navigated;
-        try { web.Navigate("about:blank"); await completed.Task; }
+        try { Stage("neutral-navigation-started"); web.Navigate("about:blank"); await completed.Task; }
         finally { web.NavigationCompleted -= Navigated; _internalNavigation = false; }
+        Stage("neutral-navigation-completed");
         await web.Profile.ClearBrowsingDataAsync(CoreWebView2BrowsingDataKinds.AllProfile);
+        Stage("profile-data-cleared");
         await web.CallDevToolsProtocolMethodAsync("Page.resetNavigationHistory", "{}");
+        Stage("history-cleared");
         await DrainOperationsAsync();
+        Stage("operations-drained");
     }
 
     public void Dispose()
