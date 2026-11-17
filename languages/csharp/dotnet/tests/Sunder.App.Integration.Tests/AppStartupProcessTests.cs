@@ -37,7 +37,7 @@ public sealed class AppStartupProcessTests
     [Trait("Capability", "NativeUI")]
     [Trait("Capability", "Process")]
     public Task NormalEntryPointOpensInteractsWithAndReopensSupervisedDevelopmentWebView()
-        => TemporaryDirectoryScope.RunAsync("sunder-app-startup-webview", RunNormalStartupAsync);
+        => TemporaryDirectoryScope.RunAsync("sunder-app", RunNormalStartupAsync);
 
     private static async Task RunNormalStartupAsync(TemporaryDirectoryScope temporary)
     {
@@ -118,7 +118,13 @@ public sealed class AppStartupProcessTests
                 await forwarded.EnsureSuccessAsync(TimeSpan.FromSeconds(15));
             });
             Assert.Contains("startup-webview: original-main-thread; STA; native-package-page; interaction; reopen; forwarded-launch", result.StandardOutput, StringComparison.Ordinal);
+            Assert.Contains("move-preserved; reload-retired; rapid-reopen-fenced; hotbar-removal-retired", result.StandardOutput, StringComparison.Ordinal);
             Assert.DoesNotContain("RPC_E_CHANGED_MODE", result.CombinedOutput, StringComparison.Ordinal);
+            // Keep file-only native cleanup phases in the original TRX before
+            // the test-owned home is reclaimed, including a failed verdict.
+            foreach (var log in Directory.EnumerateFiles(temporary.GetPath("app-state", "logs"), "*.log"))
+                Console.WriteLine(await File.ReadAllTextAsync(log));
+            Assert.DoesNotContain("Cleanup exceeded its 3 second budget while draining shared package browser infrastructure", result.CombinedOutput, StringComparison.Ordinal);
             Assert.Empty(runtime.Services.GetRequiredService<PackageSessionState>().GetActivePackageSources());
             Assert.Empty(runtime.Services.GetRequiredService<AppProcessPolicySessions>().CapturePolicySubjects());
             var profileRoot = temporary.GetPath("app-state", "webview-data");
@@ -127,6 +133,9 @@ public sealed class AppStartupProcessTests
             var quarantineRoot = temporary.GetPath("app-state", "webview-quarantine");
             Assert.True(!Directory.Exists(quarantineRoot) || !Directory.EnumerateFileSystemEntries(quarantineRoot).Any(),
                 "Ordinary browser retirement required leftover profile quarantine.");
+            var engineRoot = temporary.GetPath("app-state", "webview-engines");
+            Assert.True(!Directory.Exists(engineRoot) || !Directory.EnumerateFileSystemEntries(engineRoot).Any(),
+                "Ordinary App shutdown retained the shared browser's user-data root.");
         }
         finally
         {

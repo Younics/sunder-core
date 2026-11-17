@@ -4,8 +4,9 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
 {
     private readonly object _syncRoot = new();
     private readonly Func<AppPackageGeneration, ValueTask> _retireGenerationAsync;
-    private readonly TimeSpan _retirementBudget;
-    private readonly TimeSpan _drainBudget;
+    private readonly TimeSpan? _retirementBudget;
+    private TimeSpan _drainBudget;
+    private readonly bool _explicitDrainBudget;
     private readonly Action<Exception> _propagateFatalCleanupFault;
     private readonly List<Exception> _failures = [];
     private readonly List<AppPackageGeneration> _quarantinedGenerations = [];
@@ -21,11 +22,12 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
         Action<Exception>? fatalCleanupFaultHandler = null)
     {
         _retireGenerationAsync = retireGenerationAsync ?? (generation => generation.DisposeAsync());
-        _retirementBudget = retirementBudget ?? AppShutdownBudgets.GenerationRetirement;
+        _retirementBudget = retirementBudget;
         _drainBudget = drainBudget ?? AppShutdownBudgets.RetirementDrain;
+        _explicitDrainBudget = drainBudget is not null;
         _propagateFatalCleanupFault = fatalCleanupFaultHandler
             ?? AppPackageFatalCleanupPropagation.PostToDispatcher;
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_retirementBudget, TimeSpan.Zero);
+        if (_retirementBudget is { } budget) ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(budget, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_drainBudget, TimeSpan.Zero);
     }
 
@@ -50,9 +52,12 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
         lock (_syncRoot)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_explicitDrainBudget && generation.CleanupBudget > _drainBudget)
+                _drainBudget = generation.CleanupBudget;
             Interlocked.Increment(ref _pendingCount);
             var predecessor = _tail;
-            _tail = Task.Run(() => RetireAfterAsync(predecessor, generation));
+            var budget = _retirementBudget ?? generation.CleanupBudget;
+            _tail = Task.Run(() => RetireAfterAsync(predecessor, generation, budget));
         }
     }
 
@@ -94,7 +99,7 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
         }
     }
 
-    private async Task RetireAfterAsync(Task predecessor, AppPackageGeneration generation)
+    private async Task RetireAfterAsync(Task predecessor, AppPackageGeneration generation, TimeSpan budget)
     {
         try
         {
@@ -117,13 +122,13 @@ internal sealed class AppPackageGenerationRetirementQueue : IAsyncDisposable
 
             try
             {
-                await retirementTask.WaitAsync(_retirementBudget).ConfigureAwait(false);
+                await retirementTask.WaitAsync(budget).ConfigureAwait(false);
             }
             catch (TimeoutException ex)
             {
                 Quarantine(generation, ex);
                 AppSessionLog.WriteError(
-                    $"App package generation '{generation.Id}' cleanup exceeded its {_retirementBudget.TotalSeconds:0.###} second budget and was quarantined without forcing ALC unload.",
+                    $"App package generation '{generation.Id}' cleanup exceeded its {budget.TotalSeconds:0.###} second budget and was quarantined without forcing ALC unload.",
                     ex);
                 AppCleanupQuarantine.Retain(retirementTask, $"retiring App package generation '{generation.Id}'");
             }

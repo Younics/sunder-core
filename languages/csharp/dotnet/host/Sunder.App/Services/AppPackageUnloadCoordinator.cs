@@ -57,7 +57,8 @@ internal sealed class AppPackageUnloadCoordinator(
                 removeWholePackageTracking: packageInfo is not null || targetLifetime is not null,
                 loadAdmission,
                 cleanupProven,
-                retireActivation: true));
+                retireActivation: true),
+            targetLifetime is AppWebPackageLifetime ? AppShutdownBudgets.BrowserCleanup : AppShutdownBudgets.GenerationRetirement);
         return ToCleanupOutcome(cleanupProven);
     }
 
@@ -106,7 +107,8 @@ internal sealed class AppPackageUnloadCoordinator(
             retireActivation);
         if (useRetirementDeadline)
         {
-            var ownerCleanup = await RunBoundedOwnerCleanupAsync(packageId, cleanup).ConfigureAwait(false);
+            var ownerCleanup = await RunBoundedOwnerCleanupAsync(packageId, cleanup,
+                handle.TargetLifetime is AppWebPackageLifetime ? AppShutdownBudgets.BrowserCleanup : AppShutdownBudgets.GenerationRetirement).ConfigureAwait(false);
             return ToCleanupOutcome(viewCleanup.CleanupProven && ownerCleanup);
         }
 
@@ -271,17 +273,18 @@ internal sealed class AppPackageUnloadCoordinator(
 
     private static async Task<bool> RunBoundedOwnerCleanupAsync(
         string packageId,
-        Task<bool> cleanup)
+        Task<bool> cleanup,
+        TimeSpan budget)
     {
         try
         {
-            return await cleanup.WaitAsync(AppShutdownBudgets.GenerationRetirement)
+            return await cleanup.WaitAsync(budget)
                 .ConfigureAwait(false);
         }
         catch (TimeoutException exception)
         {
             AppSessionLog.WriteError(
-                $"App package '{packageId}' retirement exceeded its {AppShutdownBudgets.GenerationRetirement.TotalSeconds:0.###} second budget; its provider and load context were quarantined without forced disposal.",
+                $"App package '{packageId}' retirement exceeded its {budget.TotalSeconds:0.###} second budget; its provider and load context were quarantined without forced disposal.",
                 exception);
             AppCleanupQuarantine.Retain(cleanup, $"retiring App package '{packageId}'");
             return false;

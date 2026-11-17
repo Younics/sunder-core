@@ -17,6 +17,7 @@ public sealed class RuntimeEventSubscriptionService(
     private readonly CancellationTokenSource _cancellation = new();
     private readonly SemaphoreSlim _presentationGate = new(1, 1);
     private readonly SemaphoreSlim _recoveryGate = new(1, 1);
+    private readonly SemaphoreSlim _retirementReconciliationGate = new(1, 1);
     private readonly Channel<PresentationRefreshRequest> _presentationRequests = Channel.CreateBounded<PresentationRefreshRequest>(
         new BoundedChannelOptions(1)
         {
@@ -556,11 +557,69 @@ public sealed class RuntimeEventSubscriptionService(
         }
     }
 
-    internal async Task ApplySnapshotAsync(
+    internal Task ApplySnapshotAsync(
         RuntimePackageSnapshot snapshot,
         IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
         IReadOnlyCollection<string>? explicitRetryPackageIds = null,
         CancellationToken cancellationToken = default)
+        => ApplySnapshotCoreAsync(snapshot, packageSources, explicitRetryPackageIds, cancellationToken, null);
+
+    internal async Task ReconcileRetirementAsync(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
+        Func<bool> needsReconciliation,
+        CancellationToken cancellationToken)
+    {
+        lock (_syncRoot)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            if (++_activePresentationCount == 1)
+                _presentationsDrained = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _cancellation.Token);
+        var entered = false;
+        try
+        {
+            // The explicit owner acknowledgement and policy-stage observer may
+            // reconcile together. Join the event writer before deciding whether
+            // any same-stamp activation still needs restoration.
+            await _retirementReconciliationGate.WaitAsync(cancellation.Token).ConfigureAwait(false);
+            entered = true;
+            var stamp = new RuntimePackageStamp(snapshot.RuntimeInstanceId, snapshot.SessionGeneration);
+            await ApplySnapshotAsync(snapshot, packageSources, cancellationToken: cancellation.Token).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
+            await WaitUntilAppliedAsync(stamp, cancellation.Token).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (needsReconciliation())
+                await ApplySnapshotCoreAsync(snapshot, packageSources, null, cancellation.Token, needsReconciliation).ConfigureAwait(false);
+            cancellation.Token.ThrowIfCancellationRequested();
+            await WaitUntilAppliedAsync(stamp, cancellation.Token).ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException error) when (
+            Volatile.Read(ref _disposed) != 0
+            && error.ObjectName == typeof(RuntimeEventSubscriptionService).FullName)
+        {
+            // Shutdown can mark the service disposed between these admitted
+            // phases, or cancel the writer before this linked source is notified.
+            // Preserve cancellation for this owned operation, not a disposed-use
+            // fault. New calls are rejected before admission above; unrelated
+            // writer failures must still propagate without normalization.
+            throw new OperationCanceledException("Retirement reconciliation was canceled by shell shutdown.", error, _cancellation.Token);
+        }
+        finally
+        {
+            if (entered) _retirementReconciliationGate.Release();
+            lock (_syncRoot)
+                if (--_activePresentationCount == 0) _presentationsDrained?.TrySetResult();
+        }
+    }
+
+    private async Task ApplySnapshotCoreAsync(
+        RuntimePackageSnapshot snapshot,
+        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
+        IReadOnlyCollection<string>? explicitRetryPackageIds,
+        CancellationToken cancellationToken,
+        Func<bool>? needsRetirementReconciliation)
     {
         if (snapshot.BootstrapState == RuntimeBootstrapState.Failed)
         {
@@ -581,7 +640,8 @@ public sealed class RuntimeEventSubscriptionService(
             packageSources,
             explicitRetryPackageIds,
             out var recoveryTransfer);
-        if (await TryApplySameGenerationMetadataAsync(snapshot, packageSources, cancellationToken).ConfigureAwait(false))
+        if (needsRetirementReconciliation?.Invoke() != true
+            && await TryApplySameGenerationMetadataAsync(snapshot, packageSources, cancellationToken).ConfigureAwait(false))
         {
             return;
         }
@@ -591,7 +651,15 @@ public sealed class RuntimeEventSubscriptionService(
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             writePresentationAsync = _writePresentationAsync
                 ?? throw new InvalidOperationException("The Runtime presentation writer has not been initialized.");
-            if (!ShouldAcceptSnapshot(snapshot))
+            // A discarded/failed Host stage can leave the stamp unchanged after
+            // this App has acknowledged retirement. Restore those fenced owners
+            // through the same writer as the event stream, never a parallel
+            // publication path, and never roll back a newer/foreign Runtime stamp.
+            var reconcileCurrentStamp = needsRetirementReconciliation?.Invoke() == true
+                && !_retiredRuntimeInstances.Contains(snapshot.RuntimeInstanceId)
+                && _latestSnapshot is { } latest && latest.RuntimeInstanceId == snapshot.RuntimeInstanceId
+                && latest.SessionGeneration == snapshot.SessionGeneration && snapshot.EventSequence >= latest.EventSequence;
+            if (!ShouldAcceptSnapshot(snapshot) && !reconcileCurrentStamp)
             {
                 return;
             }
@@ -614,7 +682,6 @@ public sealed class RuntimeEventSubscriptionService(
             try
             {
                 supersededPresentation.Token.ThrowIfCancellationRequested();
-                IReadOnlyList<PackageUiSnapshotDescriptor> previousPackageSources;
                 lock (_syncRoot)
                 {
                     if (!ReferenceEquals(_supersededPresentation, supersededPresentation)
@@ -622,17 +689,17 @@ public sealed class RuntimeEventSubscriptionService(
                     {
                         return;
                     }
-                    previousPackageSources = _appliedPackageSources;
                 }
 
-                var retryDisabledPackageIds = GetRetryDisabledPackageIds(
-                    previousPackageSources,
-                    packageSources,
-                    explicitRetryPackageIds);
+                // Content changes are evaluated against the live generation by
+                // the package host, including byte-bound quarantine inheritance.
+                // Reload reconciliation may already have published this revision
+                // while the event reader's source cache still describes the old
+                // one. That cache must not manufacture an explicit reactivation.
                 await writePresentationAsync(
                     snapshot,
                     packageSources,
-                    retryDisabledPackageIds,
+                    explicitRetryPackageIds,
                     supersededPresentation.Token).ConfigureAwait(false);
 
                 lock (_syncRoot)
@@ -756,6 +823,7 @@ public sealed class RuntimeEventSubscriptionService(
             }
             _presentationGate.Dispose();
             _recoveryGate.Dispose();
+            _retirementReconciliationGate.Dispose();
             _cancellation.Dispose();
         }
     }
@@ -1340,31 +1408,6 @@ public sealed class RuntimeEventSubscriptionService(
             return applied.SessionGeneration >= stamp.SessionGeneration;
         }
         return _retiredRuntimeInstances.Contains(stamp.RuntimeInstanceId);
-    }
-
-    private static IReadOnlyCollection<string> GetRetryDisabledPackageIds(
-        IReadOnlyList<PackageUiSnapshotDescriptor> previousPackageSources,
-        IReadOnlyList<PackageUiSnapshotDescriptor> packageSources,
-        IReadOnlyCollection<string>? explicitRetryPackageIds)
-    {
-        var packageIds = explicitRetryPackageIds is null
-            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            : new HashSet<string>(explicitRetryPackageIds, StringComparer.OrdinalIgnoreCase);
-        var previousSources = previousPackageSources
-            .GroupBy(source => source.PackageId, StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(group => group.Key, group => group.First(), StringComparer.OrdinalIgnoreCase);
-        foreach (var source in packageSources)
-        {
-            if (!previousSources.TryGetValue(source.PackageId, out var previous)
-                || !string.Equals(previous.ContentHash, source.ContentHash, StringComparison.OrdinalIgnoreCase))
-            {
-                packageIds.Add(source.PackageId);
-            }
-        }
-
-        return explicitRetryPackageIds is AppPackageQuarantineRetryIntent retryIntent
-            ? retryIntent.WithPackageIds(packageIds)
-            : packageIds;
     }
 
     private static bool HasSnapshotMetadataChange(RuntimeEventSnapshot snapshot)

@@ -182,6 +182,10 @@ null placeholders or old-field readers. Strict codecs reject those obsolete memb
 This is a coordinated fresh baseline, not a new migration or user-data reset step.
 The local durable generation, intent recovery copy and continuous-clock high-water
 remain consistency/lease mechanisms; they do not establish independent Registry authority.
+Cancellation before a local snapshot write is admitted leaves the cache unchanged.
+Once admitted, both durable copies settle under the origin lock even if the calling
+presentation or HTTP request is superseded. This neither renews its original lease
+nor bypasses persistence/flush failures, which still fence the origin closed.
 
 A configured Registry with an initialized empty database is ready. Catalog and authority
 requirements are enforced by their consuming operations, independently of service health.

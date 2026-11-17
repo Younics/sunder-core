@@ -25,6 +25,9 @@ internal sealed class ShellPackageViewPreloader(
             .ConfigureAwait(false);
         foreach (var viewId in priorityQueue)
         {
+            // Web documents start only on real presentation demand. Retaining
+            // hotbar metadata is not permission to run hidden package JavaScript.
+            if (packageViewHostService.IsWebView(viewId)) continue;
             cancellationToken.ThrowIfCancellationRequested();
             if (packageViewHostService.CurrentGenerationId != generationId)
             {
@@ -80,6 +83,7 @@ internal sealed class ShellPackageViewPreloader(
         var generationId = packageViewHostService.CurrentGenerationId;
         foreach (var viewId in BuildHotbarQueue())
         {
+            if (packageViewHostService.IsWebView(viewId)) continue;
             if (packageViewHostService.CurrentGenerationId != generationId
                 || !viewsById.ContainsKey(viewId))
             {

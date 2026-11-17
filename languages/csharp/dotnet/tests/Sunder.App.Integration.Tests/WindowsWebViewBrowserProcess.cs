@@ -31,18 +31,23 @@ internal static class WindowsWebViewBrowserProcess
             var getId = Marshal.GetDelegateForFunctionPointer<GetBrowserProcessId>(
                 Marshal.ReadIntPtr(Marshal.ReadIntPtr(view), 37 * IntPtr.Size));
             Marshal.ThrowExceptionForHR(getId(view, out var pid));
-            using var browser = Process.GetProcessById(checked((int)pid));
+            Record(checked((int)pid));
+        }
+        finally
+        {
+            if (view != 0) Marshal.Release(view);
+        }
+    }
+
+    internal static void Record(int pid)
+    {
+            using var browser = Process.GetProcessById(pid);
             _ = browser.SafeHandle;
             var birth = browser.StartTime.ToUniversalTime().Ticks;
             using var app = Process.GetCurrentProcess();
             if (birth < app.StartTime.ToUniversalTime().Ticks)
                 throw new InvalidOperationException("The isolated fixture reused an older browser process.");
             Console.WriteLine(FormattableString.Invariant($"{Prefix}{pid}:{birth}"));
-        }
-        finally
-        {
-            if (view != 0) Marshal.Release(view);
-        }
     }
 
     internal static async Task<Sunder.Core.TestSupport.CapturedProcessResult> EnsureSuccessAndExitAsync(CapturedProcess process, TimeSpan timeout,

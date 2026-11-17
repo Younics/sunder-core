@@ -10,6 +10,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Sunder.App;
 using Sunder.App.Services;
+using Sunder.App.Models;
 using Sunder.App.ViewModels;
 using Sunder.App.Views;
 
@@ -31,8 +32,6 @@ internal static class StartupHook
             foreach (var entry in AppSessionLog.Snapshot())
                 Console.Error.WriteLine(entry.Message + Environment.NewLine + entry.ExceptionText);
         };
-        NativeWebView.AdapterInfoProperty.Changed.AddClassHandler<NativeWebView>(
-            (browser, _) => browser.AdapterCreated += WindowsWebViewBrowserProcess.Record);
         Window.WindowOpenedEvent.AddClassHandler<MainWindow>((window, _) =>
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
@@ -63,13 +62,46 @@ internal static class StartupHook
         var model = (MainWindowViewModel)window.DataContext!;
         var browser = await PageAsync(window, token);
         Require(Thread.CurrentThread.GetApartmentState() == ApartmentState.STA, "The normal desktop dispatcher is not STA.");
-        Require(browser.TryGetPlatformHandle() is IWindowsWebView2PlatformHandle, "The normal package view did not create WebView2.");
-        Require(await browser.InvokeScript("document.getElementById('press').click(); document.getElementById('press').textContent").WaitAsync(token) == "\"1\"",
+        Require(browser.NativeBrowserProcessId is not null, "The normal package view did not create WebView2.");
+        WindowsWebViewBrowserProcess.Record(browser.NativeBrowserProcessId!.Value);
+        Require(await browser.InvokeScriptAsync("document.getElementById('press').click(); document.getElementById('press').textContent").WaitAsync(token) == "\"1\"",
             "The package's real native page did not respond to interaction.");
         Require(model.ClosePackageViewPanel("test.startup.webview.view"), "The package view did not close.");
         Require(await model.OpenPackageViewPanelAsync("test.startup.webview.view"), "The package view did not reopen.");
         browser = await PageAsync(window, token);
-        Require(await browser.InvokeScript("document.getElementById('press') !== null").WaitAsync(token) == "true", "The reopened native package page is unavailable.");
+        Require(await browser.InvokeScriptAsync("document.getElementById('press').textContent").WaitAsync(token) == "\"0\"", "Explicit close retained the old document.");
+
+        var retained = browser;
+        await browser.InvokeScriptAsync("globalThis.moveState=123").WaitAsync(token);
+        model.MovePackageView("test.startup.webview.view", RailPlacement.RightTop, null);
+        browser = await PageAsync(window, token);
+        Require(ReferenceEquals(retained, browser) && await browser.InvokeScriptAsync("moveState").WaitAsync(token) == "123", "Moving a shell view recreated its document.");
+        model.MovePackageView("test.startup.webview.view", RailPlacement.Middle, null);
+        browser = await PageAsync(window, token);
+        Require(ReferenceEquals(retained, browser), "Moving a view back replaced its browser session.");
+
+        Require(await model.ReloadPackageViewAsync("test.startup.webview.view"), "The shell did not reload its web view.");
+        browser = await PageAsync(window, token);
+        Require(!ReferenceEquals(retained, browser) && await browser.InvokeScriptAsync("typeof moveState").WaitAsync(token) == "\"undefined\"", "Reload retained the previous document's authority or state.");
+        for (var cycle = 0; cycle < 3; cycle++)
+        {
+            var old = window.GetVisualDescendants().OfType<AppWebPackageViewControl>().Single();
+            Require(model.ClosePackageViewPanel("test.startup.webview.view"), "Rapid close was rejected.");
+            // Reopen without waiting for old native cleanup: the facade must
+            // serialize retirement, not return a cached retiring control.
+            Require(await model.OpenPackageViewPanelAsync("test.startup.webview.view"), "Rapid reopen was rejected.");
+            browser = await PageAsync(window, token);
+            await old.Retired.WaitAsync(TimeSpan.FromSeconds(3), token);
+            Require(!ReferenceEquals(old.Browser, browser), "Rapid reopen returned a retiring browser lease.");
+        }
+
+        var removed = window.GetVisualDescendants().OfType<AppWebPackageViewControl>().Single();
+        Require(model.RemovePackageViewFromHotbar("test.startup.webview.view"), "Hotbar removal was rejected.");
+        Require(await model.AddPackageViewToDefaultHotbarAsync("test.startup.webview.view", openPanel: true), "Hotbar re-add was rejected.");
+        browser = await PageAsync(window, token);
+        await removed.Retired.WaitAsync(TimeSpan.FromSeconds(3), token);
+        Require(!ReferenceEquals(removed.Browser, browser), "Hotbar re-add returned a retired document.");
+        Console.WriteLine("startup-webview: move-preserved; reload-retired; rapid-reopen-fenced; hotbar-removal-retired");
 
         // Observe the real secondary-process handoff through the production pipe.
         // The shell's Stack UI is unrelated to this regression.
@@ -86,11 +118,11 @@ internal static class StartupHook
         Console.WriteLine("startup-webview: original-main-thread; STA; native-package-page; interaction; reopen; forwarded-launch");
     }
 
-    private static async Task<NativeWebView> PageAsync(MainWindow window, CancellationToken token)
+    private static async Task<IAppWebView> PageAsync(MainWindow window, CancellationToken token)
     {
-        NativeWebView? browser = null;
-        await UntilAsync(() => (browser = window.GetVisualDescendants().OfType<NativeWebView>().FirstOrDefault())?.TryGetPlatformHandle() is not null, token);
-        while (await browser!.InvokeScript("globalThis.startupReady === true").WaitAsync(token) != "true")
+        IAppWebView? browser = null;
+        await UntilAsync(() => (browser = window.GetVisualDescendants().OfType<AppWebPackageViewControl>().FirstOrDefault()?.Browser)?.CanCapture == true, token);
+        while (await browser!.InvokeScriptAsync("globalThis.startupReady === true").WaitAsync(token) != "true")
             await Task.Delay(25, token);
         return browser;
     }

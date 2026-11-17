@@ -93,12 +93,14 @@ internal static class StartupHook
         window.Width = 900;
         window.Height = 600;
         window.Show();
-        using var browserTracking = NativeWebView.AdapterInfoProperty.Changed.AddClassHandler<NativeWebView>(
-            (browser, _) =>
+        using var browserTracking = ContentControl.ContentProperty.Changed.AddClassHandler<AppWebPackageViewControl>(
+            (view, args) =>
             {
-                browser.AdapterCreated += WindowsWebViewBrowserProcess.Record;
-                browser.AdapterDestroyed += (_, _) => Console.WriteLine($"installed-consumer: native adapter destroying; utc={DateTimeOffset.UtcNow:O}");
-                browser.DetachedFromVisualTree += (_, _) => Console.WriteLine($"installed-consumer: native view detached; adapter={browser.TryGetPlatformHandle() is not null}; utc={DateTimeOffset.UtcNow:O}");
+                if (args.NewValue is not Control) return;
+                view.Browser.NavigationCompleted += (_, _) =>
+                {
+                    if (view.Browser.NativeBrowserProcessId is { } pid) WindowsWebViewBrowserProcess.Record(pid);
+                };
             });
         try
         {
@@ -122,9 +124,10 @@ internal static class StartupHook
             Require(WindowsWebViewCaptureProcessProbe.EveryColor(WindowsWebViewCaptureProcessProbe.Pixels(crop), 20, 40, 220),
                 "The SDK selection included pixels outside its native element.");
             Require((await client.GetRuntimePackageSnapshotAsync()).ActivePackages.Count == 1, "The SDK owner did not unload its development package.");
-            var profileRoot = AppLocalState.GetPath("webview-data");
-            Require(!Directory.Exists(profileRoot) || !Directory.EnumerateFileSystemEntries(profileRoot).Any(),
-                "Native profile data survived SDK unload while the App was still running.");
+            Require(host.BrowserSessionCount == 0,
+                "The SDK unload retained an active, retiring or cached package browser profile.");
+            // Shared-engine files are reclaimed at App shutdown, not by deleting
+            // a live sibling's UDF or pretending that moving roots proved exit.
             Require(window.IsVisible, "The native cleanup check ran after the App window closed.");
             Console.WriteLine("installed-consumer-capture: native-shell; runtime-installed; sdk-owned; package-only; selected-crop; retired-session-rejected");
         }

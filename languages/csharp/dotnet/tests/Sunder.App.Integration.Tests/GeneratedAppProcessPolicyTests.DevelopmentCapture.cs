@@ -26,7 +26,7 @@ public sealed partial class GeneratedAppProcessPolicyTests
     [Trait("Capability", "NativeUI")]
     [Trait("Capability", "Process")]
     public Task RuntimeInstalledDeveloperToolCapturesItsSdkOwnedNativeDevelopmentView()
-        => TemporaryDirectoryScope.RunAsync("sunder-installed-development-capture", RunInstalledDevelopmentCaptureAsync);
+        => TemporaryDirectoryScope.RunAsync("sunder-cap", RunInstalledDevelopmentCaptureAsync);
 
     private async Task RunInstalledDevelopmentCaptureAsync(TemporaryDirectoryScope temporary)
     {

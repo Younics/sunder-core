@@ -454,14 +454,19 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
     {
         ValidateFile(state, state.Origin);
         RegistryActivePolicyClient.Require(JsonSerializer.SerializeToUtf8Bytes(state, RegistryActivePolicyClient.Json).Length < MaximumFileBytes, "Policy cache exceeds its byte bound.");
+        token.ThrowIfCancellationRequested();
         try
         {
             // The recovery copy is durable before visibility of the primary snapshot.
             // Retain it until superseded by a complete successor, including when the
             // installed-catalog metadata transaction has not run yet.
-            await DurableJsonDocument.WriteAsync(IntentPath(path), state, RegistryActivePolicyClient.Json, token);
+            // Once admitted, finish both copies under the origin lock even if an
+            // HTTP caller/presentation is superseded. Cancellation is not a failed
+            // persistence proof and must not poison unrelated loaded permissions.
+            // Actual I/O/flush failures still fence the origin below.
+            await DurableJsonDocument.WriteAsync(IntentPath(path), state, RegistryActivePolicyClient.Json, CancellationToken.None);
             faultInjector?.Hit(PackagePolicyPersistencePoint.IntentDurable);
-            await DurableJsonDocument.WriteAsync(path, state, RegistryActivePolicyClient.Json, token);
+            await DurableJsonDocument.WriteAsync(path, state, RegistryActivePolicyClient.Json, CancellationToken.None);
             faultInjector?.Hit(PackagePolicyPersistencePoint.SnapshotDurable);
         }
         catch { _persistenceFailures[state.Origin] = 0; throw; }

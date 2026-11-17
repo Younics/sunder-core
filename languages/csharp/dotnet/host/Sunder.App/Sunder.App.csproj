@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Version>1.0.1</Version>
+    <Version>1.1.0</Version>
     <OutputType>WinExe</OutputType>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -16,6 +16,15 @@
     <PackageReference Include="Avalonia" />
     <PackageReference Include="Avalonia.AvaloniaEdit" />
     <PackageReference Include="Avalonia.Controls.WebView" />
+    <!-- Only the host-neutral Core assembly is used. WPF/WinForms targets must
+         not select the App's backend or add desktop-framework dependencies. -->
+    <PackageReference Include="Microsoft.Web.WebView2" GeneratePathProperty="true" ExcludeAssets="all" />
+    <Reference Include="Microsoft.Web.WebView2.Core">
+      <HintPath>$(PkgMicrosoft_Web_WebView2)/lib_manual/netcoreapp3.0/Microsoft.Web.WebView2.Core.dll</HintPath>
+    </Reference>
+    <None Include="$(PkgMicrosoft_Web_WebView2)/runtimes/win-x64/native/WebView2Loader.dll" Link="runtimes/win-x64/native/WebView2Loader.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'win-x64'" />
+    <None Include="$(PkgMicrosoft_Web_WebView2)/runtimes/win-arm64/native/WebView2Loader.dll" Link="runtimes/win-arm64/native/WebView2Loader.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="'$(RuntimeIdentifier)' == '' or '$(RuntimeIdentifier)' == 'win-arm64'" />
+    <None Include="$(PkgMicrosoft_Web_WebView2)/LICENSE.txt" Link="licenses/Microsoft.Web.WebView2.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Avalonia.Desktop" />
     <PackageReference Include="Avalonia.Themes.Fluent" />
     <PackageReference Include="Avalonia.Fonts.Inter" />

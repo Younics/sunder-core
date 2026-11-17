@@ -1,5 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" GeneratePathProperty="true" ExcludeAssets="all" />
+    <Reference Include="Microsoft.Web.WebView2.Core"><HintPath>$(PkgMicrosoft_Web_WebView2)/lib_manual/netcoreapp3.0/Microsoft.Web.WebView2.Core.dll</HintPath></Reference>
     <Compile Include="..\AgentCurrentBaseline.cs" Link="AgentCurrentBaseline.cs" />
     <Compile Include="..\AgentCurrentInputs.cs" Link="AgentCurrentInputs.cs" />
     <ProjectReference Include="..\..\host\Sunder.App\Sunder.App.csproj" OutputItemType="_PolicyAppTargetPath" />
@@ -9,6 +11,8 @@
     <Compile Remove="AppPolicyStartupHook.cs" />
     <None Include="AppPolicyStartupHook.cs" />
     <Compile Remove="WindowsWebViewCaptureProcessProbe.cs" />
+    <Compile Remove="SharedBrowserProcessProbe.cs" />
+    <None Include="SharedBrowserProcessProbe.cs" />
     <None Include="WindowsWebViewCaptureProcessProbe.cs" />
     <Compile Remove="InstalledDevelopmentCaptureStartupHook.cs" />
     <None Include="InstalledDevelopmentCaptureStartupHook.cs" />
@@ -45,10 +49,10 @@
     <WriteLinesToFile File="$(TargetDir)sunder-policy-app-target-path.txt" Lines="@(_PolicyAppTargetPath->'%(FullPath)')" Overwrite="true" />
   </Target>
   <Target Name="BuildWindowsWebViewCaptureProcessProbe" AfterTargets="Build" DependsOnTargets="ResolveReferences"
-          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/SharedBrowserProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
           Outputs="$(TargetDir)webview-capture-probe/Sunder.App.Tests.dll">
     <MakeDir Directories="$(TargetDir)webview-capture-probe" />
-    <Csc Sources="$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
+    <Csc Sources="$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/SharedBrowserProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
          OutputAssembly="$(TargetDir)webview-capture-probe/Sunder.App.Tests.dll" TargetType="Exe"
          TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)"
          DisabledWarnings="$(NoWarn)"
@@ -56,10 +60,10 @@
          ToolExe="$(CscToolExe)" ToolPath="$(CscToolPath)" />
   </Target>
   <Target Name="BuildInstalledDevelopmentCaptureStartupHook" AfterTargets="Build" DependsOnTargets="ResolveReferences"
-          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/InstalledDevelopmentCaptureStartupHook.cs;$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
+          Inputs="$(MSBuildProjectFullPath);$(MSBuildProjectDirectory)/InstalledDevelopmentCaptureStartupHook.cs;$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/SharedBrowserProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs;@(_PolicyAppTargetPath);@(ReferencePathWithRefAssemblies)"
           Outputs="$(TargetDir)development-capture-hook/Sunder.App.Tests.dll">
     <MakeDir Directories="$(TargetDir)development-capture-hook" />
-    <Csc Sources="$(MSBuildProjectDirectory)/InstalledDevelopmentCaptureStartupHook.cs;$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
+    <Csc Sources="$(MSBuildProjectDirectory)/InstalledDevelopmentCaptureStartupHook.cs;$(MSBuildProjectDirectory)/WindowsWebViewCaptureProcessProbe.cs;$(MSBuildProjectDirectory)/SharedBrowserProcessProbe.cs;$(MSBuildProjectDirectory)/WindowsWebViewBrowserProcess.cs" References="@(ReferencePathWithRefAssemblies)"
          OutputAssembly="$(TargetDir)development-capture-hook/Sunder.App.Tests.dll" TargetType="Library"
          TargetFramework="$(TargetFramework)" LangVersion="$(LangVersion)" Nullable="$(Nullable)" DisabledWarnings="$(NoWarn)"
          NoConfig="true" NoLogo="true" NoStandardLib="true" Deterministic="true" TreatWarningsAsErrors="true"

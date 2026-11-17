@@ -30,7 +30,7 @@ internal sealed partial class AppPackageHostComposition
             _ => new(entry => DrainRetirementAsync(packageId, preserveDisabled, entry)));
         var acknowledged = AcknowledgeRetirementAsync(packageId, retirement);
         if (!useRetirementDeadline) return await acknowledged.ConfigureAwait(false);
-        try { return await acknowledged.WaitAsync(AppShutdownBudgets.GenerationRetirement).ConfigureAwait(false); }
+        try { return await acknowledged.WaitAsync(CleanupBudget).ConfigureAwait(false); }
         catch (TimeoutException error)
         {
             AppCleanupQuarantine.Retain(acknowledged, $"retiring App activation '{packageId}'");

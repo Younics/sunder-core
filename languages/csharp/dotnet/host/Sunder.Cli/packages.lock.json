@@ -21,7 +21,7 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.1.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.package.projections": {

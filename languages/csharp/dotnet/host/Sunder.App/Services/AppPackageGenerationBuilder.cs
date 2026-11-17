@@ -31,7 +31,8 @@ internal sealed class AppPackageGenerationBuilder(
     IAppPackagePolicy? packagePolicy = null,
     IAppPackageDevelopmentBackend? developerServices = null,
     Action<AppPackageGeneration, Task>? registerActivation = null,
-    Func<IReadOnlyList<AppPackageGeneration>>? getActivationOwners = null)
+    Func<IReadOnlyList<AppPackageGeneration>>? getActivationOwners = null,
+    IAppWebViewFactory? webViewFactory = null)
 {
     public AppPackageGeneration CreateInitialGeneration(
         AppPackageViewRegistry viewRegistry,
@@ -376,6 +377,7 @@ internal sealed class AppPackageGenerationBuilder(
             backgroundTaskQueue,
             getRuntimeConnectionInfo,
             uiDispatcher,
+            webViewFactory: webViewFactory,
             webRpcClientFactory: getRuntimeConnectionInfo is null
                 ? null
                 : new RuntimeAppWebRpcClientFactory(getRuntimeConnectionInfo),

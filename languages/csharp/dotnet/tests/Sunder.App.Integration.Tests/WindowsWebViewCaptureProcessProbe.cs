@@ -1,10 +1,12 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -27,18 +29,16 @@ internal static class WindowsWebViewCaptureProcessProbe
             var path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", name.Name + ".dll"));
             return File.Exists(path) ? AssemblyLoadContext.Default.LoadFromAssemblyPath(path) : null;
         };
-        AssemblyLoadContext.Default.ResolvingUnmanagedDll += (_, name) =>
-        {
-            var parent = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, ".."));
-            var library = OperatingSystem.IsWindows()
-                ? name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ? name : name + ".dll"
-                : name.EndsWith(OperatingSystem.IsMacOS() ? ".dylib" : ".so", StringComparison.Ordinal) ? name
-                    : (name.StartsWith("lib", StringComparison.Ordinal) ? name : "lib" + name) + (OperatingSystem.IsMacOS() ? ".dylib" : ".so");
-            foreach (var directory in new[] { parent, Path.Combine(parent, "runtimes", RuntimeInformation.RuntimeIdentifier, "native") })
-                if (File.Exists(Path.Combine(directory, library))) return NativeLibrary.Load(Path.Combine(directory, library));
-            return 0;
-        };
-        return Start(args);
+        // The launcher supplies the owning test project's deps.json. Let .NET
+        // select its exact native assets (including macOS's universal osx asset),
+        // not an unrelated library copied beside another fixture or on PATH.
+        // Session snapshots intentionally exclude file-only diagnostics. Retain
+        // those Trace messages in this isolated probe's bounded process output,
+        // rather than changing the product's developer-log visibility contract.
+        using var trace = new TextWriterTraceListener(Console.Error);
+        Trace.Listeners.Add(trace);
+        try { return Start(args); }
+        finally { Trace.Listeners.Remove(trace); }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -48,13 +48,18 @@ internal static class WindowsWebViewCaptureProcessProbe
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         desktop.Startup += (_, _) => Dispatcher.UIThread.Post(async () =>
         {
-            try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(TimeSpan.FromSeconds(45)); desktop.Shutdown(0); }
-            catch (Exception error) { Console.Error.WriteLine(error); desktop.Shutdown(1); }
+            // This is a whole-scenario hang watchdog, not a per-view UI deadline.
+            try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(TimeSpan.FromMinutes(2)); desktop.Shutdown(0); }
+            catch (Exception error) { ReportFailure(error); desktop.Shutdown(1); }
         });
     }).StartWithClassicDesktopLifetime(args);
 
     private static async Task RunAsync(IClassicDesktopStyleApplicationLifetime desktop, string root, string backend)
     {
+        Environment.SetEnvironmentVariable("SUNDER_APP_STATE_ROOT", Path.Combine(root, "state"));
+        if (backend is "shared" or "webview2") { await SharedBrowserProcessProbe.RunAsync(desktop, root); return; }
+        var started = Stopwatch.GetTimestamp();
+        void Stage(string stage) => Console.WriteLine($"native-browser-stage: {stage}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
         using var browser = new AppNativeWebView(Path.Combine(root, "browser"));
         var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var pageRequested = false;
@@ -78,10 +83,14 @@ internal static class WindowsWebViewCaptureProcessProbe
         const string html = "<!doctype html><html><body style='margin:0;background:rgb(10,180,30)'><div style='position:absolute;left:40px;top:30px;width:100px;height:80px;background:rgb(20,40,220)'></div></body></html>";
         native.AdapterCreated += (_, args) =>
         {
-            if (OperatingSystem.IsWindows()) WindowsWebViewBrowserProcess.Record(native, args);
             Console.WriteLine("adapter: " + args.TryGetPlatformHandle()?.GetType().Name);
-            pageRequested = true;
-            native.NavigateToString(html);
+            // A recreated adapter already replays NativeWebView's saved HTML.
+            // Submitting it twice would cancel that genuine replay navigation.
+            if (!pageRequested)
+            {
+                pageRequested = true;
+                native.NavigateToString(html);
+            }
         };
         window.Show();
         Console.WriteLine($"window: client={window.ClientSize}; viewport={browser.CaptureViewport}");
@@ -90,15 +99,15 @@ internal static class WindowsWebViewCaptureProcessProbe
         Require(browser.Control is Decorator { Child: NativeWebView }, "The fixture did not use the production native viewport.");
         Require(backend switch
         {
-            "webview2" => native.TryGetPlatformHandle() is Avalonia.Platform.IWindowsWebView2PlatformHandle,
             "gtk" => native.TryGetPlatformHandle() is Avalonia.Platform.IGtkWebViewPlatformHandle,
             "wkwebview" => native.TryGetPlatformHandle() is Avalonia.Platform.IAppleWKWebViewPlatformHandle,
             _ => false,
         }, "The fixture did not initialize the required browser backend: " + backend);
-        // Force document layout before asking WebView2 for its actual pixels.
+        // Force document layout before asking the backend for its actual pixels.
         await browser.InvokeScriptAsync("document.body.getBoundingClientRect().width");
         var viewport = browser.CaptureViewport;
         var png = await browser.CaptureAsync(viewport, 128, default);
+        RecordPng("native-whole", png);
         var dimensions = AppDevelopmentViewOperations.ValidatePng(png);
         Require(Math.Max(dimensions.Width, dimensions.Height) == 128, "The native image did not obey the requested edge.");
         var full = Pixels(png);
@@ -108,20 +117,33 @@ internal static class WindowsWebViewCaptureProcessProbe
 
         var crop = new Rect(viewport.X + 50, viewport.Y + 40, 40, 30);
         var cropped = await browser.CaptureAsync(crop, 128, default);
+        RecordPng("native-crop", cropped);
         Require(AppDevelopmentViewOperations.ValidatePng(cropped) == (40, 30), "The selected-region dimensions changed.");
         var cropPixels = Pixels(cropped);
         Require(EveryColor(cropPixels, 20, 40, 220), "The selected region included pixels outside the blue element.");
+        Stage("whole-and-crop-native-captures-passed");
         using (var cancellation = new System.Threading.CancellationTokenSource())
         {
             var pending = browser.CaptureAsync(viewport, 128, cancellation.Token);
             Require(!pending.IsCompleted, "The fixture did not exercise an asynchronous native capture.");
             var concurrent = browser.CaptureAsync(viewport, 128, default);
             cancellation.Cancel();
+            Stage($"canceled-native-capture-started; capture={pending.Status}; concurrent={concurrent.Status}");
             try { await concurrent; throw new InvalidDataException("Concurrent native capture was accepted."); }
             catch (InvalidOperationException) { }
             try { await pending; throw new InvalidOperationException("Canceled native capture returned an image."); }
             catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         }
+        Stage("canceled-native-capture-drained");
+
+        // Ordinary detach/move is not document retirement on either WebKit
+        // backend. The session's native ownership spans the visual gap.
+        await browser.InvokeScriptAsync("globalThis.preserved = 123");
+        Stage("reparenting-started");
+        panel.Children.Remove(browser.Control);
+        panel.Children.Add(browser.Control);
+        Require(await browser.InvokeScriptAsync("preserved") == "123", "Moving a WebKit view discarded its document.");
+        Stage("reparenting-preserved-document");
 
         var destroyed = false;
         var retired = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -130,56 +152,27 @@ internal static class WindowsWebViewCaptureProcessProbe
         Require(!detached.IsCompleted, "The fixture did not exercise capture during detachment.");
         window.Content = null;
         browser.Dispose();
+        Stage($"in-flight-retirement-started; capture={detached.Status}; destroyed={destroyed}");
         Require(!destroyed, "The wrapper destroyed its native adapter before the capture callback drained.");
         try { await detached; throw new InvalidDataException("A retired native viewport returned an image."); }
         catch (Exception error) when (error is InvalidOperationException or COMException) { }
+        Stage("retiring-native-capture-drained");
         // NativeControlHost may schedule actual destruction on the next layout
         // turn. Observe its real event rather than assuming synchronous teardown.
         await retired.Task;
+        Stage("native-adapter-destroyed");
         Require(destroyed, "The native adapter did not retire after capture settlement.");
-        await browser.DrainNativeRetirementAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await browser.DrainNativeRetirementAsync().WaitAsync(AppShutdownBudgets.BrowserCleanup);
+        Stage("native-retirement-settled");
         Directory.Delete(Path.Combine(root, "browser"), recursive: true);
         Require(!Directory.Exists(Path.Combine(root, "browser")), "Native profile data survived the browser-group exit.");
         GC.KeepAlive(retainedAdapter);
         window.Close();
         Console.WriteLine("webview2-capture: native-pixels; package-only; selected-crop; cancellation-drained; detach-drained");
         await RunHostedPackageAsync(desktop, root, backend);
-        if (OperatingSystem.IsWindows()) await RunPendingInitializationRetirementAsync(desktop, root);
     }
 
-    private static async Task RunPendingInitializationRetirementAsync(IClassicDesktopStyleApplicationLifetime desktop, string root)
-    {
-        // A replacement activation can retire a view after EnvironmentRequested
-        // but before its asynchronous controller exists. Native creation must
-        // settle before its HWND is destroyed; retirement is not an empty drain.
-        var profile = Path.Combine(root, "initializing-browser");
-        using var browser = new AppNativeWebView(profile);
-        var native = (NativeWebView)((Decorator)browser.Control).Child!;
-        SelectBackend(native, "webview2");
-        var requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var created = false;
-        native.EnvironmentRequested += (_, _) => requested.TrySetResult();
-        native.AdapterCreated += (_, args) =>
-        {
-            created = true;
-            WindowsWebViewBrowserProcess.Record(native, args);
-        };
-        var window = new Window { Title = "Sunder pending browser retirement", Width = 320, Height = 240, Content = browser.Control };
-        desktop.MainWindow = window;
-        window.Show();
-        await requested.Task;
-        Require(!created, "The pending-retirement fixture did not catch asynchronous native creation.");
-        browser.Dispose();
-        window.Content = null;
-        await browser.DrainNativeRetirementAsync().WaitAsync(TimeSpan.FromSeconds(3));
-        Require(created, "Retirement abandoned the initializing native adapter.");
-        Directory.Delete(profile, recursive: true);
-        Require(!Directory.Exists(profile), "The initializing native browser retained its profile after retirement.");
-        window.Close();
-        Console.WriteLine("webview2-retirement: pending-initialization-settled; original-sta; native-exit; profile-removed");
-    }
-
-    private static async Task RunHostedPackageAsync(IClassicDesktopStyleApplicationLifetime desktop, string root, string backend)
+    internal static async Task RunHostedPackageAsync(IClassicDesktopStyleApplicationLifetime desktop, string root, string backend, AppBrowserManager? sharedManager = null)
     {
         var packageRoot = Directory.CreateDirectory(Path.Combine(root, "package")).FullName;
         await File.WriteAllTextAsync(Path.Combine(packageRoot, "index.html"),
@@ -194,7 +187,8 @@ internal static class WindowsWebViewCaptureProcessProbe
         await using var server = await AppWebContentServer.StartAsync(packageRoot, target, default);
         var contracts = AppWebRpcContractCatalog.Load(packageRoot, new SunderPackageManifest { ContractBundles = [] },
             new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, []));
-        var factory = new HostedBrowserFactory(server, backend);
+        var manager = sharedManager ?? new AppBrowserManager(AvaloniaUiDispatcher.Instance);
+        var factory = new HostedBrowserFactory(server, backend, manager);
         using var package = new AppWebPackageViewControl(server.BaseUri, Path.Combine(root, "hosted-browser"), server,
             factory, UnavailableAppWebRpcClient.Instance, contracts, new ExternalBrowserService(_ => throw new InvalidOperationException("The capture fixture must not open an external browser.")));
         var panel = new DockPanel();
@@ -220,6 +214,7 @@ internal static class WindowsWebViewCaptureProcessProbe
             await using (var whole = await operations.CaptureAsync(binding, new(), 128, default))
             {
                 var bytes = await ReadContentAsync(whole);
+                RecordPng("hosted-whole", bytes);
                 var dimensions = AppDevelopmentViewOperations.ValidatePng(bytes);
                 Require(Math.Max(dimensions.Width, dimensions.Height) == 128, "The composed hosted image exceeded its requested edge.");
                 var pixels = Pixels(bytes);
@@ -230,6 +225,7 @@ internal static class WindowsWebViewCaptureProcessProbe
             await using (var crop = await operations.CaptureAsync(binding, selected, 128, default))
             {
                 var bytes = await ReadContentAsync(crop);
+                RecordPng("hosted-crop", bytes);
                 Require(AppDevelopmentViewOperations.ValidatePng(bytes) == (100, 80), "The hosted document selection did not retain its exact bounds.");
                 Require(EveryColor(Pixels(bytes), 20, 40, 220), "The hosted selected element included pixels outside its native bounds.");
             }
@@ -242,14 +238,12 @@ internal static class WindowsWebViewCaptureProcessProbe
         }
         finally
         {
-            var native = (NativeWebView)((Decorator)factory.Browser!.Control).Child!;
-            var detached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            native.AdapterDestroyed += (_, _) => detached.TrySetResult();
             panel.Children.Remove(package);
-            await detached.Task.WaitAsync(TimeSpan.FromSeconds(3));
             await package.DisposeAsync();
-            await package.DrainNativeRetirementAsync().WaitAsync(TimeSpan.FromSeconds(3));
-            Directory.Delete(Path.Combine(root, "hosted-browser"), recursive: true);
+            await package.DrainNativeRetirementAsync().WaitAsync(AppShutdownBudgets.BrowserCleanup);
+            await manager.RetireActivationAsync(Path.Combine(root, "hosted-browser"));
+            if (sharedManager is null) await manager.DisposeAsync();
+            if (Directory.Exists(Path.Combine(root, "hosted-browser"))) Directory.Delete(Path.Combine(root, "hosted-browser"), recursive: true);
             Require(!Directory.Exists(Path.Combine(root, "hosted-browser")), "Hosted profile data survived native retirement.");
             window.Close();
         }
@@ -272,26 +266,21 @@ internal static class WindowsWebViewCaptureProcessProbe
                 "The production Linux factory did not select only the qualified GTK backend.");
             return;
         }
-        native.AdapterPreference = backend switch
-        {
-            "webview2" => [Avalonia.Platform.WebViewAdapterType.WebView2],
-            _ => throw new ArgumentException("Unknown required native backend.", nameof(backend)),
-        };
+        throw new ArgumentException("Unknown required WebKit backend.", nameof(backend));
     }
 
-    private sealed class HostedBrowserFactory(AppWebContentServer server, string backend) : IAppWebViewFactory
+    private sealed class HostedBrowserFactory(AppWebContentServer server, string backend, AppBrowserManager manager) : IAppWebViewFactory
     {
-        internal AppNativeWebView? Browser { get; private set; }
+        internal IAppWebView? Browser { get; private set; }
         internal TaskCompletionSource Loaded { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IAppWebView Create(string userDataDirectory)
         {
-            var browser = Browser = new AppNativeWebView(userDataDirectory);
-            var native = (NativeWebView)((Decorator)browser.Control).Child!;
-            SelectBackend(native, backend);
-            if (OperatingSystem.IsWindows()) native.AdapterCreated += WindowsWebViewBrowserProcess.Record;
+            var browser = Browser = manager.Create(userDataDirectory);
+            if (!OperatingSystem.IsWindows()) SelectBackend((NativeWebView)((Decorator)browser.Control).Child!, backend);
             browser.NavigationCompleted += (_, args) =>
             {
                 if (!server.Owns(args.Uri)) return;
+                if (browser.NativeBrowserProcessId is { } pid) WindowsWebViewBrowserProcess.Record(pid);
                 if (args.Succeeded) Loaded.TrySetResult();
                 else Loaded.TrySetException(new InvalidOperationException("The hosted package fixture did not load."));
             };
@@ -305,15 +294,34 @@ internal static class WindowsWebViewCaptureProcessProbe
         using var bitmap = new Bitmap(stream);
         var size = bitmap.PixelSize;
         var count = checked(size.Width * size.Height * 4);
-        var memory = Marshal.AllocHGlobal(count);
-        try
+        // Raw CopyPixels preserves the backend's native channel/alpha layout.
+        // Explicitly transcode before applying the shared BGRA color assertions.
+        using var normalized = new WriteableBitmap(size, new Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Unpremul);
+        using var buffer = normalized.Lock();
+        bitmap.CopyPixels(buffer);
+        var pixels = new byte[count];
+        for (var row = 0; row < size.Height; row++)
+            Marshal.Copy(buffer.Address + row * buffer.RowBytes, pixels, row * size.Width * 4, size.Width * 4);
+        return pixels;
+    }
+
+    internal static void RecordPng(string stage, byte[] png)
+    {
+        var dimensions = AppDevelopmentViewOperations.ValidatePng(png);
+        var colors = Pixels(png).Chunk(4).GroupBy(pixel => Convert.ToHexString(pixel)).OrderByDescending(group => group.Count())
+            .Take(8).Select(group => $"{group.Key}:{group.Count()}");
+        Console.WriteLine($"native-capture-png: stage={stage}; size={dimensions.Width}x{dimensions.Height}; bytes={png.Length}; sha256={Convert.ToHexStringLower(SHA256.HashData(png))}; bgraColors={string.Join(',', colors)}");
+        if (Environment.GetEnvironmentVariable("SUNDER_TEST_COMMAND_LOG_DIRECTORY") is { Length: > 0 } directory)
         {
-            bitmap.CopyPixels(new PixelRect(size), memory, count, size.Width * 4);
-            var pixels = new byte[count];
-            Marshal.Copy(memory, pixels, 0, count);
-            return pixels;
+            var output = Directory.CreateDirectory(Path.Combine(directory, "native-capture")).FullName;
+            File.WriteAllBytes(Path.Combine(output, stage + ".png"), png);
         }
-        finally { Marshal.FreeHGlobal(memory); }
+    }
+    internal static void ReportFailure(Exception error)
+    {
+        Console.Error.WriteLine(error);
+        foreach (var entry in AppSessionLog.Snapshot())
+            Console.Error.WriteLine(entry.Message + Environment.NewLine + entry.ExceptionText);
     }
     internal static bool HasColor(byte[] pixels, byte red, byte green, byte blue)
     {

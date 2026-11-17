@@ -485,6 +485,10 @@ public sealed class ShellSession : IAsyncDisposable
         MainWindow.HidingForClose -= MainWindow_OnHidingForClose;
         try
         {
+            // Detach native package hosts while their original HWND/NSView/X11
+            // parent still exists. Closing the top-level first lets the OS destroy
+            // child handles before the browser session can park or retire them.
+            MainWindow.Content = null;
             MainWindow.CloseForShutdown();
         }
         finally

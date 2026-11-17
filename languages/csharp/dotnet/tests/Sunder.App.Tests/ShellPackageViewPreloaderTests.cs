@@ -15,6 +15,30 @@ namespace Sunder.App.Tests;
 public sealed class ShellPackageViewPreloaderTests
 {
     [Fact]
+    public async Task WebRegistrationIsNotDemandEvenForVisibleOrHiddenHotbarEntries()
+    {
+        var calls = 0;
+        var registry = new AppPackageViewRegistry();
+        foreach (var id in new[] { "web.visible", "web.hidden" })
+            registry.RegisterPackageView("package", new PackageViewRegistration(id, id), () => { calls++; return new Border(); }, isWebView: true);
+        await using var host = new PackageViewHostService(registry, [], [], [], sessionFolder: null, uiDispatcher: new ImmediateUiDispatcher());
+        var state = new ShellState { HiddenHotbarViewIds = ["web.hidden"] };
+        var views = new Dictionary<string, ShellPackageView>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["web.visible"] = View("web.visible", RailPlacement.Middle),
+            ["web.hidden"] = View("web.hidden", RailPlacement.Middle),
+        };
+        var layout = CreateLayout();
+        layout.MiddleBar.SetItems([Item(views["web.visible"])]);
+        var preloader = new ShellPackageViewPreloader(views, state, host, layout.GetSlots, new ImmediateUiDispatcher());
+        preloader.RetainHotbarViews();
+        await preloader.PreloadAsync((work, token) => work(token), default);
+        Assert.Equal(0, calls);
+        Assert.Empty(layout.MiddlePanel.HostedViews);
+        Assert.NotNull(host.GetOrCreateView("web.visible"));
+        Assert.Equal(1, calls);
+    }
+    [Fact]
     public async Task PreloadAsync_WarmsVisibleThenOverflowThenHiddenAndRetainsEveryView()
     {
         var probe = new PreloadProbe();

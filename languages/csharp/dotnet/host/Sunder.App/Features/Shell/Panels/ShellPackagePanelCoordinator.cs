@@ -28,7 +28,8 @@ internal sealed class ShellPackagePanelCoordinator(
     Action persistShellState,
     Func<string, IReadOnlyDictionary<string, string?>?, ValueTask<bool>>? presentViewAsync = null,
     Action<string>? cancelViewNavigation = null,
-    Action<RailPlacement, string>? closePanel = null
+    Action<RailPlacement, string>? closePanel = null,
+    Action<string>? viewClosed = null
 )
 {
     private readonly Action<string> _cancelViewNavigation =
@@ -215,6 +216,7 @@ internal sealed class ShellPackagePanelCoordinator(
             )
         )
         {
+            viewClosed?.Invoke(viewId);
             return true;
         }
 
@@ -253,6 +255,7 @@ internal sealed class ShellPackagePanelCoordinator(
 
         persistShellState();
         _cancelViewNavigation(viewId);
+        viewClosed?.Invoke(viewId);
         return true;
     }
 
@@ -282,6 +285,7 @@ internal sealed class ShellPackagePanelCoordinator(
             }
             persistShellState();
             _cancelViewNavigation(item.Id);
+            viewClosed?.Invoke(item.Id);
             return;
         }
 

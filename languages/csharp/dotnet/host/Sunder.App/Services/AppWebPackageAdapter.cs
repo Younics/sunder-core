@@ -122,7 +122,8 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
     private readonly IAppWebViewFactory _webViewFactory;
     private readonly ExternalBrowserService _externalBrowser;
     private readonly object _gate = new();
-    private readonly List<AppWebPackageViewControl> _views = [];
+    private readonly HashSet<AppWebPackageViewControl> _views = [];
+    private readonly List<Exception> _viewRetirementFailures = [];
     private readonly Lazy<Task> _disposal;
     private int _disposed;
 
@@ -159,7 +160,7 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
         _viewRegistry.RegisterPackageView(
             _packageId,
             registration,
-            () => CreateView(view));
+            () => CreateView(view), isWebView: true);
     }
 
     private AppWebPackageViewControl CreateView(SunderPackageWebViewManifest view)
@@ -168,14 +169,26 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
             var control = new AppWebPackageViewControl(
-                _contentServer.GetRouteUri(view.Route!), _userDataRoot, _contentServer,
+                _contentServer.GetRouteUri(view.Route!), AppWebViewProfile.ForView(_userDataRoot, view.ViewId!), _contentServer,
                 _webViewFactory, new NonDisposingAppWebRpcClient(_rpcClient), _contracts, _externalBrowser);
             _views.Add(control);
+            _ = ReleaseRetiredViewAsync(control);
             return control;
         }
     }
 
     public ValueTask DisposeAsync() => new(_disposal.Value);
+
+    private async Task ReleaseRetiredViewAsync(AppWebPackageViewControl view)
+    {
+        try
+        {
+            await view.Retired.ConfigureAwait(false);
+            await view.DrainNativeRetirementAsync().ConfigureAwait(false);
+        }
+        catch (Exception error) { lock (_gate) _viewRetirementFailures.Add(error); }
+        finally { lock (_gate) _views.Remove(view); }
+    }
 
     private async Task DisposeCoreAsync()
     {
@@ -187,31 +200,42 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             views = _views.ToArray();
             _views.Clear();
         }
+        var failures = new List<Exception>();
         try
         {
             // Registry disposal starts synchronous controls' cleanup, but a browser
             // bridge can still be notifying its document. Drain every owned view
             // before releasing its shared transport, server or private profile.
-            if (views.Length != 0) await AvaloniaUiDispatcher.Instance.InvokeAsync(async () =>
+            try
             {
-                var drains = views.Select(view => view.DisposeAsync().AsTask()).ToArray();
-                await Task.WhenAll(drains);
-            }).ConfigureAwait(false);
+                if (views.Length != 0) await AvaloniaUiDispatcher.Instance.InvokeAsync(async () =>
+                {
+                    var drains = views.Select(view => view.DisposeAsync().AsTask()).ToArray();
+                    await Task.WhenAll(drains);
+                }).ConfigureAwait(false);
+            }
+            catch (Exception error) { failures.Add(error); }
+            // A failed document must not leave its activation's idle profile or
+            // other native sessions alive. Keep both verdicts if cleanup fails.
+            try { await _webViewFactory.RetireActivationAsync(_userDataRoot).ConfigureAwait(false); }
+            catch (Exception error) { failures.Add(error); }
+            lock (_gate)
+                failures.AddRange(_viewRetirementFailures);
         }
         finally
         {
             try { await _rpcClient.DisposeAsync().ConfigureAwait(false); }
             finally { await _contentServer.DisposeAsync().ConfigureAwait(false); }
         }
+        if (failures.Count != 0) throw new AggregateException("A package browser document did not retire.", failures);
         if (views.Length != 0)
         {
-            var nativeDrain = AvaloniaUiDispatcher.Instance.InvokeAsync(() =>
-                Task.WhenAll(views.Select(view => view.DrainNativeRetirementAsync())));
+            var nativeDrain = Task.WhenAll(views.Select(view => view.DrainNativeRetirementAsync()));
             try { await nativeDrain.WaitAsync(RemainingCleanupBudget(started)).ConfigureAwait(false); }
             catch (TimeoutException error)
             {
                 AppCleanupQuarantine.Retain(nativeDrain, $"observing native browser exit for '{_packageId}'");
-                throw new TimeoutException($"Package '{_packageId}' did not prove native browser exit within its UI cleanup budget.", error);
+                throw new TimeoutException($"Package '{_packageId}' did not prove native view retirement within its browser cleanup allowance.", error);
             }
         }
         await DeleteOrQuarantineUserDataAsync(_userDataRoot, started).ConfigureAwait(false);
@@ -230,8 +254,8 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
 
     private static TimeSpan RemainingCleanupBudget(long started)
     {
-        var remaining = AppShutdownBudgets.UiCleanup - Stopwatch.GetElapsedTime(started);
-        if (remaining <= TimeSpan.Zero) throw new TimeoutException("Package browser retirement exceeded its UI cleanup budget.");
+        var remaining = AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException("Package browser retirement exceeded its browser cleanup allowance.");
         return remaining;
     }
 
@@ -246,9 +270,9 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
             {
-                // Native exit was observed before reclamation. An external file
+                // Native view retirement was observed before reclamation. An external file
                 // owner can still delay deletion, but never restart the budget.
-                var remaining = AppShutdownBudgets.UiCleanup - Stopwatch.GetElapsedTime(started);
+                var remaining = AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(started);
                 if (remaining > TimeSpan.Zero)
                 {
                     await Task.Delay(remaining < TimeSpan.FromMilliseconds(50) ? remaining : TimeSpan.FromMilliseconds(50)).ConfigureAwait(false);

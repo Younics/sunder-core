@@ -8,6 +8,8 @@ namespace Sunder.App.Services;
 
 internal sealed partial class AppPackageHostComposition : IDisposable
 {
+    private bool _usesBrowserCleanup;
+    internal TimeSpan CleanupBudget => _usesBrowserCleanup ? AppShutdownBudgets.BrowserCleanup : AppShutdownBudgets.GenerationRetirement;
     private readonly AppPackageActivator _packageActivator;
     private readonly AppPackageDisableCoordinator _disableCoordinator;
     private readonly object _eventSender;
@@ -205,6 +207,7 @@ internal sealed partial class AppPackageHostComposition : IDisposable
         CancellationToken cancellationToken)
     {
         var activation = new AppPackageActivationState();
+        _usesBrowserCleanup |= source.Target.Kind == Sunder.Package.Format.SunderPackageFormat.WebTargetKind;
         var activated = false;
         var projectionLease = preparedSource.ProjectionLease?.Take();
         try

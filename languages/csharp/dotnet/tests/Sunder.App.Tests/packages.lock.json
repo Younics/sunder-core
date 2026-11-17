@@ -290,6 +290,7 @@
           "CommunityToolkit.Mvvm": "[8.4.2, )",
           "LiveMarkdown.Avalonia": "[2.5.1, )",
           "Microsoft.Extensions.DependencyInjection": "[10.0.13, )",
+          "Microsoft.Web.WebView2": "[1.0.4314.35, )",
           "Sunder.App.Bridge": "[1.0.0, )",
           "Sunder.Host.Client": "[1.0.0, )",
           "Sunder.Package.Format": "[1.0.0, )",
@@ -504,6 +505,12 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.13"
         }
+      },
+      "Microsoft.Web.WebView2": {
+        "type": "CentralTransitive",
+        "requested": "[1.0.4314.35, )",
+        "resolved": "1.0.4314.35",
+        "contentHash": "x5MFf2W03xueU1mMNvivXfHSsQ+ODo7vJ36qw/dLtU5Gs+8d7+7N7zzmNNDoT3ffosmcvZNBtUnlzyiDUuBkSQ=="
       },
       "System.Security.Cryptography.ProtectedData": {
         "type": "CentralTransitive",

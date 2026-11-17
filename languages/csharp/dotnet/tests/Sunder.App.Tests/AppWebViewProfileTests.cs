@@ -36,4 +36,18 @@ public sealed class AppWebViewProfileTests
         Assert.False(Directory.Exists(exactRoot));
         Assert.Throws<PathTooLongException>(() => AppWebViewProfile.ValidateWindowsPath(new string('a', 184)));
     }
+
+    [Fact]
+    public void SharedEngineReservesTheIndependentProfileNameWithinTheOriginalDescendantBudget()
+    {
+        var maximum = AppWebViewProfile.WindowsMaximumSharedUserDataPathLength;
+        Assert.Equal(147, maximum);
+        Assert.Equal(AppWebViewProfile.WindowsMaximumUserDataPathLength, maximum + "view-".Length + 32 - "sunder-package".Length);
+        AppWebViewProfile.ValidateWindowsPath(new string('a', maximum), maximum);
+        var error = Assert.Throws<PathTooLongException>(() => AppWebViewProfile.ValidateWindowsPath(new string('a', maximum + 1), maximum));
+        Assert.Contains(AppLocalState.StateRootEnvironmentVariable, error.Message, StringComparison.Ordinal);
+        // The reproduced 161-character shared root fit the old UDF-only guard
+        // but stalled native exit. Reject it before acquiring WebView2.
+        Assert.Throws<PathTooLongException>(() => AppWebViewProfile.ValidateWindowsPath(new string('a', 161), maximum));
+    }
 }

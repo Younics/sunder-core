@@ -795,6 +795,8 @@ public sealed partial class AppWebBridgeTests
             var secondCall = second.HandleMessageAsync(Request(second.SessionNonce, origin, "b_1", "rpc.discover", new { contractId = "example.rpc" }));
             await Task.WhenAll(rpc.FirstStarted.Task, rpc.SecondStarted.Task).WaitAsync(TimeSpan.FromSeconds(5));
             await first.DisposeAsync();
+            var firstDrain = first.DrainAsync();
+            Assert.False(firstDrain.IsCompleted); // Revoked requests may still be executing.
             Assert.True(rpc.FirstToken.IsCancellationRequested);
             Assert.False(rpc.SecondToken.IsCancellationRequested);
             Assert.Equal(0, rpc.DisposeCalls);
@@ -805,6 +807,7 @@ public sealed partial class AppWebBridgeTests
             rpc.FirstRelease.SetResult();
             rpc.SecondRelease.SetResult();
             await Task.WhenAll(firstCall, secondCall).WaitAsync(TimeSpan.FromSeconds(5));
+            await firstDrain;
             Assert.Equal("result", ReadResponse(Assert.Single(secondView.Scripts)).GetProperty("type").GetString());
             await second.DisposeAsync();
             Assert.Equal(0, rpc.DisposeCalls);
@@ -818,7 +821,7 @@ public sealed partial class AppWebBridgeTests
     }
 
     [Fact]
-    public async Task ViewDisposal_NotifiesDocumentBeforeDetachingOrDisposingWebView()
+    public async Task ViewDisposal_RevokesAndDetachesBeforeDocumentAndNativeCleanupComplete()
     {
         var root = CreateRoot();
         await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
@@ -845,6 +848,8 @@ public sealed partial class AppWebBridgeTests
                     UnavailableAppWebRpcClient.Instance, EmptyCatalog(root), new ExternalBrowserService());
                 await view.Bridge.EstablishAsync(server.BaseUri);
                 var notification = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var documentCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                webView.DocumentRetirement = documentCleanup.Task;
                 webView.ClearScripts();
                 webView.EvaluateScript = script =>
                 {
@@ -859,11 +864,16 @@ public sealed partial class AppWebBridgeTests
                 var retirement = view.DisposeAsync().AsTask();
                 Assert.Same(retirement, view.DisposeAsync().AsTask());
                 Assert.Single(webView.Scripts);
+                Assert.Null(view.Content);
+                Assert.Equal(0, view.Bridge.PendingRequestCount);
                 Assert.False(webView.Disposed.Task.IsCompleted);
                 Assert.False(retirement.IsCompleted);
                 var nativeExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 webView.NativeRetirement = nativeExit.Task;
                 notification.SetResult("true");
+                await Task.Yield();
+                Assert.False(retirement.IsCompleted);
+                documentCleanup.SetResult();
                 await retirement.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.True(webView.Disposed.Task.IsCompletedSuccessfully);
                 // A single view can dispose while a sibling still owns the same
@@ -1705,6 +1715,8 @@ public sealed partial class AppWebBridgeTests
         }
 
         public Task DrainNativeRetirementAsync() => NativeRetirement;
+        public Task DocumentRetirement { get; set; } = Task.CompletedTask;
+        public Task RetireDocumentAsync() => DocumentRetirement;
 
         public void ClearScripts()
         {

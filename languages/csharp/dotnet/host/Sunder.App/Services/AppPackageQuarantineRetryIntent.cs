@@ -31,9 +31,6 @@ internal sealed class AppPackageQuarantineRetryIntent : IReadOnlyCollection<stri
     public AppPackageQuarantineRetryIntent Snapshot()
         => new(_packageIds, PreserveKnownViewQuarantines);
 
-    public AppPackageQuarantineRetryIntent WithPackageIds(IEnumerable<string> packageIds)
-        => new(_packageIds.Concat(packageIds), PreserveKnownViewQuarantines);
-
     public IEnumerator<string> GetEnumerator()
         => ((IEnumerable<string>)_packageIds).GetEnumerator();
 

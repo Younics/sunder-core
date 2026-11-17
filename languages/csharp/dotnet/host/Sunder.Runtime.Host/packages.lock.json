@@ -11,14 +11,14 @@
       "sunder.package.format": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.package.hosting": {
         "type": "Project",
         "dependencies": {
           "Sunder.Package.Format": "[1.0.0, )",
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       },
       "sunder.package.projections": {
@@ -45,7 +45,7 @@
       "sunder.sdk.stacks": {
         "type": "Project",
         "dependencies": {
-          "Sunder.Sdk": "[1.0.0, )"
+          "Sunder.Sdk": "[1.0.2, )"
         }
       }
     }
