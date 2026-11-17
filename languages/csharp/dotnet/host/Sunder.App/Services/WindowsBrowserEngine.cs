@@ -32,9 +32,13 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
 
     internal async Task<(CoreWebView2Environment Environment, CoreWebView2Controller Controller)> CreateAsync(nint parent, string profile)
     {
+        var started = Stopwatch.GetTimestamp();
+        void Stage(string stage) => AppSessionLog.WriteInfo($"Shared browser acquisition: stage={stage}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; utc={DateTime.UtcNow:O}; child={parent}; childParent={GetParent(parent)}; parking={_parking}; thread={Environment.CurrentManagedThreadId}; closing={_closing}.", visibleInDeveloperLog: false);
         if (!ui.CheckAccess()) throw new InvalidOperationException("WebView2 creation requires its original STA.");
         ObjectDisposedException.ThrowIf(_closing, this);
+        Stage("environment-requested");
         var environment = await (_environment ??= CreateEnvironmentAsync());
+        Stage("environment-ready");
         var options = environment.CreateCoreWebView2ControllerOptions();
         options.ProfileName = profile;
         options.IsInPrivateModeEnabled = true;
@@ -42,12 +46,15 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
         // surviving child is insufficient if its transient top-level is closed
         // or reparented meanwhile. Acquire under the engine's stable hidden root,
         // then attach the completed controller to its session-owned child.
+        Stage("controller-requested");
         var controller = await environment.CreateCoreWebView2ControllerAsync(ParkingWindow, options);
+        Stage("controller-ready");
         try
         {
             controller.IsVisible = false;
             controller.ParentWindow = parent;
             ObserveProcess(controller.CoreWebView2.BrowserProcessId);
+            Stage("controller-attached");
             return (environment, controller);
         }
         catch { controller.Close(); throw; }
@@ -55,13 +62,16 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
 
     private async Task<CoreWebView2Environment> CreateEnvironmentAsync()
     {
+        var started = Stopwatch.GetTimestamp();
         AppWebViewProfile.ValidateWindowsPath(_root, AppWebViewProfile.WindowsMaximumSharedUserDataPathLength);
         var environment = await CoreWebView2Environment.CreateAsync(null, _root,
             new CoreWebView2EnvironmentOptions { AllowSingleSignOnUsingOSPrimaryAccount = false });
+        AppSessionLog.WriteInfo($"Shared browser environment ready; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}; utc={DateTime.UtcNow:O}; root={_root}.", visibleInDeveloperLog: false);
         environment.BrowserProcessExited += (_, args) =>
             AppSessionLog.WriteInfo($"Shared package browser exited; pid={args.BrowserProcessId}; kind={args.BrowserProcessExitKind}.", visibleInDeveloperLog: false);
         environment.ProcessInfosChanged += (_, _) =>
         {
+            AppSessionLog.WriteInfo($"Shared browser process-info notification; utc={DateTime.UtcNow:O}; closing={_closing}; root={_root}.", visibleInDeveloperLog: false);
             if (_closing) return;
             // Also retain a process started by an acquisition which subsequently
             // fails. Controller publication is not the first ownership boundary.
@@ -92,6 +102,7 @@ internal sealed class WindowsBrowserEngine(IUiDispatcher ui) : IAsyncDisposable
         var process = Process.GetProcessById(checked((int)id));
         _ = process.SafeHandle; // Hold the exact native identity across PID reuse.
         _processes.Add(process.Id, process);
+        AppSessionLog.WriteInfo($"Shared browser native identity observed; pid={process.Id}; birthUtc={process.StartTime.ToUniversalTime():O}; utc={DateTime.UtcNow:O}; root={_root}.", visibleInDeveloperLog: false);
     }
 
     public ValueTask DisposeAsync() => new(_disposal ??= ui.InvokeAsync(CloseAsync));

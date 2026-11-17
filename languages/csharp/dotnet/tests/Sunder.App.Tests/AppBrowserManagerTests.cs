@@ -150,6 +150,111 @@ public sealed class AppBrowserManagerTests
         Assert.True(engineClosed);
     });
 
+    [Fact]
+    public Task ReopenWaitsForCleanupAndSkippedReopensNeverCreateNativeViews() => RunAsync(async () =>
+    {
+        var reset = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var navigated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var created = new List<Browser>();
+        await using var manager = new AppBrowserManager(new InlineDispatcher(), _ =>
+        {
+            var browser = new Browser { DocumentDrain = reset.Task, OnNavigate = () => navigated.TrySetResult() };
+            created.Add(browser); return browser;
+        });
+        var key = Path.Combine(Path.GetTempPath(), "browser-pending-reopen");
+        var old = manager.Create(key);
+        var documentCleanup = old.RetireDocumentAsync();
+        Assert.False(documentCleanup.IsCompleted);
+        Assert.Throws<ObjectDisposedException>(() => old.Navigate(new Uri("https://retired.invalid")));
+        var skipped = new List<Task>();
+        for (var i = 0; i < 12; i++)
+        {
+            var abandoned = manager.Create(key);
+            abandoned.Navigate(new Uri("https://abandoned.invalid"));
+            skipped.Add(abandoned.RetireAsync());
+        }
+        var reopened = manager.Create(key);
+        reopened.Navigate(new Uri("https://current.invalid"));
+        Assert.Single(created);
+        Assert.False(navigated.Task.IsCompleted);
+        var oldCleanup = old.RetireAsync();
+        reset.SetResult();
+        await Task.WhenAll(skipped.Append(oldCleanup));
+        await navigated.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Single(created); // The cleaned original is reused, not a replacement for every click.
+        Assert.False(created[0].Closed);
+        for (var cycle = 0; cycle < 3; cycle++)
+        {
+            var nextReset = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            created[0].DocumentDrain = nextReset.Task;
+            navigated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            _ = reopened.RetireDocumentAsync();
+            var next = manager.Create(key);
+            next.Navigate(new Uri("https://current.invalid"));
+            var previousCleanup = reopened.RetireAsync();
+            nextReset.SetResult();
+            await previousCleanup;
+            await navigated.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Same(created[0].Control, Assert.IsType<ContentControl>(next.Control).Content);
+            reopened = next;
+        }
+        await reopened.RetireAsync();
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task WatchdogTimeoutRetainsTheActualDrainAndNeverClaimsCompletion(bool delayEngine) => RunAsync(async () =>
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var browser = new Browser { Reusable = false, NativeDrain = delayEngine ? Task.CompletedTask : release.Task };
+        var engineEntered = false;
+        var manager = new AppBrowserManager(new InlineDispatcher(), _ => browser, () =>
+        {
+            engineEntered = true;
+            return delayEngine ? release.Task : Task.CompletedTask;
+        });
+        var lease = manager.Create(Path.Combine(Path.GetTempPath(), "browser-watchdog"));
+        var cleanup = manager.DisposeAsync().AsTask();
+        Assert.False(lease.CanCapture);
+        Assert.Throws<ObjectDisposedException>(() => lease.Navigate(new Uri("https://retired.invalid")));
+        Assert.False(await BoundedCleanup.RunAsync("testing retained browser cleanup", () => cleanup, TimeSpan.FromTicks(1)));
+        Assert.False(cleanup.IsCompleted);
+        Assert.True(AppCleanupQuarantine.IsRetained(cleanup));
+        Assert.Same(cleanup, manager.DisposeAsync().AsTask());
+        Assert.Equal(delayEngine, engineEntered);
+        release.SetResult();
+        await cleanup;
+        Assert.True(engineEntered);
+        Assert.Equal(0, manager.NativeSessionCount);
+    });
+
+    [Fact]
+    public Task FailedPredecessorDoesNotCreateOrPublishAReplacement() => RunAsync(async () =>
+    {
+        var reset = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var created = 0;
+        var manager = new AppBrowserManager(new InlineDispatcher(), _ =>
+        {
+            created++;
+            return new Browser { DocumentDrain = reset.Task };
+        });
+        var key = Path.Combine(Path.GetTempPath(), "browser-failed-reopen");
+        var first = manager.Create(key);
+        var documentCleanup = first.RetireDocumentAsync();
+        var reopened = manager.Create(key);
+        reopened.Failed += (_, _) => failure.TrySetResult();
+        var cleanup = first.RetireAsync();
+        reset.SetException(new InvalidOperationException("native reset failed"));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => documentCleanup);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => cleanup);
+        await failure.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.Equal(1, created);
+        Assert.False(reopened.CanCapture);
+        await Assert.ThrowsAsync<AggregateException>(() => manager.DisposeAsync().AsTask());
+    });
+
     private static Task RunAsync(Func<Task> work)
     {
         var previous = SynchronizationContext.Current;
@@ -177,10 +282,12 @@ public sealed class AppBrowserManagerTests
         internal bool Reusable = true, Closed, FailReset;
         internal int Resets;
         internal Task NativeDrain = Task.CompletedTask;
-        public Task ResetAsync() { Resets++; return FailReset ? Task.FromException(new InvalidOperationException("reset failed")) : Task.CompletedTask; }
+        internal Task DocumentDrain = Task.CompletedTask;
+        internal Action? OnNavigate;
+        public Task ResetAsync() { Resets++; return FailReset ? Task.FromException(new InvalidOperationException("reset failed")) : DocumentDrain; }
         public Task DrainNativeRetirementAsync() => NativeDrain;
         public void Dispose() => Closed = true;
-        public void Navigate(Uri uri) { }
+        public void Navigate(Uri uri) => OnNavigate?.Invoke();
         public void Stop() { }
         public Task<string?> InvokeScriptAsync(string script) => Task.FromResult<string?>("true");
         public event EventHandler<AppWebNavigationStartingEventArgs>? NavigationStarting { add { } remove { } }

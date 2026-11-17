@@ -57,7 +57,21 @@ internal sealed class AppBrowserManager : IAppWebViewFactory, IAsyncDisposable
             cached.Expiry.Cancel();
             browser = cached.Browser;
         }
-        else browser = _create(Path.Combine(key, Guid.NewGuid().ToString("N")));
+        else
+        {
+            var predecessors = _leases.Where(lease => lease.Key == key && lease.RetirementStarted)
+                .Select(lease => lease.WhenRetired)
+                .Concat(_cleanups.Where(item => item.Value == key).Select(item => item.Key)).ToArray();
+            var path = Path.Combine(key, Guid.NewGuid().ToString("N"));
+            browser = predecessors.Length == 0 ? _create(path)
+                : new AppDeferredWebView(Task.WhenAll(predecessors), () =>
+                {
+                    if (_idle is not { } ready || ready.Key != key) return _create(path);
+                    _idle = null;
+                    ready.Expiry.Cancel();
+                    return ready.Browser is AppDeferredWebView deferred ? deferred.DetachForReuse() : ready.Browser;
+                });
+        }
         var lease = new Lease(this, key, browser);
         _leases.Add(lease);
         return lease;
@@ -122,15 +136,16 @@ internal sealed class AppBrowserManager : IAppWebViewFactory, IAsyncDisposable
             }
             await CloseAsync(lease.Browser);
         }
-        catch
+        catch (Exception failure)
         {
             // A failed reset never becomes a reusable slot. Still own final
             // destruction; preserve the original failure rather than hiding it.
             try { await CloseAsync(lease.Browser); }
             catch (Exception error) { AppSessionLog.WriteError("Failed to close a retired browser session.", error); }
+            lease.FailWaitingReopen(failure);
             throw;
         }
-        finally { _leases.Remove(lease); }
+        finally { _leases.Remove(lease); lease.CompleteWaitingReopen(); }
     }
 
     private async Task ExpireAsync(CachedView cached)
@@ -179,6 +194,11 @@ internal sealed class AppBrowserManager : IAppWebViewFactory, IAsyncDisposable
     {
         private Task? _retirement;
         private Task? _documentRetirement;
+        private TaskCompletionSource? _waitingReopen;
+        internal bool RetirementStarted => _retirement is not null || _documentRetirement is not null;
+        internal Task WhenRetired => _retirement ?? (_waitingReopen ??= new(TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+        internal void FailWaitingReopen(Exception error) => _waitingReopen?.TrySetException(error);
+        internal void CompleteWaitingReopen() => _waitingReopen?.TrySetResult();
         internal string Key => key;
         internal IAppWebView Browser => browser;
         internal bool Reusable { get; set; } = true;

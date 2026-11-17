@@ -28,6 +28,7 @@ internal sealed class AppPackageGeneration(
     internal IReadOnlyList<string> OwnedActivationIds { get; private set; } = [];
     internal void SealActivations() => OwnedActivationIds = State.SnapshotOwnedPackageIds();
     internal IEnumerable<AppPackageGeneration> ActivationGroups => _retainedGroups.Append(this);
+    internal TimeSpan CleanupBudget => ActivationGroups.Max(group => group.Composition.CleanupBudget);
 
     internal void RetainGroup(AppPackageGeneration owner, bool existingActivation = true)
     {

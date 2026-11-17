@@ -29,7 +29,7 @@ public sealed class NativeWebViewCaptureProcessTests
                          "--depsfile", Path.Combine(AppContext.BaseDirectory, "Sunder.App.Integration.Tests.deps.json"), probe, temporary.RootPath, backend })
                 start.ArgumentList.Add(argument);
             await using var process = CapturedProcess.Start(start, 128 * 1024);
-            var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(60));
+            var result = await process.EnsureSuccessAsync(TimeSpan.FromSeconds(150));
             Assert.Contains("native-pixels; package-only; selected-crop; cancellation-drained; detach-drained", result.StandardOutput, StringComparison.Ordinal);
             Assert.Contains("hosted-package; fixed-document-query; composed-capture; exact-revision", result.StandardOutput, StringComparison.Ordinal);
         });

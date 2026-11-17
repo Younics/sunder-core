@@ -821,7 +821,7 @@ public sealed partial class AppWebBridgeTests
     }
 
     [Fact]
-    public async Task ViewDisposal_NotifiesDocumentBeforeDetachingOrDisposingWebView()
+    public async Task ViewDisposal_RevokesAndDetachesBeforeDocumentAndNativeCleanupComplete()
     {
         var root = CreateRoot();
         await File.WriteAllTextAsync(Path.Combine(root, "index.html"), "<!doctype html><html><head></head></html>");
@@ -848,6 +848,8 @@ public sealed partial class AppWebBridgeTests
                     UnavailableAppWebRpcClient.Instance, EmptyCatalog(root), new ExternalBrowserService());
                 await view.Bridge.EstablishAsync(server.BaseUri);
                 var notification = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var documentCleanup = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                webView.DocumentRetirement = documentCleanup.Task;
                 webView.ClearScripts();
                 webView.EvaluateScript = script =>
                 {
@@ -862,11 +864,16 @@ public sealed partial class AppWebBridgeTests
                 var retirement = view.DisposeAsync().AsTask();
                 Assert.Same(retirement, view.DisposeAsync().AsTask());
                 Assert.Single(webView.Scripts);
+                Assert.Null(view.Content);
+                Assert.Equal(0, view.Bridge.PendingRequestCount);
                 Assert.False(webView.Disposed.Task.IsCompleted);
                 Assert.False(retirement.IsCompleted);
                 var nativeExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                 webView.NativeRetirement = nativeExit.Task;
                 notification.SetResult("true");
+                await Task.Yield();
+                Assert.False(retirement.IsCompleted);
+                documentCleanup.SetResult();
                 await retirement.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.True(webView.Disposed.Task.IsCompletedSuccessfully);
                 // A single view can dispose while a sibling still owns the same
@@ -1708,6 +1715,8 @@ public sealed partial class AppWebBridgeTests
         }
 
         public Task DrainNativeRetirementAsync() => NativeRetirement;
+        public Task DocumentRetirement { get; set; } = Task.CompletedTask;
+        public Task RetireDocumentAsync() => DocumentRetirement;
 
         public void ClearScripts()
         {

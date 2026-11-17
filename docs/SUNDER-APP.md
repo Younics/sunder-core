@@ -75,8 +75,19 @@ Host-mediated package state/RPC for shared or persistent data.
 
 View retirement joins actual bridge handlers and submitted script/capture callbacks;
 cancellation, blank navigation or visual detachment alone is not cleanup proof.
+Closing a view revokes its bridge and detaches its presentation before waiting for
+native cleanup. A reopen while cleanup is pending shows a loading view; abandoned
+reopens do not create additional native controllers. Only a fully cleaned controller
+is reusable. Late initialization of a closed view never starts its package document.
+
+The three-second UI allowance measures presentation responsiveness, not WebView2
+startup or browser-process exit. Browser cleanup has a separate **15-second** caller
+allowance, including pending initialization, callback drain and reclamation. Final App
+shutdown keeps the UI dispatcher running during that drain; its allowance is shared
+across generation cleanup and final engine shutdown, not restarted for each step.
 Bounded caller waits do not cancel the underlying cleanup. Failed or incomplete
-cleanup remains failed and is retained by the cleanup owner.
+cleanup remains failed and is retained by the cleanup owner. Watchdog expiry permits
+bounded App exit, not successful-cleanup acknowledgement or deletion of live data.
 
 On Windows, the compact shared user-data root is under `webview-engines` inside the
 configured App state root. The complete shared-root path is limited to **147

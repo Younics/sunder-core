@@ -87,6 +87,9 @@ internal sealed class AppWebPackageViewControl : ContentControl, IDisposable, IA
                 // script callback before retiring its document can deadlock.
                 var bridgeRetirement = _bridge.DisposeAsync().AsTask();
                 var documentRetirement = _webView.RetireDocumentAsync();
+                // Presentation and authority end now. Native acquisition/capture
+                // may still be draining under the browser manager's ownership.
+                Content = null;
                 await Task.WhenAll(bridgeRetirement, documentRetirement, _bridge.DrainAsync());
             }
             finally

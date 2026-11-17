@@ -45,11 +45,14 @@ internal static class AppCleanupQuarantine
 
 internal static class AppShutdownBudgets
 {
+    // Native creation/teardown and file reclamation are not UI responsiveness.
+    // One caller allowance covers the whole browser drain, not each native step.
+    public static readonly TimeSpan BrowserCleanup = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan OwnedTasks = TimeSpan.FromSeconds(3);
     public static readonly TimeSpan RuntimeSubscription = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan BackgroundTasks = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan UiCleanup = TimeSpan.FromSeconds(3);
-    public static readonly TimeSpan PackageHost = TimeSpan.FromSeconds(10);
+    public static readonly TimeSpan PackageHost = TimeSpan.FromSeconds(10) + BrowserCleanup;
     public static readonly TimeSpan ServiceProvider = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan GenerationRetirement = TimeSpan.FromSeconds(5);
     public static readonly TimeSpan RetirementDrain = TimeSpan.FromSeconds(10);

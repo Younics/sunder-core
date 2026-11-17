@@ -48,7 +48,8 @@ internal static class WindowsWebViewCaptureProcessProbe
         desktop.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         desktop.Startup += (_, _) => Dispatcher.UIThread.Post(async () =>
         {
-            try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(TimeSpan.FromSeconds(45)); desktop.Shutdown(0); }
+            // This is a whole-scenario hang watchdog, not a per-view UI deadline.
+            try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(TimeSpan.FromMinutes(2)); desktop.Shutdown(0); }
             catch (Exception error) { ReportFailure(error); desktop.Shutdown(1); }
         });
     }).StartWithClassicDesktopLifetime(args);
@@ -161,7 +162,7 @@ internal static class WindowsWebViewCaptureProcessProbe
         await retired.Task;
         Stage("native-adapter-destroyed");
         Require(destroyed, "The native adapter did not retire after capture settlement.");
-        await browser.DrainNativeRetirementAsync().WaitAsync(TimeSpan.FromSeconds(3));
+        await browser.DrainNativeRetirementAsync().WaitAsync(AppShutdownBudgets.BrowserCleanup);
         Stage("native-retirement-settled");
         Directory.Delete(Path.Combine(root, "browser"), recursive: true);
         Require(!Directory.Exists(Path.Combine(root, "browser")), "Native profile data survived the browser-group exit.");
@@ -239,7 +240,7 @@ internal static class WindowsWebViewCaptureProcessProbe
         {
             panel.Children.Remove(package);
             await package.DisposeAsync();
-            await package.DrainNativeRetirementAsync().WaitAsync(TimeSpan.FromSeconds(3));
+            await package.DrainNativeRetirementAsync().WaitAsync(AppShutdownBudgets.BrowserCleanup);
             await manager.RetireActivationAsync(Path.Combine(root, "hosted-browser"));
             if (sharedManager is null) await manager.DisposeAsync();
             if (Directory.Exists(Path.Combine(root, "hosted-browser"))) Directory.Delete(Path.Combine(root, "hosted-browser"), recursive: true);

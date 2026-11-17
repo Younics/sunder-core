@@ -235,7 +235,7 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             catch (TimeoutException error)
             {
                 AppCleanupQuarantine.Retain(nativeDrain, $"observing native browser exit for '{_packageId}'");
-                throw new TimeoutException($"Package '{_packageId}' did not prove native view retirement within its UI cleanup budget.", error);
+                throw new TimeoutException($"Package '{_packageId}' did not prove native view retirement within its browser cleanup allowance.", error);
             }
         }
         await DeleteOrQuarantineUserDataAsync(_userDataRoot, started).ConfigureAwait(false);
@@ -254,8 +254,8 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
 
     private static TimeSpan RemainingCleanupBudget(long started)
     {
-        var remaining = AppShutdownBudgets.UiCleanup - Stopwatch.GetElapsedTime(started);
-        if (remaining <= TimeSpan.Zero) throw new TimeoutException("Package browser retirement exceeded its UI cleanup budget.");
+        var remaining = AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(started);
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException("Package browser retirement exceeded its browser cleanup allowance.");
         return remaining;
     }
 
@@ -272,7 +272,7 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             {
                 // Native view retirement was observed before reclamation. An external file
                 // owner can still delay deletion, but never restart the budget.
-                var remaining = AppShutdownBudgets.UiCleanup - Stopwatch.GetElapsedTime(started);
+                var remaining = AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(started);
                 if (remaining > TimeSpan.Zero)
                 {
                     await Task.Delay(remaining < TimeSpan.FromMilliseconds(50) ? remaining : TimeSpan.FromMilliseconds(50)).ConfigureAwait(false);

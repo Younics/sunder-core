@@ -823,14 +823,21 @@ public sealed partial class PackageViewHostService : IAsyncDisposable
         await _generationPublisher.PublishEmptyResourcesAsync().ConfigureAwait(false);
         _retirementOwner.Enqueue(generation);
         _iconCoordinator.Dispose();
-        await _retirementOwner.DisposeAsync().ConfigureAwait(false);
-        if (!await BoundedCleanup.RunAsync("draining shared package browser infrastructure",
-            () => _browsers.DisposeAsync().AsTask(), AppShutdownBudgets.UiCleanup).ConfigureAwait(false))
+        // One allowance spans generation drains, late controller acquisition,
+        // final engine exit and reclamation. The actual task survives a timeout.
+        if (!await BoundedCleanup.RunAsync("draining package and browser infrastructure",
+            DrainInfrastructureAsync, AppShutdownBudgets.BrowserCleanup).ConfigureAwait(false))
             Interlocked.Exchange(ref _browserCleanupFailed, 1);
         _faultTasks.Dispose();
 
         // Keep the verified cache for the rest of the process; native finalizers can run after package unload.
         GC.SuppressFinalize(this);
+
+        async Task DrainInfrastructureAsync()
+        {
+            try { await _retirementOwner.DisposeAsync().ConfigureAwait(false); }
+            finally { await _browsers.DisposeAsync().ConfigureAwait(false); }
+        }
     }
 
     internal Task CollectContentCacheGarbageAsync(CancellationToken cancellationToken)
