@@ -1380,6 +1380,87 @@ public sealed partial class ProcessRuntimeWorkerTests
             await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5)));
     }
 
+    [WindowsFact]
+    public async Task WorkerStatusSignalWaitsForReadableBytesWithoutHidingInvalidJson()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sunder-worker-status-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var path = Path.Combine(root, "status.json");
+        var generation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task<JsonDocument>? pending = null;
+        try
+        {
+            await using (var publisher = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                await publisher.WriteAsync("{\"started\":true}"u8.ToArray());
+                await publisher.FlushAsync();
+                pending = ReadWorkerStatusAsync(path, generation.Task, () => "exclusive status publisher");
+                // Observe the original sharing violation directly in the red
+                // case rather than hiding it behind a pending-task assertion.
+                if (pending.IsFaulted) await pending;
+                Assert.False(pending.IsCompleted);
+            }
+
+            var status = await pending.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.True(status.RootElement.GetProperty("started").GetBoolean());
+            await File.WriteAllTextAsync(path, "{");
+            await Assert.ThrowsAnyAsync<JsonException>(() =>
+                ReadWorkerStatusAsync(path, generation.Task, () => "malformed status must not be retried"));
+        }
+        finally
+        {
+            if (pending is not null)
+            {
+                try { (await pending).Dispose(); }
+                catch (IOException) { /* Preserve the primary sharing-violation regression. */ }
+            }
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private static async Task<JsonDocument> ReadWorkerStatusAsync(string path, Task generationCompletion, Func<string> describe)
+    {
+        // Windows can still deny reads after an atomic rename notification.
+        // Existence is not yet readable-byte readiness.
+        // One deadline covers both observation and any sharing-violation wait.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var signal = FileSignal.WaitForAsync(path, TimeSpan.FromSeconds(5), describe, deadline.Token);
+        IOException? sharingFailure = null;
+        try
+        {
+            var completed = await Task.WhenAny(signal, generationCompletion);
+            if (completed == generationCompletion && !File.Exists(path))
+            {
+                await generationCompletion;
+                throw new InvalidOperationException("The worker stopped before writing its status file.");
+            }
+            await signal;
+            while (true)
+            {
+                try { return JsonDocument.Parse(await File.ReadAllBytesAsync(path, deadline.Token)); }
+                catch (IOException error) when (OperatingSystem.IsWindows() && (error.HResult & 0xffff) == 32)
+                {
+                    sharingFailure = error;
+                    await Task.Delay(20, deadline.Token);
+                }
+            }
+        }
+        catch (OperationCanceledException error) when (deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Worker status '{path}' was not readable within its original five seconds. {describe()}",
+                (Exception?)sharingFailure ?? error);
+        }
+        finally
+        {
+            deadline.Cancel();
+            // A worker can finish before the signal; stop and join that observer
+            // without replacing its already-observed timeout or generation fault.
+            try { await signal; }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested) { }
+            catch (TimeoutException) { }
+        }
+    }
+
     [Fact]
     public async Task WorkerV1_ShutdownFromReadyDoesNotGrantBufferedOrdinaryCallAuthority()
     {
@@ -3154,24 +3235,9 @@ public sealed partial class ProcessRuntimeWorkerTests
                 1,
                 CancellationToken.None);
 
-        public async Task<JsonDocument> WaitForWorkerStatusAsync(string fileName)
-        {
-            var path = Path.Combine(
-                Worker.WorkerTemporaryPath,
-                fileName);
-            var signal = FileSignal.WaitForAsync(
-                path,
-                TimeSpan.FromSeconds(5),
+        public Task<JsonDocument> WaitForWorkerStatusAsync(string fileName)
+            => ReadWorkerStatusAsync(Path.Combine(Worker.WorkerTemporaryPath, fileName), Worker.GenerationCompletion,
                 () => $"generationCompleted={Worker.GenerationCompletion.IsCompleted}; temporaryRoot={Worker.WorkerTemporaryPath}");
-            var completed = await Task.WhenAny(signal, Worker.GenerationCompletion);
-            if (completed == Worker.GenerationCompletion && !File.Exists(path))
-            {
-                await Worker.GenerationCompletion;
-                throw new InvalidOperationException("The worker stopped before writing its status file.");
-            }
-            await signal;
-            return JsonDocument.Parse(await File.ReadAllBytesAsync(path));
-        }
 
         public int WorkerCallScopeCount()
         {
