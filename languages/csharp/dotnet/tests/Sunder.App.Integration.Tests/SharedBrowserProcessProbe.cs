@@ -21,6 +21,8 @@ internal static class SharedBrowserProcessProbe
     internal static async Task RunAsync(IClassicDesktopStyleApplicationLifetime desktop, string root)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        var probeStarted = Stopwatch.GetTimestamp();
+        void Stage(string stage) => Console.WriteLine($"shared-browser-stage: {stage}; elapsedMs={Stopwatch.GetElapsedTime(probeStarted).TotalMilliseconds:0.###}");
         Environment.SetEnvironmentVariable("SUNDER_APP_STATE_ROOT", Path.Combine(root, "state"));
         var ui = AvaloniaUiDispatcher.Instance;
         await using var engine = new WindowsBrowserEngine(ui);
@@ -82,19 +84,24 @@ internal static class SharedBrowserProcessProbe
         using (var info = JsonDocument.Parse(aInfo)) aContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
         await RequireWorkersAsync(created[0], aContext, present: true);
         Require(created.Count == 2 && engine.BrowserProcessIds.Count == 1, "Views did not share one browser process.");
+        Stage("documents-and-workers-ready");
         foreach (var id in engine.BrowserProcessIds)
         {
             using var process = Process.GetProcessById(id);
             Console.WriteLine($"owned-webview2-process:{id}:{process.StartTime.ToUniversalTime().Ticks}");
         }
+        Stage("whole-native-capture-started");
         var pixels = await a.CaptureAsync(a.CaptureViewport, 128, default);
+        WindowsWebViewCaptureProcessProbe.RecordPng("shared-whole", pixels);
         Require(Math.Max(AppDevelopmentViewOperations.ValidatePng(pixels).Width, AppDevelopmentViewOperations.ValidatePng(pixels).Height) == 128, "Capture dimensions changed.");
         Require(WindowsWebViewCaptureProcessProbe.HasColor(WindowsWebViewCaptureProcessProbe.Pixels(pixels), 10, 180, 30)
             && WindowsWebViewCaptureProcessProbe.HasColor(WindowsWebViewCaptureProcessProbe.Pixels(pixels), 20, 40, 220), "The capture omitted native package pixels.");
         Require(!WindowsWebViewCaptureProcessProbe.HasColor(WindowsWebViewCaptureProcessProbe.Pixels(pixels), 255, 0, 0), "Native capture included the neighboring shell.");
         var crop = await a.CaptureAsync(new Rect(a.CaptureViewport.X + 50, a.CaptureViewport.Y + 40, 40, 30), 128, default);
+        WindowsWebViewCaptureProcessProbe.RecordPng("shared-crop", crop);
         Require(AppDevelopmentViewOperations.ValidatePng(crop) == (40, 30), "Native crop dimensions changed.");
         Require(WindowsWebViewCaptureProcessProbe.EveryColor(WindowsWebViewCaptureProcessProbe.Pixels(crop), 20, 40, 220), "Native crop included neighboring pixels.");
+        Stage("whole-and-crop-native-captures-passed");
         using (var cancel = new CancellationTokenSource())
         {
             var pending = a.CaptureAsync(a.CaptureViewport, 128, cancel.Token);
@@ -106,6 +113,7 @@ internal static class SharedBrowserProcessProbe
             try { await pending; throw new InvalidDataException("Canceled capture returned an image."); }
             catch (OperationCanceledException) when (cancel.IsCancellationRequested) { }
         }
+        Stage("canceled-native-capture-drained");
         var control = a.Control;
         await a.InvokeScriptAsync("globalThis.preserved=123");
         panel.Children.Remove(aPackage);
@@ -113,14 +121,17 @@ internal static class SharedBrowserProcessProbe
         panel.Children.Add(aPackage);
         await UntilAsync(() => a.CanCapture);
         Require(await a.InvokeScriptAsync("preserved") == "123" && created.Count == 2, "Reparenting recreated the document.");
+        Stage("native-reparenting-preserved-document");
         await b.InvokeScriptAsync("localStorage.setItem('sibling','survives');globalThis.sibling=456");
         var started = Stopwatch.GetTimestamp();
         var retiredNonce = aPackage.Bridge.CaptureDevelopmentDocument();
         var script = a.InvokeScriptAsync("(()=>{const end=performance.now()+100;while(performance.now()<end){};return 1})()");
         var pendingCapture = a.CaptureAsync(a.CaptureViewport, 128, default);
+        Stage($"in-flight-retirement-started; script={script.Status}; capture={pendingCapture.Status}");
         Require(!script.IsCompleted && !pendingCapture.IsCompleted, "The fixture missed in-flight native work.");
         panel.Children.Remove(aPackage);
         await aPackage.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+        Stage($"in-flight-retirement-settled; script={script.Status}; capture={pendingCapture.Status}");
         Require(script.IsCompleted && pendingCapture.IsCompleted, "Retirement abandoned a native callback.");
         try { await script; } catch (Exception error) when (error is OperationCanceledException or COMException) { }
         try { await pendingCapture; throw new InvalidDataException("A retired native viewport returned an image."); }

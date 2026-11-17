@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -95,6 +96,7 @@ internal static class WindowsWebViewCaptureProcessProbe
         await browser.InvokeScriptAsync("document.body.getBoundingClientRect().width");
         var viewport = browser.CaptureViewport;
         var png = await browser.CaptureAsync(viewport, 128, default);
+        RecordPng("native-whole", png);
         var dimensions = AppDevelopmentViewOperations.ValidatePng(png);
         Require(Math.Max(dimensions.Width, dimensions.Height) == 128, "The native image did not obey the requested edge.");
         var full = Pixels(png);
@@ -104,6 +106,7 @@ internal static class WindowsWebViewCaptureProcessProbe
 
         var crop = new Rect(viewport.X + 50, viewport.Y + 40, 40, 30);
         var cropped = await browser.CaptureAsync(crop, 128, default);
+        RecordPng("native-crop", cropped);
         Require(AppDevelopmentViewOperations.ValidatePng(cropped) == (40, 30), "The selected-region dimensions changed.");
         var cropPixels = Pixels(cropped);
         Require(EveryColor(cropPixels, 20, 40, 220), "The selected region included pixels outside the blue element.");
@@ -191,6 +194,7 @@ internal static class WindowsWebViewCaptureProcessProbe
             await using (var whole = await operations.CaptureAsync(binding, new(), 128, default))
             {
                 var bytes = await ReadContentAsync(whole);
+                RecordPng("hosted-whole", bytes);
                 var dimensions = AppDevelopmentViewOperations.ValidatePng(bytes);
                 Require(Math.Max(dimensions.Width, dimensions.Height) == 128, "The composed hosted image exceeded its requested edge.");
                 var pixels = Pixels(bytes);
@@ -201,6 +205,7 @@ internal static class WindowsWebViewCaptureProcessProbe
             await using (var crop = await operations.CaptureAsync(binding, selected, 128, default))
             {
                 var bytes = await ReadContentAsync(crop);
+                RecordPng("hosted-crop", bytes);
                 Require(AppDevelopmentViewOperations.ValidatePng(bytes) == (100, 80), "The hosted document selection did not retain its exact bounds.");
                 Require(EveryColor(Pixels(bytes), 20, 40, 220), "The hosted selected element included pixels outside its native bounds.");
             }
@@ -269,15 +274,28 @@ internal static class WindowsWebViewCaptureProcessProbe
         using var bitmap = new Bitmap(stream);
         var size = bitmap.PixelSize;
         var count = checked(size.Width * size.Height * 4);
-        var memory = Marshal.AllocHGlobal(count);
-        try
+        // Raw CopyPixels preserves the backend's native channel/alpha layout.
+        // Explicitly transcode before applying the shared BGRA color assertions.
+        using var normalized = new WriteableBitmap(size, new Vector(96, 96), Avalonia.Platform.PixelFormat.Bgra8888, Avalonia.Platform.AlphaFormat.Unpremul);
+        using var buffer = normalized.Lock();
+        bitmap.CopyPixels(buffer);
+        var pixels = new byte[count];
+        for (var row = 0; row < size.Height; row++)
+            Marshal.Copy(buffer.Address + row * buffer.RowBytes, pixels, row * size.Width * 4, size.Width * 4);
+        return pixels;
+    }
+
+    internal static void RecordPng(string stage, byte[] png)
+    {
+        var dimensions = AppDevelopmentViewOperations.ValidatePng(png);
+        var colors = Pixels(png).Chunk(4).GroupBy(pixel => Convert.ToHexString(pixel)).OrderByDescending(group => group.Count())
+            .Take(8).Select(group => $"{group.Key}:{group.Count()}");
+        Console.WriteLine($"native-capture-png: stage={stage}; size={dimensions.Width}x{dimensions.Height}; bytes={png.Length}; sha256={Convert.ToHexStringLower(SHA256.HashData(png))}; bgraColors={string.Join(',', colors)}");
+        if (Environment.GetEnvironmentVariable("SUNDER_TEST_COMMAND_LOG_DIRECTORY") is { Length: > 0 } directory)
         {
-            bitmap.CopyPixels(new PixelRect(size), memory, count, size.Width * 4);
-            var pixels = new byte[count];
-            Marshal.Copy(memory, pixels, 0, count);
-            return pixels;
+            var output = Directory.CreateDirectory(Path.Combine(directory, "native-capture")).FullName;
+            File.WriteAllBytes(Path.Combine(output, stage + ".png"), png);
         }
-        finally { Marshal.FreeHGlobal(memory); }
     }
     internal static bool HasColor(byte[] pixels, byte red, byte green, byte blue)
     {
