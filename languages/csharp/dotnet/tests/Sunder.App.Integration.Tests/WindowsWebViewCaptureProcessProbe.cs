@@ -32,7 +32,13 @@ internal static class WindowsWebViewCaptureProcessProbe
         // The launcher supplies the owning test project's deps.json. Let .NET
         // select its exact native assets (including macOS's universal osx asset),
         // not an unrelated library copied beside another fixture or on PATH.
-        return Start(args);
+        // Session snapshots intentionally exclude file-only diagnostics. Retain
+        // those Trace messages in this isolated probe's bounded process output,
+        // rather than changing the product's developer-log visibility contract.
+        using var trace = new TextWriterTraceListener(Console.Error);
+        Trace.Listeners.Add(trace);
+        try { return Start(args); }
+        finally { Trace.Listeners.Remove(trace); }
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

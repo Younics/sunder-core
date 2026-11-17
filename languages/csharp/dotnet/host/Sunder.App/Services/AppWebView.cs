@@ -414,15 +414,24 @@ internal sealed class AppNativeWebView : IAppWebView
     }
 
     private void OnWebResourceRequested(object? sender, WebResourceRequestedEventArgs args)
+        => DispatchResourceRequest(args.Request.Uri, args.Request.Method.Method,
+            Volatile.Read(ref _disposed) != 0, _retiringDocument, () => _webView.Stop(),
+            resource => ResourceRequested?.Invoke(this, resource));
+
+    internal static void DispatchResourceRequest(Uri uri, string method, bool disposed, bool retiringDocument,
+        Action stop, Action<AppWebResourceRequestedEventArgs> forward)
     {
-        if (Volatile.Read(ref _disposed) != 0) { _webView.Stop(); return; }
-        var translated = new AppWebResourceRequestedEventArgs(
-            args.Request.Uri,
-            args.Request.Method.Method);
-        ResourceRequested?.Invoke(this, translated);
+        // WKWebView reports the host's neutral navigation as a resource request
+        // before NavigationStarted. Stopping it after disposal deadlocks cleanup.
+        // Only this exact, internally owned page bypasses the retired guard; it
+        // never reaches package policy or restores any bridge authority.
+        if (retiringDocument && uri.AbsoluteUri == "about:blank") return;
+        if (disposed) { stop(); return; }
+        var translated = new AppWebResourceRequestedEventArgs(uri, method);
+        forward(translated);
         if (translated.Cancel)
         {
-            _webView.Stop();
+            stop();
         }
     }
 

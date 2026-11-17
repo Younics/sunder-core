@@ -85,6 +85,7 @@ internal static class SharedBrowserProcessProbe
         await RequireWorkersAsync(created[0], aContext, present: true);
         Require(created.Count == 2 && engine.BrowserProcessIds.Count == 1, "Views did not share one browser process.");
         Stage("documents-and-workers-ready");
+        Console.WriteLine($"shared-browser-runtime: {created[0].Native!.Environment.BrowserVersionString}");
         foreach (var id in engine.BrowserProcessIds)
         {
             using var process = Process.GetProcessById(id);
