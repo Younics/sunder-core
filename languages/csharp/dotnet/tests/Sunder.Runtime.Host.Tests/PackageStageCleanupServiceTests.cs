@@ -45,6 +45,7 @@ public sealed class PackageStageCleanupServiceTests
     {
         await using var gate = new RuntimeOperationGate();
         await using var current = await gate.EnterAsync();
+        var waitingRequest = gate.EnterAsync().AsTask();
         var installedSweepCalled = false;
         var waitingSweep = alreadyQueued ? RunSweep() : null;
         if (waitingSweep is not null) Assert.False(waitingSweep.IsCompleted);
@@ -53,6 +54,7 @@ public sealed class PackageStageCleanupServiceTests
         {
             Assert.True(current.CancellationToken.IsCancellationRequested);
             await (waitingSweep ?? RunSweep()).WaitAsync(TimeSpan.FromSeconds(5));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waitingRequest.WaitAsync(TimeSpan.FromSeconds(5)));
             Assert.False(installedSweepCalled);
         }
         finally
@@ -62,7 +64,7 @@ public sealed class PackageStageCleanupServiceTests
         }
 
         Task RunSweep() => PackageStageCleanupService.RunSweepAsync(
-            async () => { await using var operation = await gate.EnterAsync(); },
+            async () => { await using var operation = await gate.EnterStageSweepAsync(); },
             () =>
             {
                 installedSweepCalled = true;
@@ -112,7 +114,7 @@ public sealed class PackageStageCleanupServiceTests
         }
 
         Task RunSweep() => PackageStageCleanupService.RunSweepAsync(
-            async () => { await using var operation = await gate.EnterAsync(); },
+            async () => { await using var operation = await gate.EnterStageSweepAsync(); },
             () => throw new InvalidOperationException("The installed sweep must not run after a fence."),
             CancellationToken.None,
             applicationStopping.Token);
@@ -125,7 +127,7 @@ public sealed class PackageStageCleanupServiceTests
         await using var current = await gate.EnterAsync();
         using var caller = new CancellationTokenSource();
         var sweep = PackageStageCleanupService.RunSweepAsync(
-            async () => { await using var operation = await gate.EnterAsync(caller.Token); },
+            async () => { await using var operation = await gate.EnterStageSweepAsync(caller.Token); },
             () => throw new InvalidOperationException("The installed sweep must not run after cancellation."),
             CancellationToken.None,
             CancellationToken.None);

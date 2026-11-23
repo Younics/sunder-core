@@ -9,9 +9,7 @@ internal enum RuntimeOperationRejection
 
 internal sealed class RuntimeOperationRejectedException(
     RuntimeOperationRejection reason = RuntimeOperationRejection.Unspecified)
-    : InvalidOperationException(reason == RuntimeOperationRejection.IntegrityFence
-        ? "The Runtime is not accepting new operations after an integrity failure."
-        : "The Runtime is shutting down and is not accepting new operations.")
+    : InvalidOperationException("The Runtime is shutting down and is not accepting new operations.")
 {
     internal RuntimeOperationRejection Reason { get; } = reason;
 }
@@ -37,7 +35,13 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         _shutdownTimeout = (lifecyclePolicy ?? new RuntimeLifecyclePolicyOptions()).ShutdownTimeout;
     }
 
-    public async ValueTask<Lease> EnterAsync(CancellationToken cancellationToken = default)
+    public ValueTask<Lease> EnterAsync(CancellationToken cancellationToken = default)
+        => EnterAsync(cancellationToken, classifyGateCancellation: false);
+
+    internal ValueTask<Lease> EnterStageSweepAsync(CancellationToken cancellationToken = default)
+        => EnterAsync(cancellationToken, classifyGateCancellation: true);
+
+    private async ValueTask<Lease> EnterAsync(CancellationToken cancellationToken, bool classifyGateCancellation)
     {
         lock (_syncRoot)
         {
@@ -52,13 +56,13 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         {
             await _gate.WaitAsync(linkedCancellation.Token);
         }
-        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        catch (OperationCanceledException) when (classifyGateCancellation && _shutdown.IsCancellationRequested)
         {
             linkedCancellation.Dispose();
             lock (_syncRoot)
             {
-                // Gate-driven cancellation also rejects an already queued entry.
-                // Keep independent caller cancellation and do not hide an integrity fence.
+                // A sweeper needs the reason it lost admission. Ordinary
+                // requests retain their existing queued cancellation outcome.
                 if (_integrityFenced || !cancellationToken.IsCancellationRequested)
                 {
                     throw RejectionUnderLock();

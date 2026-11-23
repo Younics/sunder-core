@@ -14,7 +14,7 @@ internal sealed partial class PackageSessionLifecycleService
 
     internal async Task SweepStagesAsync(DateTimeOffset now, CancellationToken cancellationToken = default)
     {
-        await using var operation = await _gate.EnterAsync(cancellationToken);
+        await using var operation = await _gate.EnterStageSweepAsync(cancellationToken);
         await SweepStagesCoreAsync(now);
     }
 
@@ -119,7 +119,7 @@ internal sealed partial class InstalledPackageLifecycleService
 
     internal async Task SweepStagesAsync(DateTimeOffset now, CancellationToken cancellationToken = default)
     {
-        await using var operation = await _gate.EnterAsync(cancellationToken);
+        await using var operation = await _gate.EnterStageSweepAsync(cancellationToken);
         await SweepStagesCoreAsync(now);
     }
 
