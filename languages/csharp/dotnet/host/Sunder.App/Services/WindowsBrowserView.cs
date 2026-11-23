@@ -235,7 +235,11 @@ internal sealed class WindowsBrowserView : IAppWebView
         ObjectDisposedException.ThrowIf(_disposed || _failed, this);
         _idle = true; _requestedUri = null;
         if (_creation is { } creation) await creation;
-        if (_controller is null) return;
+        // Final close may have won while acquisition was pending. The late
+        // controller then has no document callbacks, so a neutral navigation
+        // could never match its completion. Leave the controller with CloseAsync,
+        // which joins this reset before deleting the profile and draining native work.
+        if (_disposed || _controller is null) return;
         try
         {
             if (_capturing)
