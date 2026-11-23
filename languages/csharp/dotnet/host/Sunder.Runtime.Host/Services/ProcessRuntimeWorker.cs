@@ -646,18 +646,20 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
                 using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
                 try
                 {
-                    if (!process.HasExited && CanDrainShutdown())
+                    if (CanDrainShutdown())
                     {
                         // A generation fault may arrive after this wait starts. Always
-                        // observe exit as well as ack, then finish reading its fault report.
+                        // observe exit as well as ack, including an exit racing the send.
                         var exit = process.WaitForExitAsync(shutdown.Token);
                         var terminal = await Task.WhenAny(_shutdownAcknowledged.Task, exit)
                             .WaitAsync(shutdown.Token).ConfigureAwait(false);
                         await terminal.ConfigureAwait(false);
                         if (ReferenceEquals(terminal, exit))
+                        {
                             await _readerTask.WaitAsync(shutdown.Token).ConfigureAwait(false);
-                        if (_reportedGenerationFault is null)
-                            await _shutdownAcknowledged.Task.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                            if (ShouldAwaitShutdownAcknowledgementAfterExit())
+                                await _shutdownAcknowledged.Task.WaitAsync(shutdown.Token).ConfigureAwait(false);
+                        }
                     }
                     if (!process.HasExited)
                     {
@@ -1507,6 +1509,29 @@ internal sealed partial class ProcessRuntimeWorker : IRuntimePackageWorker
     private bool CanDrainShutdown()
     {
         lock (_stateGate) return _state != WorkerState.Faulted && (_fault is null || _reportedGenerationFault is not null);
+    }
+
+    private bool ShouldAwaitShutdownAcknowledgementAfterExit()
+    {
+        SunderWorkerProtocolException failure;
+        lock (_stateGate)
+        {
+            if (_reportedGenerationFault is not null) return false;
+            // A received wire ack may still be waiting on Host-side call cleanup.
+            // A reader protocol fault can also settle the acknowledgement task.
+            if (_shutdownAcknowledgementReceived || _fault is not null) return true;
+
+            // The payload exited and its reader drained. No wire ack can arrive.
+            // Report the generation failure separately from the owned cleanup.
+            failure = new SunderWorkerProtocolException(
+                $"Process Runtime target for package '{_package.PackageId}' exited without acknowledging shutdown.");
+            _fault = failure;
+            _generationCompletion.TrySetException(failure);
+        }
+        _logger.LogWarning(failure,
+            "Process Runtime target for package {PackageId}, activation {ActivationId}, generation {SessionGeneration} exited without acknowledging shutdown",
+            _package.PackageId, _activationId, _sessionGeneration);
+        return false;
     }
 
     private void HandleShutdownAcknowledgement(WorkerShutdownAcknowledgementEnvelope envelope)

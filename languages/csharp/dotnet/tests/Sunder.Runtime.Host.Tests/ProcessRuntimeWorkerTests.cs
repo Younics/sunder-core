@@ -2607,6 +2607,234 @@ public sealed partial class ProcessRuntimeWorkerTests
         await fixture.Worker.GenerationCompletion.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
+    [Fact]
+    public async Task HostStop_WhenWorkerExitsWithoutAcknowledging_ProvesCleanupBeforeSessionDeadline()
+    {
+        using var hostStopping = new CancellationTokenSource();
+        var runtimeLease = new TestExecutionRuntimeProcessLease(TestExecutionRuntimeLaunchResolver.Instance.RuntimeRootPath);
+        // The Agent smoke's host-lifetime stop can wait longer than the caller
+        // that joins it from session retirement. Neither budget should change.
+        var sessionBudget = new RuntimeLifecyclePolicyOptions().SessionDrainTimeout;
+        var processPolicy = new RuntimeProcessPolicyOptions { ShutdownTimeout = TimeSpan.FromSeconds(15) };
+        await using var fixture = await WorkerFixture.CreateAsync(
+            "shutdown-exit-without-ack", processPolicy,
+            hostStopping: hostStopping.Token, executionRuntimeLease: runtimeLease);
+        await fixture.StartAndActivateAsync();
+        var root = fixture.Worker.WorkerTemporaryPath;
+        var process = WorkerReleaseMetrics.GetProcess(fixture.Worker);
+        Assert.True(Directory.Exists(root));
+
+        hostStopping.Cancel();
+        using var received = await fixture.WaitForWorkerStatusAsync("shutdown-received.json");
+        Assert.True(received.RootElement.GetProperty("started").GetBoolean());
+        Assert.False(process.HasExited);
+
+        using var sessionDeadline = new CancellationTokenSource(sessionBudget);
+        var joinedStop = fixture.Worker.StopAsync(sessionDeadline.Token);
+        Assert.False(joinedStop.IsCompleted);
+        await File.WriteAllTextAsync(Path.Combine(root, "shutdown-exit.release"), "");
+        await process.WaitForExitAsync(sessionDeadline.Token);
+        await joinedStop;
+
+        Assert.True(runtimeLease.ProcessExitedAtRelease);
+        Assert.True(runtimeLease.Released);
+        Assert.False(Directory.Exists(root));
+        var fault = await Assert.ThrowsAsync<SunderWorkerProtocolException>(
+            () => fixture.Worker.GenerationCompletion.WaitAsync(sessionDeadline.Token));
+        Assert.Contains("exited without acknowledging shutdown", fault.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("normal")]
+    [InlineData("shutdown-final-generation-fault")]
+    [InlineData("v1-scope-close-before-shutdown")]
+    public async Task WorkerV1_ShutdownReadsBufferedTerminalFrameAfterPayloadExit(string mode)
+    {
+        var runtimeLease = new ShutdownTestProcessLease();
+        await using var fixture = await WorkerFixture.CreateAsync(
+            mode,
+            new RuntimeProcessPolicyOptions { ShutdownTimeout = TimeSpan.FromSeconds(15) },
+            executionRuntimeLease: runtimeLease);
+        var pendingHostCall = mode == "v1-scope-close-before-shutdown";
+        var scopeCloseStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseScopeClose = new ManualResetEventSlim();
+        using var deadline = new CancellationTokenSource();
+        CancellationTokenRegistration scopeRegistration = default;
+        try
+        {
+            if (pendingHostCall)
+            {
+                await fixture.PublishBrokerSessionAsync();
+                using var status = await fixture.WaitForWorkerStatusAsync("v1-scope-leak.json");
+                scopeRegistration = fixture.WorkerCallScopeRevocationToken().Register(() =>
+                {
+                    scopeCloseStarted.SetResult();
+                    releaseScopeClose.Wait();
+                });
+                await File.WriteAllTextAsync(Path.Combine(fixture.Worker.WorkerTemporaryPath, "close-scope.release"), "");
+                await scopeCloseStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            else
+            {
+                await fixture.StartAndActivateAsync();
+            }
+            var payload = WorkerReleaseMetrics.GetProcess(fixture.Worker);
+            var output = runtimeLease.Output;
+            output.Hold = true;
+            deadline.CancelAfter(new RuntimeLifecyclePolicyOptions().SessionDrainTimeout);
+            var stop = fixture.Worker.StopAsync(deadline.Token);
+            await output.ReadHeld.Task.WaitAsync(deadline.Token);
+            await payload.WaitForExitAsync(deadline.Token);
+            Assert.False(stop.IsCompleted);
+            Assert.Equal(0, runtimeLease.DrainAttempts);
+            output.Release.TrySetResult();
+
+            if (pendingHostCall)
+            {
+                var worker = fixture.Worker;
+                var reader = Assert.IsAssignableFrom<Task>(typeof(ProcessRuntimeWorker)
+                    .GetField("_readerTask", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(worker));
+                await reader.WaitAsync(deadline.Token);
+                Assert.True((bool)typeof(ProcessRuntimeWorker)
+                    .GetField("_shutdownAcknowledgementReceived", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(worker)!);
+                Assert.False(stop.IsCompleted);
+                Assert.Equal(0, runtimeLease.DrainAttempts);
+                releaseScopeClose.Set();
+            }
+
+            await stop;
+            Assert.Equal(1, runtimeLease.DrainAttempts);
+            Assert.True(runtimeLease.Inner.ProcessExitedAtRelease);
+            Assert.False(Directory.Exists(fixture.Worker.WorkerTemporaryPath));
+            if (mode == "shutdown-final-generation-fault")
+            {
+                var fault = await Assert.ThrowsAsync<ProcessRuntimeGenerationFaultException>(
+                    () => fixture.Worker.GenerationCompletion.WaitAsync(deadline.Token));
+                Assert.Equal("worker.test-fault", fault.Code);
+            }
+            else
+            {
+                await fixture.Worker.GenerationCompletion.WaitAsync(deadline.Token);
+            }
+        }
+        finally
+        {
+            releaseScopeClose.Set();
+            runtimeLease.Output.Release.TrySetResult();
+            await scopeRegistration.DisposeAsync();
+        }
+    }
+
+    [Fact]
+    public async Task WorkerV1_TerminalUnacknowledgedExitDoesNotReleaseRootsWithoutContainmentProof()
+    {
+        var runtimeLease = new ShutdownTestProcessLease { RejectFirstDrain = true };
+        await using var fixture = await WorkerFixture.CreateAsync(
+            "shutdown-exit-without-ack",
+            new RuntimeProcessPolicyOptions { ShutdownTimeout = TimeSpan.FromSeconds(15) },
+            executionRuntimeLease: runtimeLease);
+        await fixture.StartAndActivateAsync();
+        var process = WorkerReleaseMetrics.GetProcess(fixture.Worker);
+        var root = fixture.Worker.WorkerTemporaryPath;
+        using var deadline = new CancellationTokenSource(new RuntimeLifecyclePolicyOptions().SessionDrainTimeout);
+        var stop = fixture.Worker.StopAsync(deadline.Token);
+        using var received = await fixture.WaitForWorkerStatusAsync("shutdown-received.json");
+        var join = fixture.Worker.StopAsync(deadline.Token);
+        await File.WriteAllTextAsync(Path.Combine(root, "shutdown-exit.release"), "");
+        await process.WaitForExitAsync(deadline.Token);
+
+        var failure = await Assert.ThrowsAsync<IOException>(() => stop.WaitAsync(deadline.Token));
+        Assert.Equal("Synthetic unproven containment drain.", failure.Message);
+        Assert.Same(failure, await Assert.ThrowsAsync<IOException>(() => join));
+        Assert.Equal(1, runtimeLease.DrainAttempts);
+        Assert.True(Directory.Exists(root));
+        Assert.False(runtimeLease.Inner.Released);
+        await Assert.ThrowsAsync<SunderWorkerProtocolException>(() =>
+            fixture.Worker.GenerationCompletion.WaitAsync(deadline.Token));
+
+        await fixture.Worker.StopAsync(deadline.Token).WaitAsync(deadline.Token);
+        Assert.Equal(2, runtimeLease.DrainAttempts);
+        Assert.True(runtimeLease.Inner.ProcessExitedAtRelease);
+        Assert.False(Directory.Exists(root));
+    }
+
+    private sealed class ShutdownTestProcessLease : IExecutionRuntimeProcessLease
+    {
+        private int _drainAttempts;
+
+        public TestExecutionRuntimeProcessLease Inner { get; } =
+            new(TestExecutionRuntimeLaunchResolver.Instance.RuntimeRootPath);
+
+        public string LeaseId => Inner.LeaseId;
+        public string RuntimeRootPath => Inner.RuntimeRootPath;
+        public HeldProcessOutput Output { get; private set; } = null!;
+        public bool RejectFirstDrain { get; init; }
+        public int DrainAttempts => Volatile.Read(ref _drainAttempts);
+
+        public async Task<IExecutionRuntimeContainedProcess> LaunchAsync(
+            ProcessStartInfo startInfo,
+            CancellationToken cancellationToken = default,
+            Sunder.Package.Projections.PackageProjectionAcquisition? packageProjection = null)
+        {
+            var process = await Inner.LaunchAsync(startInfo, cancellationToken, packageProjection);
+            Output = new HeldProcessOutput(process.StandardOutput);
+            return new ContainedProcess(this, process);
+        }
+
+        public Task ReleaseAfterProcessTreeTerminationAsync(CancellationToken cancellationToken = default)
+            => Inner.ReleaseAfterProcessTreeTerminationAsync(cancellationToken);
+
+        public ValueTask DisposeAsync() => Inner.DisposeAsync();
+
+        private sealed class ContainedProcess(ShutdownTestProcessLease lease, IExecutionRuntimeContainedProcess inner)
+            : IExecutionRuntimeContainedProcess
+        {
+            public Process Process => inner.Process;
+            public Stream StandardInput => inner.StandardInput;
+            public Stream StandardOutput => lease.Output;
+            public Stream StandardError => inner.StandardError;
+
+            public Task TerminateAndDrainAsync(CancellationToken cancellationToken = default)
+            {
+                if (Interlocked.Increment(ref lease._drainAttempts) == 1 && lease.RejectFirstDrain)
+                    throw new IOException("Synthetic unproven containment drain.");
+                return inner.TerminateAndDrainAsync(cancellationToken);
+            }
+
+            public ValueTask DisposeAsync() => inner.DisposeAsync();
+        }
+    }
+
+    private sealed class HeldProcessOutput(Stream inner) : Stream
+    {
+        public volatile bool Hold;
+        public TaskCompletionSource ReadHeld { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var count = await inner.ReadAsync(buffer, cancellationToken);
+            if (count != 0 && Hold)
+            {
+                ReadHeld.TrySetResult();
+                await Release.Task.WaitAsync(cancellationToken);
+            }
+            return count;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
     private sealed class RecordingExecutionRuntimeLaunchResolver : IExecutionRuntimeLaunchResolver
     {
         public List<string> LeaseIds { get; } = [];

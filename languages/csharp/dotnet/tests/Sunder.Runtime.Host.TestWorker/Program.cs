@@ -571,9 +571,9 @@ while (true)
                 testHandleLimit: mode == "v1-scope-handle-limit");
             continue;
         }
-        if (mode == "v1-scope-leak")
+        if (mode is "v1-scope-leak" or "v1-scope-close-before-shutdown")
         {
-            await RunV1LeakedScopeAsync(input, output);
+            await RunV1LeakedScopeAsync(input, output, mode == "v1-scope-close-before-shutdown");
             continue;
         }
         if (mode == "v1-scope-permission-denied")
@@ -1199,7 +1199,17 @@ while (true)
     }
     if (type == "host.shutdown")
     {
-        if (mode == "v1-generation-fault-on-shutdown")
+        if (mode == "shutdown-exit-without-ack")
+        {
+            await WriteStatusAsync("shutdown-received.json", new { started = true });
+            var release = Path.Combine(WorkerTemporaryPath(), "shutdown-exit.release");
+            while (!File.Exists(release))
+            {
+                await Task.Delay(25);
+            }
+            return 0;
+        }
+        if (mode is "v1-generation-fault-on-shutdown" or "shutdown-final-generation-fault")
         {
             await WriteFrameAsync(output, new
             {
@@ -1209,6 +1219,7 @@ while (true)
                 code = "worker.test-fault",
                 message = "The test worker reported a bounded fault.",
             });
+            if (mode == "shutdown-final-generation-fault") return 70;
         }
         if (mode is "shutdown-hang" or "candidate-shutdown-hang" or "commit-shutdown-hang" or "migration-preparation-shutdown-hang")
         {
@@ -1923,7 +1934,7 @@ static async Task RunV1ScopeRoundTripAsync(
     File.Move(pendingStatusPath, statusPath);
 }
 
-static async Task RunV1LeakedScopeAsync(Stream input, Stream output)
+static async Task RunV1LeakedScopeAsync(Stream input, Stream output, bool closeBeforeShutdown)
 {
     await WriteFrameAsync(output, new
     {
@@ -1984,6 +1995,22 @@ static async Task RunV1LeakedScopeAsync(Stream input, Stream output)
         pendingStatusPath,
         JsonSerializer.SerializeToUtf8Bytes(new { scopeId }));
     File.Move(pendingStatusPath, statusPath);
+    if (closeBeforeShutdown)
+    {
+        var closePath = Path.Combine(dataPath, "close-scope.release");
+        while (!File.Exists(closePath))
+        {
+            await Task.Delay(25);
+        }
+        await WriteFrameAsync(output, new
+        {
+            type = "worker.scope-close",
+            id = "leakedScopeClose",
+            scopeId,
+        });
+        // This worker can acknowledge shutdown while the Host still owns the
+        // asynchronous teardown of the already closed scope.
+    }
 }
 
 static async Task RunV1DeniedScopeAsync(Stream input, Stream output)
