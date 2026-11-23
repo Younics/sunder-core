@@ -34,11 +34,12 @@ internal sealed class PackageStageCleanupService(
             await sweepPackageStages();
             await sweepInstalledPackageStages();
         }
-        catch (RuntimeOperationRejectedException) when (
-            backgroundServiceStopping.IsCancellationRequested
-            || applicationStopping.IsCancellationRequested)
+        catch (RuntimeOperationRejectedException exception) when (
+            exception.Reason == RuntimeOperationRejection.Shutdown
+            || exception.Reason == RuntimeOperationRejection.Unspecified
+               && (backgroundServiceStopping.IsCancellationRequested || applicationStopping.IsCancellationRequested))
         {
-            // A timer tick can already be in flight when the Runtime operation gate begins shutdown.
+            // The Runtime operation gate can close before the Generic Host signals its lifetime.
         }
     }
 }

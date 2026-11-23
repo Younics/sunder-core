@@ -1,7 +1,20 @@
 namespace Sunder.Runtime.Host.Services;
 
-internal sealed class RuntimeOperationRejectedException()
-    : InvalidOperationException("The Runtime is shutting down and is not accepting new operations.");
+internal enum RuntimeOperationRejection
+{
+    Unspecified,
+    Shutdown,
+    IntegrityFence,
+}
+
+internal sealed class RuntimeOperationRejectedException(
+    RuntimeOperationRejection reason = RuntimeOperationRejection.Unspecified)
+    : InvalidOperationException(reason == RuntimeOperationRejection.IntegrityFence
+        ? "The Runtime is not accepting new operations after an integrity failure."
+        : "The Runtime is shutting down and is not accepting new operations.")
+{
+    internal RuntimeOperationRejection Reason { get; } = reason;
+}
 
 internal sealed class RuntimeOperationGate : IAsyncDisposable
 {
@@ -30,7 +43,7 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         {
             if (_stopping || _integrityFenced)
             {
-                throw new RuntimeOperationRejectedException();
+                throw RejectionUnderLock();
             }
         }
 
@@ -39,30 +52,47 @@ internal sealed class RuntimeOperationGate : IAsyncDisposable
         {
             await _gate.WaitAsync(linkedCancellation.Token);
         }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            linkedCancellation.Dispose();
+            lock (_syncRoot)
+            {
+                // Gate-driven cancellation also rejects an already queued entry.
+                // Keep independent caller cancellation and do not hide an integrity fence.
+                if (_integrityFenced || !cancellationToken.IsCancellationRequested)
+                {
+                    throw RejectionUnderLock();
+                }
+            }
+            throw;
+        }
         catch
         {
             linkedCancellation.Dispose();
             throw;
         }
 
-        var stopping = false;
+        RuntimeOperationRejectedException? rejection = null;
         lock (_syncRoot)
         {
             if (_stopping || _integrityFenced)
             {
-                stopping = true;
+                rejection = RejectionUnderLock();
             }
         }
-        if (stopping)
+        if (rejection is not null)
         {
             _gate.Release();
             linkedCancellation.Dispose();
-            throw new RuntimeOperationRejectedException();
+            throw rejection;
         }
 
         _eventStream?.PublishOperationPhase(Sunder.Runtime.Contracts.RuntimeOperationPhase.PackageOperation);
         return new Lease(this, linkedCancellation);
     }
+
+    private RuntimeOperationRejectedException RejectionUnderLock()
+        => new(_integrityFenced ? RuntimeOperationRejection.IntegrityFence : RuntimeOperationRejection.Shutdown);
 
     public async Task ShutdownAsync(Func<Task> cleanup)
         => await ShutdownAsync(_ => cleanup(), CancellationToken.None);
