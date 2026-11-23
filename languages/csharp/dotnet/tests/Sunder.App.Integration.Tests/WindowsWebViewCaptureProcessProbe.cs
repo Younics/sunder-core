@@ -58,6 +58,7 @@ internal static class WindowsWebViewCaptureProcessProbe
     {
         Environment.SetEnvironmentVariable("SUNDER_APP_STATE_ROOT", Path.Combine(root, "state"));
         if (backend is "shared" or "webview2") { await SharedBrowserProcessProbe.RunAsync(desktop, root); return; }
+        if (backend == "webview2-pending-reset") { await SharedBrowserProcessProbe.PendingResetRetirementAsync(desktop, root); return; }
         var started = Stopwatch.GetTimestamp();
         void Stage(string stage) => Console.WriteLine($"native-browser-stage: {stage}; elapsedMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
         using var browser = new AppNativeWebView(Path.Combine(root, "browser"));

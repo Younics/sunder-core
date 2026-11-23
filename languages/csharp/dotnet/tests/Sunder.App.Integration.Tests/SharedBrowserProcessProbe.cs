@@ -75,9 +75,25 @@ internal static class SharedBrowserProcessProbe
         var window = new Window { Title = "Sunder shared browser qualification", Width = 900, Height = 340, Content = shell };
         desktop.MainWindow = window;
         window.Show();
-        await UntilAsync(() => a.CanCapture && b.CanCapture);
-        await UntilAsync(async () => await a.InvokeScriptAsync("typeof ticks") == "\"number\"" && await b.InvokeScriptAsync("typeof ticks") == "\"number\"");
-        await UntilAsync(async () => await a.InvokeScriptAsync("fixtureReady") == "true" && await b.InvokeScriptAsync("fixtureReady") == "true");
+        var readiness = "controllers";
+        try
+        {
+            await UntilAsync(() => a.CanCapture && b.CanCapture);
+            Console.WriteLine($"shared-browser-runtime: {created[0].Native!.Environment.BrowserVersionString}");
+            foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
+            readiness = "document-script";
+            await UntilAsync(async () => await a.InvokeScriptAsync("typeof ticks") == "\"number\"" && await b.InvokeScriptAsync("typeof ticks") == "\"number\"");
+            readiness = "fixture-workers";
+            await UntilAsync(async () => await a.InvokeScriptAsync("fixtureReady") == "true" && await b.InvokeScriptAsync("fixtureReady") == "true");
+        }
+        catch (Exception error)
+        {
+            Stage($"readiness-failed; phase={readiness}; initialization={string.Join(',', created.Select(view => view.Initialization?.Status.ToString() ?? "not-started"))}");
+            WindowsWebViewCaptureProcessProbe.ReportFailure(error);
+            try { Console.Error.WriteLine($"shared-browser-available-runtime: {CoreWebView2Environment.GetAvailableBrowserVersionString()}"); }
+            catch (Exception versionError) { Console.Error.WriteLine($"shared-browser-runtime-unavailable: {versionError.GetType().Name}"); }
+            throw;
+        }
         Require(await a.InvokeScriptAsync("freshStorage") == "true" && await b.InvokeScriptAsync("freshStorage") == "true", "Sibling views shared browser storage.");
         var aInfo = await created[0].Native!.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}");
         string aContext;
@@ -85,12 +101,7 @@ internal static class SharedBrowserProcessProbe
         await RequireWorkersAsync(created[0], aContext, present: true);
         Require(created.Count == 2 && engine.BrowserProcessIds.Count == 1, "Views did not share one browser process.");
         Stage("documents-and-workers-ready");
-        Console.WriteLine($"shared-browser-runtime: {created[0].Native!.Environment.BrowserVersionString}");
-        foreach (var id in engine.BrowserProcessIds)
-        {
-            using var process = Process.GetProcessById(id);
-            Console.WriteLine($"owned-webview2-process:{id}:{process.StartTime.ToUniversalTime().Ticks}");
-        }
+        foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
         Stage("whole-native-capture-started");
         var pixels = await a.CaptureAsync(a.CaptureViewport, 128, default);
         WindowsWebViewCaptureProcessProbe.RecordPng("shared-whole", pixels);
@@ -296,6 +307,63 @@ internal static class SharedBrowserProcessProbe
 
         AppWebPackageViewControl Create(string key) => new(server.BaseUri, key, server, manager,
             UnavailableAppWebRpcClient.Instance, contracts, new ExternalBrowserService(_ => throw new InvalidOperationException("The fixture must not open external browsers.")));
+    }
+
+    internal static async Task PendingResetRetirementAsync(IClassicDesktopStyleApplicationLifetime desktop, string root)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
+        var ui = AvaloniaUiDispatcher.Instance;
+        var engine = new WindowsBrowserEngine(ui);
+        var native = new WindowsBrowserView(engine, ui);
+        var manager = new AppBrowserManager(ui, _ => native, () => engine.DisposeAsync().AsTask());
+        var activation = Path.Combine(root, "pending-reset");
+        var view = manager.Create(Path.Combine(activation, "view"));
+        var owner = new Window { Title = "Sunder pending reset retirement", Width = 320, Height = 240, Content = view.Control };
+        desktop.MainWindow = owner;
+        owner.Show();
+        var initialization = native.Initialization ?? throw new InvalidOperationException("The fixture did not request a real controller.");
+        Require(!initialization.IsCompleted, "The fixture missed pending native controller creation.");
+
+        var sta = Environment.CurrentManagedThreadId;
+        var clock = Stopwatch.StartNew();
+        var observed = ObserveAcquisitionAsync();
+        // Stay on this dispatcher turn until reset and final close both own
+        // the pending creation. No sleeps or artificial native callbacks.
+        var reset = view.RetireDocumentAsync();
+        Require(!reset.IsCompleted, "Document reset did not wait for controller acquisition.");
+        owner.Close();
+        var retirement = manager.RetireActivationAsync(activation);
+        Require(!retirement.IsCompleted && !initialization.IsCompleted && !view.CanCapture,
+            "Final retirement did not revoke presentation while still owning acquisition.");
+        try
+        {
+            await Task.WhenAll(observed, reset, retirement).WaitAsync(Remaining());
+            Require(native.Native is null && manager.NativeSessionCount == 0, "Final retirement retained the late controller or cached its lease.");
+            await manager.DisposeAsync().AsTask().WaitAsync(Remaining());
+            Require(!Directory.Exists(engine.DataDirectory), "The native browser data root survived final retirement.");
+            Console.WriteLine("shared-browser: pending-reset; acquisition-settled; native-exit; profile-removed");
+        }
+        catch (Exception)
+        {
+            Console.Error.WriteLine($"pending-reset state: initialization={initialization.Status}; observed={observed.Status}; reset={reset.Status}; retirement={retirement.Status}; sessions={manager.NativeSessionCount}");
+            throw;
+        }
+
+        TimeSpan Remaining()
+        {
+            var remaining = AppShutdownBudgets.BrowserCleanup - clock.Elapsed;
+            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Pending reset retirement exceeded its original cleanup allowance.");
+            return remaining;
+        }
+
+        async Task ObserveAcquisitionAsync()
+        {
+            await initialization;
+            Require(Environment.CurrentManagedThreadId == sta && engine.BrowserProcessIds.Count == 1,
+                "The late controller did not acquire a real browser on its original STA.");
+            Console.WriteLine($"pending-reset: acquired WebView2 {native.Native!.Environment.BrowserVersionString}");
+            WindowsWebViewBrowserProcess.Record(engine.BrowserProcessIds[0]);
+        }
     }
 
     private static async Task KillOwnedAsync(int pid)
