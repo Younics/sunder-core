@@ -1535,6 +1535,7 @@
                    and '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
       <_SunderFlatAppNativeOutput Include="@(_SunderResolvedFlatAppNative->'$(TargetDir)%(Filename)%(Extension)')" />
       <_SunderRuntimeFiles Remove="@(_SunderFlatAppNativeOutput)" />
+      <_SunderNativeRuntimeFiles Include="@(_SunderFlatAppNativeOutput)" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.App.Bridge.dll" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.App.Bridge.pdb" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Controls.dll" />
@@ -1576,7 +1577,6 @@
                              AssetsDirectory="$(SunderPackageAssetsDirectory)"
                                 ManagedFiles="@(_SunderRuntimeFiles)"
                                 NativeRuntimeFiles="@(_SunderNativeRuntimeFiles)"
-                                FlatAppNativeFiles="@(_SunderFlatAppNativeOutput)"
                                 WorkerFiles="@(_SunderWorkerFile)"
                                 RoleContentFiles="@(_SunderRoleAppContent)"
                                AssetFiles="@(_SunderAssetFiles)"

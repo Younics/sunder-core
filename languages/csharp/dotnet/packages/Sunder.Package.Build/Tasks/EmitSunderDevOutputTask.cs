@@ -33,8 +33,6 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
 
     public ITaskItem[] NativeRuntimeFiles { get; set; } = [];
 
-    public ITaskItem[] FlatAppNativeFiles { get; set; } = [];
-
     public ITaskItem[] WorkerFiles { get; set; } = [];
 
     public ITaskItem[] AssetFiles { get; set; } = [];
@@ -229,6 +227,15 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
             foreach (var item in workerTargets.Length == 0 ? NativeRuntimeFiles : [])
             {
                 var relative = GetRelativePath(TargetDirectory, item.ItemSpec, "native runtime output");
+                if (!relative.Contains('/'))
+                {
+                    // The SDK already selected and flattened this copy-local asset.
+                    if (targetKeys.Count != 1 || targetKeys[0].Role != SunderPackageFormat.AppHostRole)
+                        throw new InvalidDataException("Flat App native output requires one exact App target.");
+                    var app = targetKeys[0];
+                    Copy(item.ItemSpec, $"payload/{app.Role}/{app.Rid}/lib/{relative}", destinations, stagingPath);
+                    continue;
+                }
                 var segments = relative.Split('/');
                 if (segments.Length < 3
                     || !string.Equals(segments[0], "runtimes", StringComparison.Ordinal)
@@ -244,24 +251,6 @@ public sealed class EmitSunderDevOutputTask : Microsoft.Build.Utilities.Task
                         $"payload/{target.Role}/{target.Rid}/lib/{relative}",
                         destinations,
                         stagingPath);
-                }
-            }
-
-            if (FlatAppNativeFiles.Length != 0)
-            {
-                if (targetKeys.Count != 1 || targetKeys[0].Role != SunderPackageFormat.AppHostRole)
-                {
-                    throw new InvalidDataException("Flat App native output requires one exact App target.");
-                }
-                var target = targetKeys[0];
-                foreach (var item in FlatAppNativeFiles)
-                {
-                    var relative = GetRelativePath(TargetDirectory, item.ItemSpec, "flat App native output");
-                    if (relative.Contains('/'))
-                    {
-                        throw new InvalidDataException($"App native output '{relative}' must be beside the entry assembly.");
-                    }
-                    Copy(item.ItemSpec, $"payload/{target.Role}/{target.Rid}/lib/{relative}", destinations, stagingPath);
                 }
             }
 
