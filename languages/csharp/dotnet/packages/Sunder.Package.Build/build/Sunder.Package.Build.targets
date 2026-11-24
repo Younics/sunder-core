@@ -1527,6 +1527,14 @@
                            Exclude="$(TargetDir)runtimes\**\*;$(SunderDevOutputPath)**\*" />
       <_SunderNativeRuntimeFiles Include="$(TargetDir)runtimes\**\*"
                                  Condition="Exists('$(TargetDir)runtimes')" />
+      <!-- The .NET SDK copies exact-RID native dependencies beside the App assembly.
+           Use its copy-local items, not an extension glob or the original NuGet bytes. -->
+      <_SunderResolvedFlatAppNative Include="@(ReferenceCopyLocalPaths)"
+           Condition="'$(SunderPackageCompilationRole)' == 'app'
+                   and '%(ReferenceCopyLocalPaths.AssetType)' == 'native'
+                   and '%(ReferenceCopyLocalPaths.DestinationSubDirectory)' == ''" />
+      <_SunderFlatAppNativeOutput Include="@(_SunderResolvedFlatAppNative->'$(TargetDir)%(Filename)%(Extension)')" />
+      <_SunderRuntimeFiles Remove="@(_SunderFlatAppNativeOutput)" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.App.Bridge.dll" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Sunder.App.Bridge.pdb" />
       <_SunderRuntimeFiles Remove="$(TargetDir)Avalonia.Controls.dll" />
@@ -1566,8 +1574,9 @@
                              DiscoveryRoot="$(SunderDevOutputDiscoveryRoot)"
                              TargetDirectory="$(TargetDir)"
                              AssetsDirectory="$(SunderPackageAssetsDirectory)"
-                               ManagedFiles="@(_SunderRuntimeFiles)"
-                               NativeRuntimeFiles="@(_SunderNativeRuntimeFiles)"
+                                ManagedFiles="@(_SunderRuntimeFiles)"
+                                NativeRuntimeFiles="@(_SunderNativeRuntimeFiles)"
+                                FlatAppNativeFiles="@(_SunderFlatAppNativeOutput)"
                                 WorkerFiles="@(_SunderWorkerFile)"
                                 RoleContentFiles="@(_SunderRoleAppContent)"
                                AssetFiles="@(_SunderAssetFiles)"

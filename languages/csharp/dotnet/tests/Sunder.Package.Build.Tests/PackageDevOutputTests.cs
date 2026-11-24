@@ -13,6 +13,61 @@ namespace Sunder.Package.Build.Tests;
 [Collection("Package build artifacts")]
 public sealed class PackageDevOutputTests
 {
+    [Theory]
+    [InlineData("osx-arm64", "libresolved.dylib")]
+    [InlineData("linux-arm64", "libresolved.so")]
+    [InlineData("win-arm64", "libresolved.dll")]
+    public async Task AppDevOutput_PreservesResolvedFlatNativeBytesInTheExactRid(string rid, string nativeName)
+    {
+        var root = CreateTempDirectory();
+        var seed = CreateCanonicalLeaf(root, "app", rid, "nested-native");
+        var project = Path.GetDirectoryName(seed)!;
+        var target = Path.Combine(project, "target");
+        var devOutput = Path.Combine(target, "sunder-dev");
+        var packageCache = Path.Combine(project, "package-cache");
+        Directory.CreateDirectory(packageCache);
+        var reference = Path.Combine(packageCache, nativeName);
+        var resolvedOutput = Path.Combine(target, nativeName);
+        await File.WriteAllTextAsync(reference, "original NuGet bytes");
+        await File.WriteAllTextAsync(resolvedOutput, "resolved build output bytes");
+        await File.WriteAllTextAsync(Path.Combine(target, "libunrelated.so"), "untracked output");
+        var targets = Path.GetFullPath(Path.Combine(FindTaskDirectory(), "..", "build", "Sunder.Package.Build.targets"));
+        var projectFile = Path.Combine(project, "Emit.proj");
+        await File.WriteAllTextAsync(projectFile, $$"""
+            <Project>
+              <PropertyGroup>
+                <IntermediateOutputPath>obj/</IntermediateOutputPath>
+                <TargetDir>{{target}}{{Path.DirectorySeparatorChar}}</TargetDir>
+                <RuntimeIdentifier>{{rid}}</RuntimeIdentifier>
+                <SunderPackageCompilationRole>app</SunderPackageCompilationRole>
+                <SunderDevOutputPath>{{devOutput}}</SunderDevOutputPath>
+                <SunderDevOutputDiscoveryRoot>{{target}}</SunderDevOutputDiscoveryRoot>
+                <SunderGeneratedPackageManifest>{{Path.Combine(project, "sunder-package.json")}}</SunderGeneratedPackageManifest>
+                <SunderPackageBuildProject>{{Path.Combine(root, "missing.csproj")}}</SunderPackageBuildProject>
+                <SunderPackageBuildTaskAssembly>{{typeof(EmitSunderDevOutputTask).Assembly.Location}}</SunderPackageBuildTaskAssembly>
+              </PropertyGroup>
+              <ItemGroup>
+                <ReferenceCopyLocalPaths Include="{{reference}}" AssetType="native" />
+              </ItemGroup>
+              <Import Project="{{targets}}" />
+              <Target Name="GenerateSunderPackageManifest" />
+              <Target Name="Run" DependsOnTargets="EmitSunderDevOutput" />
+            </Project>
+            """);
+        var result = await ReadProcessAsync(StartMsbuild(projectFile, project));
+        Assert.True(result.ExitCode == 0, result.Output);
+
+        var validation = await SunderPackageArchiveInspector.ValidateExtractedPackageAsync(devOutput);
+        Assert.True(validation.Success, string.Join(Environment.NewLine, validation.Errors));
+        var plan = SunderPackageTargetResolver.CreateProjectionPlan(validation.Manifest!, validation.ContentIndex!, new("app", rid));
+        var native = Assert.Single(plan.Files, file => file.LogicalPath.ToString() == "lib/" + nativeName);
+        Assert.Equal(SunderPackagePayloadLayer.Target, native.Layer);
+        Assert.Equal("resolved build output bytes", await File.ReadAllTextAsync(native.PhysicalPath.ToPlatformPath(devOutput)));
+        Assert.Equal("original NuGet bytes", await File.ReadAllTextAsync(reference));
+        Assert.DoesNotContain(plan.Files, file => file.LogicalPath.ToString().EndsWith("libunrelated.so", StringComparison.Ordinal));
+        Assert.Contains(plan.Files, file => file.LogicalPath.ToString() == $"lib/runtimes/{rid}/native/fixture.bin");
+    }
+
     [Fact]
     public async Task EmitDevOutput_CreatesValidatedCanonicalTreeAndIsolatesNativeRids()
     {
