@@ -3,6 +3,7 @@ using System.IO.Compression;
 using System.Text.Json;
 using System.Xml.Linq;
 using Sunder.Core.TestSupport;
+using Sunder.Sdk.Packaging;
 using Sunder.Sdk.Rpc;
 using Xunit;
 
@@ -152,19 +153,20 @@ public sealed partial class PackageTemplateTests
                 .SelectMany(static document => document.Descendants("PackageReference"))
                 .Where(reference => reference.Attribute("Include")?.Value.StartsWith("Sunder.", StringComparison.Ordinal) == true)
                 .ToArray();
-            Assert.Equal(3, sunderReferences.Length);
             var authoredDependencies = Directory.EnumerateFiles(payload, "*.in", SearchOption.AllDirectories)
                 .Where(path => path.EndsWith(".csproj.in", StringComparison.Ordinal) || path.EndsWith(".props.in", StringComparison.Ordinal))
                 .Select(XDocument.Load).SelectMany(document => document.Descendants("PackageReference"))
                 .ToDictionary(reference => reference.Attribute("Include")!.Value, reference => reference.Attribute("Version")!.Value);
+            Assert.Equal(authoredDependencies.Keys.Order(StringComparer.Ordinal),
+                sunderReferences.Select(reference => reference.Attribute("Include")!.Value).Order(StringComparer.Ordinal));
             Assert.All(sunderReferences, reference => Assert.Equal(authoredDependencies[reference.Attribute("Include")!.Value], reference.Attribute("Version")?.Value));
             var generatedSdk = XDocument.Load(Path.Combine(output, "Escaped.Sample.csproj")).Root!.Attribute("Sdk")!.Value;
             var authoredSdk = XDocument.Load(Path.Combine(payload, "Sunder.Package.Template.csproj.in")).Root!.Attribute("Sdk")!.Value;
             Assert.Equal(authoredSdk, generatedSdk);
-            var buildVersion = XDocument.Load(Path.Combine(repositoryRoot,
-                "languages/csharp/dotnet/packages/Sunder.Package.Build/Sunder.Package.Build.csproj"))
-                .Root!.Elements("PropertyGroup").Elements("Version").Single().Value;
-            Assert.Equal("Sunder.Package.Build/" + buildVersion, generatedSdk);
+            const string buildSdk = "Sunder.Package.Build/";
+            Assert.StartsWith(buildSdk, generatedSdk, StringComparison.Ordinal);
+            Assert.True(SemanticVersion.TryParse(generatedSdk[buildSdk.Length..], out _),
+                "The generated MSBuild SDK must retain the template's explicit version.");
             Assert.DoesNotContain(sunderReferences, reference => reference.Attribute("Include")!.Value == "Sunder.Package.Build");
 
             // NuGet's reference-version getter must retain the referenced SDK's
