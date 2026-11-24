@@ -135,6 +135,52 @@ class PackageReleaseTests(unittest.TestCase):
                              {path.name for path in (root / "feed").iterdir()})
             self.assertEqual(["3.0.0", "2.0.0"], [row["version"] for row in sdk.c.decode((root / "feed/test-feed.json").read_bytes())["packages"]])
 
+    def test_template_feed_retains_packed_project_pins_without_replacing_candidates(self):
+        build, worker, template = "Sunder.Package.Build", "Sunder.Sdk.Worker", "Sunder.Package.Templates"
+        primary = [
+            dict(kind="nuget", name=name, version=version, archive=metadata.archive_name("nuget", name, version), selected=selected)
+            for name, version, selected in ((build, "4.2.0", True), (worker, "3.5.0", True), (template, "6.0.0", False))
+        ]
+        template_files = {
+            "authors/.template.config/template.json": "{}",
+            "authors/Package.csproj": f'<Project Sdk="Other.Sdk;{build}/4.1.0"><Import Project="Feature.props" /></Project>',
+            "authors/Feature.props": f'<Project><ItemGroup><PackageReference Include="{worker}" Version="[3.4.0]" /></ItemGroup></Project>',
+            "unrelated/Example.csproj": f'<Project Sdk="{build}/9.0.0" />',
+        }
+
+        def write_package(path, name, version):
+            with zipfile.ZipFile(path, "w") as package:
+                package.writestr(name + ".nuspec", f'<package><metadata><id>{name}</id><version>{version}</version></metadata></package>')
+                if name == template:
+                    for member, text in template_files.items():
+                        package.writestr(member, text)
+
+        def download(row, directory):
+            write_package(directory / row["archive"], row["name"], row["version"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate, feed = root / "candidates", root / "feed"
+            candidate.mkdir()
+            for row in primary[:-1]:
+                write_package(candidate / row["archive"], row["name"], row["version"])
+            candidate_bytes = {path.name: path.read_bytes() for path in candidate.iterdir()}
+            plan = dict(packages=primary)
+            original = copy.deepcopy(plan)
+            with patch.object(sdk, "package_history", return_value={"present": True}), \
+                 patch.object(sdk, "download_dependency", side_effect=download) as fetched:
+                sdk.feed(plan, candidate, feed)
+            self.assertEqual({(template, "6.0.0"), (build, "4.1.0"), (worker, "3.4.0")},
+                             {(call.args[0]["name"], call.args[0]["version"]) for call in fetched.call_args_list})
+            self.assertEqual(original, plan)
+            self.assertEqual(candidate_bytes, {name: (feed / name).read_bytes() for name in candidate_bytes})
+            with zipfile.ZipFile(feed / primary[-1]["archive"]) as package:
+                for member, text in template_files.items():
+                    self.assertEqual(text.encode(), package.read(member))
+            records = sdk.c.decode((feed / "test-feed.json").read_bytes())["packages"]
+            self.assertEqual([(row["name"], row["version"]) for row in primary],
+                             [(row["name"], row["version"]) for row in records])
+
     def test_protected_main_source_is_automatic_not_an_approval_variable(self):
         plan = sdk.select(self.packages, SOURCE, [], lambda _: None)
         env = dict(GITHUB_REPOSITORY=sdk.c.REPOSITORY, GITHUB_REF="refs/heads/main", GITHUB_EVENT_NAME="push",

@@ -217,6 +217,50 @@ def pack(plan, directory, kind=None):
         documentation.verify(ROOT, [directory], plan["artifactSourceCommit"], package_names=[row["name"] for row in rows])
 
 
+def nuget_xml(archive, name):
+    c.require(archive.getinfo(name).file_size <= 1024 * 1024, "Oversized NuGet XML metadata: " + name)
+    raw = archive.read(name)
+    c.require(not any(marker in raw.upper().replace(b"\0", b"") for marker in (b"<!DOCTYPE", b"<!ENTITY")), "Unsupported NuGet XML markup")
+    return ET.fromstring(raw)
+
+
+def packaged_template_pins(archive, known):
+    # The actual template package can predate this release's Build or SDK.
+    # MSBuild references in its content are not nuspec dependencies.
+    marker = ".template.config/template.json"
+    names = archive.namelist()
+    roots = tuple(name.removesuffix(marker) for name in names if name == marker or name.endswith("/" + marker))
+    projects = [name for name in names if name.startswith(roots) and
+                name.endswith((".csproj", ".csproj.in", ".props", ".targets"))]
+    c.require(0 < len(projects) <= 128 and len(projects) == len(set(projects)), "Missing or ambiguous packaged template projects")
+    pins = set()
+
+    def remember(name, version):
+        name = known.get(name.casefold())
+        if name is None or not version:
+            return
+        if version.startswith("[") and version.endswith("]") and "," not in version:
+            version = version[1:-1]
+        try:
+            metadata.version_key(version, True)
+        except ValueError:
+            return  # Only retain literal versions; MSBuild still resolves the project.
+        pins.add((name, version))
+
+    for project in projects:
+        for node in nuget_xml(archive, project).iter():
+            tag = node.tag.rsplit("}", 1)[-1]
+            version = node.get("Version") or next((child.text for child in node if child.tag.rsplit("}", 1)[-1] == "Version"), None)
+            if tag in ("PackageReference", "PackageVersion"):
+                remember(node.get("Include", ""), version)
+            if tag == "Sdk":
+                remember(node.get("Name", ""), version)
+            for spec in node.get("Sdk", "").split(";"):
+                sdk, _, inline = spec.strip().partition("/")
+                remember(sdk, inline or version)
+    return sorted(pins)
+
+
 def feed(plan, candidate, directory):
     """Template tests use selected archives plus exact already-published dependencies."""
     directory.mkdir(parents=True, exist_ok=True)
@@ -233,8 +277,8 @@ def feed(plan, candidate, directory):
             shutil.copyfile(candidate / row["archive"], directory / row["archive"])
             continue
         download_dependency(test_row, directory)
-    # Independently versioned Worker/Avalonia/Stacks archives may refer to an
-    # older exact SDK. Preserve that real closure, not a forced same-version set.
+    # Preserve older package dependencies and the pins in shipped templates
+    # beside the candidate versions, without changing the primary feed records.
     queue = [item for item in packages if item["kind"] == "nuget"]
     known = {item["name"].casefold(): item["name"] for item in queue}
     seen = set()
@@ -243,22 +287,22 @@ def feed(plan, candidate, directory):
         if row["archive"] in seen: continue
         seen.add(row["archive"])
         c.require(len(seen) <= 128, "Oversized public NuGet dependency closure")
-        with zipfile.ZipFile(directory / row["archive"]) as archive:
+        path = directory / row["archive"]
+        if not path.exists(): download_dependency(row, directory)
+        with zipfile.ZipFile(path) as archive:
             names = [name for name in archive.namelist() if name.endswith(".nuspec")]
-            c.require(len(names) == 1 and archive.getinfo(names[0]).file_size <= 1024 * 1024, "Missing/bounded NuGet metadata required")
-            raw = archive.read(names[0])
-            c.require(not any(marker in raw.upper().replace(b"\0", b"") for marker in (b"<!DOCTYPE", b"<!ENTITY")), "Unsupported NuGet XML markup")
-            nuspec = ET.fromstring(raw)
+            c.require(len(names) == 1, "Missing/bounded NuGet metadata required")
+            nuspec = nuget_xml(archive, names[0])
+            pins = packaged_template_pins(archive, known) if row["name"] == "Sunder.Package.Templates" else []
             for dependency in nuspec.iter():
                 name, constraint = dependency.get("id", ""), dependency.get("version", "")
                 if dependency.tag.rsplit("}", 1)[-1] != "dependency" or name.casefold() not in known: continue
                 if not (constraint.startswith("[") and constraint.endswith("]") and "," not in constraint): continue
                 version = constraint[1:-1]
                 metadata.version_key(version, True)
-                name = known[name.casefold()]
-                item = dict(kind="nuget", name=name, version=version, archive=metadata.archive_name("nuget", name, version))
-                if not (directory / item["archive"]).exists(): download_dependency(item, directory)
-                queue.append(item)
+                pins.append((known[name.casefold()], version))
+            queue.extend(dict(kind="nuget", name=name, version=version, archive=metadata.archive_name("nuget", name, version))
+                         for name, version in pins)
     c.write_new(directory / "test-feed.json", dict(packages=packages))
 
 
