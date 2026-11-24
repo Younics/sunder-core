@@ -86,6 +86,8 @@ Selected validation retains:
 
 Template tests combine the selected archives with published dependencies. Different
 package versions and exact older SDK dependencies are not rewritten into one version.
+The test feed also retains literal first-party MSBuild SDK and package references
+declared in the shipped .NET templates, even when those are older than a candidate.
 An older authored version that was never published is not backfilled for testing.
 The test feed is separate from the archives eligible for publication.
 

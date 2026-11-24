@@ -41,23 +41,35 @@ class PackageReleaseTests(unittest.TestCase):
                 self.assertTrue(all(row["selected"] is expected for row in plan["packages"]))
 
     def test_independent_versions_and_mixed_registry_selection(self):
-        self.packages[0].update(version="2.0.0", tag="nuget-sunder-sdk/v2.0.0", archive="Sunder.Sdk.2.0.0.nupkg")
-        def get(url):
-            if "sunder.sdk.worker" in url: return dict(versions=["1.2.0"])
-            return self.history(["1.1.0"])(url)
-        plan = sdk.select(self.packages, SOURCE, [], get)
-        self.assertEqual(["Sunder.Sdk"], [row["name"] for row in sdk.selected(plan)])
-        # No complete previous cohort/release is required for an ordinary mixed selection.
-        self.assertEqual(1, len(sdk.selected(plan, "nuget")))
-        self.assertEqual([], sdk.selected(plan, "npm"))
+        for candidate in ("Sunder.Sdk", "Sunder.Package.Build"):
+            with self.subTest(candidate=candidate):
+                packages = {row["name"]: dict(row) for row in self.packages}
+                published = {name.lower(): row["version"] for name, row in packages.items()}
+                for name, authored, latest in ((candidate, "4.2.0", "4.1.0"), ("Sunder.Sdk.Worker", "3.4.0", "3.5.0")):
+                    row = packages[name]
+                    row.update(version=authored, tag=row["tag"].split("/v", 1)[0] + "/v" + authored,
+                               archive=metadata.archive_name(row["kind"], name, authored))
+                    published[name.lower()] = latest
+
+                def get(url):
+                    name = url.split("/")[-2] if "nuget.org" in url else unquote(url.rsplit("/", 1)[1])
+                    return self.history([published[name.lower()]])(url)
+
+                # Select the newer package without a previous GitHub cohort.
+                plan = sdk.select(list(packages.values()), SOURCE, [], get)
+                self.assertEqual([candidate], [row["name"] for row in sdk.selected(plan)])
+                self.assertEqual([candidate], [row["name"] for row in sdk.selected(plan, "nuget")])
+                self.assertEqual([], sdk.selected(plan, "npm"))
 
     def test_historical_combined_releases_are_recognized_by_package_assets(self):
-        old = dict(tag_name="sdk/v1.1.0", draft=False, assets=[dict(name="Sunder.Sdk.1.1.0.nupkg")])
-        plan = sdk.select(self.packages, SOURCE, [old], lambda _: None)
-        self.assertFalse(plan["packages"][0]["selected"])
-        self.assertEqual(8, len(sdk.selected(plan)))
-        old["draft"] = True
-        self.assertEqual(9, len(sdk.selected(sdk.select(self.packages, SOURCE, [old], lambda _: None))))
+        owner = next(row for row in self.packages if row["name"] == "Sunder.Sdk")
+        all_names = {row["name"] for row in self.packages}
+        for draft in (False, True):
+            with self.subTest(draft=draft):
+                old = dict(tag_name="sdk/v3.0.0", draft=draft, assets=[dict(name=owner["archive"])])
+                plan = sdk.select(self.packages, SOURCE, [old], lambda _: None)
+                expected = all_names if draft else all_names - {owner["name"]}
+                self.assertEqual(expected, {row["name"] for row in sdk.selected(plan)})
 
     def test_semver_is_not_lexical_or_a_mutable_channel(self):
         versions = ["1.1.0-2", "1.1.0-10", "1.1.0-alpha", "1.1.0-alpha.1", "1.1.0", "1.2.0", "1.10.0"]
@@ -122,6 +134,52 @@ class PackageReleaseTests(unittest.TestCase):
             self.assertEqual({"Sunder.Sdk.3.0.0.nupkg", "Sunder.Sdk.Worker.2.0.0.nupkg", "Sunder.Sdk.1.5.0.nupkg", "test-feed.json"},
                              {path.name for path in (root / "feed").iterdir()})
             self.assertEqual(["3.0.0", "2.0.0"], [row["version"] for row in sdk.c.decode((root / "feed/test-feed.json").read_bytes())["packages"]])
+
+    def test_template_feed_retains_packed_project_pins_without_replacing_candidates(self):
+        build, worker, template = "Sunder.Package.Build", "Sunder.Sdk.Worker", "Sunder.Package.Templates"
+        primary = [
+            dict(kind="nuget", name=name, version=version, archive=metadata.archive_name("nuget", name, version), selected=selected)
+            for name, version, selected in ((build, "4.2.0", True), (worker, "3.5.0", True), (template, "6.0.0", False))
+        ]
+        template_files = {
+            "authors/.template.config/template.json": "{}",
+            "authors/Package.csproj": f'<Project Sdk="Other.Sdk;{build}/4.1.0"><Import Project="Feature.props" /></Project>',
+            "authors/Feature.props": f'<Project><ItemGroup><PackageReference Include="{worker}" Version="[3.4.0]" /></ItemGroup></Project>',
+            "unrelated/Example.csproj": f'<Project Sdk="{build}/9.0.0" />',
+        }
+
+        def write_package(path, name, version):
+            with zipfile.ZipFile(path, "w") as package:
+                package.writestr(name + ".nuspec", f'<package><metadata><id>{name}</id><version>{version}</version></metadata></package>')
+                if name == template:
+                    for member, text in template_files.items():
+                        package.writestr(member, text)
+
+        def download(row, directory):
+            write_package(directory / row["archive"], row["name"], row["version"])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            candidate, feed = root / "candidates", root / "feed"
+            candidate.mkdir()
+            for row in primary[:-1]:
+                write_package(candidate / row["archive"], row["name"], row["version"])
+            candidate_bytes = {path.name: path.read_bytes() for path in candidate.iterdir()}
+            plan = dict(packages=primary)
+            original = copy.deepcopy(plan)
+            with patch.object(sdk, "package_history", return_value={"present": True}), \
+                 patch.object(sdk, "download_dependency", side_effect=download) as fetched:
+                sdk.feed(plan, candidate, feed)
+            self.assertEqual({(template, "6.0.0"), (build, "4.1.0"), (worker, "3.4.0")},
+                             {(call.args[0]["name"], call.args[0]["version"]) for call in fetched.call_args_list})
+            self.assertEqual(original, plan)
+            self.assertEqual(candidate_bytes, {name: (feed / name).read_bytes() for name in candidate_bytes})
+            with zipfile.ZipFile(feed / primary[-1]["archive"]) as package:
+                for member, text in template_files.items():
+                    self.assertEqual(text.encode(), package.read(member))
+            records = sdk.c.decode((feed / "test-feed.json").read_bytes())["packages"]
+            self.assertEqual([(row["name"], row["version"]) for row in primary],
+                             [(row["name"], row["version"]) for row in records])
 
     def test_protected_main_source_is_automatic_not_an_approval_variable(self):
         plan = sdk.select(self.packages, SOURCE, [], lambda _: None)
