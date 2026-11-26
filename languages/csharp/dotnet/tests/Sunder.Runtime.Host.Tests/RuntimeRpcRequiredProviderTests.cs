@@ -83,6 +83,42 @@ public sealed class RuntimeRpcRequiredProviderTests
         Assert.Equal(["consumer.package"], missing.PackageIds);
     }
 
+    [Theory]
+    [InlineData(true)]  // fresh install
+    [InlineData(false)] // restart after store commit but before grant persistence
+    public async Task FirstInstallPlansPublicSelfProviderBeforeCommitWithoutGrantingPendingOrRevokedActions(bool storeStage)
+    {
+        var paths = new RuntimePackagePaths(CreateRoot());
+        using var permissions = new RuntimeRpcPermissionStore(paths);
+        var readiness = new RuntimeRpcReadinessEvaluator(permissions);
+        var owner = new RuntimeSessionOwner(NullLogger<RuntimeSessionOwner>.Instance, new RuntimeEventStreamService(), rpcReadiness: readiness);
+        var publisher = new PackageSessionPublisher(owner, NullLogger<PackageSessionPublisher>.Instance,
+            rpcPermissions: permissions, rpcReadiness: readiness);
+        var contract = Contract();
+        var self = CreatePackage("self.package", contract, new TestHandler(), usesContract: true);
+        var index = new SunderPackageContentIndex(1, [new(SunderPackageFormat.ManifestPath, self.RpcManifestSha256!, 1)]);
+        await using var session = CreateSession(self with { Source = self.Source with { HostRoles = PackageHostRoles.Runtime, ContentIndex = index } });
+        var key = new RuntimeRpcPermissionKey("self.package", "1.0.0", self.RpcManifestSha256!, "runtime",
+            contract.ContractId, contract.Version, contract.AbiSha256, "invoke");
+        void Prepare() => publisher.Prepare(session, owner.Sources.Snapshot(), [], [], owner.Generation,
+            stageId: storeStage ? "first-install" : null, requiresPackageStoreCommit: storeStage);
+
+        Prepare();
+        Assert.Equal(["self.package"], Assert.Single(session.RequiredProviderPlan!.Predicates).Alternatives);
+        Assert.False(permissions.TryAcquire(key, out _));
+        Assert.False(File.Exists(paths.RpcPermissionFilePath));
+        Assert.Throws<RuntimeRequiredProviderException>(() => readiness.Plan(session));
+        await using var stale = CreateSession(self with { Source = self.Source with { ContentIndex = index },
+            RpcManifestSha256 = new string('b', 64) });
+        Assert.Throws<RuntimeRequiredProviderException>(() =>
+            publisher.Prepare(stale, owner.Sources.Snapshot(), [], [], owner.Generation, requiresPackageStoreCommit: storeStage));
+
+        await permissions.SetAsync(key, RuntimeRpcPermissionState.Denied, CancellationToken.None);
+        Assert.Equal(RpcReadinessErrorCodes.RequiredProviderUnsatisfied,
+            Assert.Throws<RuntimeRequiredProviderException>(Prepare).Code);
+        Assert.False(permissions.IsGranted(key));
+    }
+
     [Fact]
     public void RequiredProviderOrCycleIsBrokenByAnIndependentAlternative()
     {

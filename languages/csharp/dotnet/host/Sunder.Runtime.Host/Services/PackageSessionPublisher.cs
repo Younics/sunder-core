@@ -106,7 +106,13 @@ internal sealed class PackageSessionPublisher(
         bool developmentWorkerContinuation = false,
         bool unplannedWithdrawal = false)
     {
-        if (rpcReadiness is not null) session.RequiredProviderPlan = rpcReadiness.Plan(session);
+        if (rpcReadiness is not null)
+        {
+            // Includes startup recovery of an already committed installation if
+            // the previous process stopped before persisting its declared grants.
+            var installGrants = rpcPermissions?.PreviewDeclaredInstalledActions(RuntimeRpcPermissionSubjects.FromSession(session));
+            session.RequiredProviderPlan = rpcReadiness.Plan(session, installGrants);
+        }
         return new PreparedPackageSession(
             session,
             sources,
