@@ -193,8 +193,7 @@ internal sealed partial class AppProcessPolicySessions(RuntimePackagePaths paths
             var subject = new RegistryPackageVersionIdentity(request.Package.PackageId, request.Package.Version, request.Package.PackageContentIdentity);
             var developmentPlatforms = development && source.DevelopmentImports is not { IsLocal: true }
                 ? DevelopmentImportAuthorityStore.Platforms(source.Manifest!) : [];
-            var origin = development ? developmentPlatforms.Length == 0 ? null : source.DevelopmentImports?.RegistryOrigin ?? throw Required()
-                : source.RegistryPolicyOrigin ?? policies.FindPackageOrigin(subject) ?? throw Required();
+            var origin = LoadPolicyOrigin(source, subject, developmentPlatforms.Length > 0);
             var requiredProviders = RuntimeRpcReadinessEvaluator.AppPredicates(source);
             var ownerOnly = RuntimeRpcReadinessEvaluator.AppOwnerOnlyContracts(source);
             var manifestHash = source.ContentIndex is null ? null : RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
@@ -375,12 +374,22 @@ internal sealed partial class AppProcessPolicySessions(RuntimePackagePaths paths
         var package = PackageUiSnapshotStore.PolicySubject(source) ?? throw Required();
         var loaded = record.Loaded.SingleOrDefault(value => value.Package == package) ?? throw Required();
         var development = source.Kind == PackageSourceKind.Dev;
-        var origin = development ? source.DevelopmentImports is not { IsLocal: true } && source.Manifest is not null && DevelopmentImportAuthorityStore.Platforms(source.Manifest).Length > 0 ? source.DevelopmentImports?.RegistryOrigin : null
-            : source.RegistryPolicyOrigin ?? policies.FindPackageOrigin(new(package.PackageId, package.Version, package.PackageContentIdentity));
+        var origin = LoadPolicyOrigin(source, new(package.PackageId, package.Version, package.PackageContentIdentity),
+            development && source.DevelopmentImports is not { IsLocal: true } && source.Manifest is not null
+            && DevelopmentImportAuthorityStore.Platforms(source.Manifest).Length > 0);
         var manifestHash = source.ContentIndex is null ? null : RuntimeRpcPackageMetadata.GetManifestSha256(source.ContentIndex);
         if (loaded.Development != development || loaded.RegistryOrigin != origin || loaded.ManifestSha256 != manifestHash) throw Required();
         if (!PredicatesSatisfied(loaded.Package.Version, loaded.Development, loaded.ManifestSha256, loaded.RequiredProviders, loaded.OwnerOnlyContracts))
             throw new RuntimeUnavailableException($"Package '{loaded.Package.PackageId}' is unavailable because a required RPC provider is not ready. Other packages remain available; retry after the provider recovers.");
+    }
+    private string? LoadPolicyOrigin(RuntimePackageSource source, RegistryPackageVersionIdentity subject, bool developmentUsesRegistry)
+    {
+        if (source.Kind == PackageSourceKind.Dev && !developmentUsesRegistry) return null;
+        var origin = source.Kind == PackageSourceKind.Dev ? source.DevelopmentImports?.RegistryOrigin
+            : source.RegistryPolicyOrigin ?? policies.FindPackageOrigin(subject);
+        // Install provenance uses a base URI. Permit issuance, durable recovery
+        // and subsequent caller checks must compare the same HTTPS authority.
+        return RegistryActivePolicyClient.Origin(origin ?? throw Required());
     }
     private bool PredicatesSatisfied(string version, bool development, string? manifestHash, IReadOnlyList<RuntimeRequiredProviderPredicate> predicates, IReadOnlyList<string> ownerOnly)
         => predicates.Count == 0 || readiness is not null && runtimeSessions is not null

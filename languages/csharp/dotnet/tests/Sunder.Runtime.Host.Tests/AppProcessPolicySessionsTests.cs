@@ -22,6 +22,27 @@ namespace Sunder.Runtime.Host.Tests;
 
 public sealed partial class AppProcessPolicySessionsTests
 {
+    [Fact]
+    public async Task RegistryInstalledAppPersistsTheSamePolicyOriginUsedForItsLease()
+    {
+        using var fixture = new Fixture();
+        await fixture.Policy.RefreshAsync();
+        // Registry install provenance stores the normalized base URI, including
+        // its root slash. The policy record and cache key store an HTTPS origin.
+        fixture.Snapshots.Source = fixture.Snapshots.Source! with { RegistryPolicyOrigin = new Uri(Origin).AbsoluteUri };
+        var session = await fixture.OpenAsync();
+        var permit = await fixture.Sessions.PermitAsync(fixture.Request(session), fixture.Peer, default);
+        Assert.True(permit.Allowed);
+        Assert.Equal("valid", permit.Lease!.State);
+        Assert.Equal(Origin, Assert.Single(fixture.Sessions.CapturePolicySubjects()).Origin);
+        fixture.Sessions.RequireLoaded(fixture.Peer, fixture.Snapshots.Source);
+        Assert.Throws<PackagePolicyDeniedException>(() => fixture.Sessions.RequireLoaded(fixture.Peer,
+            fixture.Snapshots.Source with { RegistryPolicyOrigin = "https://another.example/" }));
+        using var reopened = fixture.CreateSessions(new RuntimeProtocolDescriptor());
+        await reopened.InitializeAsync(default);
+        Assert.Equal(ActivePolicyTestContext.Package, Assert.Single(Assert.Single(reopened.CapturePolicySubjects()).Packages));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

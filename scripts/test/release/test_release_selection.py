@@ -161,14 +161,17 @@ class ReleaseSelectionTests(unittest.TestCase):
                         with patch.dict(os.environ, SUNDER_CI_JOB_RESULTS=json.dumps(changed)), self.assertRaisesRegex(ValueError, name):
                             selection.summary()
 
-    def test_unchanged_version_app_fixture_pr_runs_native_app_without_selecting_publication(self):
-        for event in ("pull_request", "merge_group"):
-            with self.subTest(event=event), tempfile.TemporaryDirectory() as temporary:
+    def test_unchanged_version_runtime_or_app_fixture_pr_runs_owning_checks_without_selecting_publication(self):
+        cases = (("app", "tests/Sunder.App.Integration.Tests/SharedBrowserProcessProbe.cs"),
+                 ("host", "host/Sunder.Runtime.Host/Services/AppProcessPolicySessions.cs"),
+                 ("host", "tests/Sunder.Runtime.Host.Tests/AppProcessPolicySessionsTests.cs"))
+        for event, owner, relative in ((event, owner, path) for event in ("pull_request", "merge_group") for owner, path in cases):
+            with self.subTest(event=event, path=relative), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 (root / "artifacts").mkdir()
                 payload = root / "event.json"
                 payload.write_text(json.dumps(dict(pull_request=dict(base=dict(sha=BASE)), merge_group=dict(base_sha=BASE))))
-                path = b"languages/csharp/dotnet/tests/Sunder.App.Integration.Tests/SharedBrowserProcessProbe.cs\n"
+                path = ("languages/csharp/dotnet/" + relative + "\n").encode()
                 with patch.dict(os.environ, dict(GITHUB_EVENT_NAME=event, GITHUB_SHA=SOURCE, GITHUB_EVENT_PATH=str(payload)), clear=True), \
                      patch.object(selection, "ROOT", root), patch.object(selection, "VALIDATION", root / "validation.json"), \
                      patch.object(selection.native, "SELECTION", root / "native.json"), \
@@ -177,9 +180,9 @@ class ReleaseSelectionTests(unittest.TestCase):
                      patch.object(selection.c, "command", return_value=path), patch.object(selection.metadata, "emit") as emit:
                     selection.select("validate", "all")
                 output = emit.call_args.args[0]
-                self.assertEqual(["app", "repository"], json.loads((root / "validation.json").read_bytes())["components"])
+                self.assertIn(owner, json.loads((root / "validation.json").read_bytes())["components"])
                 self.assertEqual({"win-x64", "win-arm64", "linux-x64", "linux-arm64", "osx-x64", "osx-arm64"},
-                                 {r["rid"] for r in output["platform"]["include"] if r["scope"] == "app"})
+                                 {r["rid"] for r in output["platform"]["include"] if r["scope"] == owner})
                 self.assertFalse(output["publish"] or output["native_count"] or output["selected_count"])
 
 
