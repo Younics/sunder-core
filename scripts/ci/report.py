@@ -35,6 +35,8 @@ def collect_jobs():
         for page in pages:
             for job in page["jobs"]:
                 row = {key: job.get(key) for key in ("id", "name", "html_url", "status", "conclusion", "started_at", "completed_at")}
+                row["noRunnerOrSteps"] = (row["conclusion"] in ("cancelled", "failure", "abandoned")
+                                          and job.get("runner_name") == "" and job.get("steps") == [])
                 if not isinstance(row["name"], str) or not row["html_url"].startswith(run_url() + "/job/"):
                     raise ValueError("Invalid job navigation response")
                 row["duration"] = "running" if row["status"] == "in_progress" else "—"
@@ -51,7 +53,10 @@ def collect_jobs():
 def job_table(rows):
     lines = ["### Job navigation", "", "| Job | Result | Duration |", "|---|---|---|"]
     for row in rows:
-        lines.append(f"| [{escape(row['name'])}]({row['html_url']}) | {escape(row['conclusion'] or row['status'])} | {row['duration']} |")
+        result = row["conclusion"] or row["status"]
+        if row.get("noRunnerOrSteps"): result += " — no runner assigned; no steps ran"
+        elif result == "skipped": result += " — did not run"
+        lines.append(f"| [{escape(row['name'])}]({row['html_url']}) | {escape(result)} | {row['duration']} |")
     if not rows:
         lines.append("| Job links unavailable; see the Actions sidebar | — | — |")
     return lines

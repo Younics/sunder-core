@@ -12,6 +12,7 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Media;
+using Avalonia.VisualTree;
 using Microsoft.Web.WebView2.Core;
 using Sunder.App.Services;
 using Sunder.Package.Format;
@@ -22,6 +23,7 @@ internal static class SharedBrowserProcessProbe
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException();
         var probeStarted = Stopwatch.GetTimestamp();
+        var deadline = new BrowserProbeDeadline(WindowsWebViewCaptureProcessProbe.ScenarioWatchdog - AppShutdownBudgets.BrowserCleanup, TimeProvider.System);
         void Stage(string stage) => Console.WriteLine($"shared-browser-stage: {stage}; elapsedMs={Stopwatch.GetElapsedTime(probeStarted).TotalMilliseconds:0.###}");
         Environment.SetEnvironmentVariable("SUNDER_APP_STATE_ROOT", Path.Combine(root, "state"));
         var ui = AvaloniaUiDispatcher.Instance;
@@ -36,11 +38,16 @@ internal static class SharedBrowserProcessProbe
         var content = Directory.CreateDirectory(Path.Combine(root, "content")).FullName;
         await File.WriteAllTextAsync(Path.Combine(content, "index.html"), "<!doctype html><html><body style='margin:0;background:rgb(10,180,30)'><div style='position:absolute;left:40px;top:30px;width:100px;height:80px;background:rgb(20,40,220)'></div><script src='page.js'></script></body></html>");
         await File.WriteAllTextAsync(Path.Combine(content, "page.js"), """
-            globalThis.ticks=0; setInterval(()=>ticks++,10);
-            globalThis.fixtureReady=false; globalThis.freshStorage=false;
-            globalThis.worker=new Worker('worker.js');
-            globalThis.shared=new SharedWorker('shared.js'); shared.port.start();
-            (async()=>{
+            globalThis.fixtureId=crypto.randomUUID(); globalThis.freshStorage=false;
+            globalThis.fixtureBridge=window.sunder ? Promise.resolve() :
+              new Promise(resolve=>window.addEventListener('sunder:ready',resolve,{once:true}));
+            globalThis.fixtureWorkers=(async()=>{
+              globalThis.worker=new Worker('worker.js'); globalThis.shared=new SharedWorker('shared.js');
+              const started=(port,source)=>new Promise((resolve,reject)=>{
+                port.onmessage=e=>e.data==='ready' ? resolve() : reject(new Error('Unexpected worker response'));
+                source.onerror=e=>reject(new Error(e.message || 'Worker startup failed'));
+              });
+              const dedicated=started(worker,worker), pooled=started(shared.port,shared); shared.port.start();
               const dbs=await indexedDB.databases();
               freshStorage=localStorage.getItem('old')===null && sessionStorage.getItem('old')===null
                 && !document.cookie.includes('old=') && (await caches.keys()).length===0 && dbs.length===0;
@@ -50,15 +57,22 @@ internal static class SharedBrowserProcessProbe
                 request.onupgradeneeded=()=>request.result.createObjectStore('old');
                 request.onerror=()=>reject(request.error); request.onsuccess=()=>{request.result.close(); resolve()}});
               const r=await navigator.serviceWorker.register('service.js'); const w=r.active??r.installing??r.waiting;
-              if(w.state!=='activated')await new Promise(resolve=>w.addEventListener('statechange',()=>{if(w.state==='activated')resolve()}));
-              r.active.postMessage('start'); fixtureReady=true;
+              if(w.state!=='activated')await new Promise((resolve,reject)=>{
+                const check=()=>{if(w.state==='activated')resolve();else if(w.state==='redundant')reject(new Error('Service worker became redundant'));};
+                w.addEventListener('statechange',check); check();
+              });
+              const channel=new MessageChannel();
+              const service=new Promise((resolve,reject)=>{channel.port1.onmessage=e=>e.data==='ready' ? resolve() : reject(new Error('Unexpected service response'));});
+              r.active.postMessage('start',[channel.port2]); await Promise.all([dedicated,pooled,service]); channel.port1.close();
             })();
             """);
-        await File.WriteAllTextAsync(Path.Combine(content, "worker.js"), "setInterval(()=>fetch('page.js').catch(()=>{}),25);");
+        await File.WriteAllTextAsync(Path.Combine(content, "worker.js"), "setInterval(()=>fetch('page.js').catch(()=>{}),25);postMessage('ready');");
         await File.WriteAllTextAsync(Path.Combine(content, "shared.js"), "onconnect=e=>{e.ports[0].postMessage('ready')};setInterval(()=>fetch('page.js').catch(()=>{}),25);");
-        await File.WriteAllTextAsync(Path.Combine(content, "service.js"), "self.addEventListener('install',e=>e.waitUntil(skipWaiting()));self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('message',e=>e.waitUntil(new Promise(resolve=>{const timer=setInterval(()=>fetch('page.js').catch(()=>{}),25);setTimeout(()=>{clearInterval(timer);resolve()},60000)})));");
+        await File.WriteAllTextAsync(Path.Combine(content, "service.js"), "self.addEventListener('install',e=>e.waitUntil(skipWaiting()));self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('message',e=>e.waitUntil(new Promise(resolve=>{const timer=setInterval(()=>fetch('page.js').catch(()=>{}),25);e.ports[0].postMessage('ready');setTimeout(()=>{clearInterval(timer);resolve()},60000)})));");
         var target = new SunderPackageTargetManifest { Role = "app", Rid = RuntimeInformation.RuntimeIdentifier, Kind = "web", EntryPoint = "index.html", RequiredHostCapabilities = ["core.v1"], Views = [new() { ViewId = "probe", DisplayName = "Probe", Route = "/", DefaultPlacement = "middle", ShowInHotbar = true }] };
         await using var server = await AppWebContentServer.StartAsync(content, target, default);
+        using var documents = new SharedBrowserDocumentProbe(manager, server.BaseUri, lease => created.SingleOrDefault(view =>
+            ReferenceEquals(view.Control, lease.Control) || view.Control.GetVisualAncestors().Contains(lease.Control)), deadline);
         var contracts = AppWebRpcContractCatalog.Load(content, new SunderPackageManifest { ContractBundles = [] },
             new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, []));
         var ownerRoot = Path.Combine(root, "activation");
@@ -75,20 +89,15 @@ internal static class SharedBrowserProcessProbe
         var window = new Window { Title = "Sunder shared browser qualification", Width = 900, Height = 340, Content = shell };
         desktop.MainWindow = window;
         window.Show();
-        var readiness = "controllers";
         try
         {
-            await UntilAsync(() => a.CanCapture && b.CanCapture);
+            await BrowserProbeDeadline.BothAsync(documents.ReadyAsync(a, "initial-a"), documents.ReadyAsync(b, "initial-b"));
             Console.WriteLine($"shared-browser-runtime: {created[0].Native!.Environment.BrowserVersionString}");
             foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
-            readiness = "document-script";
-            await UntilAsync(async () => await a.InvokeScriptAsync("typeof ticks") == "\"number\"" && await b.InvokeScriptAsync("typeof ticks") == "\"number\"");
-            readiness = "fixture-workers";
-            await UntilAsync(async () => await a.InvokeScriptAsync("fixtureReady") == "true" && await b.InvokeScriptAsync("fixtureReady") == "true");
         }
         catch (Exception error)
         {
-            Stage($"readiness-failed; phase={readiness}; initialization={string.Join(',', created.Select(view => view.Initialization?.Status.ToString() ?? "not-started"))}");
+            Stage($"readiness-failed; initialization={string.Join(',', created.Select(view => view.Initialization?.Status.ToString() ?? "not-started"))}");
             WindowsWebViewCaptureProcessProbe.ReportFailure(error);
             try { Console.Error.WriteLine($"shared-browser-available-runtime: {CoreWebView2Environment.GetAvailableBrowserVersionString()}"); }
             catch (Exception versionError) { Console.Error.WriteLine($"shared-browser-runtime-unavailable: {versionError.GetType().Name}"); }
@@ -98,7 +107,7 @@ internal static class SharedBrowserProcessProbe
         var aInfo = await created[0].Native!.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}");
         string aContext;
         using (var info = JsonDocument.Parse(aInfo)) aContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
-        await RequireWorkersAsync(created[0], aContext, present: true);
+        await RequireWorkersAsync(created[0], aContext, present: true, () => deadline.Remaining);
         Require(created.Count == 2 && engine.BrowserProcessIds.Count == 1, "Views did not share one browser process.");
         Stage("documents-and-workers-ready");
         foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
@@ -128,10 +137,17 @@ internal static class SharedBrowserProcessProbe
         Stage("canceled-native-capture-drained");
         var control = a.Control;
         await a.InvokeScriptAsync("globalThis.preserved=123");
-        panel.Children.Remove(aPackage);
-        await Task.Delay(50);
+        var detached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void Detached(object? sender, VisualTreeAttachmentEventArgs e) => detached.TrySetResult();
+        control.DetachedFromVisualTree += Detached;
+        try
+        {
+            panel.Children.Remove(aPackage);
+            await deadline.ObserveAsync("reparent/detach", detached.Task);
+        }
+        finally { control.DetachedFromVisualTree -= Detached; }
         panel.Children.Add(aPackage);
-        await UntilAsync(() => a.CanCapture);
+        await SharedBrowserDocumentProbe.OnLayoutAsync(control, () => a.CanCapture, task => deadline.ObserveAsync("reparent/viewport", task));
         Require(await a.InvokeScriptAsync("preserved") == "123" && created.Count == 2, "Reparenting recreated the document.");
         Stage("native-reparenting-preserved-document");
         await b.InvokeScriptAsync("localStorage.setItem('sibling','survives');globalThis.sibling=456");
@@ -165,7 +181,7 @@ internal static class SharedBrowserProcessProbe
             throw new InvalidDataException("The retired native document still accepted script execution.");
         }
         catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
-        await RequireWorkersAsync(created[1], aContext, present: false, retirementStarted: started);
+        await RequireWorkersAsync(created[1], aContext, present: false, () => CleanupRemaining(started));
         Console.WriteLine($"shared-browser: in-flight-controller-closed; callbacks-drained; sibling-preserved; resetMs={Stopwatch.GetElapsedTime(started).TotalMilliseconds:0.###}");
         CoreWebView2? reusedNative = null;
         for (var cycle = 0; cycle < 12; cycle++)
@@ -174,8 +190,7 @@ internal static class SharedBrowserProcessProbe
             Require(ReferenceEquals(control, reopened.Browser.Control) && created.Count == 2, "Cleaned controller was not reused.");
             panel.Children.Add(reopened);
             var current = reopened.Browser;
-            await UntilAsync(() => current.CanCapture);
-            await UntilAsync(async () => await current.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            await documents.ReadyAsync(current, $"reuse-{cycle}");
             if (reusedNative is null)
             {
                 reusedNative = created[0].Native!;
@@ -197,7 +212,7 @@ internal static class SharedBrowserProcessProbe
             }));
             Require(reopened.Bridge.CaptureDevelopmentDocument() == currentNonce && reopened.Bridge.PendingRequestCount == 0, "A stale bridge request acquired new authority.");
             await current.InvokeScriptAsync("history.pushState({},'',location.pathname+'#old');globalThis.preserved=123");
-            await RequireWorkersAsync(created[0], aContext, present: true);
+            await RequireWorkersAsync(created[0], aContext, present: true, () => deadline.Remaining);
             panel.Children.Remove(reopened);
             var resetStarted = Stopwatch.GetTimestamp();
             await reopened.DisposeAsync().AsTask().WaitAsync(AppShutdownBudgets.BrowserCleanup);
@@ -212,7 +227,7 @@ internal static class SharedBrowserProcessProbe
         using (var old = Create(aKey))
         {
             panel.Children.Add(old);
-            await UntilAsync(async () => old.CanCapture && await old.Browser.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            await documents.ReadyAsync(old.Browser, "before-deferred-reopen");
             var oldNonce = old.Bridge.CaptureDevelopmentDocument();
             var busy = old.Browser.InvokeScriptAsync("(()=>{const end=performance.now()+100;while(performance.now()<end){};return 1})()");
             panel.Children.Remove(old);
@@ -223,7 +238,8 @@ internal static class SharedBrowserProcessProbe
             Require(created.Count == 2 && !reopened.CanCapture, "Reopen acquired a native view before previous cleanup.");
             await cleanup.WaitAsync(AppShutdownBudgets.BrowserCleanup);
             try { await busy; } catch (Exception error) when (error is OperationCanceledException or COMException) { }
-            await UntilAsync(async () => reopened.CanCapture && await reopened.Browser.InvokeScriptAsync("fixtureReady && freshStorage && Boolean(window.sunder)") == "true");
+            await documents.ReadyAsync(reopened.Browser, "deferred-reopen");
+            Require(await reopened.Browser.InvokeScriptAsync("freshStorage") == "true", "Deferred reopen retained old storage.");
             Require(created.Count == 2 && reopened.Bridge.CaptureDevelopmentDocument() != oldNonce, "Reopen did not reuse clean native ownership with fresh authority.");
             var reopenedPixels = await reopened.Browser.CaptureAsync(reopened.Browser.CaptureViewport, 128, default);
             WindowsWebViewCaptureProcessProbe.RecordPng("pending-reopen", reopenedPixels);
@@ -241,7 +257,7 @@ internal static class SharedBrowserProcessProbe
         {
             var closingWindow = new Window { Title = "Sunder capture owner closure", Width = 420, Height = 300, Content = closing };
             closingWindow.Show();
-            await UntilAsync(async () => closing.CanCapture && await closing.Browser.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            await documents.ReadyAsync(closing.Browser, "closing-owner");
             var closingNative = created[^1];
             using var info = JsonDocument.Parse(await closingNative.Native!.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}"));
             var closingContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
@@ -256,7 +272,7 @@ internal static class SharedBrowserProcessProbe
             try { await busy; } catch (Exception error) when (error is OperationCanceledException or COMException) { }
             try { await capture; throw new InvalidDataException("A closed native owner returned an image."); }
             catch (Exception error) when (error is InvalidOperationException or OperationCanceledException or COMException) { }
-            await RequireWorkersAsync(created[1], closingContext, present: false, retirementStarted: closeStarted);
+            await RequireWorkersAsync(created[1], closingContext, present: false, () => CleanupRemaining(closeStarted));
             Require(await b.InvokeScriptAsync("sibling") == "456" && await b.InvokeScriptAsync("localStorage.getItem('sibling')") == "\"survives\"", "Final owner closure disturbed its sibling.");
             Console.WriteLine($"shared-browser: capture-owner-closed; callbacks-drained; sibling-preserved; retirementMs={Stopwatch.GetElapsedTime(closeStarted).TotalMilliseconds:0.###}");
         }
@@ -265,8 +281,7 @@ internal static class SharedBrowserProcessProbe
         using (var failed = Create(aKey))
         {
             panel.Children.Add(failed);
-            await UntilAsync(async () => failed.Browser.CanCapture
-                && await failed.Browser.InvokeScriptAsync("fixtureReady && Boolean(window.sunder)") == "true");
+            await documents.ReadyAsync(failed.Browser, "renderer-before-failure");
             var native = created[0].Native!;
             var oldNonce = failed.Bridge.CaptureDevelopmentDocument();
             var processes = await native.Environment.GetProcessExtendedInfosAsync();
@@ -284,8 +299,8 @@ internal static class SharedBrowserProcessProbe
             panel.Children.Remove(failed);
             using var replacement = Create(aKey);
             panel.Children.Add(replacement);
-            await UntilAsync(async () => replacement.Browser.CanCapture
-                && await replacement.Browser.InvokeScriptAsync("fixtureReady && freshStorage && Boolean(window.sunder)") == "true");
+            await documents.ReadyAsync(replacement.Browser, "renderer-replacement");
+            Require(await replacement.Browser.InvokeScriptAsync("freshStorage") == "true", "Renderer recovery retained old storage.");
             Require(!ReferenceEquals(control, replacement.Browser.Control)
                 && replacement.Bridge.CaptureDevelopmentDocument() != oldNonce, "Renderer recovery reused failed native ownership or bridge authority.");
             Require(await b.InvokeScriptAsync("sibling") == "456"
@@ -305,7 +320,7 @@ internal static class SharedBrowserProcessProbe
         await PendingAsync(desktop, root, closeOwner: false);
         await PendingAsync(desktop, root, closeOwner: true);
 
-        AppWebPackageViewControl Create(string key) => new(server.BaseUri, key, server, manager,
+        AppWebPackageViewControl Create(string key) => new(server.BaseUri, key, server, documents,
             UnavailableAppWebRpcClient.Instance, contracts, new ExternalBrowserService(_ => throw new InvalidOperationException("The fixture must not open external browsers.")));
     }
 
@@ -379,37 +394,40 @@ internal static class SharedBrowserProcessProbe
 
     private static async Task RequireCleanAsync(WindowsBrowserView view, string context, long retirementStarted)
     {
-        await RequireWorkersAsync(view, context, present: false, retirementStarted);
-        using var history = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Page.getNavigationHistory", "{}"));
+        await RequireWorkersAsync(view, context, present: false, () => CleanupRemaining(retirementStarted));
+        var remaining = CleanupRemaining(retirementStarted);
+        if (remaining <= TimeSpan.Zero) throw new TimeoutException("History verification exceeded the browser cleanup allowance.");
+        using var history = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Page.getNavigationHistory", "{}").WaitAsync(remaining));
         var entries = history.RootElement.GetProperty("entries");
         Require(entries.GetArrayLength() == 1 && entries[0].GetProperty("url").GetString() == "about:blank", "A cleaned controller retained old document history.");
     }
 
-    private static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present, long? retirementStarted = null)
+    private static TimeSpan CleanupRemaining(long started) => AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(started);
+
+    private static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present, Func<TimeSpan> remaining)
     {
-        if (!present && retirementStarted is null) throw new InvalidOperationException("Worker retirement requires its original budget start.");
+        var last = "no observation";
+        TimeSpan Budget()
+        {
+            var time = remaining();
+            return time > TimeSpan.Zero ? time : throw new TimeoutException($"Native worker {(present ? "startup" : "retirement")} deadline; {last}.");
+        }
         while (true)
         {
-            var remaining = present ? TimeSpan.FromSeconds(3) : AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(retirementStarted!.Value);
-            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Native worker retirement exceeded its browser cleanup allowance.");
-            using var targets = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}").WaitAsync(remaining));
+            var available = Budget();
+            using var targets = JsonDocument.Parse(await view.Native!.CallDevToolsProtocolMethodAsync("Target.getTargets", "{}").WaitAsync(available));
             var nativeWorkers = targets.RootElement.GetProperty("targetInfos").EnumerateArray()
                 .Where(item => item.GetProperty("type").GetString() is "worker" or "shared_worker" or "service_worker").ToArray();
             var unscoped = nativeWorkers.Any(item => !item.TryGetProperty("browserContextId", out var owner) || string.IsNullOrEmpty(owner.GetString()));
             var workers = nativeWorkers.Where(item => item.TryGetProperty("browserContextId", out var owner) && owner.GetString() == context)
                 .Select(item => item.GetProperty("type").GetString()).ToArray();
-            if (present)
-            {
-                Require(!unscoped && workers.Distinct().Count() == 3, "The fixture did not unambiguously start all three real worker types: " + targets.RootElement.GetRawText());
-                return;
-            }
-            remaining = AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(retirementStarted!.Value);
-            if (remaining <= TimeSpan.Zero) throw new TimeoutException("Native worker retirement exceeded its browser cleanup allowance: " + targets.RootElement.GetRawText());
-            if (!unscoped && workers.Length == 0) return;
+            last = $"unscoped={unscoped}; contextWorkers=[{string.Join(',', workers)}]";
+            available = Budget();
+            if (!unscoped && (present ? workers.Distinct().Count() == 3 : workers.Length == 0)) return;
             // A stopped service-worker target can briefly lose its context while
             // the browser removes it. Wait for conclusive absence; neither pid=0
             // nor detached debugger state is proof. Never grant a fresh budget.
-            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(20, remaining.TotalMilliseconds)));
+            await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(20, available.TotalMilliseconds)));
         }
     }
 
@@ -484,12 +502,6 @@ internal static class SharedBrowserProcessProbe
         }
     }
 
-    private static Task UntilAsync(Func<bool> test) => UntilAsync(() => Task.FromResult(test()));
-    private static async Task UntilAsync(Func<Task<bool>> test)
-    {
-        var timer = Stopwatch.StartNew();
-        while (!await test()) { if (timer.Elapsed > TimeSpan.FromSeconds(10)) throw new TimeoutException("Native fixture condition did not become ready."); await Task.Delay(20); }
-    }
     private static void Require(bool condition, string message) { if (!condition) throw new InvalidOperationException(message); }
     [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool IsWindow(nint window);
 }

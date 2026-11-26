@@ -47,7 +47,9 @@ rewritten into a publication or compatibility claim.
 ## Native and compatibility scope
 
 `select_releases.py` selects independent versions and their existing validation
-owners before toolchain setup. `native_release.py` reserves each App/Host/CLI tag
+owners before toolchain setup. PR and merge-queue changes to the App integration
+harness also select its existing App validation scope without a version change.
+`native_release.py` reserves each App/Host/CLI tag
 and draft after validation, retaining `native-release-plan.json` before packaging.
 The plan pins component, version, source, protected-main workflow and original run.
 Same-run retries reuse completed platform artifacts. Incomplete reservations require

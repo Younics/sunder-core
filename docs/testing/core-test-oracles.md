@@ -210,9 +210,11 @@ in-flight callback drains, genuine parent-window closure during acquisition and
 final held-process/root reclamation. It also terminates the SDK/frame-selected
 owned renderer and checks unavailable fallback, fresh reload and sibling survival.
 The normal entry-point observer separately
-checks shell move, reload, rapid close/reopen and hotbar removal. These retain the
-three-second native cleanup assertions; an empty SDK process snapshot is not exit
-proof. WKWebView/WebKitGTK probes qualify their own native cleanup, not Windows
+checks shell move, reload, rapid close/reopen and hotbar removal. The Windows probe
+observes controller acquisition, the expected navigation, and the page's worker/bridge
+readiness on the original STA. Its scenario watchdog is distinct from the three-second
+UI responsiveness and fifteen-second native retirement allowances. An empty SDK
+process snapshot is not exit proof. WKWebView/WebKitGTK probes qualify their own native cleanup, not Windows
 sharing by analogy. Test-owned homes must fit the backend's native descendant path
 budget; configured roots are never silently relocated to make a run pass.
 Shared Host test support records its exact Worker project output in assembly metadata
