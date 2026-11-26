@@ -217,7 +217,9 @@ internal sealed class AppBrowserManager : IAppWebViewFactory, IAsyncDisposable
         public Task<byte[]> CaptureAsync(Rect bounds, int edge, CancellationToken token) { RequireActive(); return browser.CaptureAsync(bounds, edge, token); }
         public void Stop() { if (_retirement is null) browser.Stop(); }
         public Task RetireAsync() => _retirement ??= owner.ReleaseAsync(this);
-        public Task RetireDocumentAsync() => _documentRetirement ??= browser.CanReset ? browser.ResetAsync() : browser.RetireDocumentAsync();
+        public void PreventReuse() => Reusable = false;
+        public Task RetireDocumentAsync() => _documentRetirement ??= !Reusable ? RetireAsync()
+            : browser.CanReset ? browser.ResetAsync() : browser.RetireDocumentAsync();
         public void Dispose() { var task = RetireAsync(); AppCleanupQuarantine.Retain(task, "retiring a browser session"); }
         public Task DrainNativeRetirementAsync() => RetireAsync();
         private void RequireActive() => ObjectDisposedException.ThrowIf(_retirement is not null || _documentRetirement is not null, this);

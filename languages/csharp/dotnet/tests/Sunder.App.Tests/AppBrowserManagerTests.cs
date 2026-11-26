@@ -1,12 +1,53 @@
 using Avalonia.Controls;
 using Sunder.App.Services;
 using Sunder.App.Tests.TestSupport;
+using Sunder.Package.Format;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
 
 public sealed class AppBrowserManagerTests
 {
+    [Fact]
+    public Task UnregisteringWebPackageDrainsItsNativeLeaseWithoutPreparingItForReuse() => RunAsync(async () =>
+    {
+        var root = Directory.CreateTempSubdirectory("sunder-unregister-");
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root.FullName, "index.html"), "<!doctype html>");
+            await using var server = await AppWebContentServer.StartAsync(root.FullName,
+                new SunderPackageTargetManifest { EntryPoint = "index.html" }, default);
+            var ui = new InlineDispatcher();
+            var created = new List<Browser>();
+            await using var manager = new AppBrowserManager(ui, _ => { var browser = new Browser(); created.Add(browser); return browser; });
+            var registry = new AppPackageViewRegistry(ui);
+            var catalog = AppWebRpcContractCatalog.Load(root.FullName, new SunderPackageManifest { ContractBundles = [] },
+                new SunderPackageContentIndex(SunderPackageFormat.CurrentContentIndexVersion, []));
+            registry.RegisterPackageView("target", new PackageViewRegistration("view", "View"), () =>
+                new AppWebPackageViewControl(server.BaseUri, Path.Combine(root.FullName, "target"), server, manager,
+                    UnavailableAppWebRpcClient.Instance, catalog, new ExternalBrowserService()), isWebView: true);
+            var view = Assert.IsType<AppWebPackageViewControl>(registry.GetOrCreateView("view", _ => false, (_, _, _) => false));
+            var sibling = manager.Create(Path.Combine(root.FullName, "sibling"));
+            var nativeExit = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            created[0].NativeDrain = nativeExit.Task;
+            try
+            {
+                Assert.Equal(["view"], registry.UnregisterPackage("target"));
+                Assert.Equal(0, created[0].Resets);
+                Assert.True(created[0].Closed);
+                Assert.Null(view.Content);
+                Assert.False(view.Retired.IsCompleted);
+                Assert.False(created[1].Closed);
+            }
+            finally { nativeExit.TrySetResult(); }
+            await view.Retired;
+            Assert.Equal(1, manager.NativeSessionCount);
+            await sibling.RetireAsync();
+        }
+        finally { root.Delete(recursive: true); }
+    });
+
     [Fact]
     public Task NoDemandDoesNotCreateBrowserAndOnlyCleanSameViewIsReused() => RunAsync(async () =>
     {

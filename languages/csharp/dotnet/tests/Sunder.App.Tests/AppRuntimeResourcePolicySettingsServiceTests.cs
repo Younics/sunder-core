@@ -11,12 +11,12 @@ public sealed class AppRuntimeResourcePolicySettingsServiceTests
     [Fact]
     public void DefaultPathRemainsInAppV1State()
     {
-        var path = AppRuntimeResourcePolicySettingsService.GetDefaultSettingsFilePath();
-
-        Assert.EndsWith(
-            Path.Combine("Sunder", "app", "v1", "runtime-resource-policy.json"),
-            path,
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+        var defaultRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Sunder", "app", "v1");
+        Assert.Equal(defaultRoot, AppLocalState.ResolveRootPath(null));
+        var configured = Environment.GetEnvironmentVariable(AppLocalState.StateRootEnvironmentVariable);
+        var expectedRoot = string.IsNullOrWhiteSpace(configured) ? defaultRoot : Path.GetFullPath(configured);
+        Assert.Equal(Path.Combine(expectedRoot, "runtime-resource-policy.json"),
+            AppRuntimeResourcePolicySettingsService.GetDefaultSettingsFilePath());
     }
 
     [Fact]

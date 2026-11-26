@@ -64,6 +64,7 @@ internal sealed class SharedBrowserDocumentProbe(AppBrowserManager manager, Uri 
         internal async Task ObserveAsync(BrowserProbeDeadline deadline, string name)
         {
             var phase = "attachment";
+            var lastPageState = "not-observed";
             Task Wait(Task operation) => deadline.ObserveAsync(name + "/" + phase, operation, _failure.Task);
             try
             {
@@ -77,32 +78,51 @@ internal sealed class SharedBrowserDocumentProbe(AppBrowserManager manager, Uri 
                 await Wait(_navigation.Task);
                 phase = "viewport";
                 await OnLayoutAsync(_lease.Control, () => _lease.CanCapture && _lease.CaptureViewport.Width > 0 && _lease.CaptureViewport.Height > 0, Wait);
-                var native = _native()?.Native ?? throw new InvalidDataException("The visible lease has no native controller.");
+                var view = _native() ?? throw new InvalidDataException("The visible lease has no native view.");
+                var native = view.Native ?? throw new InvalidDataException("The visible lease has no native controller.");
                 phase = "document-script";
                 var readId = _lease.InvokeScriptAsync("globalThis.fixtureId");
                 await Wait(readId);
                 var id = JsonSerializer.Deserialize<string>(await readId ?? "null");
                 if (!Guid.TryParse(id, out _)) throw new InvalidDataException("The lease did not run the fixture page script.");
-                phase = "workers-and-bridge";
-                // Unlike ExecuteScript, Runtime.evaluate can join a JS promise.
-                // Compare its document id with the id read via the live lease:
-                // another controller/document cannot supply the readiness proof.
-                var evaluation = native.CallDevToolsProtocolMethodAsync("Runtime.evaluate", JsonSerializer.Serialize(new
+                phase = "document-setup";
+                // Title is a level-triggered observation of this specific live
+                // document. Subscribe then read so an already-ready page works.
+                var prefix = "sunder-fixture:" + id + ":";
+                var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void TitleChanged(object? sender, object e)
                 {
-                    expression = "Promise.all([fixtureWorkers,fixtureBridge]).then(()=>fixtureId)",
-                    awaitPromise = true, returnByValue = true,
-                }));
-                await Wait(evaluation);
-                using var response = JsonDocument.Parse(await evaluation);
-                if (response.RootElement.TryGetProperty("exceptionDetails", out var error))
-                    throw new InvalidDataException($"Fixture page rejected setup: {error}");
-                if (response.RootElement.GetProperty("result").GetProperty("value").GetString() != id)
-                    throw new InvalidDataException("The ready document does not belong to the observed lease.");
+                    try
+                    {
+                        var title = native.DocumentTitle;
+                        if (!title.StartsWith(prefix, StringComparison.Ordinal)) return;
+                        lastPageState = title[prefix.Length..];
+                        if (lastPageState == "ready") ready.TrySetResult();
+                        else if (lastPageState.StartsWith("failed:", StringComparison.Ordinal))
+                            _failure.TrySetResult(new InvalidDataException(lastPageState));
+                    }
+                    catch (Exception error) { _failure.TrySetResult(error); }
+                }
+                native.DocumentTitleChanged += TitleChanged;
+                try { TitleChanged(native, EventArgs.Empty); await Wait(ready.Task); }
+                finally { native.DocumentTitleChanged -= TitleChanged; }
+                phase = "native-worker-targets";
+                var info = native.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}");
+                await Wait(info);
+                using var target = JsonDocument.Parse(await info);
+                var context = target.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString();
+                if (string.IsNullOrEmpty(context)) throw new InvalidDataException("Document has no native browser context.");
+                await SharedBrowserProcessProbe.RequireWorkersAsync(view, context, present: true, () => deadline.Remaining);
+                phase = "live-document";
+                var confirm = _lease.InvokeScriptAsync("window.sunder?.signal.aborted === false && document.title === 'sunder-fixture:'+fixtureId+':ready' ? fixtureId : null");
+                await Wait(confirm);
+                if (JsonSerializer.Deserialize<string>(await confirm ?? "null") != id)
+                    throw new InvalidDataException("Ready document lost its bridge or changed during worker observation.");
                 Console.WriteLine($"shared-browser-ready: view={name}; runtime={native.Environment.BrowserVersionString}");
             }
             catch (Exception error)
             {
-                Console.Error.WriteLine($"shared-browser-readiness-failed: view={name}; phase={phase}; initialization={_native()?.Initialization?.Status}; navigation={_navigation.Task.Status}; {error}");
+                Console.Error.WriteLine($"shared-browser-readiness-failed: view={name}; phase={phase}; page={lastPageState}; initialization={_native()?.Initialization?.Status}; navigation={_navigation.Task.Status}; {error}");
                 throw;
             }
         }

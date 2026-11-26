@@ -210,6 +210,7 @@ internal sealed class AppWebPackageLifetime : IAsyncDisposable
             {
                 if (views.Length != 0) await AvaloniaUiDispatcher.Instance.InvokeAsync(async () =>
                 {
+                    foreach (var view in views) view.Browser.PreventReuse();
                     var drains = views.Select(view => view.DisposeAsync().AsTask()).ToArray();
                     await Task.WhenAll(drains);
                 }).ConfigureAwait(false);

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -32,7 +33,14 @@ internal static class StartupHook
         Environment.SetEnvironmentVariable("SUNDER_TEST_DEVELOPMENT_CAPTURE_CONFIG", null);
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
             throw new InvalidOperationException("The App entry point must supply the original STA thread; the fixture must not repair its apartment.");
-        Environment.Exit(Start(config));
+        // Keep the real App's file-only native retirement phases on failure
+        // (the parent bounds captured output). Preserve the original App log policy.
+        using var trace = new TextWriterTraceListener(Console.Error);
+        Trace.Listeners.Add(trace);
+        int result;
+        try { result = Start(config); }
+        finally { Trace.Listeners.Remove(trace); }
+        Environment.Exit(result);
     }
 
     private static int Start(string config) => AppBuilder.Configure<CaptureApplication>().UsePlatformDetect().AfterSetup(builder =>

@@ -81,7 +81,8 @@ reopens do not create additional native controllers. Only a fully cleaned contro
 is reusable. Late initialization of a closed view never starts its package document.
 If final Windows retirement wins before a pending reset can submit native work,
 it still joins controller acquisition and deletes the late controller's profile.
-An already submitted reset or capture must still drain.
+Unregistering a package closes its live view leases directly, without preparing
+their controllers for reuse. An already submitted reset or capture must still drain.
 
 The three-second UI allowance measures presentation responsiveness, not WebView2
 startup or browser-process exit. Browser cleanup has a separate **15-second** caller

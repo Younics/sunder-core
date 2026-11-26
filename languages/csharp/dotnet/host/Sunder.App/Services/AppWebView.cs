@@ -35,6 +35,8 @@ internal interface IAppWebView : IDisposable
     Task DrainNativeRetirementAsync() => Task.CompletedTask;
 
     bool CanReset => false;
+    // An activation being removed has no future consumer for a clean spare.
+    void PreventReuse() { }
     Task ResetAsync() => throw new NotSupportedException("This browser backend requires a fresh native view.");
     Task RetireAsync() { Dispose(); return Task.CompletedTask; }
     Task RetireDocumentAsync() => Task.CompletedTask;

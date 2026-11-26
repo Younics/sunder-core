@@ -733,6 +733,9 @@ internal sealed class AppPackageViewRegistry
             _quarantinedViewIds.Remove(GetSettingsViewId(packageId));
         }
 
+        // The view registration itself is gone. Notify its lease before the
+        // ordinary control disposer submits a reset for a possible reopen.
+        foreach (var view in controlsToDispose.OfType<AppWebPackageViewControl>()) view.Browser.PreventReuse();
         return new AppPackageViewUnregistrationResult(
             removedViewIds,
             DisposeCachedControls(controlsToDispose));

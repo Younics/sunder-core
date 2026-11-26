@@ -39,15 +39,14 @@ internal static class SharedBrowserProcessProbe
         await File.WriteAllTextAsync(Path.Combine(content, "index.html"), "<!doctype html><html><body style='margin:0;background:rgb(10,180,30)'><div style='position:absolute;left:40px;top:30px;width:100px;height:80px;background:rgb(20,40,220)'></div><script src='page.js'></script></body></html>");
         await File.WriteAllTextAsync(Path.Combine(content, "page.js"), """
             globalThis.fixtureId=crypto.randomUUID(); globalThis.freshStorage=false;
-            globalThis.fixtureBridge=window.sunder ? Promise.resolve() :
-              new Promise(resolve=>window.addEventListener('sunder:ready',resolve,{once:true}));
-            globalThis.fixtureWorkers=(async()=>{
+            let step='storage', error=null;
+            const signal=()=>{document.title='sunder-fixture:'+fixtureId+':'+
+              (error!==null ? 'failed:'+error : step==='activated' ? (window.sunder?.signal.aborted===false ? 'ready':'bridge') : step)};
+            const fail=e=>{error=String(e?.message??e).slice(0,200);signal()};
+            window.addEventListener('sunder:ready',signal,{once:true}); signal();
+            (async()=>{
               globalThis.worker=new Worker('worker.js'); globalThis.shared=new SharedWorker('shared.js');
-              const started=(port,source)=>new Promise((resolve,reject)=>{
-                port.onmessage=e=>e.data==='ready' ? resolve() : reject(new Error('Unexpected worker response'));
-                source.onerror=e=>reject(new Error(e.message || 'Worker startup failed'));
-              });
-              const dedicated=started(worker,worker), pooled=started(shared.port,shared); shared.port.start();
+              worker.onerror=shared.onerror=fail; shared.port.start();
               const dbs=await indexedDB.databases();
               freshStorage=localStorage.getItem('old')===null && sessionStorage.getItem('old')===null
                 && !document.cookie.includes('old=') && (await caches.keys()).length===0 && dbs.length===0;
@@ -56,19 +55,19 @@ internal static class SharedBrowserProcessProbe
               await new Promise((resolve,reject)=>{const request=indexedDB.open('old',1);
                 request.onupgradeneeded=()=>request.result.createObjectStore('old');
                 request.onerror=()=>reject(request.error); request.onsuccess=()=>{request.result.close(); resolve()}});
+              step='service-registration'; signal();
               const r=await navigator.serviceWorker.register('service.js'); const w=r.active??r.installing??r.waiting;
+              step='service-activation'; signal();
               if(w.state!=='activated')await new Promise((resolve,reject)=>{
                 const check=()=>{if(w.state==='activated')resolve();else if(w.state==='redundant')reject(new Error('Service worker became redundant'));};
                 w.addEventListener('statechange',check); check();
               });
-              const channel=new MessageChannel();
-              const service=new Promise((resolve,reject)=>{channel.port1.onmessage=e=>e.data==='ready' ? resolve() : reject(new Error('Unexpected service response'));});
-              r.active.postMessage('start',[channel.port2]); await Promise.all([dedicated,pooled,service]); channel.port1.close();
-            })();
+              r.active.postMessage('start'); step='activated'; signal();
+            })().catch(fail);
             """);
-        await File.WriteAllTextAsync(Path.Combine(content, "worker.js"), "setInterval(()=>fetch('page.js').catch(()=>{}),25);postMessage('ready');");
+        await File.WriteAllTextAsync(Path.Combine(content, "worker.js"), "setInterval(()=>fetch('page.js').catch(()=>{}),25);");
         await File.WriteAllTextAsync(Path.Combine(content, "shared.js"), "onconnect=e=>{e.ports[0].postMessage('ready')};setInterval(()=>fetch('page.js').catch(()=>{}),25);");
-        await File.WriteAllTextAsync(Path.Combine(content, "service.js"), "self.addEventListener('install',e=>e.waitUntil(skipWaiting()));self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('message',e=>e.waitUntil(new Promise(resolve=>{const timer=setInterval(()=>fetch('page.js').catch(()=>{}),25);e.ports[0].postMessage('ready');setTimeout(()=>{clearInterval(timer);resolve()},60000)})));");
+        await File.WriteAllTextAsync(Path.Combine(content, "service.js"), "self.addEventListener('install',e=>e.waitUntil(skipWaiting()));self.addEventListener('activate',e=>e.waitUntil(clients.claim()));self.addEventListener('message',e=>e.waitUntil(new Promise(resolve=>{const timer=setInterval(()=>fetch('page.js').catch(()=>{}),25);setTimeout(()=>{clearInterval(timer);resolve()},60000)})));");
         var target = new SunderPackageTargetManifest { Role = "app", Rid = RuntimeInformation.RuntimeIdentifier, Kind = "web", EntryPoint = "index.html", RequiredHostCapabilities = ["core.v1"], Views = [new() { ViewId = "probe", DisplayName = "Probe", Route = "/", DefaultPlacement = "middle", ShowInHotbar = true }] };
         await using var server = await AppWebContentServer.StartAsync(content, target, default);
         using var documents = new SharedBrowserDocumentProbe(manager, server.BaseUri, lease => created.SingleOrDefault(view =>
@@ -107,7 +106,6 @@ internal static class SharedBrowserProcessProbe
         var aInfo = await created[0].Native!.CallDevToolsProtocolMethodAsync("Target.getTargetInfo", "{}");
         string aContext;
         using (var info = JsonDocument.Parse(aInfo)) aContext = info.RootElement.GetProperty("targetInfo").GetProperty("browserContextId").GetString()!;
-        await RequireWorkersAsync(created[0], aContext, present: true, () => deadline.Remaining);
         Require(created.Count == 2 && engine.BrowserProcessIds.Count == 1, "Views did not share one browser process.");
         Stage("documents-and-workers-ready");
         foreach (var pid in engine.BrowserProcessIds) WindowsWebViewBrowserProcess.Record(pid);
@@ -212,7 +210,6 @@ internal static class SharedBrowserProcessProbe
             }));
             Require(reopened.Bridge.CaptureDevelopmentDocument() == currentNonce && reopened.Bridge.PendingRequestCount == 0, "A stale bridge request acquired new authority.");
             await current.InvokeScriptAsync("history.pushState({},'',location.pathname+'#old');globalThis.preserved=123");
-            await RequireWorkersAsync(created[0], aContext, present: true, () => deadline.Remaining);
             panel.Children.Remove(reopened);
             var resetStarted = Stopwatch.GetTimestamp();
             await reopened.DisposeAsync().AsTask().WaitAsync(AppShutdownBudgets.BrowserCleanup);
@@ -404,7 +401,7 @@ internal static class SharedBrowserProcessProbe
 
     private static TimeSpan CleanupRemaining(long started) => AppShutdownBudgets.BrowserCleanup - Stopwatch.GetElapsedTime(started);
 
-    private static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present, Func<TimeSpan> remaining)
+    internal static async Task RequireWorkersAsync(WindowsBrowserView view, string context, bool present, Func<TimeSpan> remaining)
     {
         var last = "no observation";
         TimeSpan Budget()
