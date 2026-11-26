@@ -56,7 +56,7 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
             .Select(package => package.PackageId).Order(StringComparer.Ordinal).ToArray();
     }
 
-    internal RuntimeRequiredProviderPlan Plan(ActivePackageSession session)
+    internal RuntimeRequiredProviderPlan Plan(ActivePackageSession session, IReadOnlySet<RuntimeRpcPermissionKey>? installGrants = null)
     {
         var providers = session.LoadedPackageMap.Values.Where(package => session.IsPackageEnabled(package.Descriptor.PackageId))
             .SelectMany(package => package.RpcProviders.Values.Select(registration => new ActiveProvider(package.Descriptor.PackageId, registration))).ToArray();
@@ -71,7 +71,7 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
             {
                 var bundle = source.Manifest?.ContractBundles?.SingleOrDefault(value => value?.ContractId == use.ContractId && value.Version == use.ContractVersion);
                 var hash = bundle?.DescriptorSha256 ?? caller?.RpcContracts.Values.SingleOrDefault(value => value.ContractId == use.ContractId && value.Version == use.ContractVersion)?.Sha256;
-                var alternatives = providers.Where(provider => hash is not null && IsAvailable(package, source, caller, use, [provider]))
+                var alternatives = providers.Where(provider => hash is not null && IsAvailable(package, source, caller, use, [provider], installGrants))
                     .Select(provider => provider.PackageId).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
                 requirements.Add(new(new(package.PackageId, use.Role, new(use.ContractId, use.ContractVersion, hash ?? "", use.AbiSha256), use.Actions.Order(StringComparer.Ordinal).ToArray()), alternatives));
             }
@@ -137,7 +137,8 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
         RuntimePackageSource source,
         ActiveLoadedPackage? callerActivation,
         PackageRpcContractUseDescriptor use,
-        IReadOnlyList<ActiveProvider> providers)
+        IReadOnlyList<ActiveProvider> providers,
+        IReadOnlySet<RuntimeRpcPermissionKey>? installGrants = null)
     {
         var compatibleProviders = providers
             .Where(provider => IsCompatible(caller.PackageId, use, provider)
@@ -171,15 +172,12 @@ internal sealed class RuntimeRpcReadinessEvaluator(RuntimeRpcPermissionStore per
         {
             return false;
         }
-        return use.Actions.All(action => permissions.IsGranted(new RuntimeRpcPermissionKey(
-            caller.PackageId,
-            caller.Version,
-            manifestSha256,
-            use.Role,
-            use.ContractId,
-            use.ContractVersion,
-            use.AbiSha256,
-            action)));
+        return use.Actions.All(action =>
+        {
+            var key = new RuntimeRpcPermissionKey(caller.PackageId, caller.Version, manifestSha256, use.Role,
+                use.ContractId, use.ContractVersion, use.AbiSha256, action);
+            return installGrants?.Contains(key) ?? permissions.IsGranted(key);
+        });
     }
 
     private static bool IsCompatible(

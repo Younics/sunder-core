@@ -243,6 +243,8 @@ An imported bundle requires public exposure, `selectedAuthorityRelease`, and `se
 
 Each `usesContracts` entry binds one exact caller `role`, `contractVersion`, and `abiSha256`, then declares the maximum requested `discover`, `invoke`, and `subscribe` actions. Installing or updating a package consents to all actions declared by that exact manifest; Runtime records version- and manifest-fenced grants automatically. Development packages receive equivalent activation-scoped access without durable grants. Undeclared actions remain default-deny. `required` controls dependency readiness, not consent; Runtime does not resolve contract version ranges from an immutable package.
 
+When planning a prospective installed session, Runtime accounts for the exact declared actions it will grant at commit, including same-package uses of a public provider. An explicit denial on that manifest remains a denial. Planning neither writes grants nor authorizes RPC calls; live calls and live readiness use effective permissions.
+
 `provides` binds a stable provider id and target role to one exact contract version, `descriptorSha256`, `abiSha256`, and `owner` or `public` audience. A public provider requires a public contract bundle; package exposure permits only owner audience. Target code registers the same canonical identity with `RegisterRpcProvider`. Runtime stamps discovery results and exact activation endpoint references; an old endpoint never retargets a replacement activation.
 
 Large content stays off the JSON control plane and uses Host-mediated content references. Requests, responses, and stream events are validated against the bundled descriptor before dispatch or delivery.

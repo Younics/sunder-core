@@ -164,14 +164,10 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
         foreach (var change in changed) CancelAndDispose(change);
     }
 
-    public async Task GrantDeclaredInstalledActionsAsync(
-        IEnumerable<RuntimeRpcPermissionSubject> packages,
-        CancellationToken cancellationToken)
+    private static HashSet<RuntimeRpcPermissionKey> DeclaredInstalledKeys(IEnumerable<RuntimeRpcPermissionSubject> packages)
     {
-        var installedPackages = packages
-            .Where(static package => package.SourceKind == PackageSourceKind.Installed)
-            .ToArray();
-        foreach (var package in installedPackages)
+        var keys = new HashSet<RuntimeRpcPermissionKey>();
+        foreach (var package in packages.Where(static package => package.SourceKind == PackageSourceKind.Installed))
         {
             if (!PackageId.TryParse(package.PackageId, out _)
                 || !SemanticVersion.TryParse(package.PackageVersion, out _)
@@ -181,36 +177,40 @@ internal sealed class RuntimeRpcPermissionStore : IDisposable
                     "The declared RPC permission package fence is invalid.",
                     nameof(packages));
             }
-        }
-
-        var now = _timeProvider.GetUtcNow();
-        var grants = installedPackages
-            .SelectMany(package => package.ContractUses.SelectMany(use =>
-                (use.Actions ?? [])
-                    .Where(static action => action is not null)
-                    .Select(action => new RuntimeRpcPermissionRecord(
-                        new RuntimeRpcPermissionKey(
-                            package.PackageId,
-                            package.PackageVersion,
-                            package.ManifestSha256,
-                            use.Role!,
-                            use.ContractId!,
-                            use.ContractVersion!,
-                            use.AbiSha256!,
-                            action!),
-                        RuntimeRpcPermissionState.Granted,
-                        now))))
-            .GroupBy(static record => record.Key)
-            .ToDictionary(static group => group.Key, static group => group.First());
-        foreach (var record in grants.Values)
-        {
-            if (!IsValidKey(record.Key))
+            foreach (var use in package.ContractUses)
+            foreach (var action in (use.Actions ?? []).OfType<string>())
             {
-                throw new ArgumentException(
-                    "The declared RPC permission identity or fence is invalid.",
-                    nameof(packages));
+                var key = new RuntimeRpcPermissionKey(package.PackageId, package.PackageVersion, package.ManifestSha256,
+                    use.Role!, use.ContractId!, use.ContractVersion!, use.AbiSha256!, action);
+                if (!IsValidKey(key))
+                    throw new ArgumentException("The declared RPC permission identity or fence is invalid.", nameof(packages));
+                keys.Add(key);
             }
         }
+        return keys;
+    }
+
+    // Planning has no side effects. It sees precisely the declarations that
+    // commit would grant, preserving explicit denials for this exact manifest.
+    internal IReadOnlySet<RuntimeRpcPermissionKey> PreviewDeclaredInstalledActions(IEnumerable<RuntimeRpcPermissionSubject> packages)
+    {
+        var keys = DeclaredInstalledKeys(packages);
+        lock (_gate)
+        {
+            ThrowIfDisposed();
+            keys.RemoveWhere(key => _records.TryGetValue(key, out var record) && record.State != RuntimeRpcPermissionState.Granted);
+        }
+        return keys;
+    }
+
+    public async Task GrantDeclaredInstalledActionsAsync(
+        IEnumerable<RuntimeRpcPermissionSubject> packages,
+        CancellationToken cancellationToken)
+    {
+        var installedPackages = packages.Where(static package => package.SourceKind == PackageSourceKind.Installed).ToArray();
+        var now = _timeProvider.GetUtcNow();
+        var grants = DeclaredInstalledKeys(installedPackages).ToDictionary(static key => key,
+            key => new RuntimeRpcPermissionRecord(key, RuntimeRpcPermissionState.Granted, now));
 
         var revoked = new List<CancellationTokenSource>();
         CancellationTokenSource[] changed = [];
