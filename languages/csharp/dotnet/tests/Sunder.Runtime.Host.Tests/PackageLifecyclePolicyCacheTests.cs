@@ -107,6 +107,52 @@ public sealed class PackageLifecyclePolicyCacheTests
         Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, Assert.Throws<PackagePolicyDeniedException>(() => context.Require()).Code);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ConcurrentActivationAndRefreshPreserveAnUnchangedPackagesLease(bool acceptingResponse)
+    {
+        using var context = new ActivePolicyTestContext();
+        var other = Package with { PackageId = "example.other" };
+        await context.RefreshAsync([Package, other]);
+        var otherLease = context.Cache.PackageLease(Origin, other);
+        var response = acceptingResponse ? await context.FetchAsync() : null;
+
+        // A continuous clock sample is taken before the OS call returns to its
+        // caller. Give a concurrent admission a chance to finish during that gap.
+        // Both samples use the same boot and a strictly increasing tick counter.
+        using var sampled = new ManualResetEventSlim();
+        using var enteringAdmission = new ManualResetEventSlim();
+        using var admitted = new ManualResetEventSlim();
+        var budget = TimeSpan.FromSeconds(10);
+        var ticks = context.Clock.Value.Ticks;
+        var first = ticks + 1;
+        context.Clock.ReadOverride = () =>
+        {
+            var value = context.Clock.Value with { Ticks = Interlocked.Increment(ref ticks) };
+            if (value.Ticks == first)
+            {
+                sampled.Set();
+                if (!enteringAdmission.Wait(budget)) throw new TimeoutException("Admission did not enter.");
+                // When sampling is serialized, admission waits for this read to return.
+                admitted.Wait(TimeSpan.FromMilliseconds(250));
+            }
+            return value;
+        };
+        var admission = Task.Run(() =>
+        {
+            if (!sampled.Wait(budget)) throw new TimeoutException("Refresh did not sample its clock.");
+            enteringAdmission.Set();
+            try { context.Require(other); }
+            finally { admitted.Set(); }
+        });
+        try { await context.Cache.ObserveAsync(response ?? await context.FetchAsync()); }
+        finally { await admission.WaitAsync(budget); }
+
+        context.Require();
+        Assert.Equal(otherLease, context.Cache.PackageLease(Origin, other));
+    }
+
     [Fact]
     public async Task OldAllowedResponseCannotOverwriteSecurityBlockAndBlockSurvivesRestart()
     {

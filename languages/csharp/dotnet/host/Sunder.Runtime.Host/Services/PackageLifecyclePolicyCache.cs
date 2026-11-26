@@ -48,12 +48,16 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         lock (_clockGate) return _clockStates.GetValueOrDefault(RegistryActivePolicyClient.Origin(origin)).Generation;
     }
 
-    internal long BeginRefresh(string origin, PolicyClockReading started)
+    internal (PolicyClockReading Started, long Generation) BeginRefresh(string origin)
     {
         lock (_clockGate)
         {
+            // Sample under the same lock as admission. A later-scheduled
+            // comparison of an earlier sample is not a clock discontinuity.
+            var started = clock.Read();
+            RegistryActivePolicyClient.ValidateClock(started);
             if (ClockRegressed(origin, started)) MarkClockInvalid(origin);
-            return _clockStates.GetValueOrDefault(origin).Generation;
+            return (started, _clockStates.GetValueOrDefault(origin).Generation);
         }
     }
 
@@ -150,11 +154,12 @@ internal sealed partial class PackageLifecyclePolicyCache(RuntimePackagePaths pa
         var filePath = FilePath(origin);
         using var lease = await RuntimeFileLock.AcquireExclusiveAsync(filePath + ".lock", token);
         var previous = await ReadFileAsync(origin, filePath, token);
-        var now = clock.Read();
-        RegistryActivePolicyClient.ValidateClock(now);
+        PolicyClockReading now;
         bool invalidateOldLeases;
         lock (_clockGate)
         {
+            now = clock.Read();
+            RegistryActivePolicyClient.ValidateClock(now);
             if (ClockRegressed(origin, now)) MarkClockInvalid(origin);
             RegistryActivePolicyClient.Require(observation.ClockGeneration == _clockStates.GetValueOrDefault(origin).Generation,
                 "Policy refresh predates a clock discontinuity.");

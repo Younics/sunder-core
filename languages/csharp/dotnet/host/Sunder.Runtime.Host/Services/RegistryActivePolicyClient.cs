@@ -40,8 +40,7 @@ internal sealed partial class RegistryActivePolicyClient(RegistryHttpClient http
             Packages = subjects.Packages.OrderBy(PackageKey, StringComparer.Ordinal).ToArray(),
             PlatformCatalogs = subjects.PlatformCatalogs.OrderBy(PlatformKey, StringComparer.Ordinal).ToArray() };
         ValidateRequest(request);
-        var started = clock.Read(); ValidateClock(started);
-        var generation = policies.BeginRefresh(origin, started);
+        var (started, generation) = policies.BeginRefresh(origin);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(RuntimePolicyTiming.RequestDeadlineSeconds), timeProvider);
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token, cancellationToken);
         try
