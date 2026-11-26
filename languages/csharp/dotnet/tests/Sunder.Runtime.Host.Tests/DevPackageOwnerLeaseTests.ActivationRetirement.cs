@@ -232,11 +232,13 @@ public sealed partial class DevPackageOwnerLeaseTests
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task InstalledUninstallRetiresTheLiveAppBeforeRemovingItsRequiredWorker(bool direct, bool cancel)
+    [InlineData(false, "commit")]
+    [InlineData(true, "commit")]
+    [InlineData(false, "cancel")]
+    [InlineData(true, "cancel")]
+    [InlineData(false, "expire")]
+    [InlineData(false, "stale")]
+    public async Task InstalledUninstallRetiresTheLiveAppBeforeRemovingItsRequiredWorker(bool direct, string outcome)
     {
         using var policy = new ActivePolicyTestContext();
         var process = new RetirementProcess();
@@ -280,13 +282,26 @@ public sealed partial class DevPackageOwnerLeaseTests
             Assert.False(commit.IsCompleted);
             Assert.False(worker.GenerationCompletion.IsCompleted);
             Assert.Single((await host.RpcBroker.DiscoverAppAsync(caller.SessionId, "example.rpc", deadline.Token)).Providers);
-            if (cancel)
+            if (outcome == "cancel")
             {
                 deadline.Cancel();
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => commit);
                 Assert.Single(await fixture.Store.ListAsync());
                 Assert.False(worker.GenerationCompletion.IsCompleted);
                 Assert.Equal(RuntimePackageStageState.Discarded, host.GetPackageStageStatus(request.StageId)!.State);
+            }
+            else if (outcome is "expire" or "stale")
+            {
+                if (outcome == "expire")
+                    await host.SweepStoreStagesAsync(host.GetPackageStageStatus(request.StageId)!.ExpiresAtUtc!.Value);
+                else
+                    Assert.True((await host.LoadInstalledPackagesAsync(deadline.Token)).Success);
+                var rejected = await commit;
+                Assert.False(rejected.Success || rejected.StoreCommitted);
+                Assert.Contains(outcome, rejected.Message, StringComparison.OrdinalIgnoreCase);
+                Assert.Single(await fixture.Store.ListAsync());
+                Assert.Equal(RuntimePackageStageState.Failed, host.GetPackageStageStatus(request.StageId)!.State);
+                Assert.False(host.ActiveSession.LoadedPackageMap[id].Worker.GenerationCompletion.IsCompleted);
             }
             else
             {

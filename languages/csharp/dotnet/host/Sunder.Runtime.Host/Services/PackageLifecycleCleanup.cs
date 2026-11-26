@@ -47,6 +47,7 @@ internal sealed partial class InstalledPackageLifecycleService
                 shutdownToken);
             var storeStages = _stages.ToArray();
             _stages.Clear();
+            foreach (var (stageId, _) in storeStages) _appPolicies?.ForgetRetirementStage(stageId);
             foreach (var (stageId, stage) in storeStages)
             {
                 if (shutdownToken.IsCancellationRequested)
@@ -131,6 +132,7 @@ internal sealed partial class InstalledPackageLifecycleService
                      || pair.Value.BaseCatalogGeneration != _storeCoordinator.CatalogGeneration).ToArray())
         {
             if (!_stages.Remove(stageId)) continue;
+            _appPolicies?.ForgetRetirementStage(stageId);
             try
             {
                 if (stage.Candidate is not null) await _publisher.DiscardAsync(stage.Candidate);

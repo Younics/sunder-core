@@ -767,7 +767,7 @@ internal sealed partial class InstalledPackageLifecycleService
         {
             while (true)
             {
-                DateTimeOffset expires;
+                PendingStoreStage pending;
                 await using (var operation = await _gate.EnterAsync(cancellationToken))
                 {
                     await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
@@ -775,12 +775,14 @@ internal sealed partial class InstalledPackageLifecycleService
                         || _appPolicies.RegisterRetirementStage(stageId, stage.Candidate.Session).Count == 0)
                         return await CommitStageCoreAsync(stageId, authorityConfirmation, operation.CancellationToken);
                     waitingForApp = true;
-                    expires = stage.ExpiresAtUtc;
+                    pending = stage;
                 }
 
                 // The shell drains its exact activation on heartbeat. Its cleanup can itself
                 // need the operation gate. Recheck the stage and publication fence after ack.
-                while (_timeProvider.GetUtcNow() < expires
+                while (_timeProvider.GetUtcNow() < pending.ExpiresAtUtc
+                    && _sessions.Generation == pending.BaseSessionGeneration
+                    && _storeCoordinator.CatalogGeneration == pending.BaseCatalogGeneration
                     && _sessions.GetStageStatus(stageId)?.State == RuntimePackageStageState.Pending
                     && _appPolicies.HasPendingRetirements(stageId))
                     await Task.Delay(TimeSpan.FromMilliseconds(50), _timeProvider, cancellationToken);
@@ -1252,6 +1254,7 @@ internal sealed partial class InstalledPackageLifecycleService
         operation.CancellationToken.ThrowIfCancellationRequested();
         await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
         if (!_stages.Remove(stageId, out var stage)) return false;
+        _appPolicies?.ForgetRetirementStage(stageId);
         var discarded = false;
         try
         {
