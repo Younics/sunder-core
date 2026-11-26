@@ -169,15 +169,26 @@ internal sealed partial class AppProcessPolicySessions
             && PackageUiSnapshotStore.PolicySubject(source) == loaded.Package && (source.Kind == PackageSourceKind.Dev) == loaded.Development
             && (source.RegistryPolicyOrigin is null || source.RegistryPolicyOrigin == loaded.RegistryOrigin);
 
-    internal void RegisterRetirementStage(string stageId, ActivePackageSession candidate, bool sourceWithdrawal = false)
-        => _pendingRetirements[stageId] = RetirementRequirements(candidate, sourceWithdrawal).Select(value => value with { StageId = stageId }).ToArray();
+    internal IReadOnlyList<RuntimeAppActivationRetirementRequirement> RegisterRetirementStage(string stageId, ActivePackageSession candidate, bool sourceWithdrawal = false)
+    {
+        var requests = RetirementRequirements(candidate, sourceWithdrawal).Select(value => value with { StageId = stageId }).ToArray();
+        if (requests.Length == 0) ForgetRetirementStage(stageId);
+        else _pendingRetirements[stageId] = requests;
+        return requests;
+    }
 
     internal void ForgetRetirementStage(string stageId) => _pendingRetirements.TryRemove(stageId, out _);
 
+    internal bool HasPendingRetirements(string stageId)
+        => _pendingRetirements.TryGetValue(stageId, out var requests) && requests.Any(IsPendingRetirement);
+
+    private bool IsPendingRetirement(RuntimeAppActivationRetirementRequirement request)
+        => _sessions.TryGetValue(request.PolicySessionId, out var session)
+            && session.Record.Activations.Any(activation => activation.ActivationId == request.AppActivationId && activation.State != "retired");
+
     private IReadOnlyList<RuntimeAppActivationRetirementRequirement> PendingRetirements(string sessionId)
-        => _pendingRetirements.Values.SelectMany(value => value).Where(value => value.PolicySessionId == sessionId
-            && _sessions.TryGetValue(sessionId, out var session)
-            && session.Record.Activations.Any(activation => activation.ActivationId == value.AppActivationId && activation.State != "retired")).ToArray();
+        => _pendingRetirements.Values.SelectMany(value => value)
+            .Where(value => value.PolicySessionId == sessionId && IsPendingRetirement(value)).ToArray();
 
     internal async Task<IDisposable> FencePublicationAsync(ActivePackageSession candidate, CancellationToken token, bool sourceWithdrawal = false)
     {

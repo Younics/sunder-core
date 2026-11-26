@@ -31,6 +31,7 @@ internal sealed partial class InstalledPackageLifecycleService
     private readonly InstalledPackagePolicyCoordinator? _packagePolicies;
     private readonly PackageRuntimePrerequisiteService? _runtimePrerequisites;
     private readonly ExecutionRuntimeActivationUpdates? _runtimeActivationUpdates;
+    private readonly AppProcessPolicySessions? _appPolicies;
     private readonly Dictionary<string, PendingStoreStage> _stages = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _reconciliationPendingStages = new(StringComparer.OrdinalIgnoreCase);
 
@@ -50,7 +51,8 @@ internal sealed partial class InstalledPackageLifecycleService
         LocalExecutionRuntimeBindingResolver? localRuntimeBindings = null,
         InstalledPackagePolicyCoordinator? packagePolicies = null,
         PackageRuntimePrerequisiteService? runtimePrerequisites = null,
-        ExecutionRuntimeActivationUpdates? runtimeActivationUpdates = null)
+        ExecutionRuntimeActivationUpdates? runtimeActivationUpdates = null,
+        AppProcessPolicySessions? appPolicies = null)
     {
         _sessions = sessions;
         _gate = gate;
@@ -68,6 +70,7 @@ internal sealed partial class InstalledPackageLifecycleService
         _packagePolicies = packagePolicies;
         _runtimePrerequisites = runtimePrerequisites;
         _runtimeActivationUpdates = runtimeActivationUpdates;
+        _appPolicies = appPolicies;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -757,14 +760,42 @@ internal sealed partial class InstalledPackageLifecycleService
     private async Task<PackageOperationResult> CommitStageAsync(
         string stageId,
         Func<PackageAuthorityConfirmationPhase, CancellationToken, Task>? authorityConfirmation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool waitingForApp = false)
     {
-        await using var operation = await _gate.EnterAsync(cancellationToken);
-        await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
-        return await CommitStageCoreAsync(
-            stageId,
-            authorityConfirmation,
-            operation.CancellationToken);
+        try
+        {
+            while (true)
+            {
+                DateTimeOffset expires;
+                await using (var operation = await _gate.EnterAsync(cancellationToken))
+                {
+                    await SweepStagesCoreAsync(_timeProvider.GetUtcNow());
+                    if (_appPolicies is null || !_stages.TryGetValue(stageId, out var stage) || stage.Candidate is null
+                        || _appPolicies.RegisterRetirementStage(stageId, stage.Candidate.Session).Count == 0)
+                        return await CommitStageCoreAsync(stageId, authorityConfirmation, operation.CancellationToken);
+                    waitingForApp = true;
+                    expires = stage.ExpiresAtUtc;
+                }
+
+                // The shell drains its exact activation on heartbeat. Its cleanup can itself
+                // need the operation gate. Recheck the stage and publication fence after ack.
+                while (_timeProvider.GetUtcNow() < expires
+                    && _sessions.GetStageStatus(stageId)?.State == RuntimePackageStageState.Pending
+                    && _appPolicies.HasPendingRetirements(stageId))
+                    await Task.Delay(TimeSpan.FromMilliseconds(50), _timeProvider, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (waitingForApp && cancellationToken.IsCancellationRequested)
+        {
+            try { await DiscardStageAsync(stageId, CancellationToken.None); }
+            catch (RuntimeOperationRejectedException) { /* Shutdown or integrity recovery owns the remaining stage. */ }
+            throw;
+        }
+        finally
+        {
+            if (waitingForApp) _appPolicies!.ForgetRetirementStage(stageId);
+        }
     }
 
     private async Task<PackageOperationResult> CommitStageCoreAsync(
@@ -1249,6 +1280,7 @@ internal sealed partial class InstalledPackageLifecycleService
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(mutations);
+        string retirementStageId;
         await using (var operation = await _gate.EnterAsync(cancellationToken))
         {
             var operationToken = operation.CancellationToken;
@@ -1274,13 +1306,13 @@ internal sealed partial class InstalledPackageLifecycleService
                 currentPackages,
                 sources,
                 operationToken);
-            return !stage.Success || stage.StageId is null
-                ? stage.OperationResult
-                : await CommitStageCoreAsync(
-                    stage.StageId,
-                    authorityConfirmation: null,
-                    operationToken: operationToken);
+            if (!stage.Success || stage.StageId is null) return stage.OperationResult;
+            if (_appPolicies is null || GetStagedSession(stage.StageId) is not { } candidate
+                || _appPolicies.RetirementRequirements(candidate).Count == 0)
+                return await CommitStageCoreAsync(stage.StageId, authorityConfirmation: null, operationToken);
+            retirementStageId = stage.StageId;
         }
+        return await CommitStageAsync(retirementStageId, authorityConfirmation: null, cancellationToken, waitingForApp: true);
     }
 
     private List<PackageStoreChange> ResolveMutations(

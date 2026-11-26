@@ -231,6 +231,82 @@ public sealed partial class DevPackageOwnerLeaseTests
         finally { await fixture.DisposeAsync(); }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task InstalledUninstallRetiresTheLiveAppBeforeRemovingItsRequiredWorker(bool direct, bool cancel)
+    {
+        using var policy = new ActivePolicyTestContext();
+        var process = new RetirementProcess();
+        await using var fixture = CreateFixture(appPolicyFactory: (state, protocol, snapshots, readiness) => new(policy.Paths,
+            protocol, snapshots, new(policy.Cache), policy.Cache, policy.Clock, policy.Time, process,
+            NullLogger<AppProcessPolicySessions>.Instance, state, readiness));
+        const string id = "startup.counted.package";
+        const string version = "1.0.0";
+        var path = fixture.Paths.GetInstalledPackagePath(id, version);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        Directory.Move(CreateRequiredAppPackage(fixture.Paths.RootPath, web: false), path);
+        var installed = CanonicalPackageTestBuilder.CreateInstalledRecord(path, id, version);
+        await AddInstalledPackageAsync(fixture.Store, installed);
+        await policy.RefreshAsync(packages: [new(id, version, installed.ContentIdentity)]);
+        var host = fixture.Host;
+        Assert.True((await host.LoadInstalledPackagesAsync()).Success);
+        var (session, permit, caller) = await OpenTrackedAppAsync(host);
+        var policies = host.AppPolicies!;
+        var worker = host.ActiveSession.LoadedPackageMap[id].Worker;
+        var plan = PackageStorePolicy.CreateUninstallPlan(id, await fixture.Store.ListAsync());
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var stage = direct ? null : await host.StagePackageStoreChangesAsync(
+            new([new(PackageStoreMutationKind.Uninstall, id, ConfirmationToken: plan.ConfirmationToken)]), deadline.Token);
+        if (stage is not null) Assert.True(stage.Success, stage.OperationResult.Message);
+        var commit = direct
+            ? host.UninstallPackageAsync(id, new(false, plan.ConfirmationToken), deadline.Token)
+            : host.CommitPackageStoreStageAsync(stage!.StageId!, deadline.Token);
+        try
+        {
+            RuntimeAppPolicySessionStatus status;
+            while ((status = await policies.HeartbeatAsync(session, new(123, null), deadline.Token)).Retirements.Count == 0)
+            {
+                if (commit.IsCompleted) Assert.Fail($"Uninstall finished before retirement: {(await commit).Message}");
+                await Task.Delay(10, deadline.Token);
+            }
+            var request = Assert.Single(status.Retirements);
+            Assert.Equal(permit.AppActivationId, request.AppActivationId);
+            Assert.Equal(permit.PermitId, request.LoadPermitId);
+            Assert.NotNull(request.StageId);
+            if (stage is not null) Assert.Equal(stage.StageId, request.StageId);
+            Assert.False(commit.IsCompleted);
+            Assert.False(worker.GenerationCompletion.IsCompleted);
+            Assert.Single((await host.RpcBroker.DiscoverAppAsync(caller.SessionId, "example.rpc", deadline.Token)).Providers);
+            if (cancel)
+            {
+                deadline.Cancel();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => commit);
+                Assert.Single(await fixture.Store.ListAsync());
+                Assert.False(worker.GenerationCompletion.IsCompleted);
+                Assert.Equal(RuntimePackageStageState.Discarded, host.GetPackageStageStatus(request.StageId)!.State);
+            }
+            else
+            {
+                Assert.Equal("retired", (await policies.RetireActivationAsync(
+                    new(session, request.AppActivationId, request.LoadPermitId), new(123, null), deadline.Token)).State);
+                var result = await commit;
+                Assert.True(result.Success && result.StoreCommitted && result.RuntimeSessionApplied, result.Message);
+                Assert.Empty(await fixture.Store.ListAsync());
+                Assert.True(worker.GenerationCompletion.IsCompleted);
+                Assert.Empty(host.GetActivePackages());
+            }
+            status = await policies.HeartbeatAsync(session, new(123, null), default);
+            Assert.Empty(status.Retirements);
+            Assert.False(status.ShutdownRequired);
+            Assert.Equal(id, Assert.Single(status.LoadedPackages).PackageId);
+            Assert.Equal(0, process.Terminations);
+        }
+        finally { deadline.Cancel(); }
+    }
+
     [Fact]
     public async Task NewAppPermitAfterReleasePreparationBlocksCommitUntilFreshRetirement()
     {

@@ -149,7 +149,8 @@ internal sealed class RuntimePackageSessionTestHost
             lifecyclePolicy,
             timeProvider,
             _rpcCatalog,
-            localExecutionRuntimeBindingResolver);
+            localExecutionRuntimeBindingResolver,
+            appPolicies: AppPolicies);
         _ui = new RuntimePackageUiService(
             _owner,
             snapshots,

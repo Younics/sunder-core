@@ -14,12 +14,11 @@ internal sealed partial class PackageSessionLifecycleService
             { ReleaseOwnerId = releaseOwnerId, ReloadOwnerId = reloadOwnerId, SourcesOnly = sourcesOnly });
         _sessions.RegisterStage(stageId, candidate.BaseGeneration + (sourcesOnly ? 0 : 1), candidate.BaseGeneration,
             RuntimePackageStageKind.PackageSession, now, expires);
-        if (!sourcesOnly) _appPolicies?.RegisterRetirementStage(stageId, candidate.Session, candidate.AppSourceWithdrawal);
         return new(stageId, sourcesOnly ? _sessions.GetSnapshot().ActivePackages : candidate.Session.GetActivePackages(),
             candidate.Warnings, candidate.Errors, impacted)
         {
             BaseStamp = _sessions.Stamp,
-            Retirements = sourcesOnly ? [] : _appPolicies?.RetirementRequirements(candidate.Session, candidate.AppSourceWithdrawal).Select(value => value with { StageId = stageId }).ToArray() ?? [],
+            Retirements = sourcesOnly ? [] : _appPolicies?.RegisterRetirementStage(stageId, candidate.Session, candidate.AppSourceWithdrawal) ?? [],
         };
     }
 
