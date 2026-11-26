@@ -21,6 +21,7 @@ using Sunder.Sdk.Services;
 
 internal static class WindowsWebViewCaptureProcessProbe
 {
+    internal static readonly TimeSpan ScenarioWatchdog = TimeSpan.FromMinutes(2);
     [STAThread]
     private static int Main(string[] args)
     {
@@ -49,7 +50,7 @@ internal static class WindowsWebViewCaptureProcessProbe
         desktop.Startup += (_, _) => Dispatcher.UIThread.Post(async () =>
         {
             // This is a whole-scenario hang watchdog, not a per-view UI deadline.
-            try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(TimeSpan.FromMinutes(2)); desktop.Shutdown(0); }
+            try { await RunAsync(desktop, args[0], args.Length > 1 ? args[1] : "webview2").WaitAsync(ScenarioWatchdog); desktop.Shutdown(0); }
             catch (Exception error) { ReportFailure(error); desktop.Shutdown(1); }
         });
     }).StartWithClassicDesktopLifetime(args);

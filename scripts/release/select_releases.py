@@ -111,7 +111,10 @@ def select(mode, scope):
             components = [component for component in native.PROJECTS if native.authored_version(component) !=
                           native.authored_version(component, source=base, allow_missing=True)]
             changed = c.command("git", "diff", "--name-only", base, source, cwd=ROOT).decode().splitlines()
-            validation = requirements(rows, components, tooling=tooling_changed(changed))
+            # Changes to the native App harness need its owning checks even when
+            # no version changes. A PR/merge queue never selects a publication.
+            app_tests = any(path.startswith("languages/csharp/dotnet/tests/Sunder.App.Integration.Tests/") for path in changed)
+            validation = requirements(rows, components, scopes=["app"] if app_tests else None, tooling=tooling_changed(changed))
         else:
             c.require(event == "schedule" or mode == "validate", "Manual validation requires validate mode")
             rows = [dict(row, selected=False, latest=None) for row in current]

@@ -619,11 +619,10 @@ export function renderGithubSummary(summary) {
     for (const job of summary.jobs) text += `- **${escape(job.job)}**: ${job.result === "skipped" && summary.issues.some(issue => issue.includes(`'${job.job}'`)) ? "blocked" : escape(job.result)}\n`;
     text += `\nNative component/RID groups: **${summary.native.filter(row => row.complete).length}/${summary.native.length} complete**.\n`;
   }
-  if (summary.failures.length || summary.issues.length) {
-    text += "\n### Failures and missing evidence\n\n";
-    text += [...summary.failures.map(row => `${row.report}: ${row.name}`), ...summary.issues]
-      .map(value => `<pre>${escape(value)}</pre>\n`).join("");
-  }
+  if (summary.failures.length) text += "\n### Failed test cases\n\n"
+    + summary.failures.map(row => `<pre>${escape(row.report)}: ${escape(row.name)}</pre>\n`).join("");
+  if (summary.issues.length) text += "\n### Job outcomes and evidence issues\n\n"
+    + summary.issues.map(value => `<pre>${escape(value)}</pre>\n`).join("");
   return text + "\n";
 }
 

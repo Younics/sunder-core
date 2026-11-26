@@ -623,29 +623,28 @@ public sealed class LocalStateV1Tests
     }
 
     [MacOsFact]
+    [SupportedOSPlatform("macos")]
     public async Task Reset_allows_trusted_macos_var_alias()
     {
-        var tempPath = Path.GetFullPath(Path.GetTempPath());
-        var varTempPath = tempPath.StartsWith("/private/var/", StringComparison.Ordinal)
-            ? "/var/" + tempPath[13..]
-            : tempPath;
-        Assert.StartsWith("/var/", varTempPath, StringComparison.Ordinal);
-
-        var runtimeRoot = Path.Combine(varTempPath, "SunderLocalStateV1AliasTests", Guid.NewGuid().ToString("N"));
+        // This case qualifies the real system alias, even if TMPDIR is elsewhere.
+        Assert.Equal("/private/var", Directory.ResolveLinkTarget("/var", returnFinalTarget: true)?.FullName);
+        var leaf = $"sunder-reset-{Guid.NewGuid():N}";
+        var physicalRoot = Path.Combine("/private/var/tmp", leaf);
+        var aliasRoot = Path.Combine("/var/tmp", leaf);
+        Directory.CreateDirectory(physicalRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         try
         {
-            RuntimeLocalState.EnsureInitialized(runtimeRoot);
+            RuntimeLocalState.EnsureInitialized(physicalRoot);
+            var marker = Path.Combine(physicalRoot, ".schema.json.interrupted.tmp");
+            File.WriteAllText(marker, "stale");
 
-            var result = await RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, runtimeRoot);
-
+            var result = await RuntimeV1StateReset.ResetAsync(TimeSpan.Zero, aliasRoot);
             Assert.True(result.Success);
+            Assert.False(File.Exists(marker));
         }
         finally
         {
-            if (Directory.Exists(runtimeRoot))
-            {
-                Directory.Delete(runtimeRoot, recursive: true);
-            }
+            if (Directory.Exists(physicalRoot)) Directory.Delete(physicalRoot, recursive: true);
         }
     }
 

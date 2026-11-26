@@ -90,7 +90,9 @@ class CiMetadataTests(unittest.TestCase):
 
     def test_template_sdk_resolution_and_restore_share_discoverable_candidate_feed_and_cache(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            # The build resolves project paths; macOS temp aliases (/var vs
+            # /private/var) can name the same candidate directory.
+            root = Path(temporary).resolve()
             work, feed, output = root / "consumers", root / "feed", root / "packages"
             for path in (work, feed, output, root / "eng/test-oracles", root / "eng/platform-contracts"):
                 path.mkdir(parents=True, exist_ok=True)
@@ -433,7 +435,8 @@ class CiMetadataTests(unittest.TestCase):
         env = dict(GITHUB_REPOSITORY="Younics/sunder-core", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="2")
         job = dict(id=1, name="App — Process tests — linux-x64", html_url="https://github.com/Younics/sunder-core/actions/runs/123/job/1",
                    status="completed", conclusion="success", started_at="2026-11-07T10:00:00Z", completed_at="2026-11-07T10:02:13Z")
-        pages = [dict(jobs=[job]), dict(jobs=[dict(job, id=2, name="Host — Process tests — linux-x64")])]
+        pages = [dict(jobs=[job]), dict(jobs=[dict(job, id=2, name="Host — Process tests — osx-arm64",
+                     conclusion="cancelled", runner_name="", steps=[])])]
         with patch.dict(os.environ, env), patch.object(report.subprocess, "check_output", return_value=json.dumps(pages).encode()) as gh:
             rows = report.collect_jobs()
             self.assertEqual(2, len(rows))
@@ -443,6 +446,8 @@ class CiMetadataTests(unittest.TestCase):
             self.assertNotIn("--jq", args)
             self.assertIn("/attempts/2/jobs", args[-1])
             self.assertIn(job["html_url"], "\n".join(report.job_table(rows)))
+            self.assertFalse(rows[0]["noRunnerOrSteps"])
+            self.assertIn("no runner assigned; no steps ran", "\n".join(report.job_table(rows)))
             gh.side_effect = subprocess.CalledProcessError(1, "gh")
             self.assertEqual([], report.collect_jobs())
 
