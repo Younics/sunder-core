@@ -16,6 +16,29 @@ internal sealed record InstalledPackagePolicyRecord(
 
     internal InstalledPackageRecord ApplyTo(InstalledPackageRecord package) => package with { Policy = this };
 
+    // A clock checkpoint or a renewed lease for the same decision does not
+    // change an App comparison or uninstall preview. Admission still checks
+    // the live lease, clock and authority at its own boundary.
+    internal object ComparisonEvidence() => new
+    {
+        State, ErrorCode, RegistryOrigin, Package,
+        Snapshots = Snapshots.OrderBy(snapshot => snapshot.Origin, StringComparer.Ordinal).Select(snapshot => new
+        {
+            snapshot.SchemaVersion, snapshot.Origin, snapshot.PackagePolicy, snapshot.ClockGeneration, snapshot.ClockInvalidated,
+            Epoch = new { snapshot.HighWater.BootSessionId, snapshot.HighWater.Source, snapshot.HighWater.Frequency, snapshot.HighWater.VirtualMachineGeneration },
+            Packages = snapshot.Packages.Select(pair => new
+            {
+                pair.Key, pair.Value.Revision, pair.Value.Decision,
+                Lease = new { pair.Value.Lease.State, pair.Value.Lease.ErrorCode, pair.Value.Lease.Watermark },
+            }).ToArray(),
+            Platforms = snapshot.Platforms.Select(pair => new
+            {
+                pair.Key, pair.Value.Revision, pair.Value.Decision,
+                Lease = new { pair.Value.Lease.State, pair.Value.Lease.ErrorCode, pair.Value.Lease.Watermark },
+            }).ToArray(),
+        }).ToArray(),
+    };
+
     internal void Validate(InstalledPackageRecord installed)
     {
         RegistryActivePolicyClient.Require(Package == Subject(installed)

@@ -38,6 +38,53 @@ public sealed class InstalledPackagePolicyTests
     }
 
     [Theory]
+    [InlineData("checkpoint", true)]
+    [InlineData("renewal", true)]
+    [InlineData("revision", false)]
+    [InlineData("blocked", false)]
+    public async Task UninstallConfirmationSurvivesPolicyMaintenanceButRejectsChangedAuthority(string change, bool mayRemove)
+    {
+        using var fixture = new Fixture();
+        var package = fixture.Package();
+        await fixture.Store.WriteAsync([package]);
+        await fixture.AllowAsync(package);
+        await fixture.Metadata.ReconcileAsync(default);
+        var before = await fixture.Store.ListAsync();
+        var plan = PackageStorePolicy.CreateUninstallPlan(package.PackageId, before);
+
+        fixture.Context.Clock.Advance(TimeSpan.FromSeconds(1));
+        if (change == "checkpoint")
+        {
+            await fixture.Context.Cache.CaptureInstalledAsync(before, default);
+        }
+        else
+        {
+            if (change == "revision") fixture.Context.Response = request => Allowed(request, 2);
+            if (change == "blocked") fixture.Block();
+            await fixture.AllowAsync(package);
+        }
+        await fixture.Metadata.ReconcileAsync(default);
+        var after = await fixture.Store.ListAsync();
+        Assert.False(PackageStorePolicy.CatalogsEqual(before, after));
+        Assert.True(PackageStorePolicy.CatalogBindingsEqual(before, after));
+
+        var result = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Uninstall, package.PackageId, ConfirmationToken: plan.ConfirmationToken),
+        ]);
+        if (mayRemove)
+        {
+            Assert.True(result.Success, result.Message);
+            Assert.Empty(await fixture.Store.ListAsync());
+        }
+        else
+        {
+            Assert.False(result.Success);
+            Assert.Contains("missing or stale", result.Message, StringComparison.Ordinal);
+            Assert.True(PackageStorePolicy.CatalogsEqual(after, await fixture.Store.ListAsync()));
+        }
+    }
+
+    [Theory]
     [InlineData("package")]
     [InlineData("platform")]
     [InlineData("expiry")]

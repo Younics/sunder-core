@@ -26,7 +26,7 @@ internal static class AppActivationFingerprint
             {
                 PackageId = id, source.Kind, source.SourceFolder, source.HostRoles, source.Dependencies, source.SelectedTargetKey, source.SelectedTarget,
                 ContentIdentity = continuation ?? source.ContentIdentity, source.RegistryPolicyOrigin,
-                source.RegistryPolicyContentIdentity, InstalledPolicy = PolicyComparison(source.InstalledPolicy), source.Compatibility, source.DevelopmentImports,
+                source.RegistryPolicyContentIdentity, InstalledPolicy = source.InstalledPolicy?.ComparisonEvidence(), source.Compatibility, source.DevelopmentImports,
                 source.DevelopmentOmittedPackages, source.AcquiredTargets, source.Manifest,
                 ContentIndex = continuation is null ? source.ContentIndex : null,
                 // Imported contract/source bytes are compatibility dependencies,
@@ -45,29 +45,6 @@ internal static class AppActivationFingerprint
             && !(source.Manifest?.Provides ?? []).Any(provider => provider?.Role == SunderPackageFormat.AppHostRole)
                 ? source.DevelopmentWorkerContentIdentity : null;
     }
-
-    private static object? PolicyComparison(InstalledPackagePolicyRecord? policy) => policy is null ? null : new
-    {
-        policy.State, policy.ErrorCode, policy.RegistryOrigin, policy.Package,
-        // Checkpoints and same-decision renewals advance timestamps/nonces without
-        // changing App code or policy decisions. This is reuse comparison only;
-        // every retained activation still requires a fresh exact policy permit.
-        Snapshots = policy.Snapshots.OrderBy(snapshot => snapshot.Origin, StringComparer.Ordinal).Select(snapshot => new
-        {
-            snapshot.SchemaVersion, snapshot.Origin, snapshot.PackagePolicy, snapshot.ClockGeneration, snapshot.ClockInvalidated,
-            Epoch = new { snapshot.HighWater.BootSessionId, snapshot.HighWater.Source, snapshot.HighWater.Frequency, snapshot.HighWater.VirtualMachineGeneration },
-            Packages = snapshot.Packages.Select(pair => new
-            {
-                pair.Key, pair.Value.Revision, pair.Value.Decision,
-                Lease = new { pair.Value.Lease.State, pair.Value.Lease.ErrorCode, pair.Value.Lease.Watermark },
-            }).ToArray(),
-            Platforms = snapshot.Platforms.Select(pair => new
-            {
-                pair.Key, pair.Value.Revision, pair.Value.Decision,
-                Lease = new { pair.Value.Lease.State, pair.Value.Lease.ErrorCode, pair.Value.Lease.Watermark },
-            }).ToArray(),
-        }).ToArray(),
-    };
 
     private static string? DevelopmentAppContentIdentity(RuntimePackageSource source)
     {

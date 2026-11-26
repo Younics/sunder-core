@@ -109,6 +109,7 @@ public sealed class PackageStoreCoordinatorTests
         var faultRecorder = new RecordingFaultInjector();
         var fixture = await CreateInstalledFixtureAsync(CreateRuntimeBinding(), faultRecorder);
         var before = Assert.Single(await fixture.Store.ListAsync());
+        var removal = PackageStorePolicy.CreateUninstallPlan(before.PackageId, [before]);
         var filesBefore = SnapshotPackageFiles(before.InstallPath);
         var desiredBinding = CreateRuntimeBinding(
             runtimeVersion: "10.0.2",
@@ -141,6 +142,13 @@ public sealed class PackageStoreCoordinatorTests
         Assert.DoesNotContain(PackageStoreFaultPoint.DirectoryMoveBefore, faultRecorder.Points);
         Assert.DoesNotContain(PackageStoreFaultPoint.DirectoryMoveAfter, faultRecorder.Points);
         Assert.DoesNotContain(PackageStoreFaultPoint.PayloadMoved, faultRecorder.Points);
+
+        var stale = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Uninstall, before.PackageId, ConfirmationToken: removal.ConfirmationToken),
+        ]);
+        Assert.False(stale.Success);
+        Assert.Contains("missing or stale", stale.Message, StringComparison.Ordinal);
+        Assert.True(PackageStorePolicy.CatalogsEqual([after], await fixture.Store.ListAsync()));
     }
 
     [Fact]
@@ -182,9 +190,17 @@ public sealed class PackageStoreCoordinatorTests
             [new InstalledPackageDependencyRecord("test.dependency", ">=1.0.0 <2.0.0")]);
         var dependency = CreatePackageArchive(fixture.Root, "test.dependency", "1.0.0");
         Assert.True((await fixture.Coordinator.ExecuteAsync([
-            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: dependent),
             new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: dependency),
         ])).Success);
+        var directOnly = PackageStorePolicy.CreateUninstallPlan("test.dependency", await fixture.Store.ListAsync());
+        Assert.True((await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Install, ArchiveFilePath: dependent),
+        ])).Success);
+        var expanded = await fixture.Coordinator.ExecuteAsync([
+            new PackageStoreMutation(PackageStoreMutationKind.Uninstall, "test.dependency", AllowCascade: true, ConfirmationToken: directOnly.ConfirmationToken),
+        ]);
+        Assert.False(expanded.Success);
+        Assert.Contains("missing or stale", expanded.Message, StringComparison.Ordinal);
         var plan = PackageStorePolicy.CreateUninstallPlan("test.dependency", await fixture.Store.ListAsync());
         var retainedDataPath = Path.Combine(fixture.Paths.PackageDataRootPath, "test.dependency", "data", "state.json");
         Directory.CreateDirectory(Path.GetDirectoryName(retainedDataPath)!);

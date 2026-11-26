@@ -166,8 +166,12 @@ internal static class PackageStorePolicy
         string packageId,
         IReadOnlyList<InstalledPackageRecord> packages)
     {
-        var catalog = JsonSerializer.Serialize(packages, InstalledPackageStore.JsonOptions);
-        var payload = Encoding.UTF8.GetBytes($"sunder-uninstall-v1\n{packageId}\n{catalog}");
+        var catalog = JsonSerializer.Serialize(packages.Select(package => new
+        {
+            Package = WithoutRenewablePolicy(package),
+            Policy = package.Policy?.ComparisonEvidence(),
+        }), InstalledPackageStore.JsonOptions);
+        var payload = Encoding.UTF8.GetBytes($"sunder-uninstall-v2\n{packageId}\n{catalog}");
         return Convert.ToHexString(SHA256.HashData(payload)).ToLowerInvariant();
     }
 }
