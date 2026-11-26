@@ -7,6 +7,7 @@ namespace Sunder.Runtime.Host.Services;
 internal static class UnixProcessGroups
 {
     public const int SignalKill = 9;
+    public const int ErrorOperationNotPermitted = 1;
     private const int ErrorNoSuchProcess = 3;
 
     public static int CreateSession()
@@ -29,6 +30,10 @@ internal static class UnixProcessGroups
 
     public static bool IsAlive(int processGroupId)
         => HasMemberOtherThan(processGroupId, excludedProcessId: null);
+
+    // Signal zero never delivers a signal. In particular, EPERM is not proof of absence.
+    public static bool IsAbsent(int processGroupId)
+        => kill(-processGroupId, 0) == -1 && Marshal.GetLastPInvokeError() == ErrorNoSuchProcess;
 
     public static bool HasMemberOtherThan(int processGroupId, int? excludedProcessId)
     {

@@ -34,6 +34,14 @@ internal sealed partial class SystemExecutionRuntimeProcessContainmentController
     private static readonly TimeSpan LaunchTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan TerminationTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan TerminalObservationTimeout = TimeSpan.FromMilliseconds(250);
+    private readonly Action<int, int> _signalUnixGroup = UnixProcessGroups.Signal;
+
+    internal SystemExecutionRuntimeProcessContainmentController(
+        IExecutionRuntimeProcessController processes,
+        Action<int, int> signalUnixGroup) : this(processes)
+    {
+        _signalUnixGroup = signalUnixGroup;
+    }
 
     public async Task<IExecutionRuntimePendingContainedProcess> StartAsync(
         string leaseId,
@@ -309,19 +317,23 @@ internal sealed partial class SystemExecutionRuntimeProcessContainmentController
         return await ConfirmEmptyAfterTerminalRaceAsync(lease).ConfigureAwait(false);
     }
 
-    private async Task<bool> ConfirmEmptyAfterTerminalRaceAsync(ExecutionRuntimeProcessLeaseV1 lease)
+    private async Task<bool> ConfirmEmptyAfterTerminalRaceAsync(
+        ExecutionRuntimeProcessLeaseV1 lease,
+        int? deniedGroupId = null)
     {
+        bool IsEmpty() => (deniedGroupId is not int group || UnixProcessGroups.IsAbsent(group))
+                          && Probe(lease) == ExecutionRuntimeContainmentProbe.Empty;
         var started = Stopwatch.GetTimestamp();
         do
         {
-            if (Probe(lease) == ExecutionRuntimeContainmentProbe.Empty)
+            if (IsEmpty())
             {
                 return true;
             }
             await Task.Delay(25, CancellationToken.None).ConfigureAwait(false);
         }
         while (Stopwatch.GetElapsedTime(started) < TerminalObservationTimeout);
-        return Probe(lease) == ExecutionRuntimeContainmentProbe.Empty;
+        return IsEmpty();
     }
 
     private async Task<bool> WaitForAttachedProcessExitAsync(ExecutionRuntimeProcessLeaseV1 lease)
@@ -455,7 +467,19 @@ internal sealed partial class SystemExecutionRuntimeProcessContainmentController
         {
             return false;
         }
-        UnixProcessGroups.Signal(processGroupId, UnixProcessGroups.SignalKill);
+        try
+        {
+            _signalUnixGroup(processGroupId, UnixProcessGroups.SignalKill);
+        }
+        catch (Win32Exception error) when (OperatingSystem.IsMacOS()
+                                            && error.NativeErrorCode == UnixProcessGroups.ErrorOperationNotPermitted)
+        {
+            // Darwin can report EPERM between the last member's exit and reap.
+            // Observe only: never signal a numeric group again after losing its anchor.
+            if (await ConfirmEmptyAfterTerminalRaceAsync(lease, processGroupId).ConfigureAwait(false))
+                return true;
+            throw;
+        }
         return await WaitForUnixGroupExitAsync(processGroupId, cancellationToken).ConfigureAwait(false);
     }
 

@@ -146,6 +146,55 @@ public sealed class ExecutionRuntimeProcessContainmentTests
         }
     }
 
+    [UnixTheory]
+    [Trait("Capability", "Process")]
+    [InlineData(1, true)]  // Darwin EPERM as the last verified member exits
+    [InlineData(1, false)] // A live denied group must keep the original failure
+    [InlineData(5, true)]  // EIO is not a terminal race
+    public async Task DeniedGroupSignal_RequiresConfirmedMacOsRetirement(int errno, bool retire)
+    {
+        using var scope = TemporaryDirectoryScope.Create("sunder-guardian-signal-race");
+        var failure = new Win32Exception(errno);
+        var guardianId = 0;
+        var calls = 0;
+        var controller = new SystemExecutionRuntimeProcessContainmentController(
+            new SystemExecutionRuntimeProcessController(), (groupId, signal) =>
+            {
+                Assert.Equal(guardianId, groupId);
+                Assert.Equal(UnixProcessGroups.SignalKill, signal);
+                Assert.Equal(1, ++calls);
+                if (retire)
+                {
+                    // Fix the ordering at the syscall boundary, after real lease and
+                    // group verification. This guardian has not launched a payload.
+                    using var exiting = Process.GetProcessById(guardianId);
+                    exiting.Kill();
+                    Assert.True(exiting.WaitForExit(5000));
+                }
+                throw failure;
+            });
+        await using var pending = await controller.StartAsync(
+            Guid.NewGuid().ToString("N"), Guid.NewGuid(), TestWorkerFixture.CreateProcessStartInfo(scope.RootPath),
+            scope.GetPath("payload.report"), CancellationToken.None);
+        guardianId = pending.ContainmentProcess.ProcessId;
+        using var guardian = Process.GetProcessById(guardianId);
+        try
+        {
+            if (OperatingSystem.IsMacOS() && errno == 1 && retire)
+                await pending.TerminateAndDrainAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            else
+                Assert.Same(failure, await Assert.ThrowsAsync<Win32Exception>(() =>
+                    pending.TerminateAndDrainAsync().WaitAsync(TimeSpan.FromSeconds(5))));
+            Assert.Equal(1, calls);
+            Assert.Equal(retire, guardian.HasExited);
+        }
+        finally
+        {
+            if (!guardian.HasExited) guardian.Kill();
+            await guardian.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
     [UnixFact]
     [Trait("Capability", "Process")]
     public async Task DetachedPayload_IsIdentityMismatchAndGroupIsNotSignaled()
