@@ -22,14 +22,14 @@ internal sealed class PackageRuntimePrerequisiteService(
             var package = (await installed.ListAsync(token)).SingleOrDefault(value => string.Equals(value.PackageId, adoption.PackageId, StringComparison.OrdinalIgnoreCase))
                 ?? throw new RuntimeNotFoundException("The package selected for source adoption is not installed.");
             var batch = RegistrySourceAdoptionSelection.Create(adoption, package);
-            var resolution = await registryPlans.ResolveForExecutionAsync(batch, batch.ExpectedResolutionFingerprint, token);
+            var resolution = await registryPlans.ResolveAsync(batch, token);
             if (!resolution.Plan.Success) throw new RuntimeConflictException(string.Join("; ", resolution.Plan.Errors));
             result = await InspectRegistryAsync([resolution], token, [package]);
             CheckExpectation(result, adoption.RuntimePrerequisiteExpectation);
         }
         else if (request.Registry is { } registry)
         {
-            var resolution = await registryPlans.ResolveForExecutionAsync(registry, registry.ExpectedResolutionFingerprint, token);
+            var resolution = await registryPlans.ResolveAsync(registry, token);
             if (!resolution.Plan.Success) throw new RuntimeConflictException(string.Join("; ", resolution.Plan.Errors));
             result = await InspectRegistryAsync([resolution], token);
         }

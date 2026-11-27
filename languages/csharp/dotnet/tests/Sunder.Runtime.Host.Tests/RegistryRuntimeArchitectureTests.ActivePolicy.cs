@@ -43,7 +43,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             cache.ClockGeneration(normalizedOrigin)));
     }
 
-    private sealed class ActivePolicyRegistryFixture
+    private sealed class ActivePolicyRegistryFixture(Func<RegistryPolicySynchronizationRequest, HttpResponseMessage?>? policyResponse = null)
     {
         private readonly Dictionary<string, RegistryResolveInstallPlanResponse> _plans = new(StringComparer.Ordinal);
 
@@ -53,6 +53,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             if (request.RequestUri.AbsolutePath == RegistryApiRoutes.PolicySynchronization)
             {
                 var subjects = (await request.Content!.ReadFromJsonAsync<RegistryPolicySynchronizationRequest>(RegistryActivePolicyClient.Json, token))!;
+                if (policyResponse?.Invoke(subjects) is { } responseOverride) return responseOverride;
                 _plans.TryGetValue(origin, out var plan);
                 var response = ActivePolicyTestContext.Allowed(subjects, plan?.PackagePolicy?.Revision ?? 1);
                 var observedAt = plan?.ExpiresAtUtc > DateTimeOffset.MinValue.AddMinutes(5)

@@ -1421,6 +1421,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
             await store.WriteAsync([installed]);
             var item = await CreatePackageActionItemAsync(installed, RegistryPackageActionKinds.Keep);
             var resolutionRequests = new List<RegistryResolvePackageChangesRequest>();
+            var policyNonces = new List<string>();
             var artifactGets = 0;
             var handler = new DelegateHandler(request =>
             {
@@ -1433,6 +1434,11 @@ public sealed partial class RegistryRuntimeArchitectureTests
                     .GetAwaiter()
                     .GetResult()!);
                 return PlanResponse(item, now: now);
+            }, subjects =>
+            {
+                policyNonces.Add(subjects.Nonce);
+                // The Registry throttles policy synchronization during final confirmation.
+                return policyNonces.Count == 2 ? RateLimited(TimeSpan.Zero) : null;
             });
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(paths, new RuntimeBearerTokenValidator("test-runtime-token"));
@@ -1453,8 +1459,9 @@ public sealed partial class RegistryRuntimeArchitectureTests
             Assert.False(result.RuntimeSessionApplied);
             Assert.Equal(0, artifactGets);
             Assert.Equal(
-                new string?[] { null, "test-resolution-fingerprint" },
+                new string?[] { null, "test-resolution-fingerprint", "test-resolution-fingerprint" },
                 resolutionRequests.Select(static request => request.ExpectedResolutionFingerprint).ToArray());
+            Assert.Equal(3, policyNonces.Distinct(StringComparer.Ordinal).Count());
             Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
             Assert.Equal(catalogJson, await File.ReadAllTextAsync(paths.StateFilePath));
             Assert.Empty(Directory.EnumerateDirectories(paths.TransactionRootPath));
@@ -1501,6 +1508,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 resolutionRequests.Add(request.Content!.ReadFromJsonAsync<RegistryResolvePackageChangesRequest>()
                     .GetAwaiter()
                     .GetResult()!);
+                if (resolutionRequests.Count == 1) return RateLimited(TimeSpan.Zero);
                 return PlanResponse(
                     artifact.PlanItem,
                     resolutionFingerprint: currentFingerprint);
@@ -1533,7 +1541,7 @@ public sealed partial class RegistryRuntimeArchitectureTests
                 "The Registry package plan changed after it was previewed. Review the current plan and retry; no package changes were applied.",
                 result.Message);
             Assert.Equal(0, artifactGets);
-            Assert.Equal(previewFingerprint, Assert.Single(resolutionRequests).ExpectedResolutionFingerprint);
+            Assert.Equal([previewFingerprint, previewFingerprint], resolutionRequests.Select(request => request.ExpectedResolutionFingerprint));
             Assert.Empty(await new InstalledPackageStore(paths).ListAsync());
             Assert.Equal(catalogGeneration, coordinator.CatalogGeneration);
             Assert.Equal(packageStagingBefore, CaptureFileTree(paths.StagingRootPath));
@@ -2212,15 +2220,22 @@ public sealed partial class RegistryRuntimeArchitectureTests
         }
     }
 
-    [Fact]
-    public async Task RegistryPackagePlan_DoesNotDeserializeTypedFailureResponse()
+    [Theory]
+    [InlineData(HttpStatusCode.BadRequest, RuntimeRegistryErrorCode.InvalidRequest, "Registry rejected the request.", 1)]
+    [InlineData(HttpStatusCode.TooManyRequests, RuntimeRegistryErrorCode.RegistryUnavailable, "The Registry request rate limit was exceeded.", 2)]
+    public async Task RegistryPackagePlan_DoesNotDeserializeTypedFailureResponse(
+        HttpStatusCode status, RuntimeRegistryErrorCode errorCode, string message, int expectedReads)
     {
         var root = CreateTempDirectory();
         try
         {
-            var handler = new DelegateHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+            var reads = 0;
+            var handler = new DelegateHandler(_ =>
             {
-                Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(true, [], [], [], [], [])),
+                reads++;
+                var response = status == HttpStatusCode.TooManyRequests ? RateLimited(TimeSpan.Zero) : new HttpResponseMessage(status);
+                response.Content = JsonContent.Create(new RegistryResolveInstallPlanResponse(true, [], [], [], [], []));
+                return response;
             });
             var services = new ServiceCollection();
             services.AddRuntimeHostServices(
@@ -2232,15 +2247,20 @@ public sealed partial class RegistryRuntimeArchitectureTests
             await using var provider = services.BuildServiceProvider();
             await provider.GetRequiredService<InstalledPackageLifecycleService>().InitializeAsync();
             var orchestrator = provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
-            var plan = await orchestrator.ResolveAsync(
-                new RuntimeRegistryPackageBatchRequest(
-                    "https://registry.example/",
-                    [new RuntimeRegistryPackageChangeRequest("agent", null, [], "latest")]),
-                CancellationToken.None);
+            var request = new RuntimeRegistryPackageBatchRequest("https://registry.example/", [new("agent", null, [], "latest")]);
+            var plan = await orchestrator.ResolveAsync(request, CancellationToken.None);
 
             Assert.False(plan.Success);
             Assert.Empty(plan.Items);
-            Assert.Equal(["Registry rejected the request."], plan.Errors);
+            Assert.Equal([message], plan.Errors);
+            Assert.Equal(expectedReads, reads);
+
+            var result = await orchestrator.ExecuteAsync(request with { ExpectedResolutionFingerprint = new string('f', 64) }, CancellationToken.None);
+            Assert.False(result.Success);
+            Assert.Equal(errorCode, result.ErrorCode);
+            Assert.Equal(message, result.Message);
+            Assert.Empty(result.PlanItems);
+            Assert.Equal(2 * expectedReads, reads);
         }
         finally
         {
@@ -2473,6 +2493,11 @@ public sealed partial class RegistryRuntimeArchitectureTests
         => RegistryArtifactFixture.CreateAsync(root, name, origin, packageId, currentVersion, version,
             typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, runtimeIdentifiers, runtimeRequiredHostCapabilities, roles);
 
+    private static HttpResponseMessage RateLimited(TimeSpan retryAfter) => new(HttpStatusCode.TooManyRequests)
+    {
+        Headers = { RetryAfter = new(retryAfter) },
+    };
+
     private static HttpResponseMessage PlanResponse(
         RegistryPackageInstallPlanItem item,
         string resolutionFingerprint = "test-resolution-fingerprint",
@@ -2575,9 +2600,10 @@ public sealed partial class RegistryRuntimeArchitectureTests
         public override DateTimeOffset GetUtcNow() => now;
     }
 
-    private sealed class DelegateHandler(Func<HttpRequestMessage, HttpResponseMessage> send) : HttpMessageHandler
+    private sealed class DelegateHandler(Func<HttpRequestMessage, HttpResponseMessage> send,
+        Func<RegistryPolicySynchronizationRequest, HttpResponseMessage?>? policyResponse = null) : HttpMessageHandler
     {
-        private readonly ActivePolicyRegistryFixture _policy = new();
+        private readonly ActivePolicyRegistryFixture _policy = new(policyResponse);
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             => await _policy.SendAsync(request, () => Task.FromResult(send(request)), cancellationToken);
     }

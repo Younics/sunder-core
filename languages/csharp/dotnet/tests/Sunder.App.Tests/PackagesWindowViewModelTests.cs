@@ -506,6 +506,34 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task UninstallSnapshot_DropsRemovedSelectionBeforeLoadingDetailsAndKeepsInstalledOnlyRows()
+    {
+        var runtimeClient = new FakeRuntimeApiClient([
+            CreateInstalledPackage("agent", isEnabled: true),
+            CreateInstalledPackage("tools", isEnabled: false),
+        ]) { SessionPackages = [CreateSessionPackage("agent", PackageReadinessState.Ready)] };
+        using var viewModel = CreateViewModel(runtimeClient);
+        await viewModel.InitializeAsync();
+        Assert.Equal("agent", viewModel.Installed.SelectedPackage?.PackageId);
+        runtimeClient.RemoveInstalledPackage("agent");
+        var detailReads = new List<string>();
+        runtimeClient.Information = (id, _) =>
+        {
+            detailReads.Add(id);
+            return Task.FromResult<PackageInformationDescriptor?>(null);
+        };
+        var snapshot = new RuntimePackageSnapshot(Guid.NewGuid(), 2, 3, RuntimeBootstrapState.Ready, [], [], [], []);
+
+        await viewModel.ApplyPackageSnapshotAsync(snapshot, CancellationToken.None);
+        Assert.Equal("tools", Assert.Single(viewModel.Installed.Packages).PackageId);
+        Assert.Equal("tools", viewModel.Installed.SelectedPackage?.PackageId);
+        Assert.DoesNotContain("agent", detailReads);
+        var catalogReads = runtimeClient.GetInstalledPackagesCallCount;
+        await viewModel.ApplyPackageSnapshotAsync(snapshot with { EventSequence = 4 }, CancellationToken.None);
+        Assert.Equal(catalogReads, runtimeClient.GetInstalledPackagesCallCount);
+    }
+
+    [Fact]
     public async Task DevOverlayDetails_UseActiveSourceInformationInsteadOfInstalledDeclarations()
     {
         var runtimeClient = new FakeRuntimeApiClient(
@@ -1911,10 +1939,12 @@ public sealed class PackagesWindowViewModelTests
 
         public void AddInstalledPackage(InstalledPackageDescriptor package)
         {
-            _installedPackages.RemoveAll(existing =>
-                string.Equals(existing.PackageId, package.PackageId, StringComparison.OrdinalIgnoreCase));
+            RemoveInstalledPackage(package.PackageId);
             _installedPackages.Add(package);
         }
+
+        public void RemoveInstalledPackage(string packageId)
+            => _installedPackages.RemoveAll(existing => string.Equals(existing.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
         public Task<SystemStatusResponse?> GetSystemStatusAsync(
             CancellationToken cancellationToken = default

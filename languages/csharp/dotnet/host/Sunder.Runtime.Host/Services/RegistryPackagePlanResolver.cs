@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using Sunder.Package.Format;
 using Sunder.Registry.Contracts;
@@ -10,39 +11,37 @@ internal sealed class RegistryPackagePlanResolver(
     RegistryHttpClient registryClient,
     InstalledPackageStore installedPackages,
     ILogger<RegistryPackagePlanResolver> logger,
+    TimeProvider timeProvider,
     RegistryPackagePolicySynchronizer? policySynchronizer = null)
 {
-    public async Task<RuntimeRegistryResolveInstallPlanResponse> ResolveAsync(
+    private static readonly TimeSpan MaximumRateLimitWait = TimeSpan.FromMinutes(1);
+
+    public async Task<RegistryPackagePlanResolution> ResolveAsync(
         RuntimeRegistryPackageBatchRequest request,
         CancellationToken cancellationToken)
     {
         var origin = RegistryOrigin.Normalize(request.RegistryOrigin);
         try
         {
-            return RuntimeRegistryContractMapper.ToRuntime(
-                await ResolveCoreAsync(
-                    origin,
-                    request,
-                    request.ExpectedResolutionFingerprint,
-                    cancellationToken));
+            return await ResolveForExecutionAsync(request, request.ExpectedResolutionFingerprint, cancellationToken);
+        }
+        catch (HttpRequestException error) when (error.StatusCode.HasValue)
+        {
+            return Failed(error.Message);
         }
         catch (Exception ex) when (ex is HttpRequestException or TimeoutException)
         {
             logger.LogWarning(
                 "Package plan failed: Registry is not reachable at {RegistryOrigin}.",
                 origin.AbsoluteUri);
-            return new RuntimeRegistryResolveInstallPlanResponse(
-                false,
-                [],
-                [],
-                [$"Registry is not reachable at {origin.AbsoluteUri}."],
-                [],
-                []);
+            return Failed($"Registry is not reachable at {origin.AbsoluteUri}.");
         }
         catch (PackagePolicyDeniedException error)
         {
-            return new(false, [], [], [error.Code], [], []);
+            return Failed(error.Code);
         }
+
+        RegistryPackagePlanResolution Failed(string message) => new(origin, new(false, [], [], [message], [], []));
     }
 
     public async Task<RegistryPackagePlanResolution> ResolveForExecutionAsync(
@@ -51,12 +50,20 @@ internal sealed class RegistryPackagePlanResolver(
         CancellationToken cancellationToken)
     {
         var origin = RegistryOrigin.Normalize(request.RegistryOrigin);
-        return new RegistryPackagePlanResolution(
-            origin,
-            await ResolveCoreAsync(origin, request, expectedResolutionFingerprint, cancellationToken));
+        try
+        {
+            return await ResolveCoreAsync(origin, request, expectedResolutionFingerprint, cancellationToken);
+        }
+        catch (RegistryRateLimitException error) when (error.RetryAfter is { } delay && delay <= MaximumRateLimitWait)
+        {
+            // Repeat only the read, with the same expectation and a fresh policy observation.
+            logger.LogInformation("Registry at {RegistryOrigin} rate limited package planning. Retrying once after {Delay}.", origin.AbsoluteUri, delay);
+            await Task.Delay(delay, timeProvider, cancellationToken);
+        }
+        return await ResolveCoreAsync(origin, request, expectedResolutionFingerprint, cancellationToken);
     }
 
-    private async Task<RegistryResolveInstallPlanResponse> ResolveCoreAsync(
+    private async Task<RegistryPackagePlanResolution> ResolveCoreAsync(
         Uri origin,
         RuntimeRegistryPackageBatchRequest request,
         string? expectedResolutionFingerprint,
@@ -86,32 +93,22 @@ internal sealed class RegistryPackagePlanResolver(
                 acquired,
                 GetRegistryPackageContentIdentity(package)));
         }
-        using var response = await registryClient.SendAsync(
-            new HttpRequestMessage(
-                HttpMethod.Post,
-                new Uri(
-                    origin,
-                    RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.PackageResolvePackageChanges)))
-            {
-                Content = JsonContent.Create(new RegistryResolvePackageChangesRequest(
-                    RuntimeRegistryContractMapper.ToRegistry(request.Packages),
-                    installed,
-                    RuntimeRegistryContractMapper.CompatibilityProfile,
-                    ExpectedResolutionFingerprint: expectedResolutionFingerprint,
-                    IncludePrerelease: request.IncludePrerelease,
-                    AllowDowngrade: request.AllowDowngrade,
-                    Reinstall: request.Reinstall)),
-            },
-            cancellationToken);
-        if (!response.IsSuccessStatusCode && response.StatusCode != System.Net.HttpStatusCode.Conflict)
+        using var message = new HttpRequestMessage(HttpMethod.Post,
+            new Uri(origin, RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.PackageResolvePackageChanges)))
         {
-            return new RegistryResolveInstallPlanResponse(
-                false,
-                [],
-                [],
-                [await registryClient.ReadErrorAsync(response, cancellationToken)],
-                [],
-                []);
+            Content = JsonContent.Create(new RegistryResolvePackageChangesRequest(
+                RuntimeRegistryContractMapper.ToRegistry(request.Packages),
+                installed,
+                RuntimeRegistryContractMapper.CompatibilityProfile,
+                ExpectedResolutionFingerprint: expectedResolutionFingerprint,
+                IncludePrerelease: request.IncludePrerelease,
+                AllowDowngrade: request.AllowDowngrade,
+                Reinstall: request.Reinstall)),
+        };
+        using var response = await registryClient.SendAsync(message, cancellationToken);
+        if (response.StatusCode != HttpStatusCode.Conflict)
+        {
+            await registryClient.EnsureSuccessAsync(response, cancellationToken);
         }
 
         var result = await registryClient.ReadJsonAsync<RegistryResolveInstallPlanResponse>(response, cancellationToken);
@@ -119,9 +116,9 @@ internal sealed class RegistryPackagePlanResolver(
         {
             if (result.Success && policySynchronizer is not null)
                 await policySynchronizer.RefreshPlanAsync(origin.AbsoluteUri, result, cancellationToken);
-            return result;
+            return new(origin, result);
         }
-        return new RegistryResolveInstallPlanResponse(false, [], [], [await registryClient.ReadErrorAsync(response, cancellationToken)], [], []);
+        return new(origin, new(false, [], [], [await registryClient.ReadErrorAsync(response, cancellationToken)], [], []));
     }
 
     internal static void ValidateRuntimeBindings(

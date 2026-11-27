@@ -26,6 +26,25 @@ public sealed partial class PackagesWindowViewModel
             {
                 return;
             }
+            if (snapshot.BootstrapState == RuntimeBootstrapState.Ready
+                && (_latestPackageSnapshot?.RuntimeInstanceId != snapshot.RuntimeInstanceId
+                    || _latestPackageSnapshot.SessionGeneration != snapshot.SessionGeneration
+                    || _latestPackageSnapshot.BootstrapState != RuntimeBootstrapState.Ready))
+            {
+                // A session snapshot does not include installed-only packages. Read the local
+                // catalog before projecting rows so removed packages cannot be reselected.
+                try
+                {
+                    await _installedPackages.Catalog.RefreshInstalledRecordsAsync(cancellationToken);
+                    NotifyUpdateStateChanged();
+                }
+                catch (Exception error) when (error is not OperationCanceledException)
+                {
+                    AppSessionLog.WriteError("Could not refresh installed packages for the Packages window.", error);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_disposed) return;
+            }
             _latestPackageSnapshot = snapshot;
             ApplyLatestSessionPackages();
             RebuildInstalledPackageList(

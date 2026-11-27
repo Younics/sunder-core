@@ -61,6 +61,14 @@ internal sealed class PackagesInstalledCatalog(
     public void ApplySessionPackages(IReadOnlyList<SessionPackageDescriptor> sessionPackages)
         => ReplaceItems(_sessionPackages, sessionPackages);
 
+    public async Task RefreshInstalledRecordsAsync(CancellationToken cancellationToken)
+    {
+        var installed = await runtimeApiClient.GetInstalledPackagesAsync(cancellationToken).ConfigureAwait(false);
+        ReplaceItems(_installedPackages, installed);
+        _availableUpdates.RemoveAll(update => !string.Equals(GetInstalledPackage(update.PackageId)?.Version,
+            update.CurrentVersion, StringComparison.OrdinalIgnoreCase));
+    }
+
     public InstalledPackageDescriptor? GetInstalledPackage(string packageId)
         => _installedPackages.FirstOrDefault(package => string.Equals(package.PackageId, packageId, StringComparison.OrdinalIgnoreCase));
 
