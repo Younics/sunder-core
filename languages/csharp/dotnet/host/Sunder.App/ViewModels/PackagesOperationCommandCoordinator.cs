@@ -69,9 +69,20 @@ internal sealed class PackagesOperationCommandCoordinator(
     public async Task UninstallPackageAsync(string packageId, string displayName)
     {
         setStatusText($"Checking what will be removed with {displayName}…");
-        if (await operationExecutor.EnqueueUninstallAsync(packageId, displayName) is not null)
-            MarkQueued($"Queued uninstall for {displayName}.");
-        else setStatusText("Uninstall cancelled.");
+        try
+        {
+            if (await operationExecutor.EnqueueUninstallAsync(packageId, displayName) is null)
+            {
+                setStatusText("Uninstall cancelled.");
+                return;
+            }
+        }
+        catch (Exception error)
+        {
+            setStatusText($"Could not queue uninstall for {displayName}: {error.Message}");
+            return;
+        }
+        MarkQueued($"Queued uninstall for {displayName}.");
     }
 
     public async Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)

@@ -29,6 +29,19 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task UninstallSelectedPackageCommand_WhenPreviewFails_ShowsErrorAndAllowsRetry()
+    {
+        var runtimeClient = new FakeRuntimeApiClient([CreateInstalledPackage("agent", isEnabled: true)]);
+        var executor = new FakePackageOperationExecutor { UninstallPreviewError = new HttpRequestException("Runtime unavailable.") };
+        using var viewModel = CreateViewModel(runtimeClient, operationExecutor: executor);
+        await viewModel.InitializeAsync();
+        await viewModel.UninstallSelectedPackageCommand.ExecuteAsync(null);
+
+        Assert.Equal("Could not queue uninstall for Agent: Runtime unavailable.", viewModel.Operations.StatusText);
+        Assert.True(viewModel.UninstallSelectedPackageCommand.CanExecute(null));
+    }
+
+    [Fact]
     public async Task UnknownProvenancePackage_OffersExplicitRegistrySourceAdoption()
     {
         var package = CreateInstalledPackage("younics.ai.agent", isEnabled: false);
@@ -1598,6 +1611,8 @@ public sealed class PackagesWindowViewModelTests
 
         public Uri? AdoptionRegistryUrl { get; private set; }
 
+        public Exception? UninstallPreviewError { get; init; }
+
         public BackgroundTaskSnapshot? GetActiveOperationForPackage(string packageId) => null;
 
         public BackgroundTaskSnapshot? GetActivePackageStoreOperation() => null;
@@ -1648,7 +1663,9 @@ public sealed class PackagesWindowViewModelTests
             => CreateSnapshot(packageId, PackageOperationKind.Disable, displayName);
 
         public Task<BackgroundTaskSnapshot?> EnqueueUninstallAsync(string packageId, string displayName, CancellationToken cancellationToken = default)
-            => Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName));
+            => UninstallPreviewError is { } error
+                ? Task.FromException<BackgroundTaskSnapshot?>(error)
+                : Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName));
 
         private static BackgroundTaskSnapshot CreateSnapshot(
             string? packageId,
