@@ -398,8 +398,7 @@ bundled-output and installer checks. App releases require both App and Host vali
 Superseded PR runs are cancelled. Main release runs share a serialized concurrency
 group; scheduled and manual validation use independent run groups.
 
-The historical Core/Stack migration ledgers are inert preserved archives; the
-separate current candidate remains UNFROZEN / UNRELEASED. Current API snapshots
+The historical Core/Stack migration ledgers are inert preserved archives. Current API snapshots
 and independently retained supported-release references keep their own gates.
 `core-public-packages.json`, the npm artifact checks, and
 `CorePublicPackageContractTests` continue to protect public/package contracts.
