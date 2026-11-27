@@ -29,6 +29,10 @@
   <Window.Styles>
     <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
+    <Style Selector="TabItem">
+      <Setter Property="FontSize" Value="14" />
+      <Setter Property="Padding" Value="8,6" />
+    </Style>
   </Window.Styles>
 
   <Grid RowDefinitions="52,*,Auto"
@@ -92,7 +96,7 @@
                 x:Name="PackagesListPane"
                 Background="{DynamicResource Sunder.Brush.Surface.Base}"
                 Padding="16">
-          <Grid RowDefinitions="Auto,Auto,*"
+          <Grid RowDefinitions="Auto,Auto,*,Auto"
                 RowSpacing="12">
             <Grid ColumnDefinitions="*,Auto"
                   ColumnSpacing="8">
@@ -169,15 +173,11 @@
                                              Glyph="{Binding Glyph}"
                                              ShowGlyphFallback="{Binding ShowGlyphFallback}"
                                              Title="{Binding Name}"
-                                              PackageId="{Binding PackageId}"
-                                              PrimaryBadge="{Binding LatestVersionText}"
-                                              DetailBadge="{Binding InstalledVersionText}"
-                                              ShowDetailBadge="{Binding IsInstalled}"
-                                              ActionBadge="{Binding ActionText}"
-                                              ShowBadgeRow="{Binding ShowRowBadges}"
-                                              ShowActionBadge="{Binding HasUpdate}"
-                                              ActionBadgeIsUpdate="{Binding HasUpdate}"
-                                              OperationStatusText="{Binding OperationStatusText}"
+                                             ToolTip.Tip="{Binding PackageId}"
+                                             Status="{Binding RowStatus}"
+                                             ActionBadge="{Binding ActionText}"
+                                             ShowActionBadge="{Binding HasUpdate}"
+                                             OperationStatusText="{Binding OperationStatusText}"
                                              ShowOperationStatus="{Binding ShowOperationStatus}" />
                   </DataTemplate>
                 </ListBox.ItemTemplate>
@@ -196,12 +196,10 @@
                                              Glyph="{Binding Glyph}"
                                              ShowGlyphFallback="{Binding ShowGlyphFallback}"
                                              Title="{Binding DisplayName}"
-                                             PackageId="{Binding PackageId}"
-                                             PrimaryBadge="{Binding StatusText}"
-                                             DetailBadge="{Binding SourceLabel}"
+                                             ToolTip.Tip="{Binding PackageId}"
+                                             Status="{Binding RowStatus}"
                                              ActionBadge="{Binding UpdateText}"
                                              ShowActionBadge="{Binding HasUpdate}"
-                                             ActionBadgeIsUpdate="True"
                                              OperationStatusText="{Binding OperationStatusText}"
                                              ShowOperationStatus="{Binding ShowOperationStatus}" />
                   </DataTemplate>
@@ -218,6 +216,9 @@
                          Text="No packages are installed or active in the current session."
                          TextWrapping="Wrap" />
             </Grid>
+            <Button Grid.Row="3" Classes="secondary-action compact-action" Content="Load more packages"
+                    HorizontalAlignment="Center" Command="{Binding LoadMoreMarketplaceCommand}"
+                    IsVisible="{Binding HasMoreMarketplacePackages}" />
           </Grid>
         </Border>
 
@@ -234,7 +235,7 @@
                 x:Name="PackagesDetailPane"
                 Classes="workspace-surface"
                 Margin="16">
-          <Grid RowDefinitions="Auto,*">
+          <Grid RowDefinitions="Auto,*" IsVisible="{Binding !ShowNoSelection}">
           <WrapPanel Margin="18,12,18,0" ItemSpacing="8" LineSpacing="6">
             <Button x:Name="CompactPackageBackButton" Classes="secondary-action compact-action" Content="‹ Packages"
                     Click="CompactPackageBackButton_OnClick" IsVisible="False" />
@@ -252,10 +253,6 @@
 
               <controls:InstalledPackageDetails IsVisible="{Binding ShowInstalledDetails}" />
 
-              <TextBlock Classes="muted"
-                         IsVisible="{Binding ShowNoSelection}"
-                         Text="Select a package from the list to inspect details and actions."
-                         TextWrapping="Wrap" />
             </StackPanel>
           </ScrollViewer>
           </Grid>
@@ -265,57 +262,12 @@
     </Border>
 
     <Grid Grid.Row="2"
-          ColumnDefinitions="*,Auto"
+          ColumnDefinitions="Auto,*,Auto"
           Margin="20,16,20,16"
           ColumnSpacing="16">
-      <WrapPanel ItemSpacing="10" LineSpacing="8">
-        <Button Classes="secondary-action" Command="{Binding InstallPackageCommand}" Content="Install from disk" IsEnabled="{Binding CanInstallPackage}" />
-        <Button Classes="primary-action"
-                Command="{Binding InstallSelectedMarketplacePackageCommand}"
-                Content="Install"
-                IsEnabled="{Binding CanInstallSelectedMarketplacePackage}"
-                IsVisible="{Binding ShowMarketplaceInstallButton}" />
-        <Button Classes="secondary-action"
-                Command="{Binding UninstallSelectedPackageCommand}"
-                Content="Uninstall"
-                IsEnabled="{Binding CanUninstallSelectedPackage}"
-                IsVisible="{Binding ShowInstalledDetails}" />
-        <Button Classes="secondary-action"
-                Command="{Binding UninstallSelectedMarketplacePackageCommand}"
-                Content="Uninstall"
-                IsEnabled="{Binding CanUninstallSelectedMarketplacePackage}"
-                IsVisible="{Binding ShowMarketplaceUninstallButton}" />
-        <Button Classes="secondary-action"
-                Command="{Binding EnableSelectedPackageCommand}"
-                Content="Enable"
-                IsEnabled="{Binding CanEnableSelectedPackage}"
-                IsVisible="{Binding ShowEnableSelectedPackage}" />
-        <Button Classes="secondary-action"
-                Command="{Binding DisableSelectedPackageCommand}"
-                Content="Disable"
-                IsEnabled="{Binding CanDisableSelectedPackage}"
-                IsVisible="{Binding ShowDisableSelectedPackage}" />
-        <Button Classes="primary-action"
-                Command="{Binding AdoptSelectedInstalledPackageSourceCommand}"
-                Content="Adopt source &amp; update"
-                IsEnabled="{Binding CanAdoptSelectedInstalledPackageSource}"
-                IsVisible="{Binding ShowAdoptSelectedInstalledPackageSource}" />
-        <Button Classes="primary-action"
-                Command="{Binding UpdateSelectedInstalledPackageCommand}"
-                Content="Update"
-                IsEnabled="{Binding CanUpdateSelectedInstalledPackage}"
-                IsVisible="{Binding ShowUpdateSelectedInstalledPackage}" />
-        <Button Classes="primary-action"
-                Command="{Binding UpdateSelectedMarketplacePackageCommand}"
-                Content="Update"
-                IsEnabled="{Binding CanUpdateSelectedMarketplacePackage}"
-                IsVisible="{Binding ShowMarketplaceUpdateButton}" />
-        <Button Classes="secondary-action"
-                Command="{Binding CancelSelectedPackageOperationCommand}"
-                Content="Cancel"
-                IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
-      </WrapPanel>
-      <controls:BackgroundTaskMonitor Grid.Column="1"
+      <Button Classes="secondary-action" Command="{Binding InstallPackageCommand}" Content="Install from disk" />
+      <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Operations.StatusText}" TextWrapping="Wrap" VerticalAlignment="Center" />
+      <controls:BackgroundTaskMonitor Grid.Column="2"
                                           HorizontalAlignment="Right"
                                           DataContext="{Binding PackageProcesses}" />
     </Grid>

@@ -5,6 +5,7 @@ public sealed class PackagePlatformsViewModel
     public string VersionText { get; private init; } = string.Empty;
     public string Summary { get; private init; } = "Platform information unavailable.";
     public string DeviceSummary { get; private init; } = string.Empty;
+    public string DeviceComponents { get; private init; } = string.Empty;
     public bool HasDeviceSummary => DeviceSummary.Length > 0;
     public bool? SupportsCurrentPlatform { get; private init; }
     public bool IsUnsupported => SupportsCurrentPlatform == false;
@@ -31,12 +32,19 @@ public sealed class PackagePlatformsViewModel
                 : supported.Length == 0 ? "No platform includes all declared roles."
                 : string.Join(" · ", supported.Select(PlatformName)),
             SupportsCurrentPlatform = supportsCurrent,
+            DeviceComponents = Components(groups.Where(group => group.Any(target => target.Rid == currentRid)).Select(group => group.Key), groups.Length),
             DeviceSummary = $"This Sunder installation: {PlatformName(currentRid)} — {deviceStatus}",
             Roles = groups.Select(group => new PackagePlatformRoleViewModel(
                 group.Key == "app" ? "Desktop UI" : group.Key == "runtime" ? "Background worker" : group.Key,
                 string.Join(" · ", group.Select(target => target.Rid).Order(StringComparer.Ordinal)
                     .Select(rid => $"{PlatformName(rid)} ({rid})")))).ToArray(),
         };
+    }
+
+    internal static string Components(IEnumerable<string> roles, int declaredCount)
+    {
+        var names = roles.Distinct().Order(StringComparer.Ordinal).Select(PackageInformationViewModel.RoleText).ToArray();
+        return names.Length > 0 ? string.Join(" + ", names) : declaredCount == 0 ? "Shared contracts" : "No components for this device";
     }
 
     private static string PlatformName(string rid) => rid switch

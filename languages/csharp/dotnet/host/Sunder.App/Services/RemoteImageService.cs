@@ -19,6 +19,10 @@ public sealed class RemoteImageService : IDisposable
     private readonly HttpClient _externalAvatarClient;
     private readonly Func<byte[], RemoteImageMetadata, RemoteImageDisplaySize, IImage> _decode;
     private readonly SemaphoreSlim _requestGate = new(6, 6);
+    // Cache encoded bytes, so disposing a recycled row cannot dispose another row's bitmap.
+    private readonly Dictionary<Uri, (byte[] Content, RemoteImageMetadata Metadata)> _icons = [];
+    private readonly Queue<Uri> _iconOrder = new();
+    private int _iconBytes;
     private readonly TimeSpan _requestTimeout;
     private bool _disposed;
 
@@ -58,7 +62,7 @@ public sealed class RemoteImageService : IDisposable
         => LoadAsync(
             registryOrigin,
             imageUri,
-            RemoteImagePolicy.Registry,
+            RemoteImagePolicy.RegistryIcon,
             SunderPackageFormat.MaxIconBytes,
             IconDisplaySize,
             cancellationToken);
@@ -124,7 +128,7 @@ public sealed class RemoteImageService : IDisposable
         _disposed = true;
         _registryClient.Dispose();
         _externalAvatarClient.Dispose();
-        _requestGate.Dispose();
+        lock (_icons) { _icons.Clear(); _iconOrder.Clear(); }
     }
 
     private async Task<RemoteImageLoadResult> LoadAsync(
@@ -156,6 +160,12 @@ public sealed class RemoteImageService : IDisposable
             var effectiveToken = linked?.Token ?? cancellationToken;
             try
             {
+                if (policy == RemoteImagePolicy.RegistryIcon)
+                {
+                    (byte[] Content, RemoteImageMetadata Metadata) cached;
+                    lock (_icons) _icons.TryGetValue(imageUri, out cached);
+                    if (cached.Content is not null) return RemoteImageLoadResult.Success(_decode(cached.Content, cached.Metadata, displaySize));
+                }
                 using var response = await SendWithRedirectsAsync(
                     registryOrigin,
                     imageUri,
@@ -184,7 +194,11 @@ public sealed class RemoteImageService : IDisposable
                         "Image format or decoded dimensions exceed the allowed limits.");
                 }
 
-                return RemoteImageLoadResult.Success(_decode(content, metadata, displaySize));
+                var image = _decode(content, metadata, displaySize);
+                if (policy == RemoteImagePolicy.RegistryIcon && response.Headers.CacheControl is { NoStore: false } cache
+                    && cache.Extensions.Any(value => value.Name.Equals("immutable", StringComparison.OrdinalIgnoreCase)))
+                    CacheIcon(imageUri, content, metadata);
+                return RemoteImageLoadResult.Success(image);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -208,6 +222,21 @@ public sealed class RemoteImageService : IDisposable
             if (acquired)
             {
                 _requestGate.Release();
+            }
+        }
+    }
+
+    private void CacheIcon(Uri uri, byte[] content, RemoteImageMetadata metadata)
+    {
+        lock (_icons)
+        {
+            if (_disposed || !_icons.TryAdd(uri, (content, metadata))) return;
+            _iconOrder.Enqueue(uri);
+            _iconBytes += content.Length;
+            while (_icons.Count > 128 || _iconBytes > 8 * 1024 * 1024)
+            {
+                _icons.Remove(_iconOrder.Dequeue(), out var oldest);
+                _iconBytes -= oldest.Content.Length;
             }
         }
     }
@@ -366,6 +395,7 @@ public sealed class RemoteImageService : IDisposable
 
     private enum RemoteImagePolicy
     {
+        RegistryIcon,
         Registry,
         Avatar,
     }

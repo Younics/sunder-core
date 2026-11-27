@@ -100,7 +100,7 @@ public sealed class PackageArchivePicker(Window owner) : IPackageArchivePicker
             }
             return validation.Success
                 ? new PackageArchiveReview(
-                    LocalPackageInstallConsentViewModel.Valid(displayFileName, validation),
+                    LocalPackageInstallConsentViewModel.Valid(displayFileName, validation, validatedHash, new FileInfo(packagePath).Length),
                     validatedHash,
                     CreateCapabilityConsent(validation))
                 : new PackageArchiveReview(

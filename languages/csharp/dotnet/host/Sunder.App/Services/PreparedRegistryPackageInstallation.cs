@@ -13,10 +13,10 @@ internal sealed class PreparedRegistryPackageInstallation(
     IRuntimeRegistryPackageClient client,
     RegistryInstallationPreview approved,
     Func<CancellationToken, Task<RegistryInstallationPreview>> preview,
-    Func<RegistryInstallationPreview, RuntimePackageRuntimePrerequisiteExpectation, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> apply)
+    Func<RegistryInstallationPreview, RuntimePackageRuntimePrerequisiteExpectation, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> apply,
+    IReadOnlySet<string>? requestedPackages = null)
 {
     private readonly PackageInstallationApproval _runtimes = new(approved.Runtimes);
-    private readonly string _packageSemantics = PackageInstallationApproval.PackageSemantics(approved.Plan);
     public bool NeedsRuntimeInstallation => _runtimes.NeedsRuntimeInstallation;
     public IReadOnlyList<string> PackageIds => approved.Plan.Items.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep)
         .Select(item => item.PackageId).Distinct(StringComparer.Ordinal).ToArray();
@@ -24,11 +24,13 @@ internal sealed class PreparedRegistryPackageInstallation(
     private async Task<RegistryInstallationPreview> RefreshAsync(CancellationToken token)
     {
         var current = await preview(token).ConfigureAwait(false);
-        if (PackageInstallationApproval.PackageSemantics(current.Plan) != _packageSemantics
-            || !approved.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)
-                .SequenceEqual(current.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)))
-            throw PackageInstallationApproval.Changed();
+        // The Host source fingerprint covers even a Keep item's verified acquisition, grants
+        // and manifest. Runtime semantics also pin each exact bound or prospective runtime.
         _runtimes.Validate(current.Runtimes);
+        if (!approved.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)
+                 .SequenceEqual(current.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)))
+            throw PackageInstallationApproval.Changed();
+        PackageInstallationApproval.ValidatePackageChanges(approved.Plan, current.Plan, requestedPackages);
         return current;
     }
 

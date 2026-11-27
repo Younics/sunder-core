@@ -1,5 +1,6 @@
 using Sunder.App.Services;
 using Sunder.App.Tests.TestSupport;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 using Xunit;
@@ -110,6 +111,92 @@ public sealed class RegistryPackageInstallServiceTests
         var job = Assert.Single(queue.ListTasks());
         Assert.Equal("package", job.Metadata["sunder.installationPhase"]);
         Assert.Equal(BackgroundTaskState.Completed, job.State);
+    }
+
+    [Fact]
+    public async Task ThreeApprovedInstallsReuseTheFirstIdenticalDependencyInOrder()
+    {
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 3);
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var applied = new List<string>();
+        var reviews = new List<string>();
+        using var service = new RegistryPackageInstallService((review, _) =>
+        {
+            Assert.All(review.Plan.Items, item => Assert.Equal(RegistryPackageActionKinds.PackageInstall, item.ActionKind));
+            reviews.Add(review.Plan.Items[^1].PackageId);
+            return Task.FromResult(true);
+        }, queue);
+        var tasks = new List<Task<RegistryPackageInstallExecutionResult>>();
+        foreach (var name in new[] { "first", "second", "third" })
+        {
+            var client = new RegistryInstallationTestClient
+            {
+                RuntimeReady = true, PackageIds = ["shared", name], Consents = [],
+                TransformPreview = plan => applied.Count == 0 ? plan : plan with
+                {
+                    Items = [plan.Items[0] with { ActionKind = RegistryPackageActionKinds.Keep, CurrentVersion = "1.0.0", Artifacts = [] }, plan.Items[1]],
+                },
+                BeforePackageApply = async () =>
+                {
+                    if (name == "first")
+                    {
+                        firstEntered.SetResult();
+                        await releaseFirst.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                    }
+                    applied.Add(name);
+                },
+            };
+            tasks.Add(service.InstallPackageAsync(name, "1.0.0", null, false, false, new Registry(), client));
+            if (name == "first") await firstEntered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        Assert.Equal(["first", "second", "third"], reviews);
+        Assert.Equal(2, queue.ListTasks().Count(task => task.State == BackgroundTaskState.Queued));
+        releaseFirst.SetResult();
+        Assert.All(await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(5)), result => Assert.True(result.Success, result.Message));
+        Assert.Equal(reviews, applied);
+    }
+
+    [Theory]
+    [InlineData("content")]
+    [InlineData("target")]
+    [InlineData("runtime")]
+    [InlineData("acquisition")]
+    [InlineData("requested-root")]
+    public async Task QueuedInstallCannotReplaceADifferentApprovedAcquisitionWithKeep(string change)
+    {
+        await using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        queue.Enqueue(new("Prior approval", PackageOperationService.PackageStoreGroupKey, BackgroundTaskIndicator.Packages,
+            BackgroundTaskConcurrencyMode.SequentialWithinGroup, true, context => release.Task.WaitAsync(context.CancellationToken)));
+        var client = new RegistryInstallationTestClient { PackageIds = ["shared", "root"], RuntimeReady = true, Consents = [] };
+        using var service = new RegistryPackageInstallService((_, _) => Task.FromResult(true), queue);
+        var pending = service.InstallPackageAsync("root", "1.0.0", null, false, false, new Registry(), client);
+        try
+        {
+            Assert.Contains(queue.ListTasks(), row => row.Metadata.GetValueOrDefault("sunder.installationPhase") == "package"
+                && row.State == BackgroundTaskState.Queued);
+            client.TransformPreview = plan =>
+            {
+                var index = change == "requested-root" ? 1 : 0;
+                var items = plan.Items.ToArray();
+                var kept = items[index] with { ActionKind = RegistryPackageActionKinds.Keep, CurrentVersion = items[index].Version, Artifacts = [] };
+                items[index] = change switch
+                {
+                    "content" => kept with { PackageContentIdentity = new('f', 64) },
+                    "target" => kept with { Targets = [new("app", "linux-arm64", "avalonia", "Other.dll", null, null, [])] },
+                    _ => kept,
+                };
+                return plan with { Items = items, RuntimePrerequisites = change == "acquisition"
+                    ? plan.RuntimePrerequisites! with { SourceFingerprint = new('c', 64) } : plan.RuntimePrerequisites };
+            };
+            if (change == "runtime") client.SelectedRuntime = client.SelectedRuntime with { VendorChecksumDigest = new('b', 128) };
+            release.SetResult();
+            Assert.Contains("Review the installation again", (await pending.WaitAsync(TimeSpan.FromSeconds(5))).Message);
+            Assert.Empty(client.Installs);
+            Assert.Null(client.InstallConfirmation);
+        }
+        finally { release.TrySetResult(); }
     }
 
     [Fact]

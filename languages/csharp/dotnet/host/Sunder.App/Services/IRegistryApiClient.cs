@@ -11,6 +11,7 @@ public interface IRegistryPackageBrowseClient : IRegistryClient
 {
     Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default);
     Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default);
+    Task<RegistryPackageDetails?> GetPackageOverviewAsync(string packageId, string? version, string rid, CancellationToken cancellationToken);
     Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken cancellationToken = default);
 }
 

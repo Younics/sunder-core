@@ -33,15 +33,24 @@
         <Border Classes="package-row-badge"><TextBlock Text="{Binding SelectedPackageStatus}" /></Border>
         <TextBlock Classes="caption" Text="{Binding SelectedInstalledPackage.UpdateText}" IsVisible="{Binding SelectedInstalledPackage.HasUpdate}" TextWrapping="Wrap" />
       </WrapPanel>
+      <WrapPanel ItemSpacing="10" LineSpacing="6" IsVisible="{Binding ShowMarketplacePackageDetailsContent}">
+        <TextBlock Classes="caption" Text="{Binding MarketplaceSelectedVersion, StringFormat='Selected: {0}'}" />
+        <TextBlock Classes="caption" Text="{Binding MarketplaceLatestVersion, StringFormat='Latest: {0}'}" />
+        <TextBlock Classes="caption" Text="{Binding SelectedMarketplacePackage.InstalledVersionText}" />
+      </WrapPanel>
     </StackPanel>
 
-    <StackPanel Grid.Row="1"
-                Grid.ColumnSpan="2"
-                Orientation="Horizontal"
-                Spacing="10"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                IsVisible="{Binding ShowMarketplaceDetails}">
+    <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" ItemSpacing="8" LineSpacing="6">
+      <Button Classes="primary-action" Content="Install…" Command="{Binding InstallSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceInstallButton}" />
+      <Button Classes="primary-action" Content="Update…" Command="{Binding UpdateSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceUpdateButton}" />
+      <Button Classes="primary-action" Content="Update…" Command="{Binding UpdateSelectedInstalledPackageCommand}" IsVisible="{Binding ShowUpdateSelectedInstalledPackage}" />
+      <Button Classes="primary-action" Content="Adopt source &amp; update" Command="{Binding AdoptSelectedInstalledPackageSourceCommand}" IsVisible="{Binding ShowAdoptSelectedInstalledPackageSource}" />
+      <Button Classes="secondary-action" Content="Enable" Command="{Binding EnableSelectedPackageCommand}" IsVisible="{Binding ShowEnableSelectedPackage}" />
+      <Button Classes="secondary-action" Content="Disable" Command="{Binding DisableSelectedPackageCommand}" IsVisible="{Binding ShowDisableSelectedPackage}" />
+      <Button Classes="secondary-action" Content="Uninstall…" Command="{Binding UninstallSelectedPackageCommand}" IsVisible="{Binding ShowUninstallSelectedPackage}" />
+      <Button Classes="secondary-action" Content="Uninstall…" Command="{Binding UninstallSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceUninstallButton}" />
+      <TextBlock Classes="caption" Text="{Binding Operations.SelectedPackageOperationStatusText}" VerticalAlignment="Center" IsVisible="{Binding Operations.ShowSelectedPackageOperationStatus}" />
+      <Button Classes="secondary-action" Content="Cancel" Command="{Binding CancelSelectedPackageOperationCommand}" IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
       <TextBlock Classes="caption"
                  Text="{Binding MarketplacePackageStatsText}"
                  TextAlignment="Right"
@@ -58,6 +67,6 @@
               Classes="star-icon"
               Data="{StaticResource Sunder.Icon.Star}" />
       </Button>
-    </StackPanel>
+    </WrapPanel>
   </Grid>
 </UserControl>

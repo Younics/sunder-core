@@ -46,6 +46,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
                 new SunderPackageTargetManifest
                 {
                     Role = "runtime",
+                    Kind = "worker",
                     Rid = AppPackageTargetEnvironment.CurrentRid,
                     RequiredHostCapabilities = [SunderSdkCapabilities.DockerEnvironmentV1],
                 },
@@ -81,7 +82,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
 
         Assert.True(viewModel.IsValid);
         Assert.Equal("sample.package  1.2.3", viewModel.PackageIdentity);
-        Assert.Equal("App + Runtime", viewModel.TargetText);
+        Assert.Equal("Desktop UI + Background worker", viewModel.TargetText);
         Assert.True(viewModel.HasDockerEnvironmentAccess);
         Assert.Equal(new string('b', 64), viewModel.SensitiveCapabilityManifestSha256);
         var access = Assert.Single(viewModel.Information.ServiceAccess);

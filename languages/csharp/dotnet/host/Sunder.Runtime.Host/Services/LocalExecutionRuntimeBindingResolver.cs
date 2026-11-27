@@ -53,6 +53,18 @@ internal sealed class LocalExecutionRuntimeBindingResolver(
     ExecutionRuntimeStore store,
     TimeProvider timeProvider) : IEphemeralExecutionRuntimeBindingResolver
 {
+    internal async Task<ExecutionRuntimeReceiptV1> VerifyKeptBindingAsync(
+        InstalledPackageExecutionRuntimeBindingRecord binding, CancellationToken token)
+    {
+        var identity = ExecutionRuntimeIdentity.FromContract(binding.Runtime);
+        var receipt = await store.GetReceiptAsync(identity, token).ConfigureAwait(false);
+        if (receipt is null || !RuntimePackageExecutionRuntimeBinding.FromInstalled(binding).MatchesReceipt(receipt)
+            || !(await store.VerifyAsync(identity, false, token).ConfigureAwait(false)).Healthy)
+            throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Unhealthy,
+                "Repair the exact committed runtime of the kept package before continuing.");
+        return receipt;
+    }
+
     internal async Task<ExecutionRuntimeReceiptV1?> FindHealthyAsync(
         RuntimeExecutionRuntimeRequirement requirement,
         string rid,

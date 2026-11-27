@@ -1,7 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Sunder.App.ViewModels" xmlns:controls="using:Sunder.App.Views.Controls"
         x:Class="Sunder.App.Views.RuntimeConfirmationWindow" x:DataType="vm:RuntimeConfirmationViewModel"
-        Width="640" Height="530" MinWidth="560" MinHeight="420" WindowStartupLocation="CenterOwner"
+         Width="640" Height="530" MinWidth="360" MinHeight="360" WindowStartupLocation="CenterOwner"
         Title="{Binding Title}" Icon="avares://Sunder.App/Assets/Images/app.ico" ShowInTaskbar="False"
         WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True" Classes="secondary-window">
   <Grid RowDefinitions="52,*,Auto" Background="{DynamicResource Sunder.Brush.Background.App}">

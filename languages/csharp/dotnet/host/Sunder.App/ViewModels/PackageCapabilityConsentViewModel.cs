@@ -1,5 +1,7 @@
 using Sunder.App.Services;
 using Sunder.Registry.Contracts;
+using Sunder.Package.Format;
+using Sunder.Sdk.Compatibility;
 
 namespace Sunder.App.ViewModels;
 
@@ -20,19 +22,32 @@ public sealed class PackageCapabilityConsentViewModel
                 plan.ExpectedResolutionFingerprint))
             .ToArray();
         Changes = preflight.Plan.Items
-            .Where(static item => item.ActionKind != RegistryPackageActionKinds.Keep)
             .Select(static item => new PackageChangeConfirmationItemViewModel(
                 item.PackageId,
                 item.Version ?? item.CurrentVersion ?? "-",
                 FormatAction(item.ActionKind)))
             .ToArray();
+        var files = preflight.Plan.Items.SelectMany(item => item.Artifacts.Select(file =>
+            $"{item.PackageId} · {file.Kind} {file.Rid} · {file.Size:N0} bytes\nSHA-256: {file.Sha256}\nManifest SHA-256: {file.ManifestSha256}"));
+        var runtimes = preflight.ExecutionRuntimes.Select(runtime =>
+            $"{RuntimeManagementUi.Identity(runtime.Identity)} · {runtime.Identity.Rid} · {ExactBytes(runtime.DownloadSize)}\n"
+            + $"Vendor checksum ({runtime.Identity.VendorChecksumAlgorithm}): {runtime.Identity.VendorChecksumDigest}");
+        var plans = RegistryPlans.Select(plan => $"{plan.RegistryOrigin} · {plan.PrereleasePolicyText}\nResolution: {plan.ResolutionFingerprint}");
+        ReviewDetails = $"Package files: {ExactBytes(preflight.PackageDownloadBytes)}\nShared runtimes: {ExactBytes(preflight.SharedRuntimeDownloadBytes)}\nTotal: {ExactBytes(preflight.TotalDownloadBytes)}\n\n"
+            + string.Join("\n\n", plans.Concat(files).Concat(runtimes));
+        SensitiveAccess = preflight.Plan.Items.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep).SelectMany(item =>
+            PackageInformationViewModel.DescribeFeatures(item.Targets.Where(target => item.Artifacts.Any(file => file.Kind == target.Role && file.Rid == target.Rid))
+                .SelectMany(target => target.RequiredHostCapabilities.Select(capability => new SunderPackageFeature(target.Role, target.Rid, capability))))
+            .Where(feature => feature.IsSensitive && !(feature.Identifiers == SunderSdkCapabilities.DockerEnvironmentV1
+                && preflight.Plan.RequiredCapabilityConsents.Any(consent => consent.PackageId == item.PackageId)))
+            .Select(feature => $"{item.PackageId} · {feature.Title}\n{feature.Description}")).ToArray();
         ExecutionRuntimes = preflight.ExecutionRuntimes
             .Select(static runtime => new ExecutionRuntimeDownloadItemViewModel(
                 RuntimeManagementUi.Identity(runtime.Identity),
                 $"{runtime.Identity.Rid} / {runtime.Identity.ModuleAbi}",
                 runtime.SourceText,
                 runtime.AlreadyInstalled
-                    ? $"Already installed; 0 bytes"
+                    ? "Already installed; 0 bytes"
                     : $"{RegistryPackageChangePreflight.FormatBytes(runtime.DownloadSize)} download",
                 string.Empty))
             .ToArray();
@@ -46,9 +61,7 @@ public sealed class PackageCapabilityConsentViewModel
                 requirement.ManifestSha256,
                 string.Join(", ", requirement.Capabilities)))
             .ToArray();
-        ApprovalScopeText = Items.Count == 0
-            ? "Sunder will apply only the package changes shown above."
-            : "Capability approval is fenced to the package IDs, versions, and manifest hashes shown above.";
+        ApprovalScopeText = "Only the reviewed packages, runtimes and permissions will be applied.";
     }
 
     public string PackageDownloadText { get; }
@@ -80,6 +93,10 @@ public sealed class PackageCapabilityConsentViewModel
     public bool HasCapabilityConsents => Items.Count > 0;
 
     public string ApprovalScopeText { get; }
+    public string ReviewDetails { get; }
+    public IReadOnlyList<string> SensitiveAccess { get; }
+
+    private static string ExactBytes(long? size) => size is null ? "Size unavailable" : $"{size:N0} bytes";
 
     private static string FormatAction(string action)
         => action switch
@@ -87,9 +104,9 @@ public sealed class PackageCapabilityConsentViewModel
             RegistryPackageActionKinds.PackageInstall => "Install",
             RegistryPackageActionKinds.PackageUpdate => "Update",
             RegistryPackageActionKinds.PackageRemove => "Remove",
+            RegistryPackageActionKinds.Keep => "Keep",
             _ => action,
         };
-
 }
 
 public sealed record RegistryPlanConfirmationItemViewModel(

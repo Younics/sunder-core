@@ -151,16 +151,16 @@ public sealed class PackagesWindowViewModelTests
         var registryClient = new FakeRegistryApiClient
         {
             Updates = [CreateUpdate("younics.ai.agent", "1.0.0", "1.1.0")],
+            SearchResults = _ => [CreateRegistryPackage("younics.ai.agent", "1.1.0")],
         };
-        using var viewModel = CreateViewModel(
-            new FakeRuntimeApiClient([CreateInstalledPackage(
-                "younics.ai.agent",
-                isEnabled: true,
-                isRegistryManaged: true)])
-            {
-                RegistryUpdates = registryClient.Updates,
-            },
-            _ => registryClient);
+        var runtime = new FakeRuntimeApiClient([CreateInstalledPackage("younics.ai.agent", true, isRegistryManaged: true)])
+            { RegistryUpdates = registryClient.Updates };
+        await using var queue = new BackgroundTaskQueueService();
+        var checks = new PackageUpdateStartupCheckService(queue, new FakeRuntimeApiClientFactory(runtime),
+            new AppPackageNotificationService(CreateNotificationCenter(), "sunder.app", "Sunder"));
+        var check = checks.EnqueueStartupCheck();
+        await WaitForConditionAsync(() => queue.GetTask(check.TaskId)?.IsTerminal == true);
+        using var viewModel = CreateViewModel(runtime, _ => registryClient, updateChecks: checks);
         viewModel.RegistryUrlText = "https://registry.example/";
 
         await viewModel.InitializeAsync();
@@ -168,9 +168,11 @@ public sealed class PackagesWindowViewModelTests
         Assert.Equal(1, viewModel.AvailableUpdateCount);
         Assert.True(viewModel.ShowHeaderUpdateAllPackages);
 
-        viewModel.Mode = PackageWindowMode.Marketplace;
+        await viewModel.ShowMarketplaceCommand.ExecuteAsync(null);
 
         Assert.True(viewModel.ShowHeaderUpdateAllPackages);
+        Assert.Equal("Update 1.1.0", Assert.Single(viewModel.Marketplace.Packages).ActionText);
+        Assert.Equal(1, runtime.PlanCalls); // The startup check only.
     }
 
     [Fact]
@@ -311,6 +313,12 @@ public sealed class PackagesWindowViewModelTests
         };
         using var viewModel = CreateViewModel(runtimeClient);
 
+        viewModel.Mode = PackageWindowMode.Marketplace;
+        await viewModel.InitializeAsync();
+        viewModel.Mode = PackageWindowMode.Installed;
+        Assert.Equal(2, viewModel.SelectedPackageExecutionRuntimes.Count);
+        Assert.All(viewModel.SelectedPackageExecutionRuntimes, status => Assert.False(status.CanRepair));
+        Assert.Contains("not been checked", viewModel.SelectedPackageExecutionRuntimeSummary);
         await viewModel.InitializeAsync();
 
         Assert.True(viewModel.HasSelectedPackageExecutionRuntimes);
@@ -702,6 +710,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.True(viewModel.ShowMarketplaceInstallButton);
         Assert.Contains("Loaded younics.ai.agent", viewModel.Operations.StatusText, StringComparison.OrdinalIgnoreCase);
         Assert.Collection(registryClient.SearchQueries, query => Assert.Equal("younics.ai.agent", query));
+        Assert.Equal(1, registryClient.OverviewCalls);
     }
 
     [Fact]
@@ -917,7 +926,7 @@ public sealed class PackagesWindowViewModelTests
                             new string('e', 64),
                             Required: true,
                             Actions: ["invoke", "discover"]),
-                    ]));
+                    ], targets: [new("app", AppPackageTargetEnvironment.CurrentRid, "avalonia", "lib/App.dll", "net10.0", "1.1.0", [])]));
             },
         };
         using var viewModel = CreateViewModel(
@@ -937,7 +946,7 @@ public sealed class PackagesWindowViewModelTests
     }
 
     [Fact]
-    public async Task MarketplaceVersionSelection_ShowsCurrentRidRuntimeLifecycleAndInstalledReuse()
+    public async Task MarketplaceVersionSelection_UsesOneDeviceOverviewAndDefersHostReadinessUntilReview()
     {
         var rid = AppPackageTargetEnvironment.CurrentRid;
         var requirement = new RegistryExecutionRuntimeRequirement(
@@ -947,10 +956,11 @@ public sealed class PackagesWindowViewModelTests
         var registryClient = new FakeRegistryApiClient
         {
             SearchResults = _ => [CreateRegistryPackage("younics.ai.agent")],
-            VersionDetails = (packageId, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(
-                CreateRegistryPackageVersionDetails(
-                    packageId,
-                    version,
+            Overview = (packageId, version, device, _) => Task.FromResult<RegistryPackageDetails?>(
+                CreateRegistryPackageDetails(packageId, "1.0.0") with {
+                    Versions = [new("2.0.0", false, null, DateTimeOffset.UtcNow)],
+                    SelectedRelease = RegistryPackageDeviceRelease.From(CreateRegistryPackageVersionDetails(
+                    packageId, version ?? "1.0.0",
                     targets: [new RegistryPackageTarget(
                         SunderPackageFormat.RuntimeHostRole,
                         rid,
@@ -959,7 +969,8 @@ public sealed class PackagesWindowViewModelTests
                         "net10.0",
                         "1.1.0",
                         ["execution-runtime.v1", "rpc.v1", "worker-protocol.v1"],
-                        ExecutionRuntime: requirement)])),
+                        ExecutionRuntime: requirement)]), device) }),
+            VersionDetails = (_, _, _) => throw new InvalidOperationException("An overview already contains the selected release."),
         };
         var runtimeArtifact = CreateResolvedRuntimeArtifact(rid, RuntimeExecutionRuntimeSupportState.Supported);
         var runtimeClient = new FakeRuntimeApiClient([])
@@ -974,19 +985,20 @@ public sealed class PackagesWindowViewModelTests
         viewModel.RegistryUrlText = "https://registry.example/";
 
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => viewModel.Marketplace.RuntimePreflightLoaded);
-
-        Assert.Equal(rid, viewModel.Marketplace.CurrentRid);
-        Assert.Equal("8 MB", viewModel.Marketplace.PackageDownloadText);
-        Assert.Equal("0 bytes (already installed)", viewModel.Marketplace.SharedRuntimeDownloadText);
-        Assert.Contains("already installed", viewModel.Marketplace.RuntimeCompatibilitySummary, StringComparison.OrdinalIgnoreCase);
-        var runtime = Assert.Single(viewModel.Marketplace.ExecutionRuntimeRequirements);
-        Assert.Equal("sunder.runtime.dotnet", runtime.RuntimeId);
-        Assert.Equal(">=10.0.0 <11.0.0", runtime.VersionRange);
-        Assert.Equal("10.0.1", runtime.ResolvedRuntime);
-        Assert.Equal("Installed", runtime.StatusText);
-        Assert.Contains("already installed", runtime.Availability, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(rid, viewModel.Marketplace.Release!.Rid);
+        Assert.Equal("1.0.0", viewModel.SelectedMarketplaceVersion!.Version);
+        Assert.Equal(["2.0.0", "1.0.0"], viewModel.Marketplace.Versions.Select(item => item.Version));
+        Assert.Equal(requirement, Assert.Single(viewModel.Marketplace.Release.RuntimeRequirements));
+        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        await viewModel.InitializeAsync();
+        Assert.Equal(1, registryClient.OverviewCalls);
+        Assert.Equal(0, runtimeClient.PlanCalls);
         Assert.True(viewModel.CanInstallSelectedMarketplacePackage);
+        var review = new PackageCapabilityConsentViewModel(RegistryPackageChangePreflight.Create(runtimeClient.RegistryPlanResult!, []));
+        Assert.Equal("8 MB", review.PackageDownloadText);
+        Assert.Equal("0 bytes", review.SharedRuntimeDownloadText);
+        Assert.Contains("Already installed", Assert.Single(review.ExecutionRuntimes).DownloadText, StringComparison.Ordinal);
+        Assert.Contains(runtimeArtifact.Identity.VendorChecksumDigest, review.ReviewDetails, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1010,7 +1022,7 @@ public sealed class PackagesWindowViewModelTests
             TimeSpan.FromMilliseconds(40));
         viewModel.RegistryUrlText = "https://registry.example/";
 
-        await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
+        var search = viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
         await requestStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.False(viewModel.Marketplace.VersionDetailsLoaded);
@@ -1019,7 +1031,8 @@ public sealed class PackagesWindowViewModelTests
         Assert.Contains("Loading", viewModel.Information.Status, StringComparison.Ordinal);
 
         releaseRequest.SetResult();
-        await WaitForConditionAsync(() => viewModel.Marketplace.HasRuntimePreflightError);
+        await search;
+        Assert.True(viewModel.HasMarketplacePackageDetailsError);
 
         Assert.False(viewModel.Marketplace.VersionDetailsLoaded);
         Assert.False(viewModel.Information.HasNoPublicBindings);
@@ -1049,7 +1062,7 @@ public sealed class PackagesWindowViewModelTests
         using var view = CreateViewModel(new FakeRuntimeApiClient([]), _ => registry, TimeSpan.FromMilliseconds(40));
         view.RegistryUrlText = "https://registry.example/";
         await view.SearchMarketplaceCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => view.Marketplace.RuntimePreflightLoaded);
+        Assert.True(view.Marketplace.VersionDetailsLoaded);
         Assert.True(view.CanInstallSelectedMarketplacePackage);
         Assert.True(view.Platforms.SupportsCurrentPlatform);
 
@@ -1057,7 +1070,7 @@ public sealed class PackagesWindowViewModelTests
         Assert.Null(view.Platforms.SupportsCurrentPlatform);
         Assert.False(view.CanInstallSelectedMarketplacePackage);
         release.SetResult();
-        await WaitForConditionAsync(() => view.Marketplace.RuntimePreflightLoaded);
+        await WaitForConditionAsync(() => view.Marketplace.VersionDetailsLoaded);
         Assert.True(view.Platforms.IsUnsupported);
         Assert.Equal("For version 2.0.0", view.Platforms.VersionText);
         Assert.False(view.CanInstallSelectedMarketplacePackage);
@@ -1076,9 +1089,12 @@ public sealed class PackagesWindowViewModelTests
         using var view = CreateViewModel(runtime, _ => registry, TimeSpan.FromMilliseconds(40));
         view.RegistryUrlText = "https://registry.example/";
         await view.SearchMarketplaceCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => view.Marketplace.RuntimePreflightLoaded);
-        Assert.Equal(message, view.Marketplace.RuntimeCompatibilitySummary);
-        Assert.False(view.CanInstallSelectedMarketplacePackage);
+        Assert.True(view.CanInstallSelectedMarketplacePackage);
+        Assert.Equal(0, runtime.PlanCalls);
+        using var service = new RegistryPackageInstallService();
+        var result = await service.InstallPackageAsync("test.root", "1.0.0", null, false, false, registry, runtime);
+        Assert.False(result.Success);
+        Assert.Equal(message, result.Message);
     }
 
     [Fact]
@@ -1106,10 +1122,10 @@ public sealed class PackagesWindowViewModelTests
         using var viewModel = CreateViewModel(new FakeRuntimeApiClient([]) { RegistryPlanResult = plan }, _ => registry, TimeSpan.FromMilliseconds(40));
         viewModel.RegistryUrlText = "https://registry.example/";
         await viewModel.SearchMarketplaceCommand.ExecuteAsync(null);
-        await WaitForConditionAsync(() => viewModel.Marketplace.RuntimePreflightLoaded);
         Assert.True(viewModel.CanInstallSelectedMarketplacePackage);
-        Assert.Contains("runtime first", viewModel.Marketplace.SharedRuntimeDownloadText);
-        Assert.False(Assert.Single(viewModel.Marketplace.ExecutionRuntimeRequirements).IsBlocked);
+        var review = new PackageCapabilityConsentViewModel(RegistryPackageChangePreflight.Create(plan, []));
+        Assert.Contains("install first", review.SharedRuntimeReuseText);
+        Assert.Contains("download", Assert.Single(review.ExecutionRuntimes).DownloadText);
     }
 
     [Fact]
@@ -1351,7 +1367,8 @@ public sealed class PackagesWindowViewModelTests
         Func<Uri, object?>? tokenProvider = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null,
         FakePackageOperationExecutor? operationExecutor = null,
-        Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null
+        Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null,
+        PackageUpdateStartupCheckService? updateChecks = null
     )
     {
         var viewModel = new PackagesWindowViewModel(
@@ -1361,7 +1378,7 @@ public sealed class PackagesWindowViewModelTests
             registryClientFactory: registryClientFactory,
             marketplaceSearchThrottleDelay: marketplaceSearchThrottleDelay,
             marketplaceDetailSpinnerDelay: marketplaceDetailSpinnerDelay,
-            confirmSharedRuntimeRepair: confirmSharedRuntimeRepair
+            confirmSharedRuntimeRepair: confirmSharedRuntimeRepair, updateChecks: updateChecks
         )
         {
             Mode = PackageWindowMode.Installed,
@@ -1761,6 +1778,14 @@ public sealed class PackagesWindowViewModelTests
             (packageId, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(
                 CreateRegistryPackageVersionDetails(packageId, version));
 
+        public Func<string, string?, string, CancellationToken, Task<RegistryPackageDetails?>>? Overview { get; init; }
+        public int OverviewCalls { get; private set; }
+        public Task<RegistryPackageDetails?> GetPackageOverviewAsync(string id, string? version, string rid, CancellationToken token)
+        {
+            OverviewCalls++;
+            return Overview is null ? GetPackageAsync(id, token) : Overview(id, version, rid, token);
+        }
+
         public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], [], []);
 
         public IReadOnlyList<RegistryPackageUpdate> Updates { get; init; } = [];
@@ -1860,7 +1885,7 @@ public sealed class PackagesWindowViewModelTests
 
     private sealed class FakeRuntimeApiClient(
         IReadOnlyList<InstalledPackageDescriptor> installedPackages
-    ) : IRuntimePackagesClient, TestSupport.IReadyRuntimePrerequisiteTestClient, TestSupport.IUnsupportedPackageUploadRetentionTestClient
+    ) : IRuntimePackagesClient, IRuntimePackageUpdateClient, TestSupport.IReadyRuntimePrerequisiteTestClient, TestSupport.IUnsupportedPackageUploadRetentionTestClient
     {
         private readonly List<InstalledPackageDescriptor> _installedPackages =
             installedPackages.ToList();
@@ -1895,11 +1920,14 @@ public sealed class PackagesWindowViewModelTests
         public RuntimeExecutionRuntimeImpact? LastRepairImpact { get; private set; }
 
         public RuntimeRegistryResolveInstallPlanResponse? RegistryPlanResult { get; init; }
+        public int PlanCalls { get; private set; }
 
         public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>>? RepairRuntime { get; set; }
 
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(RegistryPlanResult ?? new RuntimeRegistryResolveInstallPlanResponse(
+        {
+            PlanCalls++;
+            return Task.FromResult(RegistryPlanResult ?? new RuntimeRegistryResolveInstallPlanResponse(
                 true,
                 RegistryUpdates.Select(update => new RuntimeRegistryPackageInstallPlanItem(
                     update.PackageId,
@@ -1924,6 +1952,7 @@ public sealed class PackagesWindowViewModelTests
                 [],
                 [],
                 []));
+        }
 
         public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
         {

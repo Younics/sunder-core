@@ -26,35 +26,52 @@
       <ProgressBar Minimum="0" Maximum="100" Value="{Binding Operations.SelectedPackageOperationProgressPercent}"
                    IsIndeterminate="{Binding Operations.SelectedPackageOperationIsIndeterminate}" />
     </StackPanel>
-    <Border Classes="card-surface" IsVisible="{Binding HasSelectedPackageExecutionRuntimes}">
-      <Expander IsExpanded="{Binding SelectedPackageExecutionRuntimeNeedsAttention}">
-        <Expander.Header>
-          <StackPanel Spacing="3">
-            <TextBlock Classes="section-title" Text="Runtime compatibility" />
-            <TextBlock Classes="caption" Text="{Binding SelectedPackageExecutionRuntimeSummary}" TextWrapping="Wrap" />
-          </StackPanel>
-        </Expander.Header>
-        <ItemsControl ItemsSource="{Binding SelectedPackageExecutionRuntimes}" Margin="0,8,0,0">
-          <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:PackageExecutionRuntimeStatusViewModel">
-            <StackPanel Spacing="5" Margin="0,8">
-              <WrapPanel ItemSpacing="12" LineSpacing="6">
-                <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
-              </WrapPanel>
-              <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
-              <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
-              <Button Classes="primary-action compact-action" Content="{Binding ActionText}" IsVisible="{Binding CanRepair}"
-                      HorizontalAlignment="Left" Command="{Binding $parent[ItemsControl].((vm:PackagesWindowViewModel)DataContext).RepairExecutionRuntimeCommand}" CommandParameter="{Binding}" />
+    <TabControl SelectedIndex="{Binding DetailTabIndex}">
+      <TabControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabControl.ItemsPanel>
+      <TabItem Header="Overview">
+        <StackPanel Margin="0,12,0,0" Spacing="12">
+          <TextBlock Classes="section-title" Text="On this device" />
+          <TextBlock Text="{Binding InstalledComponents, StringFormat='Components: {0}'}" TextWrapping="Wrap" />
+          <TextBlock Text="{Binding InstalledSource, StringFormat='Source: {0}'}" TextWrapping="Wrap" />
+          <Border Classes="card-surface" IsVisible="{Binding HasSelectedPackageExecutionRuntimes}">
+            <StackPanel Spacing="3">
+              <TextBlock Classes="section-title" Text="Bound shared runtime" />
+              <TextBlock Classes="caption" Text="{Binding SelectedPackageExecutionRuntimeSummary}" TextWrapping="Wrap" />
+              <ItemsControl ItemsSource="{Binding SelectedPackageExecutionRuntimes}" Margin="0,8,0,0">
+                <ItemsControl.ItemTemplate>
+                  <DataTemplate x:DataType="vm:PackageExecutionRuntimeStatusViewModel">
+                    <StackPanel Spacing="5" Margin="0,8">
+                      <WrapPanel ItemSpacing="12" LineSpacing="6">
+                        <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
+                      </WrapPanel>
+                      <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
+                      <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
+                      <Button Classes="primary-action compact-action" Content="{Binding ActionText}" IsVisible="{Binding CanRepair}"
+                              HorizontalAlignment="Left" Command="{Binding $parent[ItemsControl].((vm:PackagesWindowViewModel)DataContext).RepairExecutionRuntimeCommand}" CommandParameter="{Binding}" />
+                    </StackPanel>
+                  </DataTemplate>
+                </ItemsControl.ItemTemplate>
+              </ItemsControl>
             </StackPanel>
-          </DataTemplate></ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </Expander>
-    </Border>
-    <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
-    <controls:PackageInformationView DataContext="{Binding Information}" />
-    <Expander IsExpanded="False" IsVisible="{Binding SelectedInstalledPackage.ShowHistoricalError}">
-      <Expander.Header><TextBlock Text="Last recorded failure" /></Expander.Header>
-      <TextBlock Classes="muted" Text="{Binding SelectedPackageError}" TextWrapping="Wrap" />
-    </Expander>
+          </Border>
+          <TextBlock Text="{Binding Information.ProvidedServices, StringFormat='Provides: {0}'}"
+                     IsVisible="{Binding Information.ProvidedServices, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" TextWrapping="Wrap" />
+          <controls:PackageInformationView DataContext="{Binding Information}" OverviewOnly="True" />
+        </StackPanel>
+      </TabItem>
+      <TabItem Header="Access &amp; integrations"><controls:PackageInformationView DataContext="{Binding Information}" /></TabItem>
+      <TabItem Header="Technical details">
+        <StackPanel Margin="0,12,0,0" Spacing="8">
+          <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
+          <TextBlock Classes="caption" Text="Local content identity" />
+          <TextBlock Text="{Binding LocalDetails.ContentIdentity}" FontFamily="monospace" TextWrapping="Wrap" />
+          <Expander IsExpanded="False" IsVisible="{Binding SelectedInstalledPackage.ShowHistoricalError}">
+            <Expander.Header><TextBlock Text="Last recorded failure" /></Expander.Header>
+            <TextBlock Classes="muted" Text="{Binding SelectedPackageError}" TextWrapping="Wrap" />
+          </Expander>
+        </StackPanel>
+      </TabItem>
+    </TabControl>
   </StackPanel>
 </UserControl>

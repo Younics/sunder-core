@@ -46,7 +46,7 @@
                        Text="{Binding Summary}"
                        TextWrapping="Wrap" />
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-              <TextBlock Classes="caption" Text="Targets" />
+              <TextBlock Classes="caption" Text="Components on this device" />
               <TextBlock Grid.Column="1" Text="{Binding TargetText}" TextWrapping="Wrap" />
             </Grid>
             <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
@@ -58,7 +58,6 @@
 
         <StackPanel Spacing="8" IsVisible="{Binding HasRuntimeDownloads}">
           <TextBlock Classes="section-title" Text="Package runtimes" />
-          <TextBlock Classes="caption" Text="Approved runtimes install first. This package waits in the queue and installs next." TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding RuntimeDownloads}">
             <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:ExecutionRuntimeDownloadItemViewModel">
               <Border Classes="card-surface" Margin="0,0,0,8"><StackPanel Spacing="4">
@@ -66,6 +65,7 @@
                 <TextBlock Classes="caption" Text="{Binding DownloadText}" />
                 <TextBlock Classes="caption" Text="{Binding SourceText}" />
                 <TextBlock Classes="caption" Text="{Binding TargetText}" />
+                <TextBlock Classes="caption" Text="{Binding DetailText}" TextWrapping="Wrap" />
               </StackPanel></Border>
             </DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
@@ -84,14 +84,6 @@
                        Text="This package requests your allowlisted Docker CLI connection environment. Installing consents to passing it to the Runtime worker."
                        IsVisible="{Binding HasDockerEnvironmentAccess}"
                        TextWrapping="Wrap" />
-            <TextBlock Classes="caption"
-                       Text="Manifest fence"
-                       IsVisible="{Binding HasDockerEnvironmentAccess}" />
-            <TextBlock Classes="caption"
-                       FontFamily="monospace"
-                       Text="{Binding SensitiveCapabilityManifestSha256}"
-                       IsVisible="{Binding HasDockerEnvironmentAccess}"
-                       TextWrapping="Wrap" />
             <TextBlock FontWeight="SemiBold"
                        Foreground="{DynamicResource Sunder.Brush.Danger}"
                        Text="Validation failed"
@@ -102,7 +94,14 @@
           </StackPanel>
         </Border>
 
-        <Border IsVisible="{Binding IsValid}"><controls:PackageInformationView DataContext="{Binding Information}" /></Border>
+        <StackPanel IsVisible="{Binding IsValid}" Spacing="10">
+          <controls:PackageInformationView DataContext="{Binding Information}" OverviewOnly="True" />
+          <Expander Header="Declared features and package identity">
+            <StackPanel Spacing="8"><TextBlock Classes="caption" Text="{Binding ArchiveDetails}" TextWrapping="Wrap" />
+              <controls:PackageInformationView DataContext="{Binding Information}" />
+            </StackPanel>
+          </Expander>
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
 

@@ -1776,6 +1776,9 @@ public sealed partial class StacksWindowViewModelTests
         public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => Task.FromResult<RegistryPackageDetails?>(null);
 
+        public Task<RegistryPackageDetails?> GetPackageOverviewAsync(string packageId, string? version, string rid, CancellationToken cancellationToken)
+            => GetPackageAsync(packageId, cancellationToken);
+
         public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken cancellationToken = default)
             => Task.FromResult<RegistryPackageVersionDetails?>(null);
 

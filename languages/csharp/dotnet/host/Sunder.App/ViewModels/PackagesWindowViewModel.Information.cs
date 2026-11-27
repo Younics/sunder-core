@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
+using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Packaging;
 
 namespace Sunder.App.ViewModels;
@@ -14,6 +15,16 @@ public sealed partial class PackagesWindowViewModel
     private Sunder.Package.Format.SunderPackageInformation? _informationFacts;
     private string? _informationDependencyState;
     private string? _informationSummary;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(InstalledComponents), nameof(InstalledSource))]
+    private PackageInformationDescriptor? _localDetails;
+
+    public string InstalledComponents => LocalDetails?.AcquiredTargets is not { } targets ? "Unavailable"
+        : PackagePlatformsViewModel.Components(targets.Where(target => target.Rid == AppPackageTargetEnvironment.CurrentRid).Select(target => target.Role), targets.Count);
+    public string InstalledSource => LocalDetails?.SourceKind == PackageSourceKind.Dev ? "Development folder"
+        : GetInstalledPackage(Installed.SelectedPackage?.PackageId ?? "")?.Provenance is { } source
+            ? source.RegistryOrigin ?? (source.SourceKind == InstalledPackageSourceKind.LocalArchive ? "Local archive" : "Source unavailable")
+            : "Source unavailable";
 
     [ObservableProperty]
     private PackageInformationViewModel _information = PackageInformationViewModel.Unavailable();
@@ -33,18 +44,19 @@ public sealed partial class PackagesWindowViewModel
         {
             if (Information.IsLoaded) SelectedPackageSummary = _informationSummary ?? "Package features, dependencies and public integrations.";
             if (Information.IsLoaded && _informationFacts is not null && _informationDependencyState != dependencyState)
-                Information = PackageInformationViewModel.Create(_informationFacts, AppPackageTargetEnvironment.CurrentRid, ResolveDependencyState, NavigateToDependency);
+                Information = CreateInstalledInformation(_informationFacts, LocalDetails);
             _informationDependencyState = dependencyState;
             return;
         }
         using var request = _informationRequest.Start(_tasks.Token);
         _informationSource = source;
+        LocalDetails = null;
         Information = PackageInformationViewModel.Loading();
         Platforms = PackagePlatformsViewModel.Loading();
         try
         {
             var details = await _runtimeApiClient.GetPackageInformationAsync(item.PackageId, request.Token);
-            if (_disposed || !request.IsCurrent || !ReferenceEquals(Installed.SelectedPackage, item) || !IsInstalledMode) return;
+            if (_disposed || !request.IsCurrent || Installed.SelectedPackage?.PackageId != item.PackageId || !IsInstalledMode) return;
             if (details is null || details.PackageId != item.PackageId || details.Version != item.Version
                 || identity is not null && details.ContentIdentity != identity)
             {
@@ -53,13 +65,13 @@ public sealed partial class PackagesWindowViewModel
                 return;
             }
             _informationFacts = PackageInformationViewModel.FromRuntime(details);
+            LocalDetails = details;
             Platforms = PackagePlatformsViewModel.Create(details.DeclaredTargets?.Select(target => (target.Role, target.Rid)),
                 AppPackageTargetEnvironment.CurrentRid, details.Version);
             _informationDependencyState = dependencyState;
             _informationSummary = details.Summary;
             SelectedPackageSummary = _informationSummary ?? "Package features, dependencies and public integrations.";
-            Information = PackageInformationViewModel.Create(_informationFacts, AppPackageTargetEnvironment.CurrentRid,
-                ResolveDependencyState, NavigateToDependency);
+            Information = CreateInstalledInformation(_informationFacts, details);
             request.Complete();
         }
         catch (OperationCanceledException) when (request.Token.IsCancellationRequested) { }
@@ -73,6 +85,10 @@ public sealed partial class PackagesWindowViewModel
             AppSessionLog.WriteError($"Could not load package information for '{item.PackageId}'.", error);
         }
     }
+
+    private PackageInformationViewModel CreateInstalledInformation(Sunder.Package.Format.SunderPackageInformation facts, PackageInformationDescriptor? details)
+        => PackageInformationViewModel.Create(facts, AppPackageTargetEnvironment.CurrentRid, ResolveDependencyState, NavigateToDependency,
+            details?.AcquiredTargets?.Where(target => target.Rid == AppPackageTargetEnvironment.CurrentRid).Select(target => target.Role));
 
     private PackageDependencyState ResolveDependencyState(string packageId, string range)
     {
@@ -118,9 +134,7 @@ public sealed partial class PackagesWindowViewModel
             Mode = PackageWindowMode.Marketplace;
             SearchText = packageId;
             CancelQueuedMarketplaceSearch();
-            await RefreshMarketplaceAsync(_tasks.Token);
-            var package = Marketplace.Packages.FirstOrDefault(value => value.PackageId == packageId);
-            if (package is not null && !ReferenceEquals(Marketplace.SelectedPackage, package)) await SelectMarketplacePackageAsync(package, _tasks.Token);
+            await SearchAndSelectMarketplaceAsync(packageId, true, _tasks.Token);
         }
     }
 
@@ -135,9 +149,8 @@ public sealed partial class PackagesWindowViewModel
         else
         {
             CancelQueuedMarketplaceSearch();
-            await RefreshMarketplaceAsync(_tasks.Token);
-            var package = Marketplace.Packages.FirstOrDefault(value => value.PackageId == location.PackageId);
-            if (package is not null) await SelectMarketplacePackageAsync(package, _tasks.Token);
+            var package = await SearchAndSelectMarketplaceAsync(location.PackageId, false, _tasks.Token);
+            if (package?.PackageId != location.PackageId) return;
             var version = Marketplace.Versions.FirstOrDefault(value => value.Version == location.Version);
             if (version is not null) SelectMarketplaceVersion(version);
         }

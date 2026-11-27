@@ -12,6 +12,9 @@ public sealed record PackageInformationDescriptor(
     IReadOnlyList<PackagePublicUseDescriptor> PublicUses)
 {
     public string? Summary { get; init; }
+    /// <summary>Targets present in this exact local source. Older Hosts omit this field.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<PackagePlatformTargetDescriptor>? AcquiredTargets { get; init; }
     private IReadOnlyList<PackagePlatformTargetDescriptor>? _declaredTargets;
     /// <summary>All role/RID declarations in this source version, not acquired or authorized targets. Null means unavailable.</summary>
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]

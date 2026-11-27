@@ -525,6 +525,12 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 installed,
                 cancellationToken);
             var exactBindingsByPackageId = preparedExactBindings.Bindings;
+            if (runtimePrerequisites is not null && runtimePrerequisites.Requirements.Any(reviewed =>
+                    !exactBindingsByPackageId.TryGetValue(reviewed.Package.PackageId, out var bindings)
+                    || !bindings.Any(binding => binding.Role == reviewed.Package.Role && binding.Rid == reviewed.Package.Rid
+                        && binding.Requirement == reviewed.Requirement && binding.Runtime == reviewed.InstalledRuntime)))
+                return ToResult(Failed("A runtime binding changed during installation. Review the selected runtimes again.",
+                    RuntimeRegistryErrorCode.StalePlan, planWarnings, planItems: planItems));
             var mutations = new List<PackageStoreMutationRequest>(planItems.Count);
             foreach (var resolution in resolved)
             {
@@ -567,6 +573,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                             resolution.ProvenanceByPackageId[item.PackageId] with
                             {
                                 SourceIdentity = item.PackageContentIdentity,
+                                ProjectionFingerprint = PackageRuntimePrerequisiteService.ProjectionFingerprint(item),
                             },
                             item.Artifacts[0].ManifestSha256,
                             exactBindings)

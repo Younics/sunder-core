@@ -2,6 +2,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Sunder.App.ViewModels"
              x:Class="Sunder.App.Views.Controls.PackageInformationView"
+             x:Name="Root"
              x:DataType="vm:PackageInformationViewModel">
   <UserControl.Styles>
     <Style Selector="Border.information-row">
@@ -73,7 +74,11 @@
       <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
     </Border>
     <StackPanel Spacing="16" IsVisible="{Binding IsLoaded}">
-      <Border Classes="card-surface">
+      <StackPanel IsVisible="{Binding #Root.OverviewOnly}" Spacing="8">
+        <TextBlock FontWeight="SemiBold" Text="Sensitive access" IsVisible="{Binding HasSensitiveFeatures}" />
+        <ItemsControl ItemsSource="{Binding PrimaryFeatures}" ItemTemplate="{StaticResource FeatureRow}" />
+      </StackPanel>
+      <Border Classes="card-surface" IsVisible="{Binding !#Root.OverviewOnly}">
         <StackPanel Spacing="6">
           <TextBlock Classes="section-title" Text="Uses Sunder features" />
           <TextBlock Classes="caption" Text="{Binding FeatureSummary}" />
@@ -99,6 +104,7 @@
           </Expander>
         </StackPanel>
       </Border>
+      <StackPanel IsVisible="{Binding !#Root.OverviewOnly}" Spacing="16">
       <Border Classes="card-surface">
         <StackPanel Spacing="6">
           <TextBlock Classes="section-title" Text="Public bindings" />
@@ -145,6 +151,7 @@
           </DataTemplate></ItemsControl.ItemTemplate>
         </ItemsControl>
       </Expander>
+      </StackPanel>
     </StackPanel>
   </StackPanel>
 </UserControl>

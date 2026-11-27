@@ -112,7 +112,9 @@ public partial class PackagesWindow : Window
     private void PackageDetails_OnPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (ViewModel is not { } model) return;
-        if (e.PropertyName is nameof(model.SelectedInstalledPackage) or nameof(model.SelectedMarketplacePackage) or nameof(model.SelectedMarketplaceVersion) or nameof(model.Mode))
+        if (e.PropertyName == nameof(model.Mode) || (model.IsInstalledMode
+                ? e.PropertyName == nameof(model.SelectedInstalledPackage)
+                : e.PropertyName is nameof(model.SelectedMarketplacePackage) or nameof(model.SelectedMarketplaceVersion)))
         {
             var key = model.IsInstalledMode ? $"local:{model.SelectedInstalledPackage?.PackageId}:{model.SelectedInstalledPackage?.Version}"
                 : $"market:{model.RegistryUrlText}:{model.SelectedMarketplacePackage?.PackageId}:{model.SelectedMarketplaceVersion?.Version}";
@@ -126,8 +128,8 @@ public partial class PackagesWindow : Window
                 _detailKey = key;
                 _pendingDetailOffset = _detailOffsets.GetValueOrDefault(key);
                 PackageDetailsScroll.Offset = default;
+                _showCompactDetails = true;
             }
-            _showCompactDetails = true;
             ApplyResponsiveLayout();
         }
         if (e.PropertyName == nameof(model.Information) && model.Information.IsLoaded && _pendingDetailOffset is { } offset)
@@ -151,10 +153,11 @@ public partial class PackagesWindow : Window
             else PackagesContentGrid.ColumnDefinitions[0].Width = _wideSidebarWidth;
             _compactLayout = compact;
         }
-        PackagesListPane.IsVisible = !compact || !_showCompactDetails;
-        PackagesDetailPane.IsVisible = !compact || _showCompactDetails;
+        var showDetails = _showCompactDetails && ViewModel is { ShowNoSelection: false };
+        PackagesListPane.IsVisible = !compact || !showDetails;
+        PackagesDetailPane.IsVisible = !compact || showDetails;
         PackagesSplitter.IsVisible = !compact;
-        CompactPackageBackButton.IsVisible = compact;
+        CompactPackageBackButton.IsVisible = compact && showDetails;
         PackagesContentGrid.ColumnDefinitions[0].MaxWidth = compact ? 900 : Math.Min(900, Math.Max(240, PackagesContentGrid.Bounds.Width - 364));
         PackagesContentGrid.ColumnDefinitions[2].MinWidth = compact ? 0 : 360;
         if (compact)

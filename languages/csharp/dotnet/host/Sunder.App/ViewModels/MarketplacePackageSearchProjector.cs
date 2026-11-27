@@ -30,6 +30,6 @@ internal static class MarketplacePackageSearchProjector
                 installationIndex.GetUpdate(package.PackageId),
                 selectPackageAsync,
                 registryOrigin: registryOrigin,
-                remoteImageService: remoteImageService));
+                remoteImageService: remoteImageService, deferIcon: true));
     }
 }

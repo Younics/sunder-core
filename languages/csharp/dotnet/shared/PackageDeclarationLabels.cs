@@ -1,12 +1,10 @@
-using Sunder.Package.Format;
+namespace Sunder.Presentation;
 
-namespace Sunder.App.ViewModels;
-
-internal static class PackageFeatureDescriptions
+internal static class PackageDeclarationLabels
 {
     // Reviewed descriptions of Sunder-owned identifiers, not guesses about what
     // third-party code does or a claim that native package code is sandboxed.
-    private sealed record Description(string Group, string Title, string Text, bool Sensitive = false, bool Technical = false);
+    internal sealed record Description(string Group, string Title, string Text, bool Sensitive = false, bool Technical = false);
     private static readonly IReadOnlyDictionary<string, Description> Known = new Dictionary<string, Description>(StringComparer.Ordinal)
     {
         ["storage.v1"] = new("storage", "Package storage", "Stores this package’s data through Sunder."),
@@ -44,17 +42,8 @@ internal static class PackageFeatureDescriptions
         "worker-protocol.v1", "execution-runtime.v1", "runtime-generations.v1", "theming.v1", "view-navigation-preparation.v1", "app-state-updates.v1", "storage.key-migration.v1",
     };
 
-    internal static IReadOnlyList<PackageFeatureItemViewModel> Project(IEnumerable<SunderPackageFeature> features)
-        => features.GroupBy(value => Known.TryGetValue(value.Capability, out var description) ? description.Group : value.Capability, StringComparer.Ordinal)
-            .Select(group =>
-            {
-                var identifiers = group.Select(value => value.Capability).Distinct().Order(StringComparer.Ordinal).ToArray();
-                var descriptions = identifiers.Select(id => Known.GetValueOrDefault(id)
-                    ?? new(id, id, Infrastructure.Contains(id) ? "Required Sunder infrastructure." : "Additional declared Sunder feature; no description is available.", Technical: Infrastructure.Contains(id))).ToArray();
-                return new PackageFeatureItemViewModel(descriptions[0].Title, string.Join(" ", descriptions.Select(value => value.Text).Distinct()),
-                    string.Join(" · ", group.Select(value => PackageInformationViewModel.RoleText(value.Role)).Distinct().Order(StringComparer.Ordinal)),
-                    string.Join(" · ", identifiers), descriptions.Any(value => value.Sensitive), descriptions.All(value => value.Technical));
-            }).OrderByDescending(value => value.IsSensitive).ThenBy(value => value.Title, StringComparer.Ordinal).ToArray();
+    internal static Description Feature(string id) => Known.GetValueOrDefault(id)
+        ?? new(id, id, Infrastructure.Contains(id) ? "Required Sunder infrastructure." : "Additional declared Sunder feature; no description is available.", Technical: Infrastructure.Contains(id));
 }
 
 internal static class PackageBindingNames

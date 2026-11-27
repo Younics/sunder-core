@@ -11,7 +11,8 @@ public sealed class PackagesWindowFactory(
     BackgroundTaskQueueService backgroundTaskQueue,
     ShellStateService shellStateService,
     ShellState shellState,
-    RemoteImageService remoteImageService)
+    RemoteImageService remoteImageService,
+    PackageUpdateStartupCheckService updateChecks)
 {
     internal PackagesWindow Create(
         PackageOperationService packageOperationService,
@@ -27,6 +28,7 @@ public sealed class PackagesWindowFactory(
             backgroundTaskPopoverHeight: shellState.BackgroundTaskPopoverHeight,
             persistBackgroundTaskPopoverSize: persistBackgroundTaskPopoverSize,
             remoteImageService: remoteImageService,
+            updateChecks: updateChecks,
             confirmSharedRuntimeRepair: async (impact, cancellationToken) =>
             {
                 var dialog = new ExecutionRuntimeRepairConfirmationWindow(

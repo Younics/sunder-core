@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <Compile Include="..\..\shared\PackageDeclarationLabels.cs" Link="Presentation\PackageDeclarationLabels.cs" />
   </ItemGroup>
 
   <ItemGroup>

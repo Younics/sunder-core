@@ -23,7 +23,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     internal PackageCatalogItemViewModel(
         PackageCatalogItemState state,
         Action<PackageCatalogItemViewModel> onSelect)
-        : base(state.IconUri)
+        : base(state.IconUri, deferIcon: true)
     {
         _state = state;
         PackageId = state.PackageId;
@@ -60,6 +60,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     public bool ShowOperationStatus => HasActiveOperation;
 
     public string StatusText { get; }
+    public string RowStatus => $"{StatusText} · {Version}";
 
     public bool IsEnabled { get; }
 

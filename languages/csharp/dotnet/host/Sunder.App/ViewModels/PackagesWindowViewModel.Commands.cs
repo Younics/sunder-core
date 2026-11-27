@@ -20,15 +20,14 @@ public sealed partial class PackagesWindowViewModel
             return;
         }
 
-        if (_installedPackages.IsEmpty)
+        if (IsMarketplaceMode)
         {
-            await RefreshInstalledCoreAsync(null, null, updateSelection: true, cancellationToken);
+            var search = Marketplace.Packages.Count == 0 ? RefreshMarketplaceAsync(cancellationToken) : Task.CompletedTask;
+            await Task.WhenAll(search, RefreshMarketplaceBadgesAsync(cancellationToken));
         }
-
-        cancellationToken.ThrowIfCancellationRequested();
-        if (Mode == PackageWindowMode.Marketplace && Marketplace.Packages.Count == 0)
+        else if (_installedPackages.IsEmpty || _installedPackages.IsDirty)
         {
-            await RefreshMarketplaceAsync(cancellationToken);
+            await RefreshInstalledAsync(cancellationToken: cancellationToken);
         }
     }
 
@@ -51,24 +50,8 @@ public sealed partial class PackagesWindowViewModel
         Marketplace.SearchText = request.PackageId;
         ApplySearchTextForCurrentMode();
         CancelQueuedMarketplaceSearch();
-        await RefreshMarketplaceAsync(cancellationToken);
-
-        var selectedPackage = Marketplace.Packages.FirstOrDefault(package =>
-            string.Equals(package.PackageId, request.PackageId, StringComparison.OrdinalIgnoreCase));
-        if (selectedPackage is null)
-        {
-            _marketplace.ReplacePackages([]);
-            OnPropertyChanged(nameof(HasMarketplacePackages));
-            OnPropertyChanged(nameof(ShowNoMarketplacePackages));
-            ClearMarketplaceSelection();
-            Operations.StatusText = $"Package '{request.PackageId}' was not found in the Registry.";
-            return;
-        }
-
-        _marketplace.KeepOnlyPackage(selectedPackage);
-        OnPropertyChanged(nameof(HasMarketplacePackages));
-        OnPropertyChanged(nameof(ShowNoMarketplacePackages));
-        await SelectMarketplacePackageAsync(selectedPackage, cancellationToken);
+        var selectedPackage = await SearchAndSelectMarketplaceAsync(request.PackageId, true, cancellationToken);
+        if (selectedPackage is null) return;
         Operations.StatusText = request.Kind == AppLaunchRequestKind.PackageInstall
             ? $"Review {selectedPackage.PackageId} before installing."
             : $"Loaded {selectedPackage.PackageId}.";
@@ -176,11 +159,43 @@ public sealed partial class PackagesWindowViewModel
         if (IsMarketplaceMode)
         {
             CancelQueuedMarketplaceSearch();
-            await RefreshMarketplaceAsync();
+            _marketplace.Catalog.InvalidateOverviews();
+            await Task.WhenAll(RefreshMarketplaceAsync(), RefreshMarketplaceBadgesAsync(_tasks.Token));
             return;
         }
 
         await RefreshInstalledAsync(Installed.SelectedPackage?.PackageId);
+        _updateChecks?.EnqueueStartupCheck();
+    }
+
+    [RelayCommand]
+    private async Task LoadMoreMarketplaceAsync()
+    {
+        if (!IsMarketplaceMode || !HasMoreMarketplacePackages) return;
+        var generation = _marketplaceSearchVersion;
+        try
+        {
+            var page = await _marketplace.Catalog.SearchAsync(Marketplace.SearchText,
+                SelectedMarketplaceSortOption?.Sort ?? RegistrySearchSort.Downloads, _installedPackages.Catalog,
+                item => SelectMarketplacePackageAsync(item), _tasks.Token, _nextMarketplaceOffset);
+            if (_disposed || !IsMarketplaceMode || generation != _marketplaceSearchVersion)
+            {
+                foreach (var row in page.Packages) row.Dispose();
+                return;
+            }
+            if (!page.Success) { Operations.StatusText = page.ErrorMessage!; return; }
+            var ids = Marketplace.Packages.Select(row => row.PackageId).ToHashSet(StringComparer.Ordinal);
+            foreach (var row in page.Packages)
+            {
+                if (ids.Add(row.PackageId)) Marketplace.Packages.Add(row);
+                else row.Dispose();
+            }
+            _nextMarketplaceOffset += page.Packages.Count;
+            HasMoreMarketplacePackages = page.Packages.Count == PackagesMarketplaceCatalog.PageSize;
+            RefreshMarketplaceInstalledBadges();
+        }
+        catch (OperationCanceledException) when (_disposed) { }
+        catch (Exception error) { if (generation == _marketplaceSearchVersion) Operations.StatusText = error.Message; }
     }
 
     [RelayCommand(CanExecute = nameof(CanInstallPackage))]
@@ -324,7 +339,8 @@ public sealed partial class PackagesWindowViewModel
             }
 
             selectedPackage.Stats = result.Stats;
-            ApplyMarketplacePackageStats(result.Stats);
+            _marketplace.Catalog.InvalidateOverviews();
+            if (IsMarketplaceMode && ReferenceEquals(selectedPackage, Marketplace.SelectedPackage)) ApplyMarketplacePackageStats(result.Stats);
             Operations.StatusText = result.Message ?? "Updated package star.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

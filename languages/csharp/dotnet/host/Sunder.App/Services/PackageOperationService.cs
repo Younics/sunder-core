@@ -320,12 +320,9 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         using var preparation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
         using var client = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
         var plan = await client.GetPackageUninstallPlanAsync(packageId, preparation.Token).ConfigureAwait(false);
-        if (plan.RequiresCascadeConsent)
-        {
-            if (_confirmUninstall is null)
-                throw new InvalidOperationException("Open Packages to review the dependent packages before uninstalling.");
-            if (!await _confirmUninstall(plan, preparation.Token).WaitAsync(preparation.Token).ConfigureAwait(false)) return null;
-        }
+        if (_confirmUninstall is null)
+            throw new InvalidOperationException("Open Packages to review the removal before uninstalling.");
+        if (!await _confirmUninstall(plan, preparation.Token).WaitAsync(preparation.Token).ConfigureAwait(false)) return null;
         preparation.Token.ThrowIfCancellationRequested();
         return EnqueuePackageStoreOperation(
             packageId,

@@ -49,7 +49,8 @@ public sealed partial class PackageOperationServiceTests
             new Sunder.Package.Format.SunderPackageArchiveValidationResult(new()
             {
                 Id = "agent", Name = "Agent", Version = "1.0.0", UsesContracts = [],
-                Targets = [new() { Role = "runtime", RequiredHostCapabilities = [Sunder.Sdk.Compatibility.SunderSdkCapabilities.DockerEnvironmentV1] }],
+                Targets = [new() { Role = "runtime", Kind = "worker", Rid = AppPackageTargetEnvironment.CurrentRid,
+                    RequiredHostCapabilities = [Sunder.Sdk.Compatibility.SunderSdkCapabilities.DockerEnvironmentV1] }],
             }, [], [])
             {
                 ContentIndex = new(1, [new(Sunder.Package.Format.SunderPackageFormat.ManifestPath, new('a', 64), 42)]),
@@ -524,7 +525,7 @@ public sealed partial class PackageOperationServiceTests
                 Assert.Equal(["agent", "agent.extension"], plan.ExpectedRemovalPackageIds);
                 reviews.Add(plan.ConfirmationToken);
                 var dialog = Sunder.App.ViewModels.RuntimeConfirmationViewModel.Uninstall(plan);
-                Assert.Equal(["Extension 1.0.0"], dialog.Items);
+                Assert.Equal(["Requested: Agent 1.0.0", "Also removed: Extension 1.0.0"], dialog.Items);
                 Assert.Contains("Package data will be kept", dialog.Message, StringComparison.Ordinal);
                 if (stale && reviews.Count == 1) runtimeClient.UninstallPlan = plan with { ConfirmationToken = new string('c', 64) };
                 return Task.FromResult(approve);
@@ -843,7 +844,10 @@ public sealed partial class PackageOperationServiceTests
 
     private static PackageArchiveSelection LocalSelection(string path, string hash = "test-hash", bool deleteAfterUse = false)
         => new(path, hash, deleteAfterUse, Review: Sunder.App.ViewModels.LocalPackageInstallConsentViewModel.Valid(Path.GetFileName(path),
-            new(new() { Id = "agent", Name = "Agent", Version = "1.0.0", Targets = [], UsesContracts = [] }, [], [])));
+            new(new() { Id = "agent", Name = "Agent", Version = "1.0.0", Targets = [], UsesContracts = [] }, [], [])
+            {
+                ContentIndex = new(1, [new(Sunder.Package.Format.SunderPackageFormat.ManifestPath, new('a', 64), 42)]),
+            }));
 
     private static PackageOperationService CreateService(BackgroundTaskQueueService queue, IRuntimeApiClientFactory factory,
         Func<RuntimePackageStamp, CancellationToken, Task> presentation, NotificationCenterService notifications,

@@ -9,9 +9,9 @@
         mc:Ignorable="d"
         Width="680"
         Height="700"
-        MinWidth="600"
-        MinHeight="620"
-        CanResize="False"
+        MinWidth="400"
+        MinHeight="380"
+        CanResize="True"
         WindowStartupLocation="CenterOwner"
         Title="Confirm Package Changes"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
@@ -25,7 +25,7 @@
       <controls:WindowTitleBar.LeadingContent>
         <TextBlock Classes="section-title"
                    VerticalAlignment="Center"
-                    Text="Confirm Package Changes" />
+                   Text="Install from Registry" />
       </controls:WindowTitleBar.LeadingContent>
     </controls:WindowTitleBar>
 
@@ -33,17 +33,8 @@
                   Margin="20,12,20,8"
                   HorizontalScrollBarVisibility="Disabled">
       <StackPanel Spacing="14">
-        <Border Classes="settings-note-card">
-          <StackPanel Spacing="6">
-            <TextBlock FontWeight="SemiBold" Text="Review downloads and changes" />
-            <TextBlock Classes="muted"
-                       Text="Approve the package changes, permissions and runtime downloads together. Sunder installs required runtimes first, then downloads and installs the packages in order."
-                       TextWrapping="Wrap" />
-          </StackPanel>
-        </Border>
-
         <StackPanel Spacing="8" IsVisible="{Binding HasRegistryPlans}">
-          <TextBlock Classes="section-title" Text="Registry plan fence" />
+          <TextBlock Classes="section-title" Text="Registry" />
           <ItemsControl ItemsSource="{Binding RegistryPlans}">
             <ItemsControl.ItemTemplate>
               <DataTemplate x:DataType="vm:RegistryPlanConfirmationItemViewModel">
@@ -51,11 +42,6 @@
                   <StackPanel Spacing="4">
                     <TextBlock FontWeight="SemiBold" Text="{Binding RegistryOrigin}" TextWrapping="Wrap" />
                     <TextBlock Classes="caption" Text="{Binding PrereleasePolicyText}" />
-                    <TextBlock Classes="muted"
-                               FontFamily="monospace"
-                               FontSize="11"
-                               Text="{Binding ResolutionFingerprint}"
-                               TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
               </DataTemplate>
@@ -63,7 +49,7 @@
           </ItemsControl>
         </StackPanel>
 
-        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+        <Grid ColumnDefinitions="*,*,*" ColumnSpacing="10">
           <Border Classes="card-surface">
             <StackPanel Spacing="4">
               <TextBlock Classes="caption" Text="Package downloads" />
@@ -75,6 +61,12 @@
               <TextBlock Classes="caption" Text="Runtime downloads" />
               <TextBlock Classes="section-title" Text="{Binding SharedRuntimeDownloadText}" />
               <TextBlock Classes="muted" FontSize="11" Text="{Binding SharedRuntimeReuseText}" TextWrapping="Wrap" />
+            </StackPanel>
+          </Border>
+          <Border Grid.Column="2" Classes="card-surface">
+            <StackPanel Spacing="4">
+              <TextBlock Classes="caption" Text="Total" />
+              <TextBlock Classes="section-title" Text="{Binding TotalDownloadText}" TextWrapping="Wrap" />
             </StackPanel>
           </Border>
         </Grid>
@@ -111,7 +103,6 @@
                       <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
                       <TextBlock Grid.Column="1" Classes="caption" Text="{Binding SourceText}" />
                     </Grid>
-                    <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
               </DataTemplate>
@@ -130,9 +121,9 @@
         </ItemsControl>
 
         <StackPanel Spacing="8" IsVisible="{Binding HasCapabilityConsents}">
-          <TextBlock Classes="section-title" Text="Sensitive Worker Capability" />
+          <TextBlock Classes="section-title" Text="Allow Docker connection settings?" />
           <TextBlock Classes="muted"
-                     Text="These exact package manifests request access to your allowlisted Docker CLI connection environment. Package code runs with your user account; approve only packages and sources you trust."
+                     Text="Approval allows the workers below to receive the allowlisted Docker CLI connection variables. It applies to these exact package manifests."
                      TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding Items}">
             <ItemsControl.ItemTemplate>
@@ -144,17 +135,20 @@
                       <TextBlock Grid.Column="1" Classes="caption" Text="{Binding PackageVersion}" />
                     </Grid>
                     <TextBlock Classes="caption" Text="{Binding CapabilitiesText}" TextWrapping="Wrap" />
-                    <TextBlock Classes="muted"
-                               FontFamily="monospace"
-                               FontSize="11"
-                               Text="{Binding ManifestSha256}"
-                               TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
         </StackPanel>
+        <ItemsControl ItemsSource="{Binding SensitiveAccess}">
+          <ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String">
+            <TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,0,0,6" />
+          </DataTemplate></ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <Expander Header="Review details">
+          <TextBlock Classes="caption" Text="{Binding ReviewDetails}" TextWrapping="Wrap" />
+        </Expander>
       </StackPanel>
     </ScrollViewer>
 

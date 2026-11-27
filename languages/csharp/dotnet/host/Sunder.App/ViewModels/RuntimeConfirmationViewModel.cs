@@ -14,10 +14,17 @@ public sealed record RuntimeConfirmationViewModel(
     public static RuntimeConfirmationViewModel Uninstall(PackageUninstallPlan plan)
     {
         var target = plan.DirectRemovals.Single();
+        var dependents = plan.CascadingRemovals.Count;
+        var effect = dependents switch
+        {
+            0 => "No other installed packages will be removed.",
+            1 => $"One installed package depends on {target.Name}.",
+            _ => $"{dependents} installed packages depend on {target.Name}.",
+        };
         return new($"Uninstall {target.Name}?",
-            $"Removing {target.Name} {target.Version} will also uninstall these dependent packages. Package data will be kept.",
-            $"Uninstall {plan.ExpectedRemovalPackageIds.Count} packages",
-            plan.CascadingRemovals.Select(package => $"{package.Name} {package.Version}").ToArray(),
+            $"{effect} Package data will be kept.",
+            dependents == 0 ? "Uninstall 1 package" : $"Uninstall {plan.ExpectedRemovalPackageIds.Count} packages",
+            [$"Requested: {target.Name} {target.Version}", ..plan.CascadingRemovals.Select(package => $"Also removed: {package.Name} {package.Version}")],
             string.Join("\n", plan.DirectRemovals.Concat(plan.CascadingRemovals).Select(package => $"{package.PackageId} {package.Version}")));
     }
 
