@@ -758,6 +758,7 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageDependent : Sy
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageDependent? left, Sunder.Registry.Contracts.RegistryPackageDependent? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackageDetails : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDetails>
   method public .ctor(System.String PackageId, System.String Name, System.String? Summary, System.String? LatestVersion, System.String? IconUrl, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageVersionSummary> Versions, System.DateTimeOffset CreatedAtUtc, System.DateTimeOffset UpdatedAtUtc, Sunder.Registry.Contracts.RegistryPackageProfile? Profile = null, Sunder.Registry.Contracts.RegistryPackageStats? Stats = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageDependent>? Dependents = null, Sunder.Registry.Contracts.RegistryUserAttribution? Creator = null, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryUserAttribution>? Maintainers = null, System.Int32? TotalVersionCount = null, System.Int32? TotalDependentCount = null)
+  property Sunder.Registry.Contracts.RegistryPackageDeviceRelease? SelectedRelease { public get; public init; }
   property Sunder.Registry.Contracts.RegistryPackageProfile? Profile { public get; public init; }
   property Sunder.Registry.Contracts.RegistryPackageStats? Stats { public get; public init; }
   property Sunder.Registry.Contracts.RegistryUserAttribution? Creator { public get; public init; }
@@ -781,6 +782,29 @@ type public sealed class Sunder.Registry.Contracts.RegistryPackageDetails : Syst
   method public override System.String ToString()
   method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageDetails? left, Sunder.Registry.Contracts.RegistryPackageDetails? right)
   method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageDetails? left, Sunder.Registry.Contracts.RegistryPackageDetails? right)
+type public sealed class Sunder.Registry.Contracts.RegistryPackageDeviceRelease : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDeviceRelease>
+  method public .ctor(System.String PackageId, System.String Version, System.String Rid, System.String? Summary, System.Boolean IsYanked, System.String? DeprecatedMessage, System.DateTimeOffset PublishedAtUtc, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> Platforms, System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement> RuntimeRequirements, Sunder.Registry.Contracts.RegistryPackageInformation? Information, System.String ArchiveSha256, System.Int64 ArchiveSize)
+  property System.Boolean IsYanked { public get; public init; }
+  property System.Int64 ArchiveSize { public get; public init; }
+  property Sunder.Registry.Contracts.RegistryPackageInformation? Information { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement> RuntimeRequirements { public get; public init; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> Platforms { public get; public init; }
+  property System.DateTimeOffset PublishedAtUtc { public get; public init; }
+  property System.String ArchiveSha256 { public get; public init; }
+  property System.String? DeprecatedMessage { public get; public init; }
+  property System.String PackageId { public get; public init; }
+  property System.String Rid { public get; public init; }
+  property System.String? Summary { public get; public init; }
+  property System.String Version { public get; public init; }
+  method public Sunder.Registry.Contracts.RegistryPackageDeviceRelease <Clone>$()
+  method public System.Void Deconstruct(out System.String PackageId, out System.String Version, out System.String Rid, out System.String? Summary, out System.Boolean IsYanked, out System.String? DeprecatedMessage, out System.DateTimeOffset PublishedAtUtc, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryPackageTargetRequest> Platforms, out System.Collections.Generic.IReadOnlyList<Sunder.Registry.Contracts.RegistryExecutionRuntimeRequirement> RuntimeRequirements, out Sunder.Registry.Contracts.RegistryPackageInformation? Information, out System.String ArchiveSha256, out System.Int64 ArchiveSize)
+  method public final virtual System.Boolean Equals(Sunder.Registry.Contracts.RegistryPackageDeviceRelease? other)
+  method public override System.Boolean Equals(System.Object? obj)
+  method public override System.Int32 GetHashCode()
+  method public override System.String ToString()
+  method public static Sunder.Registry.Contracts.RegistryPackageDeviceRelease From(Sunder.Registry.Contracts.RegistryPackageVersionDetails release, System.String rid)
+  method public static System.Boolean op_Equality(Sunder.Registry.Contracts.RegistryPackageDeviceRelease? left, Sunder.Registry.Contracts.RegistryPackageDeviceRelease? right)
+  method public static System.Boolean op_Inequality(Sunder.Registry.Contracts.RegistryPackageDeviceRelease? left, Sunder.Registry.Contracts.RegistryPackageDeviceRelease? right)
 type public sealed class Sunder.Registry.Contracts.RegistryPackageDistTag : System.IEquatable<Sunder.Registry.Contracts.RegistryPackageDistTag>
   method public .ctor(System.String Tag, System.String Version, System.DateTimeOffset UpdatedAtUtc)
   property System.DateTimeOffset UpdatedAtUtc { public get; public init; }
