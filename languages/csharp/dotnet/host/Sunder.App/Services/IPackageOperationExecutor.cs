@@ -16,5 +16,5 @@ internal interface IPackageOperationExecutor
     Task<BackgroundTaskSnapshot?> EnqueueLocalInstallAsync(PackageArchiveSelection selection, CancellationToken cancellationToken = default);
     BackgroundTaskSnapshot EnqueueEnable(string packageId, string displayName);
     BackgroundTaskSnapshot EnqueueDisable(string packageId, string displayName);
-    BackgroundTaskSnapshot EnqueueUninstall(string packageId, string displayName, bool allowCascade = false);
+    Task<BackgroundTaskSnapshot?> EnqueueUninstallAsync(string packageId, string displayName, CancellationToken cancellationToken = default);
 }

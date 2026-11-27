@@ -82,79 +82,16 @@ internal sealed partial class PackageSessionLoadService
 
             var physicalSourceRoot = preparationSourcePaths?.GetValueOrDefault(package.PackageId)
                 ?? package.InstallPath;
-            var packageTrace = startupTrace?.GetInstalledPackage(package);
-            packageTrace?.BeginProjection();
-            try
+            var result = await PrepareInstalledCandidateAsync(index++, package, physicalSourceRoot,
+                sessionFolder, cancellationToken, startupTrace?.GetInstalledPackage(package));
+            errors.AddRange(result.Errors);
+            if (result.SessionPackage is not null)
             {
-                var errorCount = errors.Count;
-                var activation = await _preparer.ReadInstalledActivationStateAsync(
-                    package,
-                    physicalSourceRoot,
-                    errors,
-                    cancellationToken,
-                    packageTrace);
-                if (activation is null)
-                {
-                    packageTrace?.CompleteProjection("failed");
-                    sessionPackages[package.PackageId] = BuildSessionDescriptor(
-                        new RuntimePackageActivationState(
-                            package.PackageId,
-                            package.Name,
-                            package.Version,
-                            PackageHostRoles.None,
-                            package.Icon),
-                        isEnabled: false,
-                        readiness: PackageReadinessState.Failed,
-                        failureOrigin: PackageFailureOrigin.RuntimeActivation,
-                        lastError: errors.Skip(errorCount).LastOrDefault() ?? "Installed package failed strict validation.",
-                        failureCount: 1);
-                    continue;
-                }
-                if (!package.IsEnabled)
-                {
-                    packageTrace?.CompleteProjection("not-required");
-                    sessionPackages[package.PackageId] = BuildSessionDescriptor(
-                        activation,
-                        isEnabled: false,
-                        readiness: PackageReadinessState.Disabled);
-                    continue;
-                }
-
-                errorCount = errors.Count;
-                var preparedPackage = await _preparer.PrepareInstalledPackageAsync(
-                    index++,
-                    package,
-                    physicalSourceRoot,
-                    sessionFolder,
-                    errors,
-                    cancellationToken,
-                    packageTrace);
-                if (preparedPackage is not null)
-                {
-                    packageTrace?.SetPreparedIdentity(preparedPackage);
-                    packageTrace?.CompleteProjection("succeeded");
-                    preparedCandidates.Add(preparedPackage);
-                    continue;
-                }
-
-                packageTrace?.CompleteProjection("failed");
-                sessionPackages[package.PackageId] = BuildSessionDescriptor(
-                    activation,
-                    isEnabled: false,
-                    readiness: PackageReadinessState.Failed,
-                    failureOrigin: PackageFailureOrigin.RuntimeActivation,
-                    lastError: errors.Skip(errorCount).LastOrDefault() ?? "Installed package could not be prepared for loading.",
-                    failureCount: 1);
+                sessionPackages[package.PackageId] = result.SessionPackage;
             }
-            catch (OperationCanceledException)
+            if (result.PreparedPackage is not null)
             {
-                packageTrace?.CompleteProjection("canceled");
-                throw;
-            }
-            catch
-            {
-                packageTrace?.CompleteProjection("failed");
-                throw;
+                preparedCandidates.Add(result.PreparedPackage);
             }
         }
 

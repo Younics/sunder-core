@@ -1,3 +1,4 @@
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
@@ -17,7 +18,8 @@ internal sealed class PreparedRegistryPackageInstallation(
     private readonly PackageInstallationApproval _runtimes = new(approved.Runtimes);
     private readonly string _packageSemantics = PackageInstallationApproval.PackageSemantics(approved.Plan);
     public bool NeedsRuntimeInstallation => _runtimes.NeedsRuntimeInstallation;
-    public IReadOnlyList<string> PackageIds => approved.Plan.Items.Select(item => item.PackageId).Distinct(StringComparer.Ordinal).ToArray();
+    public IReadOnlyList<string> PackageIds => approved.Plan.Items.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep)
+        .Select(item => item.PackageId).Distinct(StringComparer.Ordinal).ToArray();
 
     private async Task<RegistryInstallationPreview> RefreshAsync(CancellationToken token)
     {
@@ -38,7 +40,8 @@ internal sealed class PreparedRegistryPackageInstallation(
         context.ReportIndeterminate("Rechecking the approved package changes…");
         var current = await RefreshAsync(context.CancellationToken).ConfigureAwait(false);
         _runtimes.Validate(current.Runtimes, requireReady: true);
-        context.ReportIndeterminate("Downloading and installing packages…");
+        context.ReportIndeterminate(current.Plan.Items.Any(item => item.ActionKind != RegistryPackageActionKinds.Keep)
+            ? "Applying the approved package changes…" : "Checking installed packages…");
         var result = await apply(current, new(current.Runtimes.SourceFingerprint, current.Runtimes.Rid), context.CancellationToken).ConfigureAwait(false);
         if (!result.Success) throw new InvalidOperationException(result.Errors.FirstOrDefault() ?? result.Message);
         return result;

@@ -263,6 +263,7 @@ internal sealed class RuntimePackageSessionTestHost
     public Task<PackageOperationResult> SetInstalledPackageEnabledAsync(string packageId, bool isEnabled, CancellationToken token = default) => _installed.SetEnabledAsync(packageId, isEnabled, token);
     public Task<PackageOperationResult> UninstallPackageAsync(string packageId, PackageUninstallRequest request, CancellationToken token = default) => _installed.UninstallAsync(packageId, request, token);
     internal ActivePackageSession ActiveSession => _owner.State.ActiveSession;
+    internal InstalledPackageLifecycleService InstalledLifecycle => _installed;
     internal RuntimeSessionOwner SessionOwner => _owner;
     internal PackageSessionLease AcquireSessionLease() => _owner.State.AcquireLease();
     internal RuntimeRpcCatalog RpcCatalog => _rpcCatalog;

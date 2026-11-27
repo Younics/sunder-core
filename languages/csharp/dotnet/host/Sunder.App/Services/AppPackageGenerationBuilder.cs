@@ -198,6 +198,7 @@ internal sealed class AppPackageGenerationBuilder(
             foreach (var package in activePackages)
             {
                 if ((package.HostRoles & PackageHostRoles.App) == 0
+                    || package.Readiness == PackageReadinessState.Failed
                     || state.IsPackageDisabled(package.PackageId)
                     || sourcesByPackageId.ContainsKey(package.PackageId))
                 {

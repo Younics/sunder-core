@@ -11,6 +11,16 @@ public sealed record RuntimeConfirmationViewModel(
     string Details,
     bool CanConfirm = true)
 {
+    public static RuntimeConfirmationViewModel Uninstall(PackageUninstallPlan plan)
+    {
+        var target = plan.DirectRemovals.Single();
+        return new($"Uninstall {target.Name}?",
+            $"Removing {target.Name} {target.Version} will also uninstall these dependent packages. Package data will be kept.",
+            $"Uninstall {plan.ExpectedRemovalPackageIds.Count} packages",
+            plan.CascadingRemovals.Select(package => $"{package.Name} {package.Version}").ToArray(),
+            string.Join("\n", plan.DirectRemovals.Concat(plan.CascadingRemovals).Select(package => $"{package.PackageId} {package.Version}")));
+    }
+
     public static RuntimeConfirmationViewModel Install(RuntimeExecutionRuntimeInstallPlan plan)
     {
         var resolution = plan.Resolution!;

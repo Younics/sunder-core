@@ -11,7 +11,7 @@ internal sealed class ActivePackagePolicySynchronizer(
     RegistryPackagePolicySynchronizer synchronizer, PackagePolicyAdmission admission, PackageLifecyclePolicyCache cache,
     IPolicyContinuousClock clock, TimeProvider timeProvider, ILogger<ActivePackagePolicySynchronizer> logger,
     IHostApplicationLifetime? lifetime = null, InstalledPackagePolicyCoordinator? installedPolicies = null,
-    AppProcessPolicySessions? appProcesses = null) : BackgroundService
+    AppProcessPolicySessions? appProcesses = null, InstalledPackageLifecycleService? installedLifecycle = null) : BackgroundService
 {
     private readonly Dictionary<string, (string Identity, SunderPackageManifest Manifest)> _manifests = new(StringComparer.Ordinal);
     private readonly List<Task> _cleanup = [];
@@ -20,18 +20,19 @@ internal sealed class ActivePackagePolicySynchronizer(
     private readonly CancellationTokenSource _persistenceStopping = new();
     private Task _persistenceTask = Task.CompletedTask;
     private bool _persistenceQuiesced;
+    private int _recheckAdmission;
     private int _disposed;
 
     public override Task StartAsync(CancellationToken cancellationToken)
     {
-        cache.PolicyChanged += EnforceActive;
+        cache.PolicyChanged += OnPolicyChanged;
         return base.StartAsync(cancellationToken);
     }
 
     public override void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-        cache.PolicyChanged -= EnforceActive;
+        cache.PolicyChanged -= OnPolicyChanged;
         lock (_persistenceGate) _persistenceQuiesced = true;
         RuntimeCancellation.DisposeAfterCallbacks(_persistenceStopping, _persistenceStopping.CancelAsync());
         base.Dispose();
@@ -199,12 +200,40 @@ internal sealed class ActivePackagePolicySynchronizer(
             try
             {
                 await cache.PersistClockInvalidationsAsync(token);
-                if (installedPolicies is not null) await installedPolicies.ReconcileAsync(token);
+                await PersistInstalledPoliciesAsync(token);
             }
             catch (Exception error) when (error is not OperationCanceledException || !token.IsCancellationRequested)
             { logger.LogError("Installed policy persistence failed ({FailureType}; {Failure}); retained policy evidence remains authoritative.", error.GetType().Name, PackagePolicyFailure.Describe(error)); }
             await Task.Delay(TimeSpan.FromSeconds(1), timeProvider, token);
         }
+    }
+
+    private async Task PersistInstalledPoliciesAsync(CancellationToken token)
+    {
+        if (installedPolicies is null) return;
+        if (installedLifecycle is null || Interlocked.Exchange(ref _recheckAdmission, 0) == 0)
+        {
+            await installedPolicies.ReconcileAsync(token);
+            return;
+        }
+
+        // A prepared package-store cutover owns its generation. Keep the
+        // observation pending until metadata and admission can share the gate.
+        try
+        {
+            if (await installedPolicies.ReconcileAsync(token, installedLifecycle.RecoverClockBlockedPackagesUnderGateAsync)) return;
+        }
+        catch (RuntimeStaleGenerationException)
+        {
+            // A concurrent fault published a newer session; reconsider its current packages.
+        }
+        Interlocked.Exchange(ref _recheckAdmission, 1);
+    }
+
+    private void OnPolicyChanged()
+    {
+        Interlocked.Exchange(ref _recheckAdmission, 1);
+        EnforceActive();
     }
 
     internal void EnforceActive()

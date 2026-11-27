@@ -1647,8 +1647,8 @@ public sealed class PackagesWindowViewModelTests
         public BackgroundTaskSnapshot EnqueueDisable(string packageId, string displayName)
             => CreateSnapshot(packageId, PackageOperationKind.Disable, displayName);
 
-        public BackgroundTaskSnapshot EnqueueUninstall(string packageId, string displayName, bool allowCascade = false)
-            => CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName);
+        public Task<BackgroundTaskSnapshot?> EnqueueUninstallAsync(string packageId, string displayName, CancellationToken cancellationToken = default)
+            => Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.Uninstall, displayName));
 
         private static BackgroundTaskSnapshot CreateSnapshot(
             string? packageId,

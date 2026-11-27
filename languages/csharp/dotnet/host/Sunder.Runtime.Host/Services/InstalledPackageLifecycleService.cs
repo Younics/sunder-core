@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
 namespace Sunder.Runtime.Host.Services;
@@ -305,6 +306,47 @@ internal sealed partial class InstalledPackageLifecycleService
 
     public async Task<PackageLifecycleOperationResult> LoadInstalledPackagesAsync(CancellationToken cancellationToken = default)
         => await LoadPackagesAsync(preserveDevelopmentOverlays: false, cancellationToken);
+
+    internal async Task RecoverClockBlockedPackagesUnderGateAsync(IReadOnlyList<InstalledPackageRecord> installed, CancellationToken token)
+    {
+        var generation = _sessions.Generation;
+        var previous = _sessions.State.GetSessionPackages();
+        var waiting = previous.Where(package => package is
+            {
+                IsEnabled: true, Readiness: PackageReadinessState.Failed,
+                FailureOrigin: PackageFailureOrigin.RuntimeActivation, LastError: PackagePolicyErrorCodes.PolicyClockInvalid,
+            }).Select(package => package.PackageId).ToHashSet(StringComparer.Ordinal);
+        if (!installed.Any(package => waiting.Contains(package.PackageId) && package.IsEnabled
+                && package.Policy is { ErrorCode: not PackagePolicyErrorCodes.PolicyClockInvalid }))
+            return;
+
+        // Run the ordinary loader/admission for the waiting packages. Leave
+        // user-disabled packages and unrelated fault states out of activation.
+        var include = new HashSet<string>(waiting, StringComparer.Ordinal);
+        include.UnionWith(_sessions.State.GetActivePackageSources().Select(source => source.PackageId));
+        include.UnionWith(installed.Where(package => package.Policy is { IsBlocked: true }).Select(package => package.PackageId));
+        var sources = _sessions.Sources.Snapshot();
+        var candidate = await _reconciler.LoadMergedSessionAsync(
+            installed.Where(package => include.Contains(package.PackageId)).ToArray(),
+            sources.ActiveDevOverlays.Where(overlay => include.Contains(overlay.PackageId)).ToArray(),
+            generation, cancellationToken: token);
+        if (candidate.Session is null || candidate.Errors.Count > 0)
+        {
+            if (candidate.Session is not null) await candidate.Session.DisposeAsync();
+            _logger.LogWarning("Could not reactivate packages after policy refresh: {Errors}", string.Join(" | ", candidate.Errors));
+            return;
+        }
+
+        if (!candidate.Session.GetSessionPackages().Any(package => waiting.Contains(package.PackageId)
+                && package.LastError != PackagePolicyErrorCodes.PolicyClockInvalid))
+        {
+            await candidate.Session.DisposeAsync();
+            return;
+        }
+        candidate.Session.PreserveUnavailablePackages(previous.Where(package => !include.Contains(package.PackageId)));
+        await _publisher.PublishAsync(candidate.Session, sources, candidate.Warnings, candidate.Errors, generation, token,
+            retainWorkersExcept: []);
+    }
 
     private async Task<PackageLifecycleOperationResult> LoadPackagesAsync(
         bool preserveDevelopmentOverlays,
@@ -700,7 +742,11 @@ internal sealed partial class InstalledPackageLifecycleService
                 loaded.Errors,
                 baseSessionGeneration,
                 preparation.Stage.StageId,
-                requiresPackageStoreCommit: true);
+                requiresPackageStoreCommit: true,
+                // Even a same-byte reinstall replaces the installed activation.
+                retainWorkersExcept: preparation.Stage.PreparationSourcePaths.Keys
+                    .Where(id => loaded.Session.LoadedPackageMap.GetValueOrDefault(id)?.Source.Kind == PackageSourceKind.Installed)
+                    .ToArray());
         }
         catch (Exception exception)
         {
@@ -998,7 +1044,7 @@ internal sealed partial class InstalledPackageLifecycleService
                 },
                 storageActivationPreparing: _ => _storeCoordinator.PrepareStorageActivationAsync(
                     stageId,
-                    stage.Candidate!.Session.LoadedPackageMap.Keys.ToArray()));
+                    stage.Candidate!.Session.PackagesActivatingStorage().Select(package => package.Descriptor.PackageId).ToArray()));
             publication = null;
             var publicationCutoverWarnings = await _storeCoordinator.CompleteCutoverAsync(stageId)
                 .ConfigureAwait(false);

@@ -103,7 +103,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 var result = dialog.ShowDialog<bool>(GetPackageDialogOwner());
                 using var registration = token.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(() => dialog.Close(false)));
                 return await result.WaitAsync(token);
-            }));
+            }),
+            confirmUninstall: (plan, token) => _uiDispatcher.InvokeAsync(() => RuntimeManagementDialogs.ShowAsync(
+                GetPackageDialogOwner(), RuntimeConfirmationViewModel.Uninstall(plan), token)));
         _developerServices?.Attach(this, packageViewHostService);
     }
 

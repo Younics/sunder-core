@@ -19,12 +19,16 @@ internal sealed record InstalledPackagePolicyRecord(
     // A clock checkpoint or a renewed lease for the same decision does not
     // change an App comparison or uninstall preview. Admission still checks
     // the live lease, clock and authority at its own boundary.
-    internal object ComparisonEvidence() => new
+    internal object ComparisonEvidence(bool includeRegistryRevision = true) => new
     {
         State, ErrorCode, RegistryOrigin, Package,
         Snapshots = Snapshots.OrderBy(snapshot => snapshot.Origin, StringComparer.Ordinal).Select(snapshot => new
         {
-            snapshot.SchemaVersion, snapshot.Origin, snapshot.PackagePolicy, snapshot.ClockGeneration, snapshot.ClockInvalidated,
+            snapshot.SchemaVersion, snapshot.Origin,
+            // A partial refresh can advance this Registry-wide watermark without
+            // changing this package's decision, lease watermark or clock epoch.
+            PackagePolicy = includeRegistryRevision ? snapshot.PackagePolicy : null,
+            snapshot.ClockGeneration, snapshot.ClockInvalidated,
             Epoch = new { snapshot.HighWater.BootSessionId, snapshot.HighWater.Source, snapshot.HighWater.Frequency, snapshot.HighWater.VirtualMachineGeneration },
             Packages = snapshot.Packages.Select(pair => new
             {

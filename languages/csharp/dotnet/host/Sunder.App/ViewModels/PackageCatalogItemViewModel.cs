@@ -180,6 +180,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
                 return sessionPackage.Readiness switch
                 {
                     PackageReadinessState.Ready => "Ready",
+                    PackageReadinessState.Failed when sessionPackage.LastError == PackagePolicyErrorCodes.PolicyClockInvalid
+                        => "Waiting for Registry policy verification",
                     PackageReadinessState.NeedsConfiguration => "Needs configuration",
                     PackageReadinessState.Degraded => "Degraded",
                     PackageReadinessState.Failed => "Failed",

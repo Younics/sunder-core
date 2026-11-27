@@ -171,9 +171,11 @@ internal sealed class PackageOperationFinalizer(
 
     private static string BuildRegistryPackageOperationToastMessage(RegistryPackageInstallExecutionResult result, string fallback)
     {
-        if (result.PlanItems.Count == 1)
+        var changes = result.PlanItems.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep)
+            .DistinctBy(item => item.PackageId, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (changes.Length == 1)
         {
-            var item = result.PlanItems[0];
+            var item = changes[0];
             if (item.CurrentVersion is null)
             {
                 return $"{item.PackageId} {item.Version} was installed.";
@@ -187,13 +189,9 @@ internal sealed class PackageOperationFinalizer(
             return $"{item.PackageId} was updated from {item.CurrentVersion} to {item.Version}.";
         }
 
-        var packageChangeCount = result.PlanItems
-            .Select(item => item.PackageId)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        if (packageChangeCount > 0)
+        if (changes.Length > 0)
         {
-            return $"{packageChangeCount} package change(s) completed.";
+            return $"{changes.Length} package change(s) completed.";
         }
 
         return string.IsNullOrWhiteSpace(result.Message) ? fallback : result.Message.Trim();
