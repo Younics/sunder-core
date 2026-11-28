@@ -26,6 +26,21 @@ public sealed class AppSingleInstanceCoordinatorTests
     }
 
     [Fact]
+    public async Task EarlyProtocolActivation_ReachesTheShellWhenItIsReady()
+    {
+        using var primary = AppSingleInstanceCoordinator.Create($"Sunder.App.Tests.{Guid.NewGuid():N}");
+        var request = AppLaunchRequestParser.Parse("sunder://packages/demo/install?version=1.0.0&registry=https://hub.example/");
+        primary.DispatchLaunchRequest(request);
+        var received = new TaskCompletionSource<AppLaunchRequest>(TaskCreationOptions.RunContinuationsAsynchronously);
+        primary.SetLaunchRequestHandler((pending, _) =>
+        {
+            received.SetResult(pending);
+            return Task.CompletedTask;
+        });
+        Assert.Equal(request, await received.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
+    [Fact]
     public async Task TryForwardLaunchArgumentsAsync_WhenPrimaryIsListening_ForwardsParsedRequest()
     {
         var scope = $"Sunder.App.Tests.{Guid.NewGuid():N}";

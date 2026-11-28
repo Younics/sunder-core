@@ -41,6 +41,12 @@ public sealed partial class PackagesWindowViewModel
         }
 
         ClearWarnings();
+        if (request.Kind == AppLaunchRequestKind.PackageInstall &&
+            (request.RegistryUrl is null || !Sunder.Sdk.Packaging.SemanticVersion.TryParse(request.PackageVersion, out _)))
+        {
+            Operations.ReportError("An installation review requires an exact version and Hub.");
+            return;
+        }
         if (request.RegistryUrl is not null)
         {
             RegistryUrlText = request.RegistryUrl.ToString();
@@ -50,11 +56,30 @@ public sealed partial class PackagesWindowViewModel
         Marketplace.SearchText = request.PackageId;
         ApplySearchTextForCurrentMode();
         CancelQueuedMarketplaceSearch();
-        var selectedPackage = await SearchAndSelectMarketplaceAsync(request.PackageId, true, cancellationToken);
+        var selectedPackage = await SearchAndSelectMarketplaceAsync(request.PackageId, true, cancellationToken, request.PackageVersion);
         if (selectedPackage is null) return;
-        Operations.StatusText = request.Kind == AppLaunchRequestKind.PackageInstall
-            ? $"Review {selectedPackage.PackageId} before installing."
-            : $"Loaded {selectedPackage.PackageId}.";
+        if (request.Kind == AppLaunchRequestKind.PackageDetails)
+        {
+            Operations.StatusText = $"Loaded {selectedPackage.PackageId}.";
+            return;
+        }
+
+        if (!CanInstallSelectedMarketplacePackage || Marketplace.SelectedVersion?.Version != request.PackageVersion
+            || !TryResolveRegistryUrl(out var origin) || origin != request.RegistryUrl)
+        {
+            Operations.ReportError($"Cannot install {request.PackageId} {request.PackageVersion} from {request.RegistryUrl} on this device.");
+            return;
+        }
+        using var review = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _tasks.Token);
+        try
+        {
+            await _operationCommands.InstallMarketplacePackageAsync(selectedPackage.PackageId, selectedPackage.Name,
+                request.PackageVersion!, origin, review.Token);
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            Operations.ReportError(error.Message);
+        }
     }
 
     [RelayCommand]

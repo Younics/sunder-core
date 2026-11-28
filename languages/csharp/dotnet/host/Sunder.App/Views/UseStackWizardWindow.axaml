@@ -53,9 +53,11 @@
                 <TextBlock Classes="detail-intro" IsVisible="{Binding StackSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                            Text="{Binding StackSummary}"
                            TextWrapping="Wrap" />
-                <TextBlock Classes="caption"
-                           Text="{Binding StackMetadata}"
-                           TextWrapping="Wrap" />
+                 <TextBlock Classes="caption"
+                            Text="{Binding StackMetadata}"
+                            TextWrapping="Wrap" />
+                 <TextBlock Classes="caption" Text="{Binding PackageSource, StringFormat='Package Hub: {0}'}"
+                            TextWrapping="Wrap" />
               </StackPanel>
 
               <controls:StackInstallPlan Items="{Binding PackageRows}"
@@ -303,7 +305,7 @@
         <TextBlock Classes="status-text" Text="{Binding StatusText}" TextWrapping="Wrap" MaxLines="2" ToolTip.Tip="{Binding StatusText}" />
         <WrapPanel ItemSpacing="8" LineSpacing="4" HorizontalAlignment="Right">
           <Button Classes="secondary-action" Command="{Binding CancelCommand}" Content="Cancel" />
-          <Button Classes="primary-action" Command="{Binding ApplyCommand}" Content="Use Stack" IsEnabled="{Binding CanApply}" />
+          <Button Classes="primary-action" Command="{Binding ApplyCommand}" Content="{Binding PrimaryActionText}" IsEnabled="{Binding CanApply}" />
         </WrapPanel>
       </StackPanel>
     </Border>

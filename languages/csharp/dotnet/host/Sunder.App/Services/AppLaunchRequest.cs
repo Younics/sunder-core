@@ -10,7 +10,8 @@ public sealed record AppLaunchRequest(
     string? StackId = null,
     string? FilePath = null,
     Uri? RegistryUrl = null,
-    string? ErrorMessage = null)
+    string? ErrorMessage = null,
+    string? PackageVersion = null)
 {
     public bool Success => Kind != AppLaunchRequestKind.Invalid;
 
@@ -98,10 +99,18 @@ public static class AppLaunchRequestParser
             return AppLaunchRequest.Invalid($"Sunder package link has invalid package id '{packageId}'.");
         }
 
-        var registryUrl = TryReadRegistryUrl(uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        RegistryUrlHelper.TryParse(query["registry"], out var registryUrl);
         if (segments.Count == 1)
         {
             return new AppLaunchRequest(AppLaunchRequestKind.PackageDetails, PackageId: packageId, RegistryUrl: registryUrl);
+        }
+        if (segments is [_, "install"])
+        {
+            if (!HasActionOrigin(uri, query, registryUrl) || query.GetValues("version") is not [var version]
+                || !SemanticVersion.TryParse(version, out _))
+                return AppLaunchRequest.Invalid("An install link requires an exact package version and one valid Hub URL.");
+            return new(AppLaunchRequestKind.PackageInstall, PackageId: packageId, RegistryUrl: registryUrl, PackageVersion: version);
         }
 
         return AppLaunchRequest.Invalid($"Unsupported Sunder package link path '{uri.AbsolutePath}'.");
@@ -120,35 +129,23 @@ public static class AppLaunchRequestParser
             return AppLaunchRequest.Invalid($"Sunder Stack link has invalid Stack id '{stackId}'.");
         }
 
-        var registryUrl = TryReadRegistryUrl(uri);
+        var query = System.Web.HttpUtility.ParseQueryString(uri.Query);
+        RegistryUrlHelper.TryParse(query["registry"], out var registryUrl);
         if (segments.Count == 1)
         {
             return new AppLaunchRequest(AppLaunchRequestKind.StackDetails, StackId: stackId, RegistryUrl: registryUrl);
+        }
+        if (segments is [_, "use"])
+        {
+            return HasActionOrigin(uri, query, registryUrl)
+                ? new(AppLaunchRequestKind.StackUse, StackId: stackId, RegistryUrl: registryUrl)
+                : AppLaunchRequest.Invalid("A stack setup link requires one valid Hub URL.");
         }
 
         return AppLaunchRequest.Invalid($"Unsupported Sunder Stack link path '{uri.AbsolutePath}'.");
     }
 
-    private static Uri? TryReadRegistryUrl(Uri uri)
-    {
-        var query = ParseQuery(uri.Query);
-        return query.TryGetValue("registry", out var value) && RegistryUrlHelper.TryParse(value, out var registryUrl)
-            ? registryUrl
-            : null;
-    }
-
-    private static Dictionary<string, string> ParseQuery(string query)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var segment in query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
-        {
-            var parts = segment.Split('=', 2);
-            if (parts.Length == 2)
-            {
-                result[Uri.UnescapeDataString(parts[0])] = Uri.UnescapeDataString(parts[1].Replace('+', ' '));
-            }
-        }
-
-        return result;
-    }
+    private static bool HasActionOrigin(Uri uri, System.Collections.Specialized.NameValueCollection query, Uri? origin)
+        => origin is not null && query.GetValues("registry") is [var raw] && Uri.IsWellFormedUriString(raw, UriKind.Absolute)
+           && uri.UserInfo.Length == 0 && uri.IsDefaultPort && uri.Fragment.Length == 0;
 }

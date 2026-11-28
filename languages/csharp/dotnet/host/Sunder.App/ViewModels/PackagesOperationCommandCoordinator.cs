@@ -85,16 +85,19 @@ internal sealed class PackagesOperationCommandCoordinator(
         MarkQueued($"Queued uninstall for {displayName}.");
     }
 
-    public async Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)
-    {
-        if (TryResolveRegistryUrl(out var registryUrl))
-        {
-            operations.StatusText = "Preparing installation review…";
-            if (await operationExecutor.EnqueueMarketplaceInstallAsync(packageId, displayName, registryUrl, selectedVersion, tag: null) is not null)
-                MarkQueued($"Queued install for {packageId} {selectedVersion}.");
-            else operations.StatusText = "Installation cancelled before queueing.";
-        }
+    public Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion)
+        => TryResolveRegistryUrl(out var registryUrl)
+            ? InstallMarketplacePackageAsync(packageId, displayName, selectedVersion, registryUrl, CancellationToken.None)
+            : Task.CompletedTask;
 
+    public async Task InstallMarketplacePackageAsync(string packageId, string displayName, string selectedVersion,
+        Uri registryUrl, CancellationToken cancellationToken)
+    {
+        operations.StatusText = "Preparing installation review…";
+        if (await operationExecutor.EnqueueMarketplaceInstallAsync(packageId, displayName, registryUrl, selectedVersion,
+                tag: null, cancellationToken: cancellationToken) is not null)
+            MarkQueued($"Queued install for {packageId} {selectedVersion}.");
+        else operations.StatusText = "Installation cancelled before queueing.";
     }
 
     public Task UpdateInstalledPackageAsync(RegistryPackageUpdate update, string displayName)

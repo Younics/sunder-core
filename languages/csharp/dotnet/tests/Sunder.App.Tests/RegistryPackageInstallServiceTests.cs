@@ -23,6 +23,9 @@ public sealed class RegistryPackageInstallServiceTests
             Assert.Empty(queue.ListTasks());
             Assert.Equal(1024, review.SharedRuntimeDownloadBytes);
             Assert.Equal(client.Consents, review.Plan.RequiredCapabilityConsents);
+            var root = Assert.Single(review.Plan.Items);
+            Assert.Equal(("demo", "1.0.0"), (root.PackageId, root.Version));
+            Assert.Equal(new Registry().RegistryUrl.AbsoluteUri, Assert.Single(review.ExpectedPlans).RegistryOrigin);
             shown.SetResult();
             return approve.Task;
         }, queue);
@@ -50,6 +53,21 @@ public sealed class RegistryPackageInstallServiceTests
         Assert.Empty(queue.ListTasks());
         Assert.Null(client.InstallConfirmation);
         Assert.Empty(client.Installs);
+    }
+
+    [Theory]
+    [InlineData("other", "1.0.0")]
+    [InlineData("demo", "2.0.0")]
+    public async Task MismatchedInitialResolutionDoesNotOpenConsentOrQueue(string resolvedId, string resolvedVersion)
+    {
+        using var queue = new BackgroundTaskQueueService();
+        var client = new RegistryInstallationTestClient { PackageIds = [resolvedId], PackageVersion = resolvedVersion };
+        var shown = false;
+        using var service = new RegistryPackageInstallService((_, _) => { shown = true; return Task.FromResult(true); }, queue);
+        var result = await service.InstallPackageAsync("demo", "1.0.0", null, false, false, new Registry(), client);
+        Assert.False(result.Success);
+        Assert.False(shown);
+        Assert.Empty(queue.ListTasks());
     }
 
     [Theory]
