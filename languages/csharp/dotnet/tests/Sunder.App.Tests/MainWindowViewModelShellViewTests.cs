@@ -800,8 +800,8 @@ public sealed partial class MainWindowViewModelShellViewTests
         var panel = harness.ViewModel.RightTopPanel;
         harness.ViewModel.StopPackageViewPreloading();
         harness.ViewModel.StopPackageViewPreloading();
-        Assert.True(token.IsCancellationRequested);
         await canceled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        Assert.True(token.IsCancellationRequested);
         var attempts = 0;
         harness.ViewModel.StartPackageViewPreloading((_, _) =>
         {
