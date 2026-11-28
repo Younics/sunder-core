@@ -128,6 +128,17 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     private string _statusText = "Import a .sunderstack file or select a local Stack.";
 
     [ObservableProperty]
+    private bool _showStatusError;
+
+    partial void OnStatusTextChanged(string value) => ShowStatusError = false;
+
+    private void SetStatus(string message, bool isError)
+    {
+        StatusText = message;
+        ShowStatusError = isError;
+    }
+
+    [ObservableProperty]
     private string _selectedStackTitle = "No Stack selected";
 
     [ObservableProperty]
@@ -310,6 +321,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     private void LocalSelectionChanged(LocalStackLibraryItemViewModel? value)
     {
+        ShowStatusError = false;
         _localSelectionRequest = _selection.BeginLocal(value is not null && !_disposed);
         ApplySelectedStackSummary(value);
         NotifySelectionChanged();
@@ -325,6 +337,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnBrowserModeChanged(StackBrowserMode value)
     {
+        ShowStatusError = false;
         NotifyBrowserModeChanged();
         NotifySelectionChanged();
         NotifyRegistrySelectionChanged();
@@ -332,6 +345,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnIsBusyChanged(bool value)
     {
+        if (value) ShowStatusError = false;
         OnPropertyChanged(nameof(ShowNoStacks));
         OnPropertyChanged(nameof(ShowNoRegistryStacks));
         NotifyCommandStateChanged();
@@ -382,6 +396,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     private void RegistrySelectionChanged(RegistryStackSearchItemViewModel? value)
     {
+        ShowStatusError = false;
         var selectionRequest = BeginSelectedRegistryStackDetailsLoad(value);
         if (value is not null)
         {
@@ -502,7 +517,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     {
         if (!RegistryUrlHelper.TryParse(selectedStack.RegistryUrl, out var registryUrl) || registryUrl is null)
         {
-            StatusText = $"Saved local Stack '{selectedStack.StackId}'. Registry update was skipped because its saved Registry URL is invalid.";
+            SetStatus($"Saved local Stack '{selectedStack.StackId}'. Registry update was skipped because its saved Registry URL is invalid.", isError: true);
             return;
         }
 
@@ -515,9 +530,9 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 registryUrl,
                 preserveOriginalPublishTime: true,
                 cancellationToken);
-            StatusText = result.Success
+            SetStatus(result.Success
                 ? result.Message
-                : $"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {result.Message}";
+                : $"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {result.Message}", isError: !result.Success);
             if (result.Success)
             {
                 await Local.RefreshAsync(selectedStack.StackId, cancellationToken);
@@ -528,7 +543,7 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
         }
         catch (Exception ex)
         {
-            StatusText = $"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {ex.Message}";
+            SetStatus($"Saved local Stack '{selectedStack.StackId}'. Registry update failed: {ex.Message}", isError: true);
         }
         finally
         {

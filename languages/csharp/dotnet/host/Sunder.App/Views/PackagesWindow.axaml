@@ -30,18 +30,18 @@
     <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
     <Style Selector="controls|BackgroundTaskMonitor#PackageTasks">
-      <Setter Property="Grid.Column" Value="2" />
+      <Setter Property="Grid.Column" Value="1" />
     </Style>
     <ContainerQuery Name="PackagesFooter" Query="max-width:640">
       <Style Selector="controls|BackgroundTaskMonitor#PackageTasks">
         <Setter Property="Grid.Row" Value="1" />
         <Setter Property="Grid.Column" Value="0" />
-        <Setter Property="Grid.ColumnSpan" Value="3" />
+        <Setter Property="Grid.ColumnSpan" Value="2" />
       </Style>
     </ContainerQuery>
   </Window.Styles>
 
-  <Grid RowDefinitions="52,*,Auto"
+  <Grid RowDefinitions="52,Auto,*,Auto"
         Background="{DynamicResource Sunder.Brush.Background.App}">
     <controls:WindowTitleBar Grid.Row="0">
       <controls:WindowTitleBar.LeadingContent>
@@ -68,7 +68,11 @@
       </controls:WindowTitleBar.TrailingContent>
     </controls:WindowTitleBar>
 
-    <Grid Grid.Row="1" x:Name="PackagesContentGrid">
+    <Border Grid.Row="1" Classes="review-error" Margin="16,8" IsVisible="{Binding Operations.ShowStatusError}">
+      <TextBlock Text="{Binding Operations.StatusText}" TextWrapping="Wrap" MaxLines="3"
+                 TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Operations.StatusText}" />
+    </Border>
+    <Grid Grid.Row="2" x:Name="PackagesContentGrid">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="280" MinWidth="240" MaxWidth="900" />
           <ColumnDefinition Width="4" />
@@ -239,11 +243,9 @@
           </Grid>
         </Border>
         </Grid>
-    <Border Grid.Row="2" Classes="window-footer" Container.Name="PackagesFooter" Container.Sizing="Width">
-      <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8">
-        <Button Classes="secondary-action" Command="{Binding InstallPackageCommand}" Content="Install from disk" />
-        <TextBlock Grid.Column="1" Classes="caption" Text="{Binding Operations.StatusText}" TextWrapping="Wrap"
-                   MaxLines="2" TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding Operations.StatusText}" VerticalAlignment="Center" />
+    <Border Grid.Row="3" Classes="window-footer" Container.Name="PackagesFooter" Container.Sizing="Width">
+      <Grid ColumnDefinitions="*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8">
+        <Button Classes="secondary-action" HorizontalAlignment="Left" Command="{Binding InstallPackageCommand}" Content="Install from disk" />
         <controls:BackgroundTaskMonitor x:Name="PackageTasks" HorizontalAlignment="Right" DataContext="{Binding PackageProcesses}" />
       </Grid>
     </Border>

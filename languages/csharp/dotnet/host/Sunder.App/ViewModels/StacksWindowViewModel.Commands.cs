@@ -47,7 +47,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -121,7 +121,7 @@ public sealed partial class StacksWindowViewModel
 
             if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
             {
-                StatusText = result.ErrorMessage;
+                SetStatus(result.ErrorMessage, isError: true);
                 return;
             }
 
@@ -134,7 +134,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -213,7 +213,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -242,7 +242,7 @@ public sealed partial class StacksWindowViewModel
                 registryUrl,
                 preserveOriginalPublishTime: false,
                 cancellationToken);
-            StatusText = result.Message;
+            SetStatus(result.Message, isError: !result.Success);
             if (result.Success)
             {
                 await Local.RefreshAsync(selectedStack.StackId, cancellationToken);
@@ -253,7 +253,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -285,7 +285,7 @@ public sealed partial class StacksWindowViewModel
         try
         {
             var result = await _publishing.UnpublishAsync(selectedStack, registryUrl, cancellationToken);
-            StatusText = result.Message;
+            SetStatus(result.Message, isError: !result.Success);
             if (result.Success)
             {
                 await Local.RefreshAsync(selectedStack.StackId, cancellationToken);
@@ -296,7 +296,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -329,14 +329,14 @@ public sealed partial class StacksWindowViewModel
         {
             var result = await _publishing.ToggleStarAsync(registryUrl, publishedStackId, SelectedStackIsStarred, cancellationToken);
             ApplySelectedStackStats(result.Stats);
-            StatusText = result.Message;
+            SetStatus(result.Message, isError: !result.Success);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -363,14 +363,14 @@ public sealed partial class StacksWindowViewModel
         {
             var result = await _publishing.ToggleStarAsync(registryUrl, selectedStack.StackId, SelectedRegistryStackIsStarred, cancellationToken);
             ApplySelectedRegistryStackStats(result.Stats);
-            StatusText = result.Message;
+            SetStatus(result.Message, isError: !result.Success);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -401,9 +401,9 @@ public sealed partial class StacksWindowViewModel
                 cancellationToken);
             if (!result.Success)
             {
-                StatusText = result.Forbidden
+                SetStatus(result.Forbidden
                     ? "Unlisting requires sign-in as the Stack owner."
-                    : result.Errors.FirstOrDefault() ?? "Registry Stack visibility update failed.";
+                    : result.Errors.FirstOrDefault() ?? "Registry Stack visibility update failed.", isError: true);
                 return;
             }
 
@@ -416,7 +416,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -450,7 +450,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
         }
         finally
         {
@@ -481,7 +481,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
             return null;
         }
         finally
@@ -526,7 +526,7 @@ public sealed partial class StacksWindowViewModel
             Registry.Stacks.Clear();
             Registry.SelectedStack = null;
             NotifyRegistryStackStateChanged();
-            StatusText = $"Registry Stack '{request.StackId}' was not found.";
+            SetStatus($"Registry Stack '{request.StackId}' was not found.", isError: true);
             return;
         }
 
@@ -563,7 +563,7 @@ public sealed partial class StacksWindowViewModel
             var stack = await registryClient.GetStackAsync(stackId, cancellationToken);
             if (stack is null)
             {
-                StatusText = $"Registry Stack '{stackId}' was not found.";
+                SetStatus($"Registry Stack '{stackId}' was not found.", isError: true);
                 return null;
             }
 
@@ -577,7 +577,7 @@ public sealed partial class StacksWindowViewModel
                 });
                 if (errors.Count > 0)
                 {
-                    StatusText = string.Join(" ", errors);
+                    SetStatus(string.Join(" ", errors), isError: true);
                     return null;
                 }
             }
@@ -595,7 +595,7 @@ public sealed partial class StacksWindowViewModel
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            SetStatus(ex.Message, isError: true);
             return null;
         }
         finally

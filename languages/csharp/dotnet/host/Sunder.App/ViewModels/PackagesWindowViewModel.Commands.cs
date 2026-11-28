@@ -173,6 +173,7 @@ public sealed partial class PackagesWindowViewModel
     {
         if (!IsMarketplaceMode || !HasMoreMarketplacePackages) return;
         var generation = _marketplaceSearchVersion;
+        Operations.ShowStatusError = false;
         try
         {
             var page = await _marketplace.Catalog.SearchAsync(Marketplace.SearchText,
@@ -183,7 +184,7 @@ public sealed partial class PackagesWindowViewModel
                 foreach (var row in page.Packages) row.Dispose();
                 return;
             }
-            if (!page.Success) { Operations.StatusText = page.ErrorMessage!; return; }
+            if (!page.Success) { Operations.ReportError(page.ErrorMessage ?? "Marketplace search failed."); return; }
             var ids = Marketplace.Packages.Select(row => row.PackageId).ToHashSet(StringComparer.Ordinal);
             foreach (var row in page.Packages)
             {
@@ -195,7 +196,7 @@ public sealed partial class PackagesWindowViewModel
             RefreshMarketplaceInstalledBadges();
         }
         catch (OperationCanceledException) when (_disposed) { }
-        catch (Exception error) { if (generation == _marketplaceSearchVersion) Operations.StatusText = error.Message; }
+        catch (Exception error) { if (generation == _marketplaceSearchVersion) Operations.ReportError(error.Message); }
     }
 
     [RelayCommand(CanExecute = nameof(CanInstallPackage))]
@@ -332,9 +333,9 @@ public sealed partial class PackagesWindowViewModel
             }
             if (!result.Success)
             {
-                Operations.StatusText = result.Forbidden
+                Operations.ReportError(result.Forbidden
                     ? "Sign in to the Registry before starring a package."
-                    : result.Errors.FirstOrDefault() ?? "Registry package star update failed.";
+                    : result.Errors.FirstOrDefault() ?? "Registry package star update failed.");
                 return;
             }
 
@@ -347,7 +348,7 @@ public sealed partial class PackagesWindowViewModel
         }
         catch (Exception ex)
         {
-            Operations.StatusText = ex.Message;
+            Operations.ReportError(ex.Message);
         }
         finally
         {

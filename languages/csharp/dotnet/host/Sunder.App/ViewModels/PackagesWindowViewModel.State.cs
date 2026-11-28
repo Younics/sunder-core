@@ -96,7 +96,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
             _packageOperationExecutor,
             packageArchivePicker,
             _registryClientProvider,
-            value => Operations.StatusText = value,
+            Operations,
             RefreshPackageOperationState,
             () => _installedPackages.IsDirty = true);
         _selectedOperationCommands = new PackagesSelectedOperationCommands(

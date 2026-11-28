@@ -13,7 +13,7 @@
         MinHeight="380"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
-        Title="Review Registry changes"
+        Title="Install package from marketplace"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
@@ -22,11 +22,12 @@
   <Grid RowDefinitions="52,*,Auto"
         Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
     <controls:WindowTitleBar Grid.Row="0">
-      <controls:WindowTitleBar.LeadingContent>
+      <controls:WindowTitleBar.CenterContent>
         <TextBlock Classes="section-title"
                    VerticalAlignment="Center"
-                   Text="Registry package review" />
-      </controls:WindowTitleBar.LeadingContent>
+                   TextWrapping="Wrap"
+                   Text="{Binding $parent[Window].Title}" />
+      </controls:WindowTitleBar.CenterContent>
     </controls:WindowTitleBar>
 
     <ScrollViewer Grid.Row="1"
@@ -158,13 +159,10 @@
     </ScrollViewer>
 
     <Border Grid.Row="2" Classes="window-footer">
-      <StackPanel Spacing="7">
-        <TextBlock Classes="caption" Text="{Binding ApprovalScopeText}" TextWrapping="Wrap" />
-        <WrapPanel HorizontalAlignment="Right" ItemSpacing="8" LineSpacing="4">
-          <Button Classes="secondary-action" Content="Cancel" Click="CancelButton_OnClick" />
-          <Button Classes="primary-action" Content="Approve &amp; Install" Click="ApproveButton_OnClick" />
-        </WrapPanel>
-      </StackPanel>
+      <WrapPanel HorizontalAlignment="Right" ItemSpacing="8" LineSpacing="4">
+        <Button Classes="secondary-action" Content="Cancel" Click="CancelButton_OnClick" />
+        <Button Classes="primary-action" Content="Approve &amp; Install" Click="ApproveButton_OnClick" />
+      </WrapPanel>
     </Border>
   </Grid>
 </Window>

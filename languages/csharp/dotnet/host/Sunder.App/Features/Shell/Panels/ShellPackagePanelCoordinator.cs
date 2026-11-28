@@ -241,7 +241,7 @@ internal sealed class ShellPackagePanelCoordinator(
         else
         {
             selectionPresenter.Clear(bar, packageView.Placement);
-            ShellSelectionState.SetSelectedViewId(shellState, packageView.Placement, null);
+            ShellSelectionState.SetSelectedViewId(shellState, packageView.Placement, null, explicitlyClosed: true);
             if (_closePanel is not null)
             {
                 _closePanel(packageView.Placement, viewId);
@@ -273,7 +273,7 @@ internal sealed class ShellPackagePanelCoordinator(
         if (allowToggle && ReferenceEquals(selectedItem, item))
         {
             selectionPresenter.Clear(bar, placement);
-            ShellSelectionState.SetSelectedViewId(shellState, placement, null);
+            ShellSelectionState.SetSelectedViewId(shellState, placement, null, explicitlyClosed: true);
             if (_closePanel is not null)
             {
                 _closePanel(placement, item.Id);

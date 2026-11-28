@@ -23,7 +23,7 @@ internal sealed class ShellPackageLifecyclePresenter(
         IReadOnlyList<ActivePackageDescriptor>? runtimeActivePackages = null,
         IReadOnlyList<SessionPackageDescriptor>? sessionPackages = null)
     {
-        var projectedState = CloneProjectionState(shellState);
+        var projectedState = ShellStateSnapshotFactory.Clone(shellState);
         foreach (var view in viewsById.Values) projectedState.ViewPackageIds[view.ViewId] = view.PackageId;
         var shellSnapshot = shellCompositionService.Compose(
             IncludeQuarantinedPackages(activePackages, runtimeActivePackages),
@@ -136,21 +136,6 @@ internal sealed class ShellPackageLifecyclePresenter(
                 .Select(view => view.PackageId)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase));
 
-    private static ShellState CloneProjectionState(ShellState source)
-        => new()
-        {
-            HasInitializedLayout = source.HasInitializedLayout,
-            ViewPlacements = new Dictionary<string, RailPlacement>(source.ViewPlacements, StringComparer.OrdinalIgnoreCase),
-            ViewPackageIds = new Dictionary<string, string>(source.ViewPackageIds, StringComparer.OrdinalIgnoreCase),
-            ViewOrder = new Dictionary<string, int>(source.ViewOrder, StringComparer.OrdinalIgnoreCase),
-            HiddenHotbarViewIds = new HashSet<string>(source.HiddenHotbarViewIds, StringComparer.OrdinalIgnoreCase),
-            SelectedLeftTopViewId = source.SelectedLeftTopViewId,
-            SelectedMiddleViewId = source.SelectedMiddleViewId,
-            SelectedRightTopViewId = source.SelectedRightTopViewId,
-            SelectedLeftBottomViewId = source.SelectedLeftBottomViewId,
-            SelectedRightBottomViewId = source.SelectedRightBottomViewId,
-        };
-
     private static IReadOnlySet<string> GetSelectedViewIds(ShellSnapshot snapshot)
     {
         var activeViewIds = snapshot.PackageViews
@@ -171,6 +156,7 @@ internal sealed class ShellPackageLifecyclePresenter(
         target.HiddenHotbarViewIds = projection.HiddenHotbarViewIds;
         target.SelectedLeftTopViewId = projection.SelectedLeftTopViewId;
         target.SelectedMiddleViewId = projection.SelectedMiddleViewId;
+        target.ClosedMiddleViewId = projection.ClosedMiddleViewId;
         target.SelectedRightTopViewId = projection.SelectedRightTopViewId;
         target.SelectedLeftBottomViewId = projection.SelectedLeftBottomViewId;
         target.SelectedRightBottomViewId = projection.SelectedRightBottomViewId;

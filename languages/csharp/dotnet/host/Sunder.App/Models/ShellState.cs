@@ -40,6 +40,9 @@ public sealed class ShellState
 
     public string? SelectedMiddleViewId { get; set; }
 
+    // An empty middle panel is a saved choice only when a view was explicitly closed.
+    public string? ClosedMiddleViewId { get; set; }
+
     public string? SelectedRightTopViewId { get; set; }
 
     public string? SelectedLeftBottomViewId { get; set; }

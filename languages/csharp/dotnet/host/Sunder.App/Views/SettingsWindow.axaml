@@ -62,13 +62,6 @@
   </Window.DataTemplates>
 
   <Window.Styles>
-    <Style Selector="Border#SettingsSelectionPane">
-      <Setter Property="Margin" Value="0" /><Setter Property="Padding" Value="0" />
-    </Style>
-    <Style Selector="Border#SettingsSelectionPane.settings-package-content">
-      <Setter Property="Padding" Value="0" />
-      <Setter Property="Margin" Value="0" />
-    </Style>
     <Style Selector="Button.settings-info">
       <Setter Property="Width" Value="28" /><Setter Property="Height" Value="28" />
       <Setter Property="MinWidth" Value="28" /><Setter Property="MinHeight" Value="28" />
@@ -198,8 +191,7 @@
           <Button x:Name="CompactSettingsBackButton" Classes="secondary-action compact-action" Margin="12,6"
                   HorizontalAlignment="Left" Content="‹ Categories" IsVisible="False" />
         <Border Grid.Row="1" x:Name="SettingsSelectionPane"
-                Classes.workspace-surface="{Binding IsCoreSelection}"
-                Classes.settings-package-content="{Binding IsPackageSelection}"
+                Classes.detail-surface="{Binding IsCoreSelection}"
                 AutomationProperties.Name="{Binding SelectedTitle}">
           <Grid RowDefinitions="Auto,*">
             <StackPanel x:Name="SettingsSelectionHeader" Spacing="6" Margin="20,20,20,0"
@@ -448,63 +440,55 @@
                                    Text="Choose Custom to edit. Limits apply to each message or content item, not the whole session."
                                    TextWrapping="Wrap" />
 
-                        <Grid ColumnDefinitions="*,100"
-                              RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
-                              ColumnSpacing="18"
-                              RowSpacing="14">
-                          <StackPanel Grid.Row="0" Spacing="3">
-                            <TextBlock Classes="section-title" Text="RPC value limit" />
-                            <TextBlock Classes="caption" Text="{Binding RuntimeResources.RpcValueRange}" />
-                          </StackPanel>
-                          <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomRpcValueMiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
-                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="MiB" />
-                          </Grid>
+                         <Grid ColumnDefinitions="*,104,Auto"
+                               RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
+                               ColumnSpacing="10"
+                               RowSpacing="14">
+                           <Grid.Styles>
+                             <Style Selector="TextBlock"><Setter Property="TextWrapping" Value="Wrap" /></Style>
+                             <Style Selector="TextBox"><Setter Property="VerticalAlignment" Value="Center" /></Style>
+                           </Grid.Styles>
+                           <StackPanel Grid.Row="0" Spacing="3">
+                             <TextBlock Classes="section-title" Text="RPC value limit" />
+                             <TextBlock Classes="caption" Text="{Binding RuntimeResources.RpcValueRange}" />
+                           </StackPanel>
+                           <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding RuntimeResources.CustomRpcValueMiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
+                           <TextBlock Grid.Row="0" Grid.Column="2" Classes="muted" VerticalAlignment="Center" Text="MiB" />
 
                           <StackPanel Grid.Row="1" Spacing="3">
                             <TextBlock Classes="section-title" Text="Value depth" />
                             <TextBlock Classes="caption" Text="{Binding RuntimeResources.ValueDepthRange}" />
                           </StackPanel>
-                          <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomValueDepthText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
-                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="levels" />
-                          </Grid>
+                           <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding RuntimeResources.CustomValueDepthText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
+                           <TextBlock Grid.Row="1" Grid.Column="2" Classes="muted" VerticalAlignment="Center" Text="levels" />
 
                           <StackPanel Grid.Row="2" Spacing="3">
                             <TextBlock Classes="section-title" Text="Value nodes" />
                             <TextBlock Classes="caption" Text="{Binding RuntimeResources.ValueNodesRange}" />
                           </StackPanel>
-                          <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomValueNodesText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
-                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="nodes" />
-                          </Grid>
+                           <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding RuntimeResources.CustomValueNodesText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
+                           <TextBlock Grid.Row="2" Grid.Column="2" Classes="muted" VerticalAlignment="Center" Text="nodes" />
 
                           <StackPanel Grid.Row="3" Spacing="3">
                             <TextBlock Classes="section-title" Text="Object members" />
                             <TextBlock Classes="caption" Text="{Binding RuntimeResources.ObjectMembersRange}" />
                           </StackPanel>
-                          <Grid Grid.Row="3" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomObjectMembersText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
-                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="members" />
-                          </Grid>
+                           <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding RuntimeResources.CustomObjectMembersText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
+                           <TextBlock Grid.Row="3" Grid.Column="2" Classes="muted" VerticalAlignment="Center" Text="members" />
 
                           <StackPanel Grid.Row="4" Spacing="3">
                             <TextBlock Classes="section-title" Text="Inline decoded data" />
                             <TextBlock Classes="caption" Text="{Binding RuntimeResources.InlineDecodedRange}" />
                           </StackPanel>
-                          <Grid Grid.Row="4" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomInlineDecodedKiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
-                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="KiB" />
-                          </Grid>
+                           <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding RuntimeResources.CustomInlineDecodedKiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
+                           <TextBlock Grid.Row="4" Grid.Column="2" Classes="muted" VerticalAlignment="Center" Text="KiB" />
 
                           <StackPanel Grid.Row="5" Spacing="3">
                             <TextBlock Classes="section-title" Text="Content reference" />
                             <TextBlock Classes="caption" Text="{Binding RuntimeResources.ContentReferenceRange}" />
                           </StackPanel>
-                          <Grid Grid.Row="5" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                            <TextBox Text="{Binding RuntimeResources.CustomContentReferenceMiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
-                            <TextBlock Grid.Column="1" Classes="muted" VerticalAlignment="Center" Text="MiB" />
-                          </Grid>
+                           <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding RuntimeResources.CustomContentReferenceMiBText}" IsReadOnly="{Binding RuntimeResources.AreLimitsReadOnly}" />
+                           <TextBlock Grid.Row="5" Grid.Column="2" Classes="muted" VerticalAlignment="Center" Text="MiB" />
                         </Grid>
 
                         <Border Classes="settings-note-card"

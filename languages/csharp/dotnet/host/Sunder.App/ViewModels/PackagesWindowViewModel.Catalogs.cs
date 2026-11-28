@@ -105,7 +105,7 @@ public sealed partial class PackagesWindowViewModel
             {
                 if (!_disposed)
                 {
-                    Operations.StatusText = ex.Message;
+                    Operations.ReportError(ex.Message);
                 }
             }
         }
@@ -149,7 +149,7 @@ public sealed partial class PackagesWindowViewModel
 
             if (!searchResult.Success)
             {
-                Operations.StatusText = searchResult.ErrorMessage ?? "Marketplace search failed.";
+                Operations.ReportError(searchResult.ErrorMessage ?? "Marketplace search failed.");
                 return null;
             }
 
@@ -171,8 +171,8 @@ public sealed partial class PackagesWindowViewModel
             if (selected is null)
             {
                 ClearMarketplaceSelection();
-                Operations.StatusText = exactMatchOnly ? $"Package '{preferredPackageId}' was not found in the Registry."
-                    : "No marketplace packages matched the search.";
+                if (exactMatchOnly) Operations.ReportError($"Package '{preferredPackageId}' was not found in the Registry.");
+                else Operations.StatusText = "No marketplace packages matched the search.";
                 return null;
             }
 
@@ -189,7 +189,7 @@ public sealed partial class PackagesWindowViewModel
         {
             if (!_disposed && searchVersion == _marketplaceSearchVersion)
             {
-                Operations.StatusText = ex.Message;
+                Operations.ReportError(ex.Message);
             }
         }
         return null;

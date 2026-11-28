@@ -32,7 +32,7 @@ public sealed partial class StacksWindowViewModel
         {
             if (!_disposed && _selection.IsCurrent(selectionRequest))
             {
-                StatusText = ex.Message;
+                SetStatus(ex.Message, isError: true);
             }
         }
     }

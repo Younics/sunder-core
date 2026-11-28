@@ -106,6 +106,8 @@ public sealed partial class PackagesWindowViewModelTests
                 Assert.Equal(id, change.PackageId);
                 Assert.Equal("1.0.0", change.Version);
                 Assert.Contains(chosenDigest, ((PackageCapabilityConsentViewModel)review.DataContext!).ReviewDetails);
+                Assert.Equal("Install package from marketplace", review.Title);
+                Assert.Contains(review.GetVisualDescendants().OfType<TextBlock>(), text => text.IsEffectivelyVisible && text.Text == review.Title);
                 await ManagementWindowAssert.CheckLayoutsAsync(review);
                 ManagementWindowAssert.Click(review, review.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Cancel")));
                 await model.InstallSelectedMarketplacePackageCommand.ExecutionTask!;

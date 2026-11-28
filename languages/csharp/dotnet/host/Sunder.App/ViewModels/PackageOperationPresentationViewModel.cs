@@ -33,6 +33,17 @@ public sealed partial class PackageOperationPresentationViewModel : ViewModelBas
     private string _statusText = "Search the marketplace or inspect installed packages.";
 
     [ObservableProperty]
+    private bool _showStatusError;
+
+    partial void OnStatusTextChanged(string value) => ShowStatusError = false;
+
+    internal void ReportError(string message)
+    {
+        StatusText = message;
+        ShowStatusError = true;
+    }
+
+    [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(ShowSelectedPackageOperationStatus))]
     [NotifyPropertyChangedFor(nameof(ShowCancelSelectedPackageOperation))]
     private bool _selectedPackageHasActiveOperation;
@@ -77,6 +88,7 @@ public sealed partial class PackageOperationPresentationViewModel : ViewModelBas
 
     internal void ClearWarnings()
     {
+        ShowStatusError = false;
         _warnings.Clear();
         OnPropertyChanged(nameof(HasWarnings));
     }

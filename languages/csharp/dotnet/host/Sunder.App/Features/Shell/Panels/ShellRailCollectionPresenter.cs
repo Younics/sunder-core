@@ -199,29 +199,20 @@ internal sealed class ShellRailCollectionPresenter(
             .ToArray();
     }
 
-    private ShellItemViewModel? RestoreSelection(ShellPlacementSlot slot, string? selectedId)
+    private void RestoreSelection(ShellPlacementSlot slot, string? selectedId)
     {
-        var items = slot.Bar.Items;
         var selected = string.IsNullOrWhiteSpace(selectedId)
             ? null
-            : items.FirstOrDefault(item => string.Equals(item.Id, selectedId, StringComparison.OrdinalIgnoreCase));
-
-        if (selected is null && string.IsNullOrWhiteSpace(selectedId)
-            && !shellState.HasInitializedLayout && slot.Placement == RailPlacement.Middle && items.Count > 0)
-        {
-            selected = items[0];
-            ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, selected.Id);
-        }
+            : slot.Bar.Items.FirstOrDefault(item => string.Equals(item.Id, selectedId, StringComparison.OrdinalIgnoreCase));
 
         if (selected is null)
         {
             selectionPresenter.Clear(slot.Bar, slot.Placement);
-            return null;
+            return;
         }
 
         selectionPresenter.Select(slot.Bar, slot.Placement, selected);
         ShellSelectionState.SetSelectedViewId(shellState, slot.Placement, selected.Id);
-        return selected;
     }
 
     private void PruneRetainedHostedViews(ShellPlacementSlot slot)

@@ -64,7 +64,7 @@ public sealed partial class PackagesWindowViewModel
         }
         catch (Exception ex)
         {
-            Operations.StatusText = ex.Message;
+            Operations.ReportError(ex.Message);
         }
     }
 
@@ -325,7 +325,7 @@ public sealed partial class PackagesWindowViewModel
             return true;
         }
 
-        Operations.StatusText = "Enter a valid HTTP Registry URL before using this action.";
+        Operations.ReportError("Enter a valid HTTP Registry URL before using this action.");
         return false;
     }
 

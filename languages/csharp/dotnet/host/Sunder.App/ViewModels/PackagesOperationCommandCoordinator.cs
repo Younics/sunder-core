@@ -8,7 +8,7 @@ internal sealed class PackagesOperationCommandCoordinator(
     IPackageOperationExecutor operationExecutor,
     IPackageArchivePicker packageArchivePicker,
     PackageRegistryClientProvider registryClientProvider,
-    Action<string> setStatusText,
+    PackageOperationPresentationViewModel operations,
     Action refreshPackageOperationState,
     Action markInstalledCatalogDirty)
 {
@@ -25,10 +25,10 @@ internal sealed class PackagesOperationCommandCoordinator(
 
         try
         {
-            setStatusText("Preparing installation review…");
+            operations.StatusText = "Preparing installation review…";
             if (await operationExecutor.EnqueueLocalInstallAsync(selection) is null)
             {
-                setStatusText("Installation cancelled before queueing.");
+                operations.StatusText = "Installation cancelled before queueing.";
                 return false;
             }
         }
@@ -68,18 +68,18 @@ internal sealed class PackagesOperationCommandCoordinator(
 
     public async Task UninstallPackageAsync(string packageId, string displayName)
     {
-        setStatusText($"Checking what will be removed with {displayName}…");
+        operations.StatusText = $"Checking what will be removed with {displayName}…";
         try
         {
             if (await operationExecutor.EnqueueUninstallAsync(packageId, displayName) is null)
             {
-                setStatusText("Uninstall cancelled.");
+                operations.StatusText = "Uninstall cancelled.";
                 return;
             }
         }
         catch (Exception error)
         {
-            setStatusText($"Could not queue uninstall for {displayName}: {error.Message}");
+            operations.ReportError($"Could not queue uninstall for {displayName}: {error.Message}");
             return;
         }
         MarkQueued($"Queued uninstall for {displayName}.");
@@ -89,10 +89,10 @@ internal sealed class PackagesOperationCommandCoordinator(
     {
         if (TryResolveRegistryUrl(out var registryUrl))
         {
-            setStatusText("Preparing installation review…");
+            operations.StatusText = "Preparing installation review…";
             if (await operationExecutor.EnqueueMarketplaceInstallAsync(packageId, displayName, registryUrl, selectedVersion, tag: null) is not null)
                 MarkQueued($"Queued install for {packageId} {selectedVersion}.");
-            else setStatusText("Installation cancelled before queueing.");
+            else operations.StatusText = "Installation cancelled before queueing.";
         }
 
     }
@@ -111,7 +111,7 @@ internal sealed class PackagesOperationCommandCoordinator(
         {
             if (await operationExecutor.EnqueueRegistrySourceAdoptionAsync(packageId, displayName, registryUrl) is not null)
                 MarkQueued($"Queued Registry source adoption for {packageId}.");
-            else setStatusText("Installation cancelled before queueing.");
+            else operations.StatusText = "Installation cancelled before queueing.";
         }
 
     }
@@ -119,14 +119,14 @@ internal sealed class PackagesOperationCommandCoordinator(
     public async Task UpdateAllPackagesAsync()
     {
         if (await operationExecutor.EnqueueUpdateAllAsync() is not null) MarkQueued("Queued updates for installed packages.");
-        else setStatusText("Installation cancelled before queueing.");
+        else operations.StatusText = "Installation cancelled before queueing.";
     }
 
     private async Task EnqueueMarketplaceUpdateAsync(RegistryPackageUpdate update, string displayName)
     {
         if (await operationExecutor.EnqueueMarketplaceUpdateAsync(update.PackageId, displayName, update.AvailableVersion) is not null)
             MarkQueued($"Queued update for {update.PackageId}.");
-        else setStatusText("Installation cancelled before queueing.");
+        else operations.StatusText = "Installation cancelled before queueing.";
     }
 
     private bool TryResolveRegistryUrl(out Uri registryUrl)
@@ -139,7 +139,7 @@ internal sealed class PackagesOperationCommandCoordinator(
         }
 
         registryUrl = null!;
-        setStatusText(errorMessage ?? "Enter a valid HTTP or HTTPS registry URL.");
+        operations.ReportError(errorMessage ?? "Enter a valid HTTP or HTTPS registry URL.");
         return false;
     }
 
@@ -147,6 +147,6 @@ internal sealed class PackagesOperationCommandCoordinator(
     {
         markInstalledCatalogDirty();
         refreshPackageOperationState();
-        setStatusText(statusText);
+        operations.StatusText = statusText;
     }
 }

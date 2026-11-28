@@ -31,7 +31,7 @@
     <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
   </Window.Styles>
-  <Grid x:Name="StacksRoot" RowDefinitions="52,*,Auto" Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
+  <Grid x:Name="StacksRoot" RowDefinitions="52,Auto,*,Auto" Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
     <controls:WindowTitleBar>
       <controls:WindowTitleBar.LeadingContent><TextBlock Classes="section-title" Text="Stacks" /></controls:WindowTitleBar.LeadingContent>
       <controls:WindowTitleBar.TrailingContent>
@@ -41,7 +41,11 @@
         </Button>
       </controls:WindowTitleBar.TrailingContent>
     </controls:WindowTitleBar>
-    <Grid Grid.Row="1" x:Name="StacksContentGrid">
+    <Border Grid.Row="1" Classes="review-error" Margin="16,8" IsVisible="{Binding ShowStatusError}">
+      <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" MaxLines="3"
+                 TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding StatusText}" />
+    </Border>
+    <Grid Grid.Row="2" x:Name="StacksContentGrid">
       <Grid.ColumnDefinitions>
         <ColumnDefinition Width="260" MinWidth="220" MaxWidth="900" />
         <ColumnDefinition Width="4" /><ColumnDefinition Width="*" MinWidth="360" />
@@ -236,15 +240,12 @@
         </ScrollViewer>
       </Border>
     </Grid>
-    <Border Grid.Row="2" Classes="window-footer">
-      <StackPanel Spacing="5">
-        <TextBlock Classes="status-text" Text="{Binding StatusText}" TextWrapping="Wrap" />
-        <WrapPanel ItemSpacing="8" LineSpacing="4" IsVisible="{Binding IsLocalMode}">
-          <Button Classes="secondary-action" Content="Import from disk" Click="ImportStackButton_OnClick" IsEnabled="{Binding CanImportStack}" />
-          <Button Classes="secondary-action" Content="Export" Command="{Binding ExportSelectedStackCommand}" IsEnabled="{Binding CanExportSelectedStack}" IsVisible="{Binding ShowSelectedDetails}" />
-          <Button Classes="secondary-action danger-action" Content="Remove" Command="{Binding RemoveSelectedStackCommand}" IsEnabled="{Binding CanRemoveSelectedStack}" IsVisible="{Binding ShowSelectedDetails}" />
-        </WrapPanel>
-      </StackPanel>
+    <Border Grid.Row="3" Classes="window-footer" IsVisible="{Binding IsLocalMode}">
+      <WrapPanel ItemSpacing="8" LineSpacing="4">
+        <Button Classes="secondary-action" Content="Import from disk" Click="ImportStackButton_OnClick" IsEnabled="{Binding CanImportStack}" />
+        <Button Classes="secondary-action" Content="Export" Command="{Binding ExportSelectedStackCommand}" IsEnabled="{Binding CanExportSelectedStack}" IsVisible="{Binding ShowSelectedDetails}" />
+        <Button Classes="secondary-action danger-action" Content="Remove" Command="{Binding RemoveSelectedStackCommand}" IsEnabled="{Binding CanRemoveSelectedStack}" IsVisible="{Binding ShowSelectedDetails}" />
+      </WrapPanel>
     </Border>
   </Grid>
 </Window>

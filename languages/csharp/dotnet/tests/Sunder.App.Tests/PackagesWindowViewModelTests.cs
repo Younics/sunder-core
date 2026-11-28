@@ -26,6 +26,7 @@ public sealed partial class PackagesWindowViewModelTests
 
         Assert.Equal(["agent"], executor.EnabledPackageIds);
         Assert.Equal("Queued enable for agent.", viewModel.Operations.StatusText);
+        Assert.False(viewModel.Operations.ShowStatusError);
     }
 
     [Fact]
@@ -38,6 +39,7 @@ public sealed partial class PackagesWindowViewModelTests
         await viewModel.UninstallSelectedPackageCommand.ExecuteAsync(null);
 
         Assert.Equal("Could not queue uninstall for Agent: Runtime unavailable.", viewModel.Operations.StatusText);
+        Assert.True(viewModel.Operations.ShowStatusError);
         Assert.True(viewModel.UninstallSelectedPackageCommand.CanExecute(null));
     }
 

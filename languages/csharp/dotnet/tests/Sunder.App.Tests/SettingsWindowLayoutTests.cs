@@ -108,7 +108,7 @@ public sealed class SettingsWindowLayoutTests
     }
 
     [Fact]
-    public async Task PackagePagesOmitShellHeadingAndFrameForBothGeneratedFormsAndHostedViewsButCoreRetainsThem()
+    public async Task SettingsPagesHaveNoOuterFrameAndOnlyCorePagesHaveAShellHeading()
     {
         Assert.Null(Application.Current);
         await HeadlessAppCollection.Session.Dispatch(async () =>
@@ -179,8 +179,8 @@ public sealed class SettingsWindowLayoutTests
                 Assert.True(await vm.SelectCoreSectionAsync("advanced"));
                 window.UpdateLayout();
                 Assert.True(header.IsEffectivelyVisible);
-                Assert.Contains("workspace-surface", pane.Classes);
-                Assert.Equal(new Thickness(1), pane.BorderThickness);
+                Assert.Equal(new Thickness(0), pane.BorderThickness);
+                Assert.Equal(new CornerRadius(0), pane.CornerRadius);
             }
             finally { window.CloseForShutdown(); }
             return true;
@@ -301,6 +301,30 @@ public sealed class SettingsWindowLayoutTests
                 vm.RuntimeResources.SelectedPresetOption = vm.RuntimeResources.PresetOptions.Single(option => option.Preset == RuntimeResourcePolicyPreset.Custom);
                 await Dispatcher.UIThread.InvokeAsync(window.UpdateLayout, DispatcherPriority.Render);
                 Assert.All(fields, field => Assert.False(field.IsReadOnly));
+                vm.RuntimeResources.SelectedPresetOption = vm.RuntimeResources.PresetOptions.Single(option => option.Preset == RuntimeResourcePolicyPreset.Large);
+                await TestSupport.ManagementWindowAssert.CheckLayoutsAsync(window, () =>
+                {
+                    fields[^1].BringIntoView();
+                    window.UpdateLayout();
+                    Assert.Contains(fields, field => field.Text == "8388608");
+                    foreach (var field in fields)
+                    {
+                        var text = field.GetVisualDescendants().OfType<TextPresenter>().Single();
+                        var scroll = field.GetVisualDescendants().OfType<ScrollViewer>().Single();
+                        Assert.True(text.TextLayout.Width <= scroll.Viewport.Width + 0.5,
+                            $"Limit '{field.Text}' is clipped at window width {window.Width}.");
+                    }
+                    var units = window.GetVisualDescendants().OfType<TextBlock>().Where(text => text.IsEffectivelyVisible
+                        && text.Text is "MiB" or "levels" or "nodes" or "members" or "KiB").ToArray();
+                    Assert.Equal(6, units.Length);
+                    var left = units[0].TranslatePoint(default, window)!.Value.X;
+                    Assert.All(units, unit =>
+                    {
+                        Assert.InRange(Math.Abs(unit.TranslatePoint(default, window)!.Value.X - left), 0, 0.5);
+                        Assert.Single(unit.TextLayout.TextLines);
+                        Assert.True(left + unit.TextLayout.Width <= window.Width);
+                    });
+                }, state: "advanced");
             }
             finally { window.CloseForShutdown(); }
             return true;

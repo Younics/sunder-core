@@ -113,7 +113,8 @@ internal static class ShellHotbarStateMutator
 
     private static void ClearSourceSelection(ShellState state, RailPlacement placement, string removedId, IEnumerable<string> remainingIds)
     {
-        if (!string.Equals(ShellSelectionState.GetSelectedViewId(state, placement), removedId, StringComparison.OrdinalIgnoreCase)) return;
+        var previous = ShellSelectionState.GetRememberedViewId(state, placement);
+        if (!string.Equals(previous, removedId, StringComparison.OrdinalIgnoreCase)) return;
         // This is an explicit hotbar mutation, not startup reconstruction. Keep
         // the established middle fallback without reopening intentionally empty regions.
         ShellSelectionState.SetSelectedViewId(state, placement, placement == RailPlacement.Middle ? remainingIds.FirstOrDefault() : null);

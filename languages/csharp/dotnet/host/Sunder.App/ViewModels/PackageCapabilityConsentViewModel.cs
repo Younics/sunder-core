@@ -65,7 +65,6 @@ public sealed class PackageCapabilityConsentViewModel
                 requirement.ManifestSha256,
                 string.Join(", ", requirement.Capabilities)))
             .ToArray();
-        ApprovalScopeText = "Only the reviewed packages, runtimes and permissions will be applied.";
     }
 
     public string PackageDownloadText { get; }
@@ -98,7 +97,6 @@ public sealed class PackageCapabilityConsentViewModel
 
     public bool HasCapabilityConsents => Items.Count > 0;
 
-    public string ApprovalScopeText { get; }
     public string ReviewDetails { get; }
     public IReadOnlyList<string> SensitiveAccess { get; }
     public bool HasSensitiveAccess => SensitiveAccess.Count > 0;

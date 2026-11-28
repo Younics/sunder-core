@@ -21,13 +21,13 @@ internal static class ShellPackageRemovalPruner
             return false;
         }
 
-        var removedMiddleSelection = shellState.SelectedMiddleViewId is { } middle && removedViewIds.Contains(middle);
+        var previousMiddle = ShellSelectionState.GetRememberedViewId(shellState, RailPlacement.Middle);
         foreach (var viewId in removedViewIds)
         {
             viewsById.Remove(viewId);
         }
         ShellStateNormalizer.RemoveViews(shellState, removedViewIds);
-        if (removedMiddleSelection)
+        if (previousMiddle is not null && removedViewIds.Contains(previousMiddle))
         {
             ShellStateNormalizer.SelectMiddleFallback(shellState, viewsById.Values);
         }

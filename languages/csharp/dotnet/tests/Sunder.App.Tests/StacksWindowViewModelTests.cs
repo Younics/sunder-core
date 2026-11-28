@@ -898,8 +898,15 @@ public sealed partial class StacksWindowViewModelTests
         viewModel.ShowLocalCommand.Execute(null);
         await viewModel.InitializeAsync();
 
+        var registryUrl = viewModel.Registry.RegistryUrlText;
+        viewModel.Registry.RegistryUrlText = "invalid";
+        await viewModel.PublishSelectedStackCommand.ExecuteAsync(null);
+        Assert.True(viewModel.ShowStatusError);
+        Assert.Null(runtimeClient.LastPublishRequest);
+        viewModel.Registry.RegistryUrlText = registryUrl;
         await viewModel.PublishSelectedStackCommand.ExecuteAsync(null);
 
+        Assert.False(viewModel.ShowStatusError);
         Assert.Equal("stack-upload", runtimeClient.LastPublishRequest?.UploadId);
         var published = Assert.Single(viewModel.Local.Stacks);
         Assert.True(published.IsPublished);

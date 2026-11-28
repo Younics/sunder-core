@@ -129,9 +129,11 @@ split to 1–99%, consistently for input, rendering and loading.
 Startup and committed package changes reconcile saved views against the completed
 App registration catalog. Removed views lose their placement, order, ownership,
 hidden-hotbar entries and selections. Their side/bottom regions close, retaining
-preferred dimensions. If the selected middle view was removed, the first eligible
-remaining middle view in saved bar order opens; otherwise the default welcome panel
-is shown. An intentionally empty initialized middle region is not auto-selected.
+preferred dimensions. If there is no saved middle selection, or the selected view
+was removed, the first eligible view in middle-bar order opens. This also happens
+when the first package with a middle view is installed in an empty workspace.
+Welcome remains visible if there is no eligible view or the user explicitly closed
+the last open middle view and it is still in the bar.
 
 Core Shell mode and explicitly failed App packages do not establish view removal:
 their selections and preferences are preserved with availability placeholders.

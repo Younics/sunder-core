@@ -71,8 +71,8 @@
       <Button Classes="primary-action" Content="Adopt source &amp; update" Command="{Binding AdoptSelectedInstalledPackageSourceCommand}" IsVisible="{Binding ShowAdoptSelectedInstalledPackageSource}" />
       <Button Classes="secondary-action" Content="Enable" Command="{Binding EnableSelectedPackageCommand}" IsVisible="{Binding ShowEnableSelectedPackage}" />
       <Button Classes="secondary-action" Content="Disable" Command="{Binding DisableSelectedPackageCommand}" IsVisible="{Binding ShowDisableSelectedPackage}" />
-      <Button Classes="secondary-action danger-action" Content="Uninstall…" Command="{Binding UninstallSelectedPackageCommand}" IsVisible="{Binding ShowUninstallSelectedPackage}" />
-      <Button Classes="secondary-action danger-action" Content="Uninstall…" Command="{Binding UninstallSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceUninstallButton}" />
+      <Button Classes="secondary-action danger-action" Content="Uninstall" Command="{Binding UninstallSelectedPackageCommand}" IsVisible="{Binding ShowUninstallSelectedPackage}" />
+      <Button Classes="secondary-action danger-action" Content="Uninstall" Command="{Binding UninstallSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceUninstallButton}" />
       <TextBlock Classes="caption" Text="{Binding Operations.SelectedPackageOperationStatusText}" VerticalAlignment="Center" IsVisible="{Binding Operations.ShowSelectedPackageOperationStatus}" />
       <Button Classes="secondary-action" Content="Cancel" Command="{Binding CancelSelectedPackageOperationCommand}" IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
     </WrapPanel>
