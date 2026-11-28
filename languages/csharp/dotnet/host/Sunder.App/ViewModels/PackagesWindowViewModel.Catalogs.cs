@@ -119,7 +119,7 @@ public sealed partial class PackagesWindowViewModel
         => SearchAndSelectMarketplaceAsync(null, false, cancellationToken);
 
     private async Task<RegistryPackageSearchItemViewModel?> SearchAndSelectMarketplaceAsync(
-        string? preferredPackageId, bool exactMatchOnly, CancellationToken cancellationToken)
+        string? preferredPackageId, bool exactMatchOnly, CancellationToken cancellationToken, string? requestedVersion = null)
     {
         if (_disposed)
         {
@@ -161,7 +161,7 @@ public sealed partial class PackagesWindowViewModel
             var selected = _marketplace.ResolvePackageSelection(preferredPackageId ?? previous);
             if (exactMatchOnly)
             {
-                if (!string.Equals(selected?.PackageId, preferredPackageId, StringComparison.OrdinalIgnoreCase)) selected = null;
+                if (!string.Equals(selected?.PackageId, preferredPackageId, StringComparison.Ordinal)) selected = null;
                 _marketplace.KeepOnlyPackage(selected);
             }
             RefreshPackageOperationState();
@@ -176,7 +176,7 @@ public sealed partial class PackagesWindowViewModel
                 return null;
             }
 
-            await SelectMarketplacePackageAsync(selected, cancellationToken);
+            await SelectMarketplacePackageAsync(selected, cancellationToken, requestedVersion);
             if (!IsMarketplaceMode || searchVersion != _marketplaceSearchVersion || !ReferenceEquals(Marketplace.SelectedPackage, selected)
                 || HasMarketplacePackageDetailsError) return null;
             Operations.StatusText = Marketplace.Packages.Count == 1 ? "1 package found." : $"{Marketplace.Packages.Count} packages found.";
@@ -296,11 +296,12 @@ public sealed partial class PackagesWindowViewModel
         NotifyCommandStateChanged();
     }
 
-    private async Task SelectMarketplacePackageAsync(RegistryPackageSearchItemViewModel item, CancellationToken cancellationToken = default)
+    private async Task SelectMarketplacePackageAsync(RegistryPackageSearchItemViewModel item, CancellationToken cancellationToken = default,
+        string? requestedVersion = null)
     {
         if (!IsMarketplaceMode || !Marketplace.Packages.Contains(item)) return;
         var samePackage = Marketplace.SelectedPackage?.PackageId == item.PackageId;
-        var selectedVersion = samePackage ? Marketplace.SelectedVersion?.Version : null;
+        var selectedVersion = requestedVersion ?? (samePackage ? Marketplace.SelectedVersion?.Version : null);
         if (!samePackage) MarketplaceTabIndex = 0;
         item.EnsureIconLoaded();
         _informationSource = null;

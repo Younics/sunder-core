@@ -199,7 +199,7 @@ internal sealed class AppSingleInstanceCoordinator : IDisposable
         }
     }
 
-    private void DispatchLaunchRequest(AppLaunchRequest request)
+    internal void DispatchLaunchRequest(AppLaunchRequest request)
     {
         Func<AppLaunchRequest, CancellationToken, Task>? handler;
         lock (_gate)

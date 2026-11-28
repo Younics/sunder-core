@@ -140,6 +140,12 @@ public sealed class RegistryPackageInstallService : IDisposable
             throw new InvalidOperationException(plan.Errors.FirstOrDefault() ?? plan.Conflicts.FirstOrDefault()?.Message ?? "The package plan is not available.");
         if (!RuntimeManagementUi.IsFingerprint(plan.ResolutionFingerprint))
             throw new InvalidOperationException("The package preview has no valid resolution fingerprint. Refresh and review again.");
+        foreach (var requested in request.Packages.Where(package => package.Version is not null))
+        {
+            var roots = plan.Items.Where(item => item.PackageId == requested.PackageId).ToArray();
+            if (roots is not [var root] || root.Version != requested.Version)
+                throw new InvalidOperationException($"The plan does not select {requested.PackageId} {requested.Version} from {request.RegistryOrigin}. Review the installation again.");
+        }
         var runtimes = plan.RuntimePrerequisites ?? await client.PreviewPackageRuntimePrerequisitesAsync(new(Registry: request), token).ConfigureAwait(false);
         return new(plan, runtimes, [new(request.RegistryOrigin, request.IncludePrerelease, plan.ResolutionFingerprint)]);
     }
@@ -163,7 +169,7 @@ public sealed class RegistryPackageInstallService : IDisposable
         try
         {
             var prepared = await preparation.ConfigureAwait(false);
-            if (prepared is null) return RegistryPackageInstallExecutionResult.Failed("Installation cancelled before queueing.");
+            if (prepared is null) return RegistryPackageInstallExecutionResult.Failed("Installation cancelled before queueing.", errors: []);
             RegistryPackageInstallExecutionResult? result = null;
             reports?.Report(new("Queueing the approved runtime and package installation…", null));
             var installation = EnqueuePrepared(prepared, title, new(packageId, kind, title), token, () => ValueTask.CompletedTask,

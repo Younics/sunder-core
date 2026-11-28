@@ -64,6 +64,26 @@ public partial class StacksWindow : Window
 
     internal void ShowDetails() => _layout.OpenDetails();
 
+    internal async Task UseLinkedStackAsync(AppLaunchRequest request, CancellationToken cancellationToken)
+    {
+        if (ViewModel is not { } owner) return;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetime.Token);
+        var directory = Directory.CreateTempSubdirectory("Sunder.StackReview-");
+        UseStackWizardViewModel? wizard = null;
+        try
+        {
+            await _wizardDialogs.RunAsync(SuppressWizardOwnerInput, DeferWizardDialogLaunchAsync, CanShowWizardDialog,
+                () => ShowUseStackWizardAsync(owner, wizard!),
+                async token => (wizard = await owner.PrepareLinkedStackUseAsync(request, directory.FullName, token)) is not null,
+                lifetime.Token);
+        }
+        finally
+        {
+            if (wizard is not null) await wizard.DisposeAsync();
+            directory.Delete(recursive: true);
+        }
+    }
+
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
@@ -170,6 +190,11 @@ public partial class StacksWindow : Window
             return null;
         }
 
+        return await ShowUseStackWizardAsync(ownerViewModel, wizardViewModel);
+    }
+
+    private async Task<Func<Task>?> ShowUseStackWizardAsync(StacksWindowViewModel ownerViewModel, UseStackWizardViewModel wizardViewModel)
+    {
         var wizardWindow = RequireWizardFactory().Create(wizardViewModel);
         var result = await wizardWindow.ShowDialog<bool?>(this);
         return result == true ? ownerViewModel.RefreshAfterUsedStackAsync : null;

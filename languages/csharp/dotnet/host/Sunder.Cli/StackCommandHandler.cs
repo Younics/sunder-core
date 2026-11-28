@@ -42,7 +42,8 @@ internal sealed class StackCommandHandler(
     {
         var stack = await FindAsync(command.StackId, token).ConfigureAwait(false);
         if (stack is null) return CliExitCodes.NotFound;
-        var link = BuildShowLink(stack.StackId);
+        var hub = options.RequireRegistryApiUrl().AbsoluteUri;
+        var link = $"sunder://stacks/{Uri.EscapeDataString(stack.StackId)}?registry={Uri.EscapeDataString(hub)}";
         var opened = browser.TryOpen(new Uri(link));
         output.Data(new { stack = CliJsonData.StackDetails(stack), url = link, opened });
         CliRenderers.StackDetails(output, stack);
@@ -122,6 +123,8 @@ internal sealed class StackCommandHandler(
     private async Task<Sunder.Registry.Contracts.RegistryStackDetails?> FindAsync(string stackId, CancellationToken token)
     {
         var stack = await RequireRegistry().GetStackAsync(stackId, token).ConfigureAwait(false);
+        if (stack is not null && stack.StackId != stackId)
+            throw new InvalidDataException($"The Registry did not return the requested Stack '{stackId}'.");
         if (stack is null) output.Error($"Stack '{stackId}' was not found.", "cli.resource.not_found");
         return stack;
     }
@@ -136,8 +139,6 @@ internal sealed class StackCommandHandler(
             throw new CliUsageException("Option '--output' must name the exact destination file, not a directory.");
         return path;
     }
-
-    private static string BuildShowLink(string stackId) => $"sunder://stacks/{Uri.EscapeDataString(stackId)}";
 
     private ICliRuntimePublishClient RequirePublisher()
         => runtimePublisher ?? throw new InvalidOperationException("Registry Stack publication requires a Runtime client.");

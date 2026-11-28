@@ -406,11 +406,25 @@ public partial class App : Application
 
     private void OnMacOsActivated(object? sender, ActivatedEventArgs e)
     {
-        if (
-            e.Kind == ActivationKind.Reopen
-            && _session is { } session
-            && Volatile.Read(ref _desktopShutdownTask) is null
-        )
+        if (Volatile.Read(ref _desktopShutdownTask) is not null)
+        {
+            return;
+        }
+        if (e is ProtocolActivatedEventArgs { Kind: ActivationKind.OpenUri, Uri.Scheme: "sunder" } link)
+        {
+            var request = AppLaunchRequestParser.Parse(link.Uri.OriginalString);
+            // Launch Services delivers URLs as events, even on a cold launch. The primary
+            // instance retains the request until its shell has finished starting.
+            if (Program.SingleInstanceCoordinator is { } coordinator)
+            {
+                coordinator.DispatchLaunchRequest(request);
+            }
+            else if (_session is { } active)
+            {
+                _tasks.Run(token => active.WindowLauncher.HandleLaunchRequestAsync(request, token), "opening Sunder link");
+            }
+        }
+        else if (e.Kind == ActivationKind.Reopen && _session is { } session)
         {
             session.WindowLauncher.ActivateMainWindow();
         }

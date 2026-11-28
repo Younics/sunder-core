@@ -2555,10 +2555,7 @@ public sealed partial class PackageViewHostServiceTests
             backgroundTaskQueue: backgroundTasks,
             downloadPackageUiSnapshotAsync: RuntimeContractTestData.DownloadSnapshotAsync,
             uiDispatcher: TestUiDispatcher);
-        var candidateReady = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        var releaseCandidate = new TaskCompletionSource(
-            TaskCreationOptions.RunContinuationsAsynchronously);
+        var preparation = new ObservableGate();
         var preparationCount = 0;
 
         try
@@ -2584,6 +2581,7 @@ public sealed partial class PackageViewHostServiceTests
                 [],
                 [],
                 []);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
             var apply = hostService.ApplyPackageGenerationAsync(
                 snapshot,
                 sources,
@@ -2592,19 +2590,20 @@ public sealed partial class PackageViewHostServiceTests
                 {
                     if (Interlocked.Increment(ref preparationCount) == 1)
                     {
-                        candidateReady.TrySetResult();
-                        await releaseCandidate.Task.WaitAsync(cancellationToken);
+                        await preparation.EnterAndWaitAsync(cancellationToken);
                     }
                     return null;
                 },
-                CancellationToken.None);
-            await candidateReady.Task.WaitAsync(TimeSpan.FromSeconds(2));
+                deadline.Token);
+            var first = await Task.WhenAny(preparation.Entered, apply).WaitAsync(deadline.Token);
+            await first;
+            Assert.Same(preparation.Entered, first);
 
             var attributed = Assert.Throws<FormatException>(
                 PackageStackFrame.ThrowFrameworkException);
             Assert.True(hostService.TryHandleUnhandledException(attributed));
-            releaseCandidate.TrySetResult();
-            var enabledPackages = await apply.WaitAsync(TimeSpan.FromSeconds(5));
+            preparation.Release();
+            var enabledPackages = await apply.WaitAsync(deadline.Token);
             await WaitForFileAsync(toolsEffectPath);
 
             Assert.Equal(2, preparationCount);
@@ -2628,7 +2627,7 @@ public sealed partial class PackageViewHostServiceTests
         }
         finally
         {
-            releaseCandidate.TrySetResult();
+            preparation.Release();
             await hostService.DisposeAsync();
             await backgroundTasks.DisposeAsync();
             TryDeleteDirectoryBestEffort(rootPath);

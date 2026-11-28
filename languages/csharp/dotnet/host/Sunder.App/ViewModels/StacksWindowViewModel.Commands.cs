@@ -559,30 +559,7 @@ public sealed partial class StacksWindowViewModel
         {
             Directory.CreateDirectory(tempDirectory);
             StatusText = $"Downloading Registry Stack '{stackId}'...";
-            using var registryClient = Registry.CreateClient(registryUrl);
-            var stack = await registryClient.GetStackAsync(stackId, cancellationToken);
-            if (stack is null)
-            {
-                SetStatus($"Registry Stack '{stackId}' was not found.", isError: true);
-                return null;
-            }
-
-            if (stack.Compatibility is { } compatibility)
-            {
-                var errors = SunderStackMetadataReader.GetCompatibilityErrors(new SunderStackManifest
-                {
-                    SchemaVersion = compatibility.SchemaVersion,
-                    MinReaderVersion = compatibility.MinReaderVersion,
-                    RequiredFeatures = compatibility.RequiredFeatures,
-                });
-                if (errors.Count > 0)
-                {
-                    SetStatus(string.Join(" ", errors), isError: true);
-                    return null;
-                }
-            }
-
-            await registryClient.DownloadStackAsync(stack.Artifact, stack.StackId, tempPath, cancellationToken);
+            await DownloadRegistryStackAsync(stackId, registryUrl, tempPath, cancellationToken);
             var item = await Local.ImportAsync(tempPath, cancellationToken);
             StatusText = launchKind == AppLaunchRequestKind.StackUse
                 ? $"Downloaded '{item.Name}' from the Registry. Review it before use."
@@ -606,5 +583,46 @@ public sealed partial class StacksWindowViewModel
             }
             TryDeleteDirectory(tempDirectory);
         }
+    }
+
+    internal async Task<UseStackWizardViewModel?> PrepareLinkedStackUseAsync(AppLaunchRequest request, string reviewDirectory,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed || request.Kind != AppLaunchRequestKind.StackUse || request.StackId is null || request.RegistryUrl is null)
+            return null;
+        try
+        {
+            var path = Path.Combine(reviewDirectory, "review.sunderstack");
+            await DownloadRegistryStackAsync(request.StackId, request.RegistryUrl, path, cancellationToken);
+            // The link opens a review. Keep its archive and images separate from any local stack with the same ID.
+            var staging = new LocalStackLibraryService(reviewDirectory);
+            var item = await staging.ImportAsync(path, cancellationToken);
+            return CreateUseStackWizard(item, request.RegistryUrl.AbsoluteUri);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            SetStatus(ex.Message, isError: true);
+            return null;
+        }
+    }
+
+    private async Task DownloadRegistryStackAsync(string stackId, Uri origin, string path, CancellationToken token)
+    {
+        using var client = Registry.CreateClient(origin);
+        var stack = await client.GetStackAsync(stackId, token);
+        if (stack?.StackId != stackId) throw new InvalidDataException($"Registry Stack '{stackId}' was not found at {origin}.");
+        if (stack.Compatibility is { } compatibility)
+        {
+            var errors = SunderStackMetadataReader.GetCompatibilityErrors(new SunderStackManifest
+            {
+                SchemaVersion = compatibility.SchemaVersion,
+                MinReaderVersion = compatibility.MinReaderVersion,
+                RequiredFeatures = compatibility.RequiredFeatures,
+            });
+            if (errors.Count > 0) throw new InvalidDataException(string.Join(" ", errors));
+        }
+        await client.DownloadStackAsync(stack.Artifact, stackId, path, token);
+        if ((await _library.ReadManifestAsync(path, token)).StackId != stackId)
+            throw new InvalidDataException($"The downloaded archive does not identify Stack '{stackId}'.");
     }
 }

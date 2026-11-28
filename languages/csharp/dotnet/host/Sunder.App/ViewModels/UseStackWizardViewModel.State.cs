@@ -46,6 +46,8 @@ public sealed partial class UseStackWizardViewModel(
     public string StackTitle { get; } = stack.Name;
 
     public string StackSubtitle { get; } = stack.StackId;
+    public string PackageSource => registryUrlText;
+    public string PrimaryActionText => HasInstallPlanItems ? "Review package changes" : "Use Stack";
 
     public string StackSummary { get; } = stack.Summary?.Trim() ?? string.Empty;
 

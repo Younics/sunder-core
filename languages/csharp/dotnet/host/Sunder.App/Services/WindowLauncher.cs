@@ -196,7 +196,10 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
                 if (_stacksWindow.DataContext is StacksWindowViewModel viewModel)
                 {
                     _stacksWindow.ShowDetails();
-                    await viewModel.ApplyLaunchRequestAsync(request, cancellationToken);
+                    if (request.Kind == AppLaunchRequestKind.StackUse)
+                        await _stacksWindow.UseLinkedStackAsync(request, cancellationToken);
+                    else
+                        await viewModel.ApplyLaunchRequestAsync(request, cancellationToken);
                 }
 
                 return true;
@@ -379,9 +382,9 @@ public sealed class WindowLauncher : IWindowLauncher, IDisposable
         => _uiDispatcher.InvokeAsync(async () =>
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var owner = (Window?)_packagesWindow
-                        ?? _stacksWindow
-                        ?? (Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime)?.MainWindow;
+            var desktop = Application.Current?.ApplicationLifetime as IClassicDesktopStyleApplicationLifetime;
+            // A missing-package review belongs to the open stack wizard.
+            var owner = desktop?.Windows.FirstOrDefault(window => window.IsActive) ?? desktop?.MainWindow;
             if (owner is null)
             {
                 return false;

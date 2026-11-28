@@ -289,6 +289,37 @@ public sealed partial class StacksWindowViewModelTests
         Assert.Collection(registryClient.StackSearchQueries, query => Assert.Equal("team-stack", query));
     }
 
+    [Theory]
+    [InlineData("team-stack", "team-stack", true)]
+    [InlineData("other-stack", "team-stack", false)]
+    [InlineData("team-stack", "other-stack", false)]
+    public async Task UseLink_OpensOnlyTheRequestedArchiveWithoutReplacingTheLocalStack(string returnedId, string archiveId, bool accepted)
+    {
+        var root = CreateTempDirectory();
+        var library = new LocalStackLibraryService(Path.Combine(root, "library"));
+        await library.ImportAsync(await CreateStackArchiveAsync(root, "team-stack", "Local copy"));
+        var client = new FakeRegistryApiClient
+        {
+            StackDetails = CreateRegistryStackDetails(returnedId, "Linked stack"),
+            StackDownloadSourcePath = await CreateStackArchiveAsync(CreateTempDirectory(), archiveId, "Linked stack"),
+        };
+        using var model = CreateViewModel(root, client, library);
+        var request = AppLaunchRequestParser.Parse("sunder://stacks/team-stack/use?registry=https://registry.example/");
+        await using var wizard = await model.PrepareLinkedStackUseAsync(request, CreateTempDirectory(), CancellationToken.None);
+        if (accepted)
+        {
+            Assert.NotNull(wizard);
+            Assert.Equal("Linked stack", wizard.StackTitle);
+            Assert.Equal("https://registry.example/", wizard.PackageSource);
+        }
+        else
+        {
+            Assert.Null(wizard);
+        }
+        Assert.Equal("Local copy", Assert.Single(await library.ListAsync()).Name);
+        Assert.Equal(returnedId == "team-stack" ? returnedId : null, client.LastDownloadedStackId);
+    }
+
     [Fact]
     public async Task ImportSelectedRegistryStackCommand_DownloadsAndImportsLocalStack()
     {
@@ -1415,7 +1446,7 @@ public sealed partial class StacksWindowViewModelTests
             [new RegistryPackageInstallPlanItem(
                 "younics.ai.agent",
                 CurrentVersion: null,
-                Version: "1.2.0",
+                Version: "2.3.1",
                 PackageContentIdentity: "package-content-identity",
                 ActionKind: RegistryPackageActionKinds.PackageInstall,
                 DeprecatedMessage: null,
@@ -1428,7 +1459,7 @@ public sealed partial class StacksWindowViewModelTests
                         null,
                         "sha256",
                         1024,
-                        "https://registry.example/packages/younics.ai.agent/1.2.0/download",
+                        "https://registry.example/packages/younics.ai.agent/2.3.1/download",
                         "source-sha256",
                         "manifest-sha256",
                         "content-identity",
@@ -1444,7 +1475,7 @@ public sealed partial class StacksWindowViewModelTests
             [new RuntimeRegistryPackageInstallPlanItem(
                 "younics.ai.agent",
                 CurrentVersion: null,
-                Version: "1.2.0",
+                Version: "2.3.1",
                 PackageContentIdentity: "package-content-identity",
                 ActionKind: RegistryPackageActionKinds.PackageInstall,
                 DeprecatedMessage: null,
@@ -1457,7 +1488,7 @@ public sealed partial class StacksWindowViewModelTests
                         null,
                         "sha256",
                         1024,
-                        "https://registry.example/packages/younics.ai.agent/1.2.0/download",
+                        "https://registry.example/packages/younics.ai.agent/2.3.1/download",
                         "source-sha256",
                         "manifest-sha256",
                         "content-identity",
@@ -1497,11 +1528,18 @@ public sealed partial class StacksWindowViewModelTests
                 ImpactedPackageIds = ["younics.ai.agent"],
             },
         };
-        var viewModel = new UseStackWizardViewModel(
+        var approvePackages = false;
+        var reviews = new List<RegistryPackageChangePreflight>();
+        using var installService = new RegistryPackageInstallService((review, _) =>
+        {
+            reviews.Add(review);
+            return Task.FromResult(approvePackages);
+        });
+        await using var viewModel = new UseStackWizardViewModel(
             library,
             stack,
             runtimeApiClient,
-            new RegistryPackageInstallService((_, _) => Task.FromResult(true)),
+            installService,
             (stamp, _) =>
             {
                 runtimeApiClient.Events.Add("presentation:" + stamp.SessionGeneration);
@@ -1513,7 +1551,7 @@ public sealed partial class StacksWindowViewModelTests
         await viewModel.InitializeAsync();
 
         var packageRow = Assert.Single(viewModel.PackageRows);
-        Assert.Equal("Will install 1.2.0", packageRow.StatusText);
+        Assert.Equal("Will install 2.3.1", packageRow.StatusText);
         Assert.False(viewModel.CanApply);
         var resolveRequirement = Assert.Single(runtimeApiClient.LastRegistryPlanRequest!.Packages);
         Assert.Equal("preview", resolveRequirement.Tag);
@@ -1522,10 +1560,28 @@ public sealed partial class StacksWindowViewModelTests
 
         Assert.Single(viewModel.RequiredInputs).Value = "fresh-install-value";
         Assert.True(viewModel.CanApply);
+        Assert.Equal("Review package changes", viewModel.PrimaryActionText);
+        await viewModel.ApplyCommand.ExecuteAsync(null);
+        Assert.Null(runtimeApiClient.LastRegistryApplyRequest);
+        Assert.Null(runtimeApiClient.LastImportRequest);
+        Assert.Equal("fresh-install-value", Assert.Single(viewModel.RequiredInputs).Value);
+        Assert.True(viewModel.CanApply);
+        Assert.Empty(viewModel.InstallPlanErrors);
+
+        approvePackages = true;
         await viewModel.ApplyCommand.ExecuteAsync(null);
 
         Assert.Null(runtimeApiClient.LastImportRequest);
         Assert.Contains("Review the refreshed", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.Equal("Use Stack", viewModel.PrimaryActionText);
+        Assert.Equal(2, reviews.Count);
+        Assert.All(reviews, review =>
+        {
+            Assert.Equal(viewModel.PackageSource, Assert.Single(review.ExpectedPlans).RegistryOrigin);
+            var change = Assert.Single(review.Plan.Items);
+            Assert.Equal("younics.ai.agent", change.PackageId);
+            Assert.Equal("2.3.1", change.Version);
+        });
         Assert.Equal("fresh-install-value", runtimeApiClient.LastPreviewRequest!.InputValues["input-key"]);
         await viewModel.ApplyCommand.ExecuteAsync(null);
         Assert.Equal(["install", "presentation:1", "preview", "preview", "preview", "import"], runtimeApiClient.Events);

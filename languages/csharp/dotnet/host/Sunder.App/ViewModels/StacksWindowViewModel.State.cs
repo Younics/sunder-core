@@ -463,14 +463,10 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     public UseStackWizardViewModel? CreateUseStackWizardViewModel()
         => Local.SelectedStack is null
             ? null
-            : new UseStackWizardViewModel(
-                _library,
-                Local.SelectedStack.Item,
-                _runtimeApiClient,
-                _registryInstallService,
-                _waitUntilPresentationAppliedAsync,
-                Registry.CreateClient,
-                Registry.RegistryUrlText);
+            : CreateUseStackWizard(Local.SelectedStack.Item, Registry.RegistryUrlText);
+
+    private UseStackWizardViewModel CreateUseStackWizard(LocalStackLibraryItem item, string origin)
+        => new(_library, item, _runtimeApiClient, _registryInstallService, _waitUntilPresentationAppliedAsync, Registry.CreateClient, origin);
 
     public async Task RefreshAfterCreatedStackAsync(string? stackId)
     {
@@ -588,7 +584,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
                 await ImportStackFromPathAsync(request.FilePath, cancellationToken);
                 break;
             case AppLaunchRequestKind.StackDetails:
-            case AppLaunchRequestKind.StackUse:
                 await ShowLinkedRegistryStackAsync(request, cancellationToken);
                 break;
         }

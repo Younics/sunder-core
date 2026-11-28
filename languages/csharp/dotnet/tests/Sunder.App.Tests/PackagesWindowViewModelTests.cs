@@ -717,6 +717,28 @@ public sealed partial class PackagesWindowViewModelTests
     }
 
     [Fact]
+    public async Task InstallLink_ReviewsExactHistoricalVersionAndHub_AndRejectsMissingVersion()
+    {
+        const string package = "example.package";
+        var origin = new Uri("https://registry.example/");
+        var executor = new FakePackageOperationExecutor();
+        var registry = new FakeRegistryApiClient
+        {
+            SearchResults = _ => [CreateRegistryPackage(package)],
+            VersionDetails = (id, version, _) => Task.FromResult<RegistryPackageVersionDetails?>(
+                version == "0.9.0" ? CreateRegistryPackageVersionDetails(id, version) : null),
+        };
+        using var view = CreateViewModel(new FakeRuntimeApiClient([]), _ => registry, operationExecutor: executor);
+        var request = new AppLaunchRequest(AppLaunchRequestKind.PackageInstall, PackageId: package, RegistryUrl: origin, PackageVersion: "0.8.0");
+        await view.ApplyLaunchRequestAsync(request);
+        Assert.Null(executor.MarketplaceInstallPackageId);
+        await view.ApplyLaunchRequestAsync(request with { PackageVersion = "0.9.0" });
+        Assert.Equal(package, executor.MarketplaceInstallPackageId);
+        Assert.Equal("0.9.0", executor.MarketplaceInstallVersion);
+        Assert.Equal(origin, executor.InstallOrigin);
+    }
+
+    [Fact]
     public async Task SearchText_WhenChangedBeforeThrottleElapsed_SearchesOnlyLatestText()
     {
         var registryClient = new FakeRegistryApiClient
@@ -1655,6 +1677,7 @@ public sealed partial class PackagesWindowViewModelTests
         public string? MarketplaceInstallPackageId { get; private set; }
 
         public string? MarketplaceInstallVersion { get; private set; }
+        public Uri? InstallOrigin { get; private set; }
 
         public string? AdoptedPackageId { get; private set; }
 
@@ -1677,6 +1700,7 @@ public sealed partial class PackagesWindowViewModelTests
         {
             MarketplaceInstallPackageId = packageId;
             MarketplaceInstallVersion = version;
+            InstallOrigin = registryUrl;
             return Task.FromResult<BackgroundTaskSnapshot?>(CreateSnapshot(packageId, PackageOperationKind.InstallMarketplace, displayName));
         }
 
