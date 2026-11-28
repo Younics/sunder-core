@@ -3,6 +3,7 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:controls="using:Sunder.App.Views.Controls"
+             xmlns:vm="using:Sunder.App.ViewModels"
              x:Class="Sunder.App.Views.Controls.PackageDragOverlay"
              IsHitTestVisible="False"
              ClipToBounds="False"
@@ -13,6 +14,12 @@
             Classes="package-bar-button-surface drag-ghost-surface"
             IsVisible="False">
       <controls:PackageIconView x:Name="PackageDragGhostIcon"
+                                x:DataType="vm:ShellItemViewModel"
+                                DataContext="{x:Null}"
+                                IconImage="{Binding IconImage}"
+                                HasIconImage="{Binding HasIconImage}"
+                                Glyph="{Binding Glyph}"
+                                ShowBareGlyphFallback="{Binding ShowGlyphFallback}"
                                 ImageMargin="5" />
     </Border>
   </Canvas>

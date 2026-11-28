@@ -30,6 +30,7 @@ public partial class ShellItemViewModel : PackageIconItemViewModel
         Placement = placement;
         _onSelect = onSelect;
         IsDragPreview = isDragPreview;
+        IconOwner = this;
     }
 
     public string Id { get; }
@@ -45,6 +46,8 @@ public partial class ShellItemViewModel : PackageIconItemViewModel
     public Models.RailPlacement Placement { get; }
 
     public bool IsDragPreview { get; }
+
+    public ShellItemViewModel IconOwner { get; internal init; }
 
     public bool IsHorizontalBar => Placement == Models.RailPlacement.Middle;
 
