@@ -23,8 +23,13 @@
         Classes="shell-window">
   <Border ClipToBounds="True">
     <Grid>
-      <ExperimentalAcrylicBorder Material="{DynamicResource Sunder.Shell.AcrylicMaterial}"
-                                  IsHitTestVisible="False" />
+      <ExperimentalAcrylicBorder IsHitTestVisible="False">
+        <ExperimentalAcrylicBorder.Material>
+          <ExperimentalAcrylicMaterial TintColor="{DynamicResource Sunder.Color.Surface.Workspace}"
+                                       TintOpacity="0.44" MaterialOpacity="0.48"
+                                       PlatformTransparencyCompensationLevel="0.18" />
+        </ExperimentalAcrylicBorder.Material>
+      </ExperimentalAcrylicBorder>
       <Border IsHitTestVisible="False"
               Classes="shell-glass-tint" />
 

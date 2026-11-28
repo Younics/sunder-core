@@ -59,6 +59,7 @@ public sealed class SettingsWindowLayoutTests
                 var selector = window.FindControl<ListBox>("ThemeSelector")!;
                 var tint = main.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("shell-glass-tint"));
                 var acrylic = main.GetVisualDescendants().OfType<ExperimentalAcrylicBorder>().Single();
+                var material = Assert.IsType<ExperimentalAcrylicMaterial>(acrylic.Material);
                 var darkTint = Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color;
                 Assert.True(selector.IsEffectivelyVisible);
                 selector.SelectedItem = SunderThemeDefinition.GraphiteLight;
@@ -101,6 +102,9 @@ public sealed class SettingsWindowLayoutTests
                 Assert.True(await vm.SelectCoreSectionAsync("notifications"));
                 Assert.Equal(ThemeVariant.Light, main.ActualThemeVariant);
                 Assert.False(vm.Notifications.ShowToasts);
+                // ShellSession detaches the content before closing the native window.
+                main.Content = null;
+                Assert.Same(material, acrylic.Material);
             }
             finally { window.CloseForShutdown(); main.CloseForShutdown(); }
             return true;

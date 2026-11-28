@@ -88,13 +88,6 @@ public sealed class ThemeManager(Application application, ShellState? shellState
 
     private void SetShellGlassResources(SunderThemeDefinition theme)
     {
-        _application.Resources["Sunder.Shell.AcrylicMaterial"] = new ExperimentalAcrylicMaterial
-        {
-            TintColor = theme.SurfaceWorkspace,
-            TintOpacity = 0.44,
-            MaterialOpacity = 0.48,
-            PlatformTransparencyCompensationLevel = 0.18,
-        };
         SetBrush("Sunder.Brush.Shell.Glass.Tint", WithAlpha(theme.BackgroundApp, 0xB8));
         SetBrush("Sunder.Brush.Shell.Glass.Tint.Inactive", WithAlpha(theme.BackgroundApp, 0xD0));
         SetBrush("Sunder.Brush.Shell.Glass.Surface", WithAlpha(theme.SurfaceBase, 0x78));
