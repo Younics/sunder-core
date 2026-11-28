@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Sunder.App.Services;
 using Sunder.App.Tests.TestSupport;
@@ -18,8 +17,7 @@ public sealed partial class PackagesWindowViewModelTests
     [Fact]
     public async Task BoundTechnicalTabKeepsTheReviewedReleaseAcrossRefreshAndCancelledInstall()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             const string id = "younics.ai.agent";
             const string description = "An agent for local projects.";

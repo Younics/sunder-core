@@ -19,8 +19,7 @@ public sealed partial class MainWindowViewModelShellViewTests
     [Fact]
     public async Task FiveRegions_RestoreViewsAndActualGeometryAfterFreshViewModelAndStateLoad()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             var root = CreateTempDirectory();
             var views = FiveRegionViews();
@@ -123,8 +122,7 @@ public sealed partial class MainWindowViewModelShellViewTests
     [InlineData("bottom")]
     public async Task EverySplitter_UsesStablePointerMovementAndReversesImmediatelyAtClamp(string region)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             var views = FiveRegionViews();
             using var harness = CreateRestorationHarness(CreateTempDirectory(), FiveRegionState(views), views);

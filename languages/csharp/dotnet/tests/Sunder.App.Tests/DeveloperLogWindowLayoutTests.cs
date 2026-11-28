@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Sunder.App.Services;
@@ -17,8 +16,7 @@ public sealed class DeveloperLogWindowLayoutTests
     [Fact]
     public async Task BoundPackageNavigationSelectsActualOptionAndRevealsLatestMatchingEntryOnReopen()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var logs = new DeveloperLogService();
             logs.Enable();

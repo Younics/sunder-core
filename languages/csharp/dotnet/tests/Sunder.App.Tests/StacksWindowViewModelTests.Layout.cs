@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Sunder.App.Services;
 using Sunder.App.Tests.TestSupport;
@@ -17,8 +16,7 @@ public sealed partial class StacksWindowViewModelTests
     [Fact]
     public async Task CompactLibraryAndWizardControlsRetainSelectionAndRespectMissingInputs()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temp = TemporaryDirectoryScope.Create("sunder-stack-window");
             var file = await CreateStackArchiveAsync(temp.RootPath, "research", "Research desk", includeFragment: true,

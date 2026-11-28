@@ -4,10 +4,8 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Styling;
-using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
@@ -30,8 +28,7 @@ public sealed class SettingsWindowLayoutTests
     [Fact]
     public async Task AppearanceAndNotificationsHaveWorkingBoundControlsAndPrivacyIsAbsent()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("sunder-shell-preferences");
             using var stateService = new ShellStateService(temporary.GetPath("shell.json"));
@@ -114,8 +111,7 @@ public sealed class SettingsWindowLayoutTests
     public async Task PackagePagesOmitShellHeadingAndFrameForBothGeneratedFormsAndHostedViewsButCoreRetainsThem()
     {
         Assert.Null(Application.Current);
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("sunder-settings-package-layout");
             using var client = new EmptySettingsClient
@@ -220,8 +216,7 @@ public sealed class SettingsWindowLayoutTests
     public async Task SidebarReservesRightEdgeScrollbarAndPresetFieldsStayVisibleWithoutAnExpander()
     {
         Assert.Null(Application.Current);
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("sunder-settings-layout");
             using var client = new EmptySettingsClient();
@@ -311,32 +306,6 @@ public sealed class SettingsWindowLayoutTests
             return true;
         }, default);
         Assert.Null(Application.Current);
-    }
-
-    public sealed class SettingsTestApplication : Application
-    {
-        public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<SettingsTestApplication>()
-            .UseSkia().UseHeadless(new() { UseHeadlessDrawing = false });
-        public override void Initialize()
-        {
-            RequestedThemeVariant = ThemeVariant.Dark;
-            Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderThemeResources.axaml") });
-            Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App/Styles/IconResources.axaml") });
-            Styles.Add(new FluentTheme());
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderPackageStyles.axaml") });
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App/Styles/SunderShellStyles.axaml") });
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App/Styles/PackageWindowStyles.axaml") });
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App/Styles/ManagementWindowStyles.axaml") });
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App/Styles/ProcessMonitorStyles.axaml") });
-            new ThemeManager(this).Initialize();
-        }
     }
 
     private sealed class EmptySettingsClient : IRuntimePackageSettingsClient

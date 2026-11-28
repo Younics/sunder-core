@@ -1437,8 +1437,7 @@ public sealed partial class MainWindowViewModelShellViewTests
     [Fact]
     public async Task LayoutController_RealSplitterDragHasSingleGeometryOwner()
     {
-        await using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var harness = CreateHarness();
             Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
@@ -1514,12 +1513,6 @@ public sealed partial class MainWindowViewModelShellViewTests
             }
             finally { window.Close(); }
         }, default);
-    }
-
-    public sealed class SplitterTestApplication : Application
-    {
-        public static AppBuilder BuildAvaloniaApp()
-            => Avalonia.Headless.AvaloniaHeadlessPlatformExtensions.UseHeadless(AppBuilder.Configure<SplitterTestApplication>(), new());
     }
 
     [Fact]

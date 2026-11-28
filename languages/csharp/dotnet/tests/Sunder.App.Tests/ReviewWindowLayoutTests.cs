@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.VisualTree;
 using Sunder.App.Tests.TestSupport;
 using Sunder.App.ViewModels;
@@ -16,8 +15,7 @@ public sealed class ReviewWindowLayoutTests
     [Fact]
     public async Task ArchiveValidationAndRuntimeImpactDetermineTheVisibleActions()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             var owner = new Window();
             owner.Show();

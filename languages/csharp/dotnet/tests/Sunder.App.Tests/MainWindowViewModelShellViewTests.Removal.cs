@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Sunder.App.Features.Shell.State;
 using Sunder.App.Models;
 using Sunder.App.Services;
@@ -21,8 +20,7 @@ public sealed partial class MainWindowViewModelShellViewTests
     [InlineData(RailPlacement.RightBottom)]
     public async Task CompletedStartupCatalog_RemovesLegacySelectionAndCollapsesOnlyItsRegion(RailPlacement placement)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             var root = CreateTempDirectory();
             var views = FiveRegionViews();
@@ -86,8 +84,7 @@ public sealed partial class MainWindowViewModelShellViewTests
     [Fact]
     public async Task CompletedEmptyCatalog_UsesWelcomeAndCollapsesAllSideRegions()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             var state = FiveRegionState(FiveRegionViews());
             new ShellCompositionService().Compose([], state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);

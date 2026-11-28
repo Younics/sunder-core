@@ -1,5 +1,4 @@
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Sunder.App.Models;
 using Sunder.App.Services;
 using Sunder.App.Views;
@@ -14,8 +13,7 @@ public sealed class MainWindowStateControllerTests
     [Fact]
     public async Task RestoredWindowCannotBeForcedOffScreenByItsPreviousMinimumSize()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(MainWindowViewModelShellViewTests.SplitterTestApplication));
-        await ui.Dispatch(() =>
+        await HeadlessAppCollection.Session.Dispatch(() =>
         {
             var window = new Window { Width = 1400, Height = 850, MinWidth = 10000, MinHeight = 10000 };
             var screen = Assert.Single(window.Screens.All);
@@ -42,8 +40,7 @@ public sealed class MainWindowStateControllerTests
     [InlineData(WindowState.FullScreen)]
     public async Task RestoreAndFlushKeepModeAndNormalBoundsSeparate(WindowState mode)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(MainWindowViewModelShellViewTests.SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var service = new ShellStateService(System.IO.Path.Combine(CreateTempDirectory(), "shell-state.json"));
             var state = new ShellState();
@@ -84,8 +81,7 @@ public sealed class MainWindowStateControllerTests
     [Fact]
     public async Task FullScreenCloseExitDoesNotEraseReopenModeAndCanceledCloseResumesRecording()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(MainWindowViewModelShellViewTests.SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var service = new ShellStateService(System.IO.Path.Combine(CreateTempDirectory(), "shell-state.json"));
             var state = new ShellState();

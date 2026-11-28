@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.Interactivity;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
@@ -18,8 +17,7 @@ public sealed class PackageInformationLayoutTests
     [Fact]
     public async Task PlatformSectionWrapsAllDeclaredTargetsInANarrowPane()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(() =>
+        await HeadlessAppCollection.Session.Dispatch(() =>
         {
             var targets = new[] { "app", "runtime" }.SelectMany(role => SunderPackageFormat.SupportedRuntimeIdentifiers.Select(rid => (role, rid)));
             var view = new PackagePlatformsView { DataContext = PackagePlatformsViewModel.Create(targets, "osx-arm64", "2.0.0") };
@@ -43,8 +41,7 @@ public sealed class PackageInformationLayoutTests
     [InlineData(900)]
     public async Task InformationWrapsLongPublicIdentitiesWithoutHorizontalScrolling(double width)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(() =>
+        await HeadlessAppCollection.Session.Dispatch(() =>
         {
             var identity = "example." + new string('x', 110);
             var facts = new SunderPackageInformation([
@@ -94,8 +91,7 @@ public sealed class PackageInformationLayoutTests
     [Fact]
     public async Task NarrowPackageWindowUsesListDetailNavigationAndRestoresItsWideSidebar()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             var window = new PackagesWindow { Width = 1200, Height = 760 };
             window.Show();
