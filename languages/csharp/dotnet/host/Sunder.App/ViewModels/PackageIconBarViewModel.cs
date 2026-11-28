@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using Avalonia.Layout;
-using Avalonia.Media;
 using Sunder.App.Models;
 
 namespace Sunder.App.ViewModels;
@@ -12,9 +11,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
     private readonly Func<string, bool> _onRemove;
     private int _visibleCapacity = int.MaxValue;
     private string? _dragLayoutViewId;
-    private string? _previewDraggedViewId;
-    private string? _previewGlyph;
-    private IImage? _previewIconImage;
+    private ShellItemViewModel? _previewSource;
     private int? _previewInsertIndex;
 
     public PackageIconBarViewModel(
@@ -118,31 +115,24 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
             return;
         }
 
-        if (string.Equals(_previewDraggedViewId, draggedItem.Id, StringComparison.OrdinalIgnoreCase)
-            && string.Equals(_previewGlyph, draggedItem.Glyph, StringComparison.Ordinal)
-            && ReferenceEquals(_previewIconImage, draggedItem.IconImage)
-            && _previewInsertIndex == insertIndex)
+        if (ReferenceEquals(_previewSource, draggedItem) && _previewInsertIndex == insertIndex)
         {
             return;
         }
 
-        _previewDraggedViewId = draggedItem.Id;
-        _previewGlyph = draggedItem.Glyph;
-        _previewIconImage = draggedItem.IconImage;
+        _previewSource = draggedItem;
         _previewInsertIndex = insertIndex;
         RefreshVisibleItems();
     }
 
     public void ClearPreviewItem()
     {
-        if (_previewDraggedViewId is null && _previewGlyph is null && _previewIconImage is null && _previewInsertIndex is null)
+        if (_previewSource is null)
         {
             return;
         }
 
-        _previewDraggedViewId = null;
-        _previewGlyph = null;
-        _previewIconImage = null;
+        _previewSource = null;
         _previewInsertIndex = null;
         RefreshVisibleItems();
     }
@@ -192,19 +182,19 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
 
     private void InsertPreviewItem(List<ShellItemViewModel> visibleItems)
     {
-        if (string.IsNullOrWhiteSpace(_previewDraggedViewId)
-            || (string.IsNullOrWhiteSpace(_previewGlyph) && _previewIconImage is null))
+        if (_previewSource is not { } source || string.IsNullOrWhiteSpace(source.Id)
+            || (string.IsNullOrWhiteSpace(source.Glyph) && source.IconImage is null))
         {
             return;
         }
 
-        visibleItems.RemoveAll(item => string.Equals(item.Id, _previewDraggedViewId, StringComparison.OrdinalIgnoreCase));
+        visibleItems.RemoveAll(item => string.Equals(item.Id, source.Id, StringComparison.OrdinalIgnoreCase));
         var normalizedIndex = _previewInsertIndex.HasValue
             ? Math.Clamp(_previewInsertIndex.Value, 0, visibleItems.Count)
             : visibleItems.Count;
         visibleItems.Insert(normalizedIndex, new ShellItemViewModel(
             id: "__drag-preview__",
-            glyph: _previewGlyph ?? string.Empty,
+            glyph: source.Glyph,
             iconUri: null,
             title: string.Empty,
             packageDisplayName: string.Empty,
@@ -212,8 +202,7 @@ public sealed partial class PackageIconBarViewModel : ViewModelBase
             placement: Placement,
             onSelect: _ => { },
             isDragPreview: true,
-            iconImage: _previewIconImage,
-            ownsIconImage: false));
+            ownsIconImage: false) { IconOwner = source });
     }
 
     private bool IsDragLayoutItem(ShellItemViewModel item)

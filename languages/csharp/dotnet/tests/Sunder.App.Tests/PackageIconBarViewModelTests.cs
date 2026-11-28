@@ -1,11 +1,18 @@
 using System.Collections.Specialized;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Headless;
 using Avalonia.Layout;
+using Avalonia.Media.Imaging;
+using Avalonia.VisualTree;
 using Sunder.App.Models;
 using Sunder.App.ViewModels;
+using Sunder.App.Views.Controls;
 using Xunit;
 
 namespace Sunder.App.Tests;
 
+[Collection(HeadlessAppCollection.Name)]
 public sealed class PackageIconBarViewModelTests
 {
     [Fact]
@@ -100,16 +107,52 @@ public sealed class PackageIconBarViewModelTests
     }
 
     [Fact]
-    public void ShowPreviewItem_WhenDraggedFromAnotherBar_InsertsPreviewWithoutRemovingTargetItems()
+    public Task CrossBarDragReleasesTheRetiredIconInThePreviewAndGhost()
     {
-        var bar = CreateBar();
-        bar.SetItems([CreateItem("agent.chat"), CreateItem("agent.workspaces")]);
-        var draggedItem = CreateItem("agent.subsessions");
+        return HeadlessAppCollection.Session.Dispatch(() =>
+        {
+            var source = CreateBar();
+            var target = CreateBar();
+            target.SetItems([CreateItem("agent.chat"), CreateItem("agent.workspaces")]);
+            var bar = new PackageIconBar { DataContext = target };
+            var overlay = new PackageDragOverlay();
+            var window = new Window { Width = 400, Height = 100, Content = new Grid { Children = { bar, overlay } } };
+            window.Show();
+            try
+            {
+                PackageIconView previewIcon;
+                var ghostIcon = Assert.Single(overlay.GetVisualDescendants().OfType<PackageIconView>());
+                using (var bitmap = new WriteableBitmap(new PixelSize(24, 24), new Vector(96, 96)))
+                {
+                    var dragged = CreateItem("agent.subsessions", "S");
+                    dragged.IconImage = bitmap;
+                    source.SetItems([dragged]);
+                    target.ShowPreviewItem(dragged, insertIndex: 1);
+                    overlay.ShowPackageDragGhost(dragged, compact: true, new Point(60, 40));
+                    window.UpdateLayout();
 
-        bar.ShowPreviewItem(draggedItem, insertIndex: 1);
+                    Assert.Equal(["agent.chat", "__drag-preview__", "agent.workspaces"], target.VisibleItems.Select(item => item.Id));
+                    Assert.True(target.VisibleItems[1].IsDragPreview);
+                    previewIcon = Assert.Single(bar.GetVisualDescendants().OfType<PackageIconView>(),
+                        icon => icon.IsEffectivelyVisible && ReferenceEquals(icon.IconImage, bitmap));
+                    Assert.Same(bitmap, ghostIcon.IconImage);
+                    // A package commit replaces the source item before retiring its generation's bitmap.
+                    source.SetItems([CreateItem(dragged.Id)]);
+                }
 
-        Assert.Equal(["agent.chat", "__drag-preview__", "agent.workspaces"], bar.VisibleItems.Select(item => item.Id).ToArray());
-        Assert.True(bar.VisibleItems[1].IsDragPreview);
+                window.Width += 20;
+                window.UpdateLayout();
+                using var frame = window.CaptureRenderedFrame();
+                Assert.NotNull(frame);
+                foreach (var icon in new[] { previewIcon, ghostIcon })
+                {
+                    Assert.Null(Assert.Single(icon.GetVisualDescendants().OfType<Image>()).Source);
+                    Assert.True(icon.ShowBareGlyphFallback);
+                    Assert.Equal("S", icon.Glyph);
+                }
+            }
+            finally { window.Close(); }
+        }, default);
     }
 
     [Fact]

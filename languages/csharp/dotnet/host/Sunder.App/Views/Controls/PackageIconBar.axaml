@@ -20,7 +20,8 @@
                   Classes.top-bar-surface="{Binding IsHorizontalBar}"
                   Classes.drag-preview="{Binding IsDragPreview}"
                   Classes.selected="{Binding IsSelected}">
-            <controls:PackageIconView IconImage="{Binding IconImage}"
+            <controls:PackageIconView DataContext="{Binding IconOwner}"
+                                      IconImage="{Binding IconImage}"
                                       HasIconImage="{Binding HasIconImage}"
                                       Glyph="{Binding Glyph}"
                                       ShowBareGlyphFallback="{Binding ShowGlyphFallback}"

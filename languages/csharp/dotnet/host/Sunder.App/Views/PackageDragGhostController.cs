@@ -9,10 +9,7 @@ internal sealed class PackageDragGhostController(Border dragGhost, PackageIconVi
 {
     public void Show(ShellItemViewModel item, bool compact, Point centerPosition)
     {
-        dragGhostIcon.IconImage = item.IconImage;
-        dragGhostIcon.HasIconImage = item.HasIconImage;
-        dragGhostIcon.Glyph = item.Glyph;
-        dragGhostIcon.ShowBareGlyphFallback = item.ShowGlyphFallback;
+        dragGhostIcon.DataContext = item;
         dragGhost.Classes.Set("top-bar-surface", compact);
         dragGhost.IsVisible = true;
         Move(centerPosition);
@@ -34,9 +31,6 @@ internal sealed class PackageDragGhostController(Border dragGhost, PackageIconVi
     public void Hide()
     {
         dragGhost.IsVisible = false;
-        dragGhostIcon.IconImage = null;
-        dragGhostIcon.HasIconImage = false;
-        dragGhostIcon.Glyph = string.Empty;
-        dragGhostIcon.ShowBareGlyphFallback = false;
+        dragGhostIcon.DataContext = null;
     }
 }
