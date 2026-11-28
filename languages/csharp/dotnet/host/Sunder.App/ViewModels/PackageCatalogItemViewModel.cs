@@ -23,7 +23,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     internal PackageCatalogItemViewModel(
         PackageCatalogItemState state,
         Action<PackageCatalogItemViewModel> onSelect)
-        : base(state.IconUri)
+        : base(state.IconUri, deferIcon: true)
     {
         _state = state;
         PackageId = state.PackageId;
@@ -60,6 +60,7 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
     public bool ShowOperationStatus => HasActiveOperation;
 
     public string StatusText { get; }
+    public string RowStatus => $"{StatusText} · {Version}";
 
     public bool IsEnabled { get; }
 
@@ -180,6 +181,8 @@ public sealed partial class PackageCatalogItemViewModel : PackageIconItemViewMod
                 return sessionPackage.Readiness switch
                 {
                     PackageReadinessState.Ready => "Ready",
+                    PackageReadinessState.Failed when sessionPackage.LastError == PackagePolicyErrorCodes.PolicyClockInvalid
+                        => "Waiting for Registry policy verification",
                     PackageReadinessState.NeedsConfiguration => "Needs configuration",
                     PackageReadinessState.Degraded => "Degraded",
                     PackageReadinessState.Failed => "Failed",

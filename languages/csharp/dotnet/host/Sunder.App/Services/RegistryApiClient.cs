@@ -11,6 +11,11 @@ public sealed class RegistryApiClient : IRegistryApiClient
     private const long MaxStackDownloadBytes = 256L * 1024 * 1024;
     private static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan DefaultStackTransferTimeout = TimeSpan.FromMinutes(15);
+    private static readonly SocketsHttpHandler BrowseHandler = new()
+    {
+        AllowAutoRedirect = false, UseCookies = false, AutomaticDecompression = DecompressionMethods.All,
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+    };
     private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new(System.Text.Json.JsonSerializerDefaults.Web)
     {
         MaxDepth = 32,
@@ -57,7 +62,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
             throw new ArgumentOutOfRangeException(nameof(stackTransferTimeout));
         }
         RegistryUrl = RegistryUrlHelper.Normalize(registryUrl);
-        _httpClient = httpClient ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+        _httpClient = httpClient ?? new HttpClient(BrowseHandler, disposeHandler: false)
         {
             BaseAddress = RegistryUrl,
             Timeout = Timeout.InfiniteTimeSpan,
@@ -73,7 +78,7 @@ public sealed class RegistryApiClient : IRegistryApiClient
 
     public async Task<IReadOnlyList<RegistryPackageSummary>> SearchAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
     {
-        var path = $"{RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.Packages)}?skip={skip}&take={Math.Clamp(take, 1, 100)}&sort={FormatSort(sort)}";
+        var path = $"{RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.Packages)}?skip={skip}&take={Math.Clamp(take, 1, 100)}&sort={FormatSort(sort)}&thumbnails=true";
         if (!string.IsNullOrWhiteSpace(query)) path += $"&query={Uri.EscapeDataString(query.Trim())}";
         return await GetJsonAsync<IReadOnlyList<RegistryPackageSummary>>(path, cancellationToken) ?? [];
     }
@@ -82,6 +87,14 @@ public sealed class RegistryApiClient : IRegistryApiClient
         => GetOrNullAsync<RegistryPackageDetails>(
             RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.Package(packageId)),
             cancellationToken);
+
+    public Task<RegistryPackageDetails?> GetPackageOverviewAsync(string packageId, string? version, string rid, CancellationToken cancellationToken)
+    {
+        var path = RegistryApiRoutes.ToHttpClientRelativePath(RegistryApiRoutes.Package(packageId))
+            + $"?rid={Uri.EscapeDataString(rid)}";
+        if (version is not null) path += $"&version={Uri.EscapeDataString(version)}";
+        return GetOrNullAsync<RegistryPackageDetails>(path, cancellationToken);
+    }
 
     public async Task<IReadOnlyList<RegistryStackSummary>> SearchStacksAsync(string? query, int skip, int take, RegistrySearchSort sort = RegistrySearchSort.Downloads, CancellationToken cancellationToken = default)
     {

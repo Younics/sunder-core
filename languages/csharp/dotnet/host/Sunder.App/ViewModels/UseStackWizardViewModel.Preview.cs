@@ -310,6 +310,9 @@ public sealed partial class UseStackWizardViewModel
         OnPropertyChanged(nameof(CanApply));
         OnPropertyChanged(nameof(HasPackages));
         OnPropertyChanged(nameof(HasInstallPlanItems));
+        OnPropertyChanged(nameof(ShowInstallPlan));
+        OnPropertyChanged(nameof(ShowInstallBeforeImport));
+        OnPropertyChanged(nameof(ShowImportPreview));
         OnPropertyChanged(nameof(HasInstallPlanWarnings));
         OnPropertyChanged(nameof(HasInstallPlanErrors));
         OnPropertyChanged(nameof(ShowNoInstallPlanChanges));

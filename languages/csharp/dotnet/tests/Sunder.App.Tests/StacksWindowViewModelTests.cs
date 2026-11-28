@@ -898,8 +898,15 @@ public sealed partial class StacksWindowViewModelTests
         viewModel.ShowLocalCommand.Execute(null);
         await viewModel.InitializeAsync();
 
+        var registryUrl = viewModel.Registry.RegistryUrlText;
+        viewModel.Registry.RegistryUrlText = "invalid";
+        await viewModel.PublishSelectedStackCommand.ExecuteAsync(null);
+        Assert.True(viewModel.ShowStatusError);
+        Assert.Null(runtimeClient.LastPublishRequest);
+        viewModel.Registry.RegistryUrlText = registryUrl;
         await viewModel.PublishSelectedStackCommand.ExecuteAsync(null);
 
+        Assert.False(viewModel.ShowStatusError);
         Assert.Equal("stack-upload", runtimeClient.LastPublishRequest?.UploadId);
         var published = Assert.Single(viewModel.Local.Stacks);
         Assert.True(published.IsPublished);
@@ -1775,6 +1782,9 @@ public sealed partial class StacksWindowViewModelTests
 
         public Task<RegistryPackageDetails?> GetPackageAsync(string packageId, CancellationToken cancellationToken = default)
             => Task.FromResult<RegistryPackageDetails?>(null);
+
+        public Task<RegistryPackageDetails?> GetPackageOverviewAsync(string packageId, string? version, string rid, CancellationToken cancellationToken)
+            => GetPackageAsync(packageId, cancellationToken);
 
         public Task<RegistryPackageVersionDetails?> GetVersionAsync(string packageId, string version, CancellationToken cancellationToken = default)
             => Task.FromResult<RegistryPackageVersionDetails?>(null);

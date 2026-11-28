@@ -25,7 +25,12 @@ internal static class ShellSelectionState
             _ => shellState.SelectedMiddleViewId,
         };
 
-    public static void SetSelectedViewId(ShellState shellState, RailPlacement placement, string? viewId)
+    public static string? GetRememberedViewId(ShellState shellState, RailPlacement placement)
+        => placement == RailPlacement.Middle
+            ? shellState.SelectedMiddleViewId ?? shellState.ClosedMiddleViewId
+            : GetSelectedViewId(shellState, placement);
+
+    public static void SetSelectedViewId(ShellState shellState, RailPlacement placement, string? viewId, bool explicitlyClosed = false)
     {
         switch (placement)
         {
@@ -33,6 +38,7 @@ internal static class ShellSelectionState
                 shellState.SelectedLeftTopViewId = viewId;
                 break;
             case RailPlacement.Middle:
+                shellState.ClosedMiddleViewId = explicitlyClosed ? shellState.SelectedMiddleViewId : null;
                 shellState.SelectedMiddleViewId = viewId;
                 break;
             case RailPlacement.RightTop:
@@ -47,9 +53,9 @@ internal static class ShellSelectionState
         }
     }
 
-    public static void ClearSelectedViewId(ShellState shellState, RailPlacement placement, string viewId)
+    public static void ForgetView(ShellState shellState, RailPlacement placement, string viewId)
     {
-        if (string.Equals(GetSelectedViewId(shellState, placement), viewId, StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(GetRememberedViewId(shellState, placement), viewId, StringComparison.OrdinalIgnoreCase))
         {
             SetSelectedViewId(shellState, placement, null);
         }

@@ -15,17 +15,20 @@ public partial class SettingsWindow : Window
     private readonly SecondaryWindowStateController? _stateController;
     private readonly WindowCloseToHideCoordinator _closeCoordinator;
     private readonly OwnedTaskObserver _tasks = new("Settings window");
+    private readonly ListDetailLayout _layout;
 
     public SettingsWindow()
     {
         InitializeComponent();
+        _layout = new(SettingsContentGrid, SettingsSidebarPane, SettingsDetailPane, SettingsSplitter, CompactSettingsBackButton, () => true);
+        CompactSettingsBackButton.Click += (_, _) => ViewModel?.Appearance?.CancelPreview();
         SunderWindowSizing.ApplySecondaryWindowSize(this);
         _closeCoordinator = new WindowCloseToHideCoordinator(
             this,
             hideOnClose: true,
             closeOnEscape: true,
-             persistWindowState: () => _stateController?.PersistWindowState(),
-             hiding: () => ViewModel?.SetWindowVisible(false),
+            persistWindowState: () => _stateController?.PersistWindowState(),
+            hiding: () => ViewModel?.SetWindowVisible(false),
             closed: OnLifecycleClosed);
         Opened += OnOpened;
         PropertyChanged += (_, change) =>
@@ -54,6 +57,8 @@ public partial class SettingsWindow : Window
     public void CloseForShutdown()
         => _closeCoordinator.CloseForShutdown();
 
+    internal void ShowDetails() => _layout.OpenDetails();
+
     private void SectionButton_OnClick(object? sender, RoutedEventArgs e)
     {
         var item = (sender as Button)?.CommandParameter as SettingsSectionItemViewModel
@@ -61,6 +66,7 @@ public partial class SettingsWindow : Window
         if (item is not null && ViewModel is not null)
         {
             _tasks.Run(_ => ViewModel.SelectSectionAsync(item), "selecting a settings section");
+            _layout.OpenDetails();
         }
     }
 
@@ -111,6 +117,7 @@ public partial class SettingsWindow : Window
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
+        _layout.Refresh();
         _stateController?.RecordWindowedPlacement();
     }
 

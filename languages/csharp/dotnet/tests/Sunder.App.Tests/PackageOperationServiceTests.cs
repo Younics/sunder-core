@@ -49,7 +49,8 @@ public sealed partial class PackageOperationServiceTests
             new Sunder.Package.Format.SunderPackageArchiveValidationResult(new()
             {
                 Id = "agent", Name = "Agent", Version = "1.0.0", UsesContracts = [],
-                Targets = [new() { Role = "runtime", RequiredHostCapabilities = [Sunder.Sdk.Compatibility.SunderSdkCapabilities.DockerEnvironmentV1] }],
+                Targets = [new() { Role = "runtime", Kind = "worker", Rid = AppPackageTargetEnvironment.CurrentRid,
+                    RequiredHostCapabilities = [Sunder.Sdk.Compatibility.SunderSdkCapabilities.DockerEnvironmentV1] }],
             }, [], [])
             {
                 ContentIndex = new(1, [new(Sunder.Package.Format.SunderPackageFormat.ManifestPath, new('a', 64), 42)]),
@@ -91,24 +92,22 @@ public sealed partial class PackageOperationServiceTests
         }
     }
 
-    [Fact]
-    public async Task EnqueueMarketplaceInstall_RunsInBackgroundAndAppliesLifecycleChanges()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EnqueueMarketplaceInstall_ReportsOnlyChangedPackages(bool alreadyInstalled)
     {
-        var queue = new BackgroundTaskQueueService(maxParallelism: 1);
-        var registryClient = new FakeRegistryApiClient
+        using var queue = new BackgroundTaskQueueService(maxParallelism: 1);
+        var keep = CreatePlanItem("agent", "1.0.0") with { ActionKind = RegistryPackageActionKinds.Keep, CurrentVersion = "1.0.0" };
+        var runtimeClient = new FakeRuntimeApiClient
         {
-            InstallPlan = new RegistryResolveInstallPlanResponse(
-                true,
-                [CreatePlanItem("agent", "1.0.0")],
-                [],
-                [],
-                [],
-                []),
+            RegistryPlanItems = alreadyInstalled ? [keep] : [keep, CreatePlanItem("files", "1.0.0")],
         };
-        var runtimeClient = new FakeRuntimeApiClient();
         var lifecycleApplications = new List<RuntimePackageStamp>();
+        var toasts = new List<string>();
         var notificationCenter = new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json"));
-        var service = CreateService(
+        notificationCenter.ToastQueued += toast => toasts.Add(toast.Message);
+        using var service = CreateService(
             queue,
             new FakeRuntimeApiClientFactory(runtimeClient),
             (stamp, _) =>
@@ -117,16 +116,20 @@ public sealed partial class PackageOperationServiceTests
                 return Task.CompletedTask;
             },
             notificationCenter,
-            registryClientFactory: _ => registryClient);
+            registryClientFactory: _ => new FakeRegistryApiClient());
 
-        var operation = (await service.EnqueueMarketplaceInstallAsync("agent", "Agent", new Uri("https://registry.example/")))!;
+        var packageId = alreadyInstalled ? "agent" : "files";
+        var operation = (await service.EnqueueMarketplaceInstallAsync(packageId, packageId, new Uri("https://registry.example/")))!;
 
         Assert.Equal(BackgroundTaskIndicator.Packages, operation.Indicator);
         Assert.Equal(PackageOperationService.PackageStoreGroupKey, operation.GroupKey);
         await WaitForConditionAsync(() => queue.GetTask(operation.TaskId)?.State == BackgroundTaskState.Completed);
 
-        Assert.Equal(["agent"], runtimeClient.InstalledPackageIds);
-        Assert.Single(lifecycleApplications);
+        Assert.True(PackageOperationMetadata.TryCreate(operation.Metadata, out var metadata));
+        Assert.Equal(alreadyInstalled ? [] : new[] { "files" }, metadata.PackageIds);
+        Assert.Equal(alreadyInstalled ? [] : new[] { "files" }, runtimeClient.InstalledPackageIds);
+        Assert.Equal(alreadyInstalled ? [] : new[] { "files 1.0.0 was installed." }, toasts);
+        Assert.Equal(alreadyInstalled ? 0 : 1, lifecycleApplications.Count);
     }
 
     [Fact]
@@ -485,8 +488,11 @@ public sealed partial class PackageOperationServiceTests
         Assert.Null(request.RegistryOrigin);
     }
 
-    [Fact]
-    public async Task EnqueueUninstall_PreflightsPlanWithoutImplicitCascadeConsent()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task EnqueueUninstall_StagesOnlyTheReviewedRemoval(bool approve, bool stale)
     {
         var queue = new BackgroundTaskQueueService(maxParallelism: 1);
         var runtimeClient = new FakeRuntimeApiClient
@@ -506,18 +512,48 @@ public sealed partial class PackageOperationServiceTests
                 ["agent", "agent.extension"],
                 new string('b', 64)),
         };
+        var reviews = new List<string>();
         using var service = CreateService(
             queue,
             new FakeRuntimeApiClientFactory(runtimeClient),
             (_, _) => Task.CompletedTask,
-            new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")));
+            new NotificationCenterService(Path.Combine(CreateTempDirectory(), "notifications.json")),
+            confirmUninstall: (plan, _) =>
+            {
+                Assert.DoesNotContain(queue.ListTasks(), task => task.IsActive);
+                Assert.Equal(reviews.Count, runtimeClient.StagedRequests.Count);
+                Assert.Equal(["agent", "agent.extension"], plan.ExpectedRemovalPackageIds);
+                reviews.Add(plan.ConfirmationToken);
+                var dialog = Sunder.App.ViewModels.RuntimeConfirmationViewModel.Uninstall(plan);
+                Assert.Equal(["Requested: Agent 1.0.0", "Also removed: Extension 1.0.0"], dialog.Items);
+                Assert.Contains("Package data will be kept", dialog.Impact, StringComparison.Ordinal);
+                if (stale && reviews.Count == 1) runtimeClient.UninstallPlan = plan with { ConfirmationToken = new string('c', 64) };
+                return Task.FromResult(approve);
+            });
 
-        var operation = service.EnqueueUninstall("agent", "Agent");
-        await WaitForConditionAsync(() => queue.GetTask(operation.TaskId)?.State == BackgroundTaskState.Completed);
-
+        var operation = await service.EnqueueUninstallAsync("agent", "Agent");
+        if (!approve)
+        {
+            Assert.Null(operation);
+            Assert.Empty(queue.ListTasks());
+            Assert.Empty(runtimeClient.StagedRequests);
+            return;
+        }
+        Assert.NotNull(operation);
+        var expectedState = stale ? BackgroundTaskState.Failed : BackgroundTaskState.Completed;
+        await WaitForConditionAsync(() => queue.GetTask(operation.TaskId)?.State == expectedState);
         var mutation = Assert.Single(Assert.Single(runtimeClient.StagedRequests).Mutations);
-        Assert.False(mutation.AllowCascade);
+        Assert.True(mutation.AllowCascade);
         Assert.Equal(new string('b', 64), mutation.ConfirmationToken);
+        if (stale)
+        {
+            Assert.Empty(runtimeClient.CommittedStageIds);
+            var retry = await service.EnqueueUninstallAsync("agent", "Agent");
+            await WaitForConditionAsync(() => queue.GetTask(retry!.TaskId)?.State == BackgroundTaskState.Completed);
+            Assert.Equal(new string('c', 64), Assert.Single(runtimeClient.StagedRequests.Last().Mutations).ConfirmationToken);
+        }
+        Assert.Equal(stale ? 2 : 1, reviews.Count);
+        Assert.Single(runtimeClient.CommittedStageIds);
     }
 
     [Fact]
@@ -599,16 +635,7 @@ public sealed partial class PackageOperationServiceTests
     public async Task EnqueueMarketplaceInstall_WhenPackageAlreadyHasActiveOperation_ReturnsExistingOperation()
     {
         var queue = new BackgroundTaskQueueService(maxParallelism: 1);
-        var registryClient = new FakeRegistryApiClient
-        {
-            InstallPlan = new RegistryResolveInstallPlanResponse(
-                true,
-                [CreatePlanItem("agent", "1.0.0")],
-                [],
-                [],
-                [],
-                []),
-        };
+        var registryClient = new FakeRegistryApiClient();
         var runtimeClient = new FakeRuntimeApiClient
         {
             InstallDelay = TimeSpan.FromSeconds(1),
@@ -817,7 +844,10 @@ public sealed partial class PackageOperationServiceTests
 
     private static PackageArchiveSelection LocalSelection(string path, string hash = "test-hash", bool deleteAfterUse = false)
         => new(path, hash, deleteAfterUse, Review: Sunder.App.ViewModels.LocalPackageInstallConsentViewModel.Valid(Path.GetFileName(path),
-            new(new() { Id = "agent", Name = "Agent", Version = "1.0.0", Targets = [], UsesContracts = [] }, [], [])));
+            new(new() { Id = "agent", Name = "Agent", Version = "1.0.0", Targets = [], UsesContracts = [] }, [], [])
+            {
+                ContentIndex = new(1, [new(Sunder.Package.Format.SunderPackageFormat.ManifestPath, new('a', 64), 42)]),
+            }));
 
     private static PackageOperationService CreateService(BackgroundTaskQueueService queue, IRuntimeApiClientFactory factory,
         Func<RuntimePackageStamp, CancellationToken, Task> presentation, NotificationCenterService notifications,
@@ -825,34 +855,13 @@ public sealed partial class PackageOperationServiceTests
         Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>>? waitForPresentationAsync = null,
         TimeSpan? presentationWaitTimeout = null,
         Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? confirmLocalPackage = null,
-        TimeProvider? uploadRetentionClock = null)
+        TimeProvider? uploadRetentionClock = null, Func<PackageUninstallPlan, CancellationToken, Task<bool>>? confirmUninstall = null)
         => new(queue, factory, presentation, notifications,
             registryInstallService ?? new RegistryPackageInstallService((_, _) => Task.FromResult(true), queue), registryClientFactory,
-            waitForPresentationAsync, presentationWaitTimeout, confirmLocalPackage ?? ((_, _) => Task.FromResult(true)), uploadRetentionClock);
+            waitForPresentationAsync, presentationWaitTimeout, confirmLocalPackage ?? ((_, _) => Task.FromResult(true)), uploadRetentionClock, confirmUninstall);
 
-    private static RegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
-        => new(
-             packageId,
-             CurrentVersion: null,
-             version,
-             PackageContentIdentity: new string('a', 64),
-             ActionKind: RegistryPackageActionKinds.PackageInstall,
-            DeprecatedMessage: null,
-            DependsOn: [],
-            Targets: [],
-            Artifacts:
-            [
-                new RegistryPackageProjectionArtifact(
-                    "shared",
-                    null,
-                    "",
-                    0,
-                    $"download/{packageId}/{version}",
-                    "",
-                    "",
-                    "",
-                    1),
-            ]);
+    private static RuntimeRegistryPackageInstallPlanItem CreatePlanItem(string packageId, string version)
+        => new(packageId, null, version, new string('a', 64), RegistryPackageActionKinds.PackageInstall, null, [], [], []);
 
     private sealed class FakeRuntimeApiClientFactory(FakeRuntimeApiClient runtimeApiClient) : IRuntimeApiClientFactory
     {
@@ -862,8 +871,6 @@ public sealed partial class PackageOperationServiceTests
 
     private sealed class FakeRegistryApiClient : IRegistryClient
     {
-        public RegistryResolveInstallPlanResponse InstallPlan { get; init; } = new(true, [], [], [], [], []);
-
         public Uri RegistryUrl { get; } = new("https://registry.example/");
 
         public void Dispose() { }
@@ -933,7 +940,7 @@ public sealed partial class PackageOperationServiceTests
 
         public List<RuntimeRegistrySourceAdoptionRequest> SourceAdoptionRequests { get; } = [];
 
-        public PackageUninstallPlan UninstallPlan { get; init; } = CreateUninstallPlan("agent");
+        public PackageUninstallPlan UninstallPlan { get; set; } = CreateUninstallPlan("agent");
 
         public Task<IReadOnlyList<InstalledPackageDescriptor>> GetInstalledPackagesAsync(CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<InstalledPackageDescriptor>>([new(
@@ -944,22 +951,15 @@ public sealed partial class PackageOperationServiceTests
         public Task<PackageUninstallPlan> GetPackageUninstallPlanAsync(string packageId, CancellationToken cancellationToken = default)
             => Task.FromResult(UninstallPlan);
 
-        public Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
+        public IReadOnlyList<RuntimeRegistryPackageInstallPlanItem>? RegistryPlanItems { get; init; }
+
+        public async Task<RuntimeRegistryPackageChangeResult> InstallRegistryPackageAsync(RuntimeRegistryPackageRequest request, CancellationToken cancellationToken = default)
         {
-            InstalledPackageIds.Add(request.PackageId);
-            return Task.FromResult(new RuntimeRegistryPackageChangeResult(
-                true,
-                RuntimeRegistryErrorCode.None,
-                $"Installed {request.PackageId}.",
-                RuntimeSessionApplied,
-                RequiresAppRestart,
-                [],
-                [],
-                [request.PackageId],
-                [])
-            {
-                CommittedStamp = this.CommittedStamp,
-            });
+            if (InstallDelay > TimeSpan.Zero) await Task.Delay(InstallDelay, cancellationToken);
+            var items = RegistryPlanItems ?? [CreatePlanItem(request.PackageId, "1.0.0")];
+            var changes = items.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep).Select(item => item.PackageId).ToArray();
+            InstalledPackageIds.AddRange(changes);
+            return RegistryChangeResult(changes) with { PlanItems = items };
         }
 
         public Task<ContentUploadDescriptor> UploadPackageAsync(string packagePath, CancellationToken cancellationToken = default)
@@ -984,7 +984,9 @@ public sealed partial class PackageOperationServiceTests
             => Task.CompletedTask;
 
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(true, [], [], [], [], [], ResolutionFingerprint: new('f', 64))
+            => Task.FromResult(new RuntimeRegistryResolveInstallPlanResponse(true,
+                RegistryPlanItems ?? request.Packages.Select(item => CreatePlanItem(item.PackageId, "1.0.0")).ToArray(),
+                [], [], [], [], ResolutionFingerprint: new('f', 64))
             { RuntimePrerequisites = new(true, true, null, "Ready", new('a', 64), "osx-arm64", [], []) });
 
         public Task<RuntimeRegistryPackageChangeResult> ApplyRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
@@ -1026,6 +1028,11 @@ public sealed partial class PackageOperationServiceTests
         public async Task<PackageStoreStageResult> StagePackageStoreChangesAsync(PackageStoreStageRequest request, CancellationToken cancellationToken = default)
         {
             StagedRequests.Add(request);
+            foreach (var mutation in request.Mutations.Where(mutation => mutation.Kind == PackageStoreMutationKind.Uninstall))
+            {
+                if (mutation.ConfirmationToken != UninstallPlan.ConfirmationToken || UninstallPlan.RequiresCascadeConsent && !mutation.AllowCascade)
+                    return PackageStoreStageResult.Failed("Review the updated uninstall plan.", []);
+            }
             if (BeforeStage is not null) await BeforeStage(cancellationToken);
             if (InstallDelay > TimeSpan.Zero && request.Mutations.Any(mutation => mutation.Kind is PackageStoreMutationKind.Install or PackageStoreMutationKind.Upgrade))
             {

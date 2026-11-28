@@ -357,6 +357,83 @@ public sealed class SunderPackageArchiveInstallerTests
     }
 
     [Fact]
+    public async Task InstallingAndRemovingDependent_RetainsWorkerRpcAndWorkspaceUntilExplicitReinstall()
+    {
+        const string agentId = "test.agent";
+        const string extensionId = "test.extension";
+        var root = CreateTempDirectory();
+        var paths = new RuntimePackagePaths(Path.Combine(root, "store"));
+        var store = new InstalledPackageStore(paths);
+        var workspaceFile = Path.Combine(paths.PackageDataRootPath, agentId, "workspace", "draft.txt");
+        var reject = false;
+        var faults = new CallbackLifecycleFaultInjector(point =>
+        {
+            if (reject && point == InstalledPackageLifecycleFaultPoint.CandidateReadyBeforeStoreCommit)
+            {
+                File.WriteAllText(workspaceFile, "edit made during cutover");
+                throw new InvalidOperationException("Rejected before commit.");
+            }
+        });
+        var host = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance,
+            store, new(paths), lifecycleFaultInjector: faults);
+        try
+        {
+            var archive = CreatePackageArchive(root, agentId, "1.0.0");
+            var extension = CreatePackageArchive(root, extensionId, "1.0.0", dependencies: [new(agentId, ">=1.0.0")]);
+            var install = await host.InstallPackageFromRuntimePathAsync(archive);
+            Assert.True(install.RuntimeSessionApplied, install.Message);
+            var original = host.ActiveSession.LoadedPackageMap[agentId];
+            var appFingerprint = Assert.Single(host.GetActivePackageUiSnapshots()).ActivationFingerprint;
+            Assert.NotNull(appFingerprint);
+            var caller = new RuntimeRpcCallerStamp(agentId, original.RuntimeActivationId);
+            using (var call = host.RpcBroker.AcquirePublishedPackageDataLease(caller, original.ActivationSessionGeneration!.Value, original.Worker))
+            {
+                Assert.NotNull(call);
+                reject = true;
+                var rejected = await host.InstallPackageFromRuntimePathAsync(extension);
+                Assert.False(rejected.Success);
+                Assert.Single(await store.ListAsync());
+                AssertRetained();
+
+                reject = false;
+                var added = await host.InstallPackageFromRuntimePathAsync(extension);
+                Assert.True(added.RuntimeSessionApplied, added.Message);
+                AssertRetained();
+
+                var plan = PackageStorePolicy.CreateUninstallPlan(extensionId, await store.ListAsync());
+                Assert.False(plan.RequiresCascadeConsent);
+                var removed = await host.UninstallPackageAsync(extensionId, new(ConfirmationToken: plan.ConfirmationToken));
+                Assert.True(removed.RuntimeSessionApplied, removed.Message);
+                AssertRetained();
+
+                void AssertRetained()
+                {
+                    var current = host.ActiveSession.LoadedPackageMap[agentId];
+                    Assert.Same(original.Worker, current.Worker);
+                    Assert.Equal(original.RuntimeActivationId, current.RuntimeActivationId);
+                    Assert.Equal(original.ActivationSessionGeneration, current.ActivationSessionGeneration);
+                    Assert.False(current.Worker.GenerationCompletion.IsCompleted);
+                    Assert.False(call.RetirementToken.IsCancellationRequested);
+                    using var next = host.RpcBroker.AcquirePublishedPackageDataLease(caller, original.ActivationSessionGeneration.Value, current.Worker);
+                    Assert.NotNull(next);
+                    Assert.Equal(appFingerprint, Assert.Single(host.GetActivePackageUiSnapshots(), item => item.PackageId == agentId).ActivationFingerprint);
+                    Assert.Equal("edit made during cutover", File.ReadAllText(workspaceFile));
+                }
+            }
+            var reinstalled = await host.ReinstallPackageFromRuntimePathAsync(agentId, archive);
+            Assert.True(reinstalled.RuntimeSessionApplied, reinstalled.Message);
+            Assert.NotEqual(original.RuntimeActivationId, host.ActiveSession.LoadedPackageMap[agentId].RuntimeActivationId);
+            Assert.True(original.Worker.GenerationCompletion.IsCompleted);
+            Assert.Equal("edit made during cutover", File.ReadAllText(workspaceFile));
+        }
+        finally
+        {
+            await host.ShutdownAsync();
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [Fact]
     public async Task CommitPackageStoreStageAsync_PublishesExactStagedSessionWithoutReloading()
     {
         var root = CreateTempDirectory();
@@ -1087,7 +1164,8 @@ public sealed class SunderPackageArchiveInstallerTests
         string version,
         bool corruptHash = false,
         IReadOnlyList<string>? runtimeIdentifiers = null,
-        bool sensitiveDockerEnvironment = false)
+        bool sensitiveDockerEnvironment = false,
+        IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null)
     {
         var sourceRoot = Path.Combine(root, "package-source-" + Guid.NewGuid().ToString("N"));
         CanonicalPackageTestBuilder.WriteExplodedPackage(
@@ -1095,6 +1173,7 @@ public sealed class SunderPackageArchiveInstallerTests
             packageId,
             version,
             typeof(PackageSessionOverlayTestPackageModule).Assembly.Location,
+            dependencies: dependencies,
             runtimeIdentifiers: runtimeIdentifiers,
             runtimeRequiredHostCapabilities: sensitiveDockerEnvironment
                 ? [

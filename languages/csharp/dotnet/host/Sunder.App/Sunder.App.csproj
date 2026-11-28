@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Version>1.1.5</Version>
+    <Version>1.1.6</Version>
     <OutputType>WinExe</OutputType>
     <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\**" />
+    <Compile Include="..\..\shared\PackageDeclarationLabels.cs" Link="Presentation\PackageDeclarationLabels.cs" />
   </ItemGroup>
 
   <ItemGroup>

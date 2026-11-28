@@ -1,6 +1,7 @@
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.Input;
 using Sunder.Package.Format;
+using Sunder.Presentation;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
@@ -22,6 +23,14 @@ public sealed class PackageInformationViewModel
     public bool HasTechnicalFeatures => TechnicalFeatures.Count > 0;
     public bool HasDependencies => Dependencies.Count > 0;
     public bool HasPublicBindings => PublicBindings.Count > 0;
+    public string ProvidedServices
+    {
+        get
+        {
+            var names = PublicBindings.Where(binding => binding.Kind == "Provided service").Select(binding => binding.Title).Distinct().ToArray();
+            return names.Length <= 4 ? string.Join(" · ", names) : $"{names.Length} public services";
+        }
+    }
     public bool HasServiceAccess => ServiceAccess.Count > 0;
     public bool HasNoDependencies => IsLoaded && !HasDependencies;
     public bool HasNoPublicBindings => IsLoaded && !HasPublicBindings;
@@ -44,12 +53,13 @@ public sealed class PackageInformationViewModel
     public static PackageInformationViewModel Unavailable() => new("Package information is unavailable from this source. This does not mean that the package has no dependencies or access.");
 
     internal static PackageInformationViewModel Create(SunderPackageInformation facts, string rid,
-        Func<string, string, PackageDependencyState>? resolveDependency = null, Action<string>? navigate = null)
+        Func<string, string, PackageDependencyState>? resolveDependency = null, Action<string>? navigate = null,
+        IEnumerable<string>? deviceRoles = null)
     {
         var targets = facts.Features.Where(value => value.Rid == rid).ToArray();
-        var roles = targets.Select(value => value.Role).ToHashSet(StringComparer.Ordinal);
+        var roles = (deviceRoles ?? targets.Select(value => value.Role)).ToHashSet(StringComparer.Ordinal);
         bool IncludesRole(string role) => roles.Contains(role);
-        var features = PackageFeatureDescriptions.Project(targets);
+        var features = DescribeFeatures(targets.Where(target => IncludesRole(target.Role)));
         return new(string.Empty)
         {
             IsLoaded = true,
@@ -100,6 +110,17 @@ public sealed class PackageInformationViewModel
         value.PublicUses.Select(item => new SunderPackagePublicUse(item.Role, item.ContractId, item.Version, item.Required, item.Actions)).ToArray());
 
     internal static string RoleText(string role) => role == "app" ? "Desktop UI" : role == "runtime" ? "Background worker" : role;
+
+    internal static IReadOnlyList<PackageFeatureItemViewModel> DescribeFeatures(IEnumerable<SunderPackageFeature> features)
+        => features.GroupBy(value => PackageDeclarationLabels.Feature(value.Capability).Group, StringComparer.Ordinal)
+            .Select(group =>
+            {
+                var identifiers = group.Select(value => value.Capability).Distinct().Order(StringComparer.Ordinal).ToArray();
+                var descriptions = identifiers.Select(PackageDeclarationLabels.Feature).ToArray();
+                return new PackageFeatureItemViewModel(descriptions[0].Title, string.Join(" ", descriptions.Select(value => value.Text).Distinct()),
+                    string.Join(" · ", group.Select(value => RoleText(value.Role)).Distinct().Order(StringComparer.Ordinal)),
+                    string.Join(" · ", identifiers), descriptions.Any(value => value.Sensitive), descriptions.All(value => value.Technical));
+            }).OrderByDescending(value => value.IsSensitive).ThenBy(value => value.Title, StringComparer.Ordinal).ToArray();
 }
 
 internal sealed record PackageDependencyState(string Name, string Status);

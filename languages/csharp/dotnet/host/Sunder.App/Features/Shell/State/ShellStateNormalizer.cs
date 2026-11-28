@@ -25,11 +25,9 @@ internal static class ShellStateNormalizer
         // when the complete catalog has no unavailable package that might own them.
         var removedIds = state.ViewPlacements.Keys.Concat(state.ViewOrder.Keys)
             .Concat(state.ViewPackageIds.Keys).Concat(state.HiddenHotbarViewIds)
-            .Concat(ShellSelectionState.GetDeferredActivationSelections(state)
-                .Select(selection => selection.ViewId).OfType<string>())
+            .Concat(ShellPlacementCatalog.All.Select(placement => ShellSelectionState.GetRememberedViewId(state, placement)).OfType<string>())
             .Where(id => !availableIds.Contains(id) && CanEstablishRemoval(id))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var removedMiddleSelection = state.SelectedMiddleViewId is { } middle && removedIds.Contains(middle);
         RemoveViews(state, removedIds);
 
         foreach (var view in packageViews)
@@ -52,17 +50,16 @@ internal static class ShellStateNormalizer
 
         foreach (var placement in ShellPlacementCatalog.All)
         {
-            var selectedViewId = ShellSelectionState.GetSelectedViewId(state, placement);
-            if (!string.IsNullOrWhiteSpace(selectedViewId)
-                && (state.HiddenHotbarViewIds.Contains(selectedViewId)
-                    || state.ViewPlacements.TryGetValue(selectedViewId, out var savedPlacement) && savedPlacement != placement))
+            var rememberedId = ShellSelectionState.GetRememberedViewId(state, placement);
+            if (!string.IsNullOrWhiteSpace(rememberedId)
+                && (state.HiddenHotbarViewIds.Contains(rememberedId)
+                    || state.ViewPlacements.TryGetValue(rememberedId, out var savedPlacement) && savedPlacement != placement))
             {
                 ShellSelectionState.SetSelectedViewId(state, placement, null);
             }
         }
 
-        if (string.IsNullOrWhiteSpace(state.SelectedMiddleViewId)
-            && (removedMiddleSelection || !state.HasInitializedLayout))
+        if (string.IsNullOrWhiteSpace(ShellSelectionState.GetRememberedViewId(state, RailPlacement.Middle)))
         {
             SelectMiddleFallback(state, packageViews, unavailablePackageIds);
         }
@@ -93,7 +90,7 @@ internal static class ShellStateNormalizer
             state.ViewOrder.Remove(id);
             state.ViewPackageIds.Remove(id);
             state.HiddenHotbarViewIds.Remove(id);
-            foreach (var placement in ShellPlacementCatalog.All) ShellSelectionState.ClearSelectedViewId(state, placement, id);
+            foreach (var placement in ShellPlacementCatalog.All) ShellSelectionState.ForgetView(state, placement, id);
         }
     }
 }

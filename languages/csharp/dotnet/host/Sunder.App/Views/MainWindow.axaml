@@ -21,18 +21,15 @@
         ExtendClientAreaToDecorationsHint="True"
         UseLayoutRounding="True"
         Classes="shell-window">
-  <Window.Resources>
-    <ExperimentalAcrylicMaterial x:Key="Sunder.Shell.AcrylicMaterial"
-                                  TintColor="#14171A"
-                                  TintOpacity="0.44"
-                                  MaterialOpacity="0.48"
-                                  PlatformTransparencyCompensationLevel="0.18" />
-  </Window.Resources>
-
   <Border ClipToBounds="True">
     <Grid>
-      <ExperimentalAcrylicBorder Material="{StaticResource Sunder.Shell.AcrylicMaterial}"
-                                  IsHitTestVisible="False" />
+      <ExperimentalAcrylicBorder IsHitTestVisible="False">
+        <ExperimentalAcrylicBorder.Material>
+          <ExperimentalAcrylicMaterial TintColor="{DynamicResource Sunder.Color.Surface.Workspace}"
+                                       TintOpacity="0.44" MaterialOpacity="0.48"
+                                       PlatformTransparencyCompensationLevel="0.18" />
+        </ExperimentalAcrylicBorder.Material>
+      </ExperimentalAcrylicBorder>
       <Border IsHitTestVisible="False"
               Classes="shell-glass-tint" />
 

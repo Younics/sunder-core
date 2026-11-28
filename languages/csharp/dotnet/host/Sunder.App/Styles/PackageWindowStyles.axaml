@@ -1,6 +1,25 @@
-<Styles xmlns="https://github.com/avaloniaui">
+<Styles xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Sunder.App.ViewModels">
+  <Style Selector="ItemsControl.people-list">
+    <Setter Property="ItemTemplate">
+      <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
+        <Border Classes="detail-row" Margin="0,0,0,4">
+          <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+            <Border Width="30" Height="30" CornerRadius="15" Background="{DynamicResource Sunder.Brush.Accent.Soft}">
+              <TextBlock Text="{Binding Initial}" Foreground="{DynamicResource Sunder.Brush.Info}"
+                         FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </Border>
+            <StackPanel Grid.Column="1">
+              <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" TextWrapping="Wrap" />
+              <TextBlock Classes="caption" Text="{Binding Role}" />
+            </StackPanel>
+          </Grid>
+        </Border>
+      </DataTemplate>
+    </Setter>
+  </Style>
   <Style Selector="ListBox.package-list">
-    <Setter Property="Padding" Value="0,0,14,0" />
+    <Setter Property="Padding" Value="0" />
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
     <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Transparent}" />
     <Setter Property="BorderThickness" Value="0" />
@@ -8,7 +27,7 @@
 
   <Style Selector="ListBox.package-list ListBoxItem">
     <Setter Property="Padding" Value="0" />
-    <Setter Property="Margin" Value="0,0,0,8" />
+    <Setter Property="Margin" Value="0,0,0,4" />
     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
     <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Transparent}" />
   </Style>
@@ -59,8 +78,17 @@
     <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
   </Style>
 
-  <Style Selector="Border.marketplace-profile-card">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Raised}" />
+  <Style Selector="Border.package-row-badge.supported">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Success.Soft}" />
+  </Style>
+  <Style Selector="Border.package-row-badge.supported TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Success}" />
+  </Style>
+  <Style Selector="Border.package-row-badge.unsupported">
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Warning.Soft}" />
+  </Style>
+  <Style Selector="Border.package-row-badge.unsupported TextBlock">
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Warning}" />
   </Style>
 
   <Style Selector="Border.marketplace-profile-row">
@@ -70,22 +98,6 @@
     <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Medium}" />
     <Setter Property="Padding" Value="10,9" />
     <Setter Property="Margin" Value="0,0,0,7" />
-  </Style>
-
-  <Style Selector="Border.marketplace-profile-link-row:pointerover">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Hover}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Strong}" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-profile-label">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-    <Setter Property="VerticalAlignment" Value="Center" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-profile-value">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-    <Setter Property="VerticalAlignment" Value="Center" />
   </Style>
 
   <Style Selector="HyperlinkButton.marketplace-profile-link">
@@ -107,8 +119,8 @@
   </Style>
 
   <Style Selector="Border.marketplace-tag-chip">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
+    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
     <Setter Property="BorderThickness" Value="1" />
     <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
     <Setter Property="Margin" Value="0,0,6,6" />
@@ -116,38 +128,9 @@
   </Style>
 
   <Style Selector="Border.marketplace-tag-chip TextBlock">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
+    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Secondary}" />
     <Setter Property="FontSize" Value="12" />
     <Setter Property="FontWeight" Value="SemiBold" />
-  </Style>
-
-  <Style Selector="Border.marketplace-person-chip">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
-    <Setter Property="BorderThickness" Value="1" />
-    <Setter Property="CornerRadius" Value="{DynamicResource Sunder.Radius.Full}" />
-    <Setter Property="Margin" Value="0,0,8,8" />
-    <Setter Property="Padding" Value="10,6" />
-  </Style>
-
-  <Style Selector="Border.marketplace-person-chip.creator">
-    <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Info.Soft}" />
-    <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Accent}" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-people-heading">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Muted}" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-  </Style>
-
-  <Style Selector="TextBlock.marketplace-person-chip-text">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Foreground.Primary}" />
-    <Setter Property="FontSize" Value="12" />
-    <Setter Property="FontWeight" Value="SemiBold" />
-  </Style>
-
-  <Style Selector="Border.marketplace-person-chip.creator TextBlock.marketplace-person-chip-text">
-    <Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" />
   </Style>
 
   <Style Selector="Button.marketplace-image-thumb">

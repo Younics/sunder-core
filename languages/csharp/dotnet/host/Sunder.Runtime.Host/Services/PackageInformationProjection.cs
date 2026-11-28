@@ -19,6 +19,9 @@ internal static class PackageInformationProjection
             facts.PublicUses.Select(value => new PackagePublicUseDescriptor(value.Role, value.ContractId, value.Version, value.Required, value.Actions)).ToArray())
         {
             Summary = source.Manifest.Summary,
+            AcquiredTargets = SunderPackageTargetResolver.EnumerateTargets(source.Manifest)
+                .Where(target => InstalledPackageProjection.Includes(source.AcquiredTargets, target.Role, target.Rid))
+                .Select(target => new PackagePlatformTargetDescriptor(target.Role, target.Rid)).ToArray(),
             DeclaredTargets = SunderPackageTargetResolver.EnumerateTargets(source.Manifest)
                 .OrderBy(value => value.Role, StringComparer.Ordinal).ThenBy(value => value.Rid, StringComparer.Ordinal)
                 .Select(value => new PackagePlatformTargetDescriptor(value.Role, value.Rid)).ToArray(),

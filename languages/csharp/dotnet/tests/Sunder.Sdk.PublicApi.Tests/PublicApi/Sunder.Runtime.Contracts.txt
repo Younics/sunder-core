@@ -587,6 +587,7 @@ type public sealed class Sunder.Runtime.Contracts.PackageInformationDescriptor :
   method public .ctor(System.String PackageId, System.String Version, System.String ContentIdentity, Sunder.Runtime.Contracts.PackageSourceKind SourceKind, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageRelationshipDescriptor> Dependencies, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings, System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses)
   property Sunder.Runtime.Contracts.PackageSourceKind SourceKind { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackageFeatureDescriptor> Features { public get; }
+  property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor>? AcquiredTargets { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePlatformTargetDescriptor>? DeclaredTargets { public get; public init; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicBindingDescriptor> PublicBindings { public get; }
   property System.Collections.Generic.IReadOnlyList<Sunder.Runtime.Contracts.PackagePublicUseDescriptor> PublicUses { public get; }

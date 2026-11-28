@@ -1,6 +1,4 @@
-using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Sunder.App.Services;
 using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
@@ -17,8 +15,7 @@ public sealed partial class PackageViewHostServiceTests
     [InlineData(true, true)]
     public async Task DevelopmentViewBindingRequiresAnAlreadyCachedAttachedExactPackageView(bool nativeDocument, bool nativeCapture)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("development-view-binding");
             var registry = new AppPackageViewRegistry(TestUiDispatcher);
@@ -87,8 +84,7 @@ public sealed partial class PackageViewHostServiceTests
     [InlineData("package-disabled")]
     public async Task IssuedDevelopmentViewBindingsNeverFollowAReplacedOrRetiredAuthority(string boundary)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(DevelopmentViewTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("development-view-retirement");
             var registry = new AppPackageViewRegistry(TestUiDispatcher);
@@ -142,11 +138,5 @@ public sealed partial class PackageViewHostServiceTests
     {
         public bool CanCapture => canCapture;
         public IAppDevelopmentDocument DevelopmentDocument => throw new InvalidOperationException("View discovery must not inspect the native document.");
-    }
-
-    public sealed class DevelopmentViewTestApplication : Application
-    {
-        public static AppBuilder BuildAvaloniaApp()
-            => AppBuilder.Configure<DevelopmentViewTestApplication>().UseHeadless(new AvaloniaHeadlessPlatformOptions());
     }
 }

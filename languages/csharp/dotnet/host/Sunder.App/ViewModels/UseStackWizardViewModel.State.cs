@@ -47,9 +47,9 @@ public sealed partial class UseStackWizardViewModel(
 
     public string StackSubtitle { get; } = stack.StackId;
 
-    public string StackSummary { get; } = string.IsNullOrWhiteSpace(stack.Summary) ? "No summary provided." : stack.Summary!;
+    public string StackSummary { get; } = stack.Summary?.Trim() ?? string.Empty;
 
-    public string StackMetadata { get; } = $"{stack.PackageCount} package{StackDisplayFormatters.Plural(stack.PackageCount)} - {stack.FragmentCount} fragment{StackDisplayFormatters.Plural(stack.FragmentCount)}";
+    public string StackMetadata { get; } = StackDisplayFormatters.Contents(stack.PackageCount, stack.FragmentCount);
 
     public ObservableCollection<RegistryPackageMediaItemViewModel> StackProfileMedia => _stackProfile.Media;
 
@@ -90,6 +90,12 @@ public sealed partial class UseStackWizardViewModel(
     public bool HasInstallPlanWarnings => InstallPlanWarnings.Count > 0;
 
     public bool HasInstallPlanErrors => InstallPlanErrors.Count > 0;
+
+    public bool ShowInstallPlan => HasPackageRequirements || HasInstallPlanErrors || HasInstallPlanWarnings;
+
+    public bool ShowInstallBeforeImport => HasInstallPlanItems && HasSelectedSetupItems && !_installPlanHasErrors;
+
+    public bool ShowImportPreview => HasImportActions || HasRequiredInputs || HasImportWarnings || HasImportErrors;
 
     public bool ShowNoInstallPlanChanges => _installPlanReady && !HasInstallPlanItems && !HasInstallPlanErrors;
 

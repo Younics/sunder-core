@@ -152,8 +152,7 @@ It currently says **`UNFROZEN` / `UNRELEASED`**, with no release records. The
 historical `core-compatibility-candidate.json`, Stack migration oracle and Agent
 captures are inert byte-preserved archives, not current runtime/build gates or
 sources of current expected identities/hashes. They are not refreshed to create
-release evidence. A separately collected `core-current-compatibility-candidate.json`
-remains UNFROZEN / UNRELEASED and cannot replace independent released references.
+release evidence.
 The supported-release ledger does not claim that SDK `1.0.0` or any retained
 package has shipped.
 

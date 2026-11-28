@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Sunder.App.Services;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Client;
 using Sunder.Runtime.Contracts;
 using Sunder.Runtime.Host.Services;
@@ -128,6 +129,34 @@ public sealed class RegistryCombinedApprovalTests
                 Assert.Equal(operation == "adoption", request.Reinstall);
             });
             Assert.True(PackageSensitiveCapabilityPolicy.IsSha256(sourceFingerprint));
+            if (operation == "update-one" && !missingRuntime)
+            {
+                // Registry Keep carries no artifact rows. Only a matching verified local acquisition
+                // can replace reviewed downloads; older records can still be kept in their own review.
+                var response = registry.PlansByOrigin[new Uri(origin).GetLeftPart(UriPartial.Authority)];
+                registry.PlansByOrigin[new Uri(origin).GetLeftPart(UriPartial.Authority)] = response with
+                {
+                    Items = [published.PlanItem with { CurrentVersion = updated.Version, ActionKind = RegistryPackageActionKinds.Keep, Artifacts = [] }],
+                };
+                var request = new RuntimeRegistryPackageBatchRequest(origin, [new(updated.PackageId, updated.Version, [])]);
+                var kept = await client.ResolveRegistryPackagePlanAsync(request, timeout.Token);
+                Assert.True(kept.Success, string.Join("; ", kept.Errors));
+                Assert.Empty(kept.RequiredCapabilityConsents);
+                Assert.Equal(sourceFingerprint, kept.RuntimePrerequisites!.SourceFingerprint);
+                foreach (var differentAcquisition in new[]
+                {
+                    updated with { Provenance = updated.Provenance with { ProjectionFingerprint = null } },
+                    updated with { Provenance = updated.Provenance with { ProjectionFingerprint = new('c', 64) } },
+                    updated with { Provenance = updated.Provenance with { RegistryOrigin = "https://other.example/" }, Policy = null },
+                    updated with { CapabilityGrants = [] },
+                })
+                {
+                    await fixture.InstalledPackages.WriteAsync([differentAcquisition, retainedPin]);
+                    var different = await client.ResolveRegistryPackagePlanAsync(request, timeout.Token);
+                    Assert.True(different.Success, string.Join("; ", different.Errors));
+                    Assert.NotEqual(sourceFingerprint, different.RuntimePrerequisites!.SourceFingerprint);
+                }
+            }
         }
         finally
         {

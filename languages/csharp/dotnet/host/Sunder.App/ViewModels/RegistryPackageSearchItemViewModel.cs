@@ -16,13 +16,14 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
         Func<RegistryPackageSearchItemViewModel, Task> onSelectAsync,
         bool loadIcon = true,
         Uri? registryOrigin = null,
-        RemoteImageService? remoteImageService = null)
+        RemoteImageService? remoteImageService = null,
+        bool deferIcon = false)
         : base(
             TryCreateIconUri(package.IconUrl, registryOrigin),
             loadIcon: loadIcon,
             iconTransport: PackageIconTransport.Registry,
             registryOrigin: registryOrigin,
-            remoteImageService: remoteImageService)
+            remoteImageService: remoteImageService, deferIcon: deferIcon)
     {
         PackageId = package.PackageId;
         Name = package.Name;
@@ -59,7 +60,7 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
 
     public bool IsInstalled => InstalledVersion is not null;
 
-    public bool ShowRowBadges => IsInstalled || HasUpdate;
+    public string RowStatus => IsInstalled ? InstalledVersionText : IsYanked ? "Withdrawn" : $"{LatestVersionText} · Not installed";
 
     public bool HasUpdate => Update is not null;
 
@@ -93,14 +94,13 @@ public sealed partial class RegistryPackageSearchItemViewModel : PackageIconItem
     {
         OnPropertyChanged(nameof(InstalledVersionText));
         OnPropertyChanged(nameof(IsInstalled));
-        OnPropertyChanged(nameof(ShowRowBadges));
+        OnPropertyChanged(nameof(RowStatus));
         OnPropertyChanged(nameof(ActionText));
     }
 
     partial void OnUpdateChanged(RegistryPackageUpdate? value)
     {
         OnPropertyChanged(nameof(HasUpdate));
-        OnPropertyChanged(nameof(ShowRowBadges));
         OnPropertyChanged(nameof(ActionText));
     }
 

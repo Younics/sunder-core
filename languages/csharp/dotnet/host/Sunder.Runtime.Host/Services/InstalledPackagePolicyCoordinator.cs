@@ -8,13 +8,17 @@ internal sealed class InstalledPackagePolicyCoordinator(InstalledPackageStore in
 {
     private bool _indeterminate;
     internal InstalledPackageRecord ProjectCurrent(InstalledPackageRecord package) => policies.CaptureInstalled(package)?.ApplyTo(package) ?? package with { Policy = null };
-    internal async Task ReconcileAsync(CancellationToken token)
+    internal async Task<bool> ReconcileAsync(CancellationToken token,
+        Func<IReadOnlyList<InstalledPackageRecord>, CancellationToken, Task>? reconcileSession = null)
     {
         await using var operation = await operations.EnterAsync(token);
-        await ReconcileUnderOperationGateAsync(operation.CancellationToken);
+        var catalog = await ReconcileUnderOperationGateAsync(operation.CancellationToken);
+        if (catalog is null) return false;
+        if (reconcileSession is not null) await reconcileSession(catalog, operation.CancellationToken);
+        return true;
     }
 
-    internal async Task ReconcileUnderOperationGateAsync(CancellationToken token)
+    internal async Task<IReadOnlyList<InstalledPackageRecord>?> ReconcileUnderOperationGateAsync(CancellationToken token)
     {
         if (_indeterminate) throw new InvalidDataException("Installed policy persistence requires startup recovery.");
         var current = await installed.ListAsync(token);
@@ -23,12 +27,12 @@ internal sealed class InstalledPackagePolicyCoordinator(InstalledPackageStore in
         // A durable package cutover still owns its exact desired catalog. Its live
         // admission reads the recovered cache; persist newer display/binding policy
         // as a separate transaction after cutover acknowledgement.
-        if (store.HasPreparedStages || await store.GetPendingRuntimeCutoverAsync(token) is not null) return;
-        if (current.All(package => PackageStorePolicy.CatalogsEqual([package], [ProjectCurrent(package)]))) return;
+        if (store.HasPreparedStages || await store.GetPendingRuntimeCutoverAsync(token) is not null) return null;
+        if (current.All(package => PackageStorePolicy.CatalogsEqual([package], [ProjectCurrent(package)]))) return current;
         var desired = await policies.CaptureInstalledAsync(current, token);
         var changes = current.Zip(desired).Where(pair => !PackageStorePolicy.CatalogsEqual([pair.First], [pair.Second]))
             .Select(pair => (PackageStoreChange)new PackageLifecyclePolicyUpdateMutation(pair.First.PackageId, pair.First, pair.Second.Policy)).ToArray();
-        if (changes.Length == 0) return;
+        if (changes.Length == 0) return current;
         var preparation = await store.PrepareStageAsync(changes, token);
         if (!preparation.Success || preparation.Stage is null)
             throw new InvalidDataException(preparation.Failure?.Message ?? "Installed policy metadata could not be prepared.");
@@ -40,5 +44,6 @@ internal sealed class InstalledPackagePolicyCoordinator(InstalledPackageStore in
         }
         if (result.Disposition != PackageStoreCommitDisposition.Committed)
             throw new InvalidDataException(result.OperationResult.Message ?? "Installed policy metadata durability is unproven.");
+        return desired;
     }
 }

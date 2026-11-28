@@ -14,10 +14,9 @@ public sealed class RuntimeStatusViewModelTests
     [Fact]
     public async Task HostNeutralConstructionDoesNotReadAThemeOwnedByAnotherThread()
     {
-        await using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
-            var application = Assert.IsType<SettingsWindowLayoutTests.SettingsTestApplication>(Avalonia.Application.Current);
+            var application = Assert.IsType<HeadlessTestApplication>(Avalonia.Application.Current);
             await Task.Run(() =>
             {
                 Assert.Same(application, Avalonia.Application.Current);

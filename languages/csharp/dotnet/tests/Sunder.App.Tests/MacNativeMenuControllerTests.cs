@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Sunder.App.Features.Shell.Menus;
 using Sunder.App.Views;
@@ -16,8 +15,7 @@ public sealed class MacNativeMenuControllerTests
     [InlineData(true)]
     public async Task TopLevelUsesTextOnlyWhileNestedItemsKeepTheirIcons(bool hasRootIcon)
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(MainWindowViewModelShellViewTests.SplitterTestApplication));
-        await ui.Dispatch(() =>
+        await HeadlessAppCollection.Session.Dispatch(() =>
         {
             var window = new Window();
             using var icon = new WriteableBitmap(new PixelSize(16, 16), new Vector(96, 96));

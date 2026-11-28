@@ -11,7 +11,7 @@ public sealed partial class StacksWindowViewModel
             return true;
         }
 
-        StatusText = "Enter a valid HTTP Registry URL before using Registry Stacks.";
+        SetStatus("Enter a valid HTTP Registry URL before using Registry Stacks.", isError: true);
         NotifyRegistryStackStateChanged();
         return false;
     }

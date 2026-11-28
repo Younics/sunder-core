@@ -87,6 +87,7 @@ internal sealed class RegistryHttpClient(
             HttpStatusCode.Forbidden => "Registry operation is forbidden.",
             HttpStatusCode.NotFound => "Registry resource was not found.",
             HttpStatusCode.Conflict => "Registry operation conflicted with existing state.",
+            HttpStatusCode.TooManyRequests => "The Registry request rate limit was exceeded.",
             _ => $"Registry request failed with HTTP {(int)response.StatusCode}.",
         };
     }
@@ -94,10 +95,14 @@ internal sealed class RegistryHttpClient(
     public async Task EnsureSuccessAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
         if (response.IsSuccessStatusCode) return;
-        throw new HttpRequestException(
-            await ReadErrorAsync(response, cancellationToken),
-            inner: null,
-            response.StatusCode);
+        var message = await ReadErrorAsync(response, cancellationToken);
+        if (response.StatusCode == HttpStatusCode.TooManyRequests)
+        {
+            var retry = response.Headers.RetryAfter;
+            var delay = retry?.Delta ?? (retry?.Date - timeProvider.GetUtcNow());
+            throw new RegistryRateLimitException(message, delay < TimeSpan.Zero ? TimeSpan.Zero : delay);
+        }
+        throw new HttpRequestException(message, inner: null, response.StatusCode);
     }
 
     private static async Task<byte[]> ReadBoundedAsync(HttpContent content, long maxBytes, CancellationToken cancellationToken)
@@ -314,4 +319,11 @@ internal sealed class RegistryHttpClient(
             GC.SuppressFinalize(this);
         }
     }
+}
+
+internal sealed class RegistryRateLimitException(string message, TimeSpan? retryAfter) : HttpRequestException(
+    retryAfter > TimeSpan.Zero ? $"{message} Retry after {Math.Ceiling(retryAfter.Value.TotalSeconds):0} seconds." : message,
+    inner: null, HttpStatusCode.TooManyRequests)
+{
+    public TimeSpan? RetryAfter { get; } = retryAfter;
 }

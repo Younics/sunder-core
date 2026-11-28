@@ -41,6 +41,12 @@ public sealed class PackageExecutionRuntimeStatusViewModel
 
     public string ActionText { get; }
 
+    internal bool AwaitingInventory { get; private init; }
+
+    internal static PackageExecutionRuntimeStatusViewModel Unchecked(PackageTargetExecutionRuntimeBinding binding)
+        => new(binding, "Not checked", "The Host has not reported availability for this bound runtime.", false, false)
+            { AwaitingInventory = true };
+
     internal static PackageExecutionRuntimeStatusViewModel Create(
         PackageTargetExecutionRuntimeBinding binding,
         InstalledExecutionRuntimeSummary? runtime)

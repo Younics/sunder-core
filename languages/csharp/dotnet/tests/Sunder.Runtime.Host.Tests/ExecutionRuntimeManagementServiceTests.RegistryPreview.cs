@@ -34,6 +34,15 @@ public sealed partial class ExecutionRuntimeManagementServiceTests
         registry.Artifacts = first.ContentByUrl.Concat(second.ContentByUrl).ToDictionary(pair => pair.Key, pair => pair.Value);
         fixture.CorruptInstalledContent(runtime);
         var orchestrator = fixture.Provider.GetRequiredService<RegistryPackageChangeOrchestrator>();
+        var package = packages[0];
+        var packagePreview = await orchestrator.ResolveAsync(new(package.Provenance.RegistryOrigin!,
+            [new(package.PackageId, null, [], package.Provenance.RequestedTag)], package.Provenance.IncludePrerelease), default);
+        Assert.True(packagePreview.Success, string.Join("; ", packagePreview.Errors));
+        Assert.Single(registry.PlansRequested);
+        var requirement = Assert.Single(packagePreview.RuntimePrerequisites!.Requirements);
+        Assert.False(requirement.Satisfied);
+        Assert.Equal(Assert.Single(packagePreview.RequiredCapabilityConsents).ManifestSha256, requirement.ManifestSha256);
+
         var preview = await orchestrator.UpdateAsync(new(DryRun: true), default);
         Assert.False(preview.Success);
         Assert.Equal(RuntimeRegistryErrorCode.RuntimePrerequisitesRequired, preview.ErrorCode);

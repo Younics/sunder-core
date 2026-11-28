@@ -16,6 +16,7 @@ internal static class ShellStateSnapshotFactory
             HiddenHotbarViewIds = new HashSet<string>(state.HiddenHotbarViewIds, StringComparer.OrdinalIgnoreCase),
             SelectedLeftTopViewId = state.SelectedLeftTopViewId,
             SelectedMiddleViewId = state.SelectedMiddleViewId,
+            ClosedMiddleViewId = state.ClosedMiddleViewId,
             SelectedRightTopViewId = state.SelectedRightTopViewId,
             SelectedLeftBottomViewId = state.SelectedLeftBottomViewId,
             SelectedRightBottomViewId = state.SelectedRightBottomViewId,

@@ -4,11 +4,11 @@ import { readFile } from "node:fs/promises";
 import { posix, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-export const currentInventoryPath = "compatibility/agent-current-inventory.json";
-export const currentContractsPath = "compatibility/agent-current-contracts.json";
+const currentInventoryPath = "compatibility/agent-current-inventory.json";
+const currentContractsPath = "compatibility/agent-current-contracts.json";
 export const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 export function requireCurrent(condition, message) { if (!condition) throw new Error(message); }
-export function exactSet(actual, expected, label) {
+function exactSet(actual, expected, label) {
   requireCurrent(Array.isArray(actual) && new Set(actual).size === actual.length
     && isDeepStrictEqual([...actual].sort(), [...expected].sort()), `${label} differs from current expectations`);
 }
@@ -89,5 +89,5 @@ export async function readCurrentAgentInputs(agentRoot) {
   const inventorySha256 = sha256(inventoryBytes);
   validateCurrentRecords(records, inventory, inventorySha256);
   validateObservedInventory(packageInventory, inventory);
-  return { inventory, records, packageInventory, inventorySha256, contractsSha256: sha256(contractBytes), packagesSha256: sha256(packageBytes) };
+  return { inventory, records, packageInventory, inventorySha256, contractsSha256: sha256(contractBytes) };
 }

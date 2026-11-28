@@ -43,7 +43,7 @@ internal sealed class SecondaryWindowStateController(
 
     public void PersistSidebarWidth()
     {
-        if (shellState is null || sidebarPane.Bounds.Width <= 0)
+        if (shellState is null || !sidebarColumn.Width.IsAbsolute || !sidebarPane.IsVisible || sidebarPane.Bounds.Width <= 0)
         {
             return;
         }

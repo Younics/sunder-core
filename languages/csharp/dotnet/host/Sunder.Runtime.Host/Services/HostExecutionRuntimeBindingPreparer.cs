@@ -35,7 +35,6 @@ internal sealed class PreparedExecutionRuntimeBindings(
 
 internal sealed class HostExecutionRuntimeBindingPreparer(
     LocalExecutionRuntimeBindingResolver localResolver,
-    ExecutionRuntimeStore store,
     IExecutionRuntimeRetentionManager retentionManager,
     TimeProvider timeProvider,
     ExecutionRuntimePhaseTelemetry? telemetry = null) : IHostExecutionRuntimeBindingPreparer
@@ -80,12 +79,7 @@ internal sealed class HostExecutionRuntimeBindingPreparer(
                             throw new InvalidDataException("A kept Registry package must match the authoritative installed package.");
                         foreach (var binding in installed.ExecutionRuntimeBindings)
                         {
-                            var identity = ExecutionRuntimeIdentity.FromContract(binding.Runtime);
-                            var receipt = await store.GetReceiptAsync(identity, cancellationToken).ConfigureAwait(false);
-                            if (receipt is null || !RuntimePackageExecutionRuntimeBinding.FromInstalled(binding).MatchesReceipt(receipt)
-                                || !(await store.VerifyAsync(identity, false, cancellationToken).ConfigureAwait(false)).Healthy)
-                                throw new RuntimeExecutionRuntimeException(ExecutionRuntimeErrorCodes.Unhealthy,
-                                    "Repair the exact committed runtime of the kept package before continuing.");
+                            var identity = (await localResolver.VerifyKeptBindingAsync(binding, cancellationToken).ConfigureAwait(false)).Identity;
                             if (retainedIdentities.Add(identity)) retentions.Add(await retentionManager.RetainAsync(new(identity), cancellationToken).ConfigureAwait(false));
                         }
                         byPackage[item.PackageId] = installed.ExecutionRuntimeBindings;

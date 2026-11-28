@@ -1,3 +1,4 @@
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
@@ -12,21 +13,24 @@ internal sealed class PreparedRegistryPackageInstallation(
     IRuntimeRegistryPackageClient client,
     RegistryInstallationPreview approved,
     Func<CancellationToken, Task<RegistryInstallationPreview>> preview,
-    Func<RegistryInstallationPreview, RuntimePackageRuntimePrerequisiteExpectation, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> apply)
+    Func<RegistryInstallationPreview, RuntimePackageRuntimePrerequisiteExpectation, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> apply,
+    IReadOnlySet<string>? requestedPackages = null)
 {
     private readonly PackageInstallationApproval _runtimes = new(approved.Runtimes);
-    private readonly string _packageSemantics = PackageInstallationApproval.PackageSemantics(approved.Plan);
     public bool NeedsRuntimeInstallation => _runtimes.NeedsRuntimeInstallation;
-    public IReadOnlyList<string> PackageIds => approved.Plan.Items.Select(item => item.PackageId).Distinct(StringComparer.Ordinal).ToArray();
+    public IReadOnlyList<string> PackageIds => approved.Plan.Items.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep)
+        .Select(item => item.PackageId).Distinct(StringComparer.Ordinal).ToArray();
 
     private async Task<RegistryInstallationPreview> RefreshAsync(CancellationToken token)
     {
         var current = await preview(token).ConfigureAwait(false);
-        if (PackageInstallationApproval.PackageSemantics(current.Plan) != _packageSemantics
-            || !approved.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)
-                .SequenceEqual(current.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)))
-            throw PackageInstallationApproval.Changed();
+        // The Host source fingerprint covers even a Keep item's verified acquisition, grants
+        // and manifest. Runtime semantics also pin each exact bound or prospective runtime.
         _runtimes.Validate(current.Runtimes);
+        if (!approved.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)
+                 .SequenceEqual(current.ExpectedPlans.Select(item => (item.RegistryOrigin, item.IncludePrerelease)).OrderBy(item => item.RegistryOrigin, StringComparer.Ordinal).ThenBy(item => item.IncludePrerelease)))
+            throw PackageInstallationApproval.Changed();
+        PackageInstallationApproval.ValidatePackageChanges(approved.Plan, current.Plan, requestedPackages);
         return current;
     }
 
@@ -38,7 +42,8 @@ internal sealed class PreparedRegistryPackageInstallation(
         context.ReportIndeterminate("Rechecking the approved package changes…");
         var current = await RefreshAsync(context.CancellationToken).ConfigureAwait(false);
         _runtimes.Validate(current.Runtimes, requireReady: true);
-        context.ReportIndeterminate("Downloading and installing packages…");
+        context.ReportIndeterminate(current.Plan.Items.Any(item => item.ActionKind != RegistryPackageActionKinds.Keep)
+            ? "Applying the approved package changes…" : "Checking installed packages…");
         var result = await apply(current, new(current.Runtimes.SourceFingerprint, current.Runtimes.Rid), context.CancellationToken).ConfigureAwait(false);
         if (!result.Success) throw new InvalidOperationException(result.Errors.FirstOrDefault() ?? result.Message);
         return result;

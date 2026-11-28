@@ -29,8 +29,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
         }
     }
 
-    [Fact]
-    public void Valid_ProjectsIdentityFeaturesAndDeclaredPublicServiceAccess()
+    internal static SunderPackageArchiveValidationResult SampleArchive()
     {
         var manifest = new SunderPackageManifest
         {
@@ -46,6 +45,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
                 new SunderPackageTargetManifest
                 {
                     Role = "runtime",
+                    Kind = "worker",
                     Rid = AppPackageTargetEnvironment.CurrentRid,
                     RequiredHostCapabilities = [SunderSdkCapabilities.DockerEnvironmentV1],
                 },
@@ -66,7 +66,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
             ContractBundles = [new SunderPackageContractBundleManifest { Source = "imported", ContractId = "example.messages", Version = "1.4.0+local", Exposure = "public" }],
             Provides = [],
         };
-        var validation = new SunderPackageArchiveValidationResult(manifest, [], [])
+        return new SunderPackageArchiveValidationResult(manifest, [], [])
         {
             ContentIndex = new SunderPackageContentIndex(1,
             [
@@ -76,12 +76,16 @@ public sealed class LocalPackageInstallConsentViewModelTests
                     42),
             ]),
         };
+    }
 
-        var viewModel = LocalPackageInstallConsentViewModel.Valid("sample.sunderpkg", validation);
+    [Fact]
+    public void Valid_ProjectsIdentityFeaturesAndDeclaredPublicServiceAccess()
+    {
+        var viewModel = LocalPackageInstallConsentViewModel.Valid("sample.sunderpkg", SampleArchive());
 
         Assert.True(viewModel.IsValid);
         Assert.Equal("sample.package  1.2.3", viewModel.PackageIdentity);
-        Assert.Equal("App + Runtime", viewModel.TargetText);
+        Assert.Equal("Desktop UI + Background worker", viewModel.TargetText);
         Assert.True(viewModel.HasDockerEnvironmentAccess);
         Assert.Equal(new string('b', 64), viewModel.SensitiveCapabilityManifestSha256);
         var access = Assert.Single(viewModel.Information.ServiceAccess);

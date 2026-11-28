@@ -1,97 +1,94 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:vm="using:Sunder.App.ViewModels"
-        xmlns:controls="using:Sunder.App.Views.Controls"
-        x:Class="Sunder.App.Views.DeveloperLogWindow"
-        x:DataType="vm:DeveloperLogWindowViewModel"
-        mc:Ignorable="d"
-        Width="1100"
-        Height="680"
-        MinWidth="820"
-        MinHeight="480"
-        CanResize="True"
-        Title="Developer Logs"
-        Icon="avares://Sunder.App/Assets/Images/app.ico"
-        WindowDecorations="BorderOnly"
-        ExtendClientAreaToDecorationsHint="True"
-        Classes="secondary-window">
-  <Grid RowDefinitions="52,*"
-        Background="{DynamicResource Sunder.Brush.Background.App}">
-    <controls:WindowTitleBar Grid.Row="0">
-      <controls:WindowTitleBar.LeadingContent>
-        <TextBlock Classes="section-title"
-                   VerticalAlignment="Center"
-                   Text="Developer Logs" />
-      </controls:WindowTitleBar.LeadingContent>
-    </controls:WindowTitleBar>
-
-    <Border Grid.Row="1"
-            Margin="20,12,20,20"
-            Classes="panel-surface"
-            Padding="0">
-      <Border Classes="secondary-panel-content-clip"
-              Padding="14">
-        <Grid RowDefinitions="Auto,Auto,*" RowSpacing="8">
-          <Grid ColumnDefinitions="220,*,Auto" ColumnSpacing="10">
-            <controls:SunderComboBox ItemsSource="{Binding FilterOptions}"
-                                     SelectedItem="{Binding SelectedFilter}"
-                                     HorizontalAlignment="Stretch">
-              <controls:SunderComboBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:DeveloperLogFilterOptionViewModel">
-                  <TextBlock Text="{Binding Label}" />
-                </DataTemplate>
-              </controls:SunderComboBox.ItemTemplate>
-            </controls:SunderComboBox>
-            <TextBox Grid.Column="1"
-                     PlaceholderText="Search logs"
-                     Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Grid.Column="2"
-                       Classes="caption"
-                       VerticalAlignment="Center"
-                       Text="{Binding StatusText}" />
-          </Grid>
-
-          <Grid Grid.Row="1" ColumnDefinitions="110,95,90,190,*" ColumnSpacing="10">
-            <TextBlock Classes="caption" Text="Time" />
-            <TextBlock Grid.Column="1" Classes="caption" Text="Level" />
-            <TextBlock Grid.Column="2" Classes="caption" Text="Scope" />
-            <TextBlock Grid.Column="3" Classes="caption" Text="Source" />
-            <TextBlock Grid.Column="4" Classes="caption" Text="Message" />
-          </Grid>
-
-          <ListBox x:Name="LogEntries" Grid.Row="2"
-                   ItemsSource="{Binding FilteredEntries}"
-                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                   ScrollViewer.VerticalScrollBarVisibility="Auto">
-            <ListBox.Styles>
-              <Style Selector="ListBoxItem">
-                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-              </Style>
-            </ListBox.Styles>
-            <ListBox.ItemsPanel>
-              <ItemsPanelTemplate>
-                <VirtualizingStackPanel />
-              </ItemsPanelTemplate>
-            </ListBox.ItemsPanel>
-            <ListBox.ItemTemplate>
-                <DataTemplate x:DataType="vm:DeveloperLogEntryViewModel">
-                  <Grid ColumnDefinitions="110,95,90,190,*" ColumnSpacing="10" Margin="0,0,0,4" HorizontalAlignment="Stretch">
-                    <TextBlock Classes="caption" Text="{Binding TimestampText}" />
-                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding LevelText}" />
-                    <TextBlock Grid.Column="2" Classes="caption" Text="{Binding ScopeText}" />
-                    <TextBlock Grid.Column="3" Classes="caption" Text="{Binding Source}" TextTrimming="CharacterEllipsis" />
-                    <TextBlock Grid.Column="4"
-                               FontFamily="Menlo,Consolas,monospace"
-                               Text="{Binding Message}"
-                               TextWrapping="Wrap" />
-                  </Grid>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-          </ListBox>
-        </Grid>
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Sunder.App.ViewModels" xmlns:controls="using:Sunder.App.Views.Controls"
+        x:Class="Sunder.App.Views.DeveloperLogWindow" x:DataType="vm:DeveloperLogWindowViewModel"
+        Width="1060" Height="680" MinWidth="360" MinHeight="400"
+        Title="Developer logs" Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True" Classes="secondary-window management-window">
+  <Window.Resources>
+    <DataTemplate x:Key="Severity" x:DataType="vm:DeveloperLogEntryViewModel">
+      <Border Classes="package-row-badge log-level" Classes.warning="{Binding IsWarning}" Classes.error="{Binding IsError}"
+              HorizontalAlignment="Left">
+        <TextBlock Text="{Binding LevelText}" />
       </Border>
-    </Border>
+    </DataTemplate>
+    <DataTemplate x:Key="LogTableRow" x:DataType="vm:DeveloperLogEntryViewModel">
+      <Grid ColumnDefinitions="92,96,68,150,*" ColumnSpacing="8">
+        <TextBlock Classes="code-value" Text="{Binding TimestampText}" />
+        <ContentControl Grid.Column="1" Content="{Binding}" ContentTemplate="{StaticResource Severity}" />
+        <TextBlock Grid.Column="2" Classes="caption" Text="{Binding ScopeText}" />
+        <TextBlock Grid.Column="3" Classes="caption" Text="{Binding Source}" TextWrapping="Wrap" />
+        <TextBlock Grid.Column="4" Classes="code-value" Text="{Binding Message}" />
+      </Grid>
+    </DataTemplate>
+    <DataTemplate x:Key="CompactLogRow" x:DataType="vm:DeveloperLogEntryViewModel">
+      <StackPanel Spacing="4">
+        <WrapPanel ItemSpacing="8" LineSpacing="3">
+          <TextBlock Classes="code-value" Text="{Binding TimestampText}" />
+          <ContentControl Content="{Binding}" ContentTemplate="{StaticResource Severity}" />
+          <TextBlock Classes="caption" Text="{Binding ScopeText}" />
+        </WrapPanel>
+        <TextBlock FontWeight="SemiBold" Text="{Binding Source}" TextWrapping="Wrap" />
+        <TextBlock Classes="code-value" Text="{Binding Message}" />
+      </StackPanel>
+    </DataTemplate>
+  </Window.Resources>
+  <Window.Styles>
+    <Style Selector="ListBox#LogEntries">
+      <Setter Property="ItemTemplate" Value="{StaticResource LogTableRow}" />
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+      <Setter Property="BorderThickness" Value="0" />
+      <Setter Property="Padding" Value="0" />
+    </Style>
+    <Style Selector="ListBox#LogEntries ListBoxItem">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+      <Setter Property="Padding" Value="10,7" />
+      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+    </Style>
+    <Style Selector="Border.log-level.warning">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Warning.Soft}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Warning}" />
+    </Style>
+    <Style Selector="Border.log-level.error">
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Danger.Soft}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Danger}" />
+    </Style>
+    <ContainerQuery Name="Logs" Query="max-width:720">
+      <Style Selector="Grid#TableHeader"><Setter Property="IsVisible" Value="False" /></Style>
+      <Style Selector="ListBox#LogEntries"><Setter Property="ItemTemplate" Value="{StaticResource CompactLogRow}" /></Style>
+    </ContainerQuery>
+  </Window.Styles>
+  <Grid Container.Name="Logs" Container.Sizing="Width" RowDefinitions="52,Auto,Auto,*,Auto"
+        Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
+    <controls:WindowTitleBar>
+      <controls:WindowTitleBar.LeadingContent><TextBlock Classes="section-title" Text="Developer logs" /></controls:WindowTitleBar.LeadingContent>
+    </controls:WindowTitleBar>
+    <Grid Grid.Row="1" Margin="16,12" ColumnDefinitions="2*,3*" ColumnSpacing="8">
+      <controls:SunderComboBox ItemsSource="{Binding FilterOptions}" SelectedItem="{Binding SelectedFilter}"
+                               HorizontalAlignment="Stretch" MaxWidth="260" HorizontalContentAlignment="Left" AutomationProperties.Name="Log source">
+        <controls:SunderComboBox.ItemTemplate>
+          <DataTemplate x:DataType="vm:DeveloperLogFilterOptionViewModel"><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis" /></DataTemplate>
+        </controls:SunderComboBox.ItemTemplate>
+      </controls:SunderComboBox>
+      <TextBox Grid.Column="1" PlaceholderText="Search logs" AutomationProperties.Name="Search logs"
+               Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+    </Grid>
+    <Grid x:Name="TableHeader" Grid.Row="2" Margin="26,0,26,6" ColumnDefinitions="92,96,68,150,*" ColumnSpacing="8">
+      <TextBlock Classes="section-label" Text="Time" />
+      <TextBlock Grid.Column="1" Classes="section-label" Text="Level" />
+      <TextBlock Grid.Column="2" Classes="section-label" Text="Scope" />
+      <TextBlock Grid.Column="3" Classes="section-label" Text="Source" />
+      <TextBlock Grid.Column="4" Classes="section-label" Text="Message" />
+    </Grid>
+    <Grid Grid.Row="3" Margin="16,0,16,10">
+      <ListBox x:Name="LogEntries" ItemsSource="{Binding FilteredEntries}" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+        <ListBox.ItemsPanel><ItemsPanelTemplate><VirtualizingStackPanel /></ItemsPanelTemplate></ListBox.ItemsPanel>
+      </ListBox>
+      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" IsVisible="{Binding !FilteredEntries.Count}">
+        <TextBlock Classes="section-title" Text="{Binding EmptyText}" />
+        <Button Classes="secondary-action" Content="Clear filters" HorizontalAlignment="Center" IsVisible="{Binding HasFilters}" Command="{Binding ClearFiltersCommand}" />
+      </StackPanel>
+    </Grid>
+    <Border Grid.Row="4" Classes="window-footer"><TextBlock Classes="caption" Text="{Binding StatusText}" /></Border>
   </Grid>
 </Window>

@@ -1,6 +1,5 @@
 using Avalonia;
 using Avalonia.Controls;
-using Avalonia.Headless;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Sunder.App.Services;
@@ -17,8 +16,7 @@ public sealed class DeveloperLogWindowLayoutTests
     [Fact]
     public async Task BoundPackageNavigationSelectsActualOptionAndRevealsLatestMatchingEntryOnReopen()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsWindowLayoutTests.SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var logs = new DeveloperLogService();
             logs.Enable();
@@ -55,6 +53,14 @@ public sealed class DeveloperLogWindowLayoutTests
                         $"Latest matching entry was not revealed: {top}, list height {list.Bounds.Height}.");
                     Assert.True(list.GetVisualDescendants().OfType<ScrollViewer>().First().Offset.Y > 0);
                 }
+                await TestSupport.ManagementWindowAssert.CheckLayoutsAsync(window, () =>
+                    Assert.Equal(window.Width > 720, window.FindControl<Grid>("TableHeader")!.IsEffectivelyVisible));
+                model.SearchText = "no such entry";
+                window.UpdateLayout();
+                var clear = window.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Clear filters"));
+                TestSupport.ManagementWindowAssert.Click(window, clear);
+                Assert.False(model.HasFilters);
+                Assert.NotEmpty(model.FilteredEntries);
             }
             finally { window.CloseForShutdown(); }
             return true;

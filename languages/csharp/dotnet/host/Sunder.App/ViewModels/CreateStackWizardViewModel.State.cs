@@ -129,11 +129,9 @@ public sealed partial class CreateStackWizardViewModel(
 
     public string StepDescription => CurrentStep switch
     {
-        CreateStackWizardStep.Packages => "Pick the packages that should be installed when this Stack is used.",
-        CreateStackWizardStep.Items => "Optionally choose setup items that should be imported after selected packages are installed.",
-        CreateStackWizardStep.Review => IsEditMode
-            ? "Review the exact content that will be saved into this local Stack."
-            : "Review the exact content that will be exported and create the Stack when it looks safe.",
+        CreateStackWizardStep.Packages => "Name the Stack and choose its package requirements.",
+        CreateStackWizardStep.Items => "Packages are included even if you skip their setup items.",
+        CreateStackWizardStep.Review => "Check the packages and values included in this Stack.",
         _ => string.Empty,
     };
 

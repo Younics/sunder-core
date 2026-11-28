@@ -38,8 +38,7 @@ that older Hosts reject before code runs. Protected release history and the
 old-package/new-Host, old-source/new-SDK and new-feature/older-Host corpus become
 continuing obligations, not snapshots that can be replaced by a newer SDK minor.
 
-The [Core compatibility inputs](SUNDER-CORE-COMPATIBILITY-CANDIDATE.md) separate a
-new UNFROZEN current observation from byte-preserved inert migration archives.
-Those archives are not current runtime/build prerequisites or a final release freeze. Final
+The [Core compatibility checks](SUNDER-CORE-COMPATIBILITY-CANDIDATE.md) exercise
+current contracts independently of the archived migration ledgers. Final
 clean-source, native and production acceptance remain the requirements in the
 [release guide](SUNDER-CORE-RELEASES.md).

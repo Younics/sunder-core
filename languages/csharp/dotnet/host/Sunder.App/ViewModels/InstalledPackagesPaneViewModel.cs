@@ -29,7 +29,7 @@ public sealed class InstalledPackagesPaneViewModel : IDisposable
 
     internal PackagesInstalledCatalog Catalog => _catalog;
 
-    public bool IsDirty { get; set; }
+    public bool IsDirty { get; set; } = true;
 
     public bool HasPackages => Packages.Count > 0;
 
@@ -45,15 +45,10 @@ public sealed class InstalledPackagesPaneViewModel : IDisposable
 
     public int AvailableUpdateCount => _catalog.AvailableUpdateCount;
 
-    public async Task RefreshAsync(Action<string> addWarning, CancellationToken cancellationToken = default)
+    public async Task RefreshAsync(CancellationToken cancellationToken)
     {
-        await _catalog.RefreshAsync(addWarning, cancellationToken).ConfigureAwait(false);
+        await _catalog.RefreshAsync(cancellationToken);
         IsDirty = false;
-    }
-
-    public async Task RefreshInstalledPackageStateOnlyAsync(Action<string> addWarning, CancellationToken cancellationToken = default)
-    {
-        await _catalog.RefreshInstalledPackageStateOnlyAsync(addWarning, cancellationToken).ConfigureAwait(false);
     }
 
     public Task RefreshExecutionRuntimesAsync(CancellationToken cancellationToken = default)

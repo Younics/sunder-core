@@ -1,234 +1,93 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:vm="using:Sunder.App.ViewModels"
              xmlns:controls="using:Sunder.App.Views.Controls"
              xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia"
              x:Class="Sunder.App.Views.Controls.MarketplacePackageDetails"
-             x:DataType="vm:PackagesWindowViewModel"
-             mc:Ignorable="d">
-  <StackPanel Spacing="16">
-    <Grid MinHeight="220"
-          IsVisible="{Binding ShowMarketplacePackageDetailsLoading}">
-      <Path Classes="marketplace-detail-spinner"
-            Data="M 15,3 A 12,12 0 1 1 6.5,24.5"
-            Fill="{x:Null}"
-            HorizontalAlignment="Center"
-            VerticalAlignment="Center"
-            RenderTransformOrigin="50%,50%">
-        <Path.RenderTransform>
-          <RotateTransform Angle="0" />
-        </Path.RenderTransform>
-      </Path>
-    </Grid>
-
-    <Border Classes="settings-note-card"
-            IsVisible="{Binding ShowMarketplacePackageDetailsError}">
-      <StackPanel Spacing="6">
-        <TextBlock Text="Package details unavailable"
-                   FontWeight="SemiBold" />
-        <TextBlock Classes="muted"
-                   Text="{Binding MarketplacePackageDetailsError}"
-                   TextWrapping="Wrap" />
-      </StackPanel>
+             x:DataType="vm:PackagesWindowViewModel">
+  <StackPanel Spacing="12" Container.Name="PackageTabArea" Container.Sizing="Width">
+    <ProgressBar IsIndeterminate="True" IsVisible="{Binding ShowMarketplacePackageDetailsLoading}" />
+    <Border Classes="review-error" IsVisible="{Binding ShowMarketplacePackageDetailsError}">
+      <TextBlock Text="{Binding MarketplacePackageDetailsError}" TextWrapping="Wrap" />
     </Border>
-
-    <StackPanel Spacing="16"
-                IsVisible="{Binding ShowMarketplacePackageDetailsContent}">
-      <Grid ColumnDefinitions="*,*,*"
-            ColumnSpacing="12">
-      <Border Classes="card-surface">
-        <StackPanel Spacing="4">
-          <TextBlock Classes="caption" Text="Latest" />
-          <TextBlock Classes="section-title" Text="{Binding MarketplaceLatestVersion}" />
-        </StackPanel>
-      </Border>
-      <Border Grid.Column="1" Classes="card-surface">
-        <StackPanel Spacing="4">
-          <TextBlock Classes="caption" Text="Installed" />
-          <TextBlock Classes="section-title" Text="{Binding MarketplaceInstalledVersion}" />
-        </StackPanel>
-      </Border>
-      <Border Grid.Column="2" Classes="card-surface">
-        <StackPanel Spacing="4">
-          <TextBlock Classes="caption" Text="Selected Version" />
-          <TextBlock Classes="section-title" Text="{Binding MarketplaceSelectedVersion}" />
-        </StackPanel>
-      </Border>
-    </Grid>
-
-    <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
-
-    <Border Classes="card-surface">
-      <Expander IsExpanded="{Binding Marketplace.HasRuntimePreflightError}">
-        <Expander.Header>
-          <StackPanel Spacing="3">
-            <TextBlock Classes="section-title" Text="Runtime compatibility" />
-            <TextBlock Classes="caption" Text="{Binding Marketplace.RuntimeCompatibilitySummary}" TextWrapping="Wrap" />
+    <TabControl Classes="detail-tabs package-tabs" IsVisible="{Binding ShowMarketplacePackageDetailsContent}" SelectedIndex="{Binding MarketplaceTabIndex, Mode=TwoWay}">
+      <TabItem Header="Overview">
+        <StackPanel Margin="0,12,0,0" Spacing="12">
+          <TextBlock Classes="detail-intro" Text="{Binding SelectedPackageSummary}"
+                     IsVisible="{Binding SelectedPackageSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+          <controls:MarketplaceProfileCard
+              Links="{Binding Marketplace.ProfileLinks}" Metadata="{Binding Marketplace.ProfileMetadata}" Tags="{Binding Marketplace.ProfileTags}"
+              HasLinks="{Binding HasMarketplaceProfileLinks}" HasMetadata="{Binding HasMarketplaceProfileMetadata}"
+              HasTags="{Binding HasMarketplaceProfileTags}" IsVisible="{Binding HasMarketplaceProfile}" />
+          <StackPanel Spacing="6" IsVisible="{Binding HasMarketplaceReadme}">
+            <TextBlock Classes="section-label" Text="README" />
+            <md:MarkdownRenderer MarkdownBuilder="{Binding Marketplace.ReadmeMarkdownBuilder}" />
           </StackPanel>
-        </Expander.Header>
-      <StackPanel Spacing="12" Margin="0,12,0,0">
-        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-          <StackPanel Spacing="2">
-            <TextBlock FontWeight="SemiBold" Text="Package runtime" />
-            <TextBlock Classes="caption" Text="Shared by compatible packages; not installed as a package dependency." TextWrapping="Wrap" />
+          <controls:MarketplaceMediaStrip Items="{Binding Marketplace.ProfileMedia}" IsVisible="{Binding HasMarketplaceProfileMedia}" />
+          <StackPanel Spacing="6">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Classes="section-title" Text="On this device" />
+              <Border Grid.Column="1" Classes="package-row-badge" Classes.supported="{Binding !Platforms.IsUnsupported}"
+                      Classes.unsupported="{Binding Platforms.IsUnsupported}" IsVisible="{Binding Platforms.HasDeviceSummary}">
+                <TextBlock Text="{Binding Platforms.SupportLabel}" />
+              </Border>
+            </Grid>
+            <TextBlock Classes="caption" Text="{Binding Platforms.Summary}" TextWrapping="Wrap" IsVisible="{Binding !Platforms.HasDeviceSummary}" />
+            <Border Classes="detail-row" IsVisible="{Binding Platforms.HasDeviceSummary}">
+              <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="5" ColumnSpacing="12">
+                <TextBlock Classes="section-label" Text="Platform" />
+                <TextBlock Grid.Column="1" Text="{Binding Platforms.DevicePlatform}" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="1" Classes="section-label" Text="Components" />
+                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Platforms.DeviceComponents}" TextWrapping="Wrap" />
+                <TextBlock Grid.Row="2" Classes="section-label" Text="Shared runtime" IsVisible="{Binding Marketplace.RuntimeRequirements, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Marketplace.RuntimeRequirements}" TextWrapping="Wrap"
+                           IsVisible="{Binding Marketplace.RuntimeRequirements, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Grid.Row="3" Classes="section-label" Text="Provides" IsVisible="{Binding Information.ProvidedServices, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Information.ProvidedServices}" TextWrapping="Wrap"
+                           IsVisible="{Binding Information.ProvidedServices, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              </Grid>
+            </Border>
           </StackPanel>
-          <Border Grid.Column="1" Classes="package-row-badge" VerticalAlignment="Top">
-            <TextBlock Text="{Binding Marketplace.CurrentRid}" />
-          </Border>
-        </Grid>
-
-        <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
-          <Border Classes="settings-note-card">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="caption" Text="Package download" />
-              <TextBlock FontWeight="SemiBold" Text="{Binding Marketplace.PackageDownloadText}" />
-            </StackPanel>
-          </Border>
-          <Border Grid.Column="1" Classes="settings-note-card">
-            <StackPanel Spacing="4">
-              <TextBlock Classes="caption" Text="Shared runtime download" />
-              <TextBlock FontWeight="SemiBold" Text="{Binding Marketplace.SharedRuntimeDownloadText}" />
-            </StackPanel>
-          </Border>
-        </Grid>
-
-        <TextBlock Text="{Binding Marketplace.RuntimeCompatibilitySummary}"
-                   TextWrapping="Wrap" />
-        <TextBlock Classes="muted"
-                   IsVisible="{Binding Marketplace.HasRuntimePreflightError}"
-                   Text="{Binding Marketplace.RuntimePreflightError}"
-                   TextWrapping="Wrap" />
-
-        <ItemsControl ItemsSource="{Binding Marketplace.ExecutionRuntimeRequirements}"
-                      IsVisible="{Binding Marketplace.HasExecutionRuntimeRequirements}">
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="vm:MarketplaceExecutionRuntimeRequirementViewModel">
-              <Border Classes="settings-note-card" Margin="0,0,0,8">
-                <StackPanel Spacing="6">
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                    <TextBlock FontWeight="SemiBold" Text="{Binding RuntimeId}" TextWrapping="Wrap" />
-                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding StatusText}" />
-                  </Grid>
-                  <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
-                    <TextBlock Classes="caption" Text="{Binding VersionRange}" TextWrapping="Wrap" />
-                    <TextBlock Grid.Column="1" Classes="caption" Text="{Binding ResolvedRuntime}" />
-                  </Grid>
-                  <TextBlock Classes="muted" Text="{Binding Rid}" />
-                  <TextBlock Classes="muted" Text="{Binding Availability}" TextWrapping="Wrap" />
-                  <TextBlock Classes="muted" Text="{Binding DetailText}" TextWrapping="Wrap" />
-                </StackPanel>
+          <controls:PackageInformationView DataContext="{Binding Information}" OverviewOnly="True"
+              AccessCommand="{Binding $parent[TabControl].((vm:PackagesWindowViewModel)DataContext).ShowPackageAccessCommand}" />
+          <StackPanel Spacing="6" IsVisible="{Binding HasMarketplaceAttributions}">
+            <TextBlock Classes="section-title" Text="People" />
+            <ItemsControl Classes="people-list" ItemsSource="{Binding Marketplace.Attributions}" />
+          </StackPanel>
+        </StackPanel>
+      </TabItem>
+      <TabItem Header="Access &amp; integrations">
+        <controls:PackageInformationView Margin="0,12,0,0" DataContext="{Binding Information}" />
+      </TabItem>
+      <TabItem Header="Versions">
+        <ListBox Classes="package-list" Margin="0,12,0,0" MaxHeight="340" ItemsSource="{Binding Marketplace.Versions}"
+                 SelectedItem="{Binding SelectedMarketplaceVersion, Mode=TwoWay}">
+          <ListBox.ItemTemplate><DataTemplate x:DataType="vm:RegistryPackageVersionItemViewModel">
+            <Border Classes="package-list-row" Classes.selected="{Binding IsSelected}">
+            <WrapPanel ItemSpacing="10" LineSpacing="4">
+              <TextBlock FontWeight="SemiBold" Text="{Binding Version}" TextWrapping="Wrap" />
+              <Border Classes="package-row-badge" IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding StatusText}" />
               </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </StackPanel>
-      </Expander>
-    </Border>
-
-    <Border Classes="card-surface"
-            IsVisible="{Binding HasMarketplaceProfileMedia}">
-      <controls:MarketplaceMediaStrip Items="{Binding Marketplace.ProfileMedia}" />
-    </Border>
-
-    <Border Classes="card-surface"
-            IsVisible="{Binding HasMarketplaceReadme}">
-      <StackPanel Spacing="8">
-        <TextBlock Classes="section-title" Text="Overview" />
-        <md:MarkdownRenderer MarkdownBuilder="{Binding Marketplace.ReadmeMarkdownBuilder}" />
-      </StackPanel>
-    </Border>
-
-    <controls:PackageInformationView DataContext="{Binding Information}" />
-
-    <controls:MarketplaceProfileCard Description="Project links and package metadata."
-                                      Links="{Binding Marketplace.ProfileLinks}"
-                                      Metadata="{Binding Marketplace.ProfileMetadata}"
-                                      Tags="{Binding Marketplace.ProfileTags}"
-                                     HasLinks="{Binding HasMarketplaceProfileLinks}"
-                                     HasMetadata="{Binding HasMarketplaceProfileMetadata}"
-                                     HasTags="{Binding HasMarketplaceProfileTags}"
-                                     IsVisible="{Binding HasMarketplaceProfile}" />
-
-    <Border Classes="card-surface marketplace-profile-card"
-            IsVisible="{Binding HasMarketplaceAttributions}">
-      <StackPanel Spacing="12">
-        <StackPanel Spacing="2">
-          <TextBlock Classes="section-title" Text="People" />
-          <TextBlock Classes="caption" Text="Creator and maintainers shown by public profile name." />
-        </StackPanel>
-        <StackPanel Spacing="6"
-                    IsVisible="{Binding HasMarketplaceCreators}">
-          <TextBlock Classes="caption marketplace-people-heading" Text="Creator" />
-          <ItemsControl ItemsSource="{Binding Marketplace.Creators}">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <WrapPanel />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
-                <Border Classes="marketplace-person-chip creator">
-                  <TextBlock Classes="marketplace-person-chip-text"
-                             Text="{Binding DisplayName}" />
-                </Border>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </StackPanel>
-        <StackPanel Spacing="6"
-                    IsVisible="{Binding HasMarketplaceMaintainers}">
-          <TextBlock Classes="caption marketplace-people-heading" Text="Maintainers" />
-          <ItemsControl ItemsSource="{Binding Marketplace.Maintainers}">
-            <ItemsControl.ItemsPanel>
-              <ItemsPanelTemplate>
-                <WrapPanel />
-              </ItemsPanelTemplate>
-            </ItemsControl.ItemsPanel>
-            <ItemsControl.ItemTemplate>
-              <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
-                <Border Classes="marketplace-person-chip">
-                  <TextBlock Classes="marketplace-person-chip-text"
-                             Text="{Binding DisplayName}" />
-                </Border>
-              </DataTemplate>
-            </ItemsControl.ItemTemplate>
-          </ItemsControl>
-        </StackPanel>
-      </StackPanel>
-    </Border>
-
-    <Border Classes="card-surface">
-      <StackPanel Spacing="8">
-        <TextBlock Classes="section-title" Text="Versions" />
-        <ListBox Classes="package-list"
-                 MaxHeight="280"
-                 ItemsSource="{Binding Marketplace.Versions}"
-                 SelectedItem="{Binding SelectedMarketplaceVersion, Mode=TwoWay}"
-                 IsVisible="{Binding HasMarketplaceVersions}">
-          <ListBox.ItemTemplate>
-            <DataTemplate x:DataType="vm:RegistryPackageVersionItemViewModel">
-              <Border Classes="package-list-row"
-                      Classes.selected="{Binding IsSelected}">
-                <Grid ColumnDefinitions="*,Auto,Auto"
-                      ColumnSpacing="10">
-                  <TextBlock Classes="section-title" Text="{Binding Version}" />
-                  <Border Grid.Column="1" Classes="package-row-badge">
-                    <TextBlock Text="{Binding StatusText}" />
-                  </Border>
-                  <TextBlock Grid.Column="2" Classes="caption" Text="{Binding PublishedAtText}" VerticalAlignment="Center" />
-                </Grid>
-              </Border>
-            </DataTemplate>
-          </ListBox.ItemTemplate>
+              <TextBlock Classes="caption" Text="{Binding PublishedAtText}" />
+            </WrapPanel>
+            </Border>
+          </DataTemplate></ListBox.ItemTemplate>
         </ListBox>
-        <TextBlock Classes="muted"
-                   IsVisible="{Binding ShowNoMarketplaceVersions}"
-                   Text="No versions loaded for the selected package."
-                   TextWrapping="Wrap" />
-      </StackPanel>
-    </Border>
-    </StackPanel>
+      </TabItem>
+      <TabItem Header="Technical details">
+        <StackPanel Margin="0,12,0,0" Spacing="12">
+          <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
+          <Border Classes="detail-row" IsVisible="{Binding Marketplace.VersionDetailsLoaded}">
+            <StackPanel Spacing="6">
+              <TextBlock Classes="section-title" Text="Canonical archive" />
+              <TextBlock Text="{Binding Marketplace.Release.ArchiveSize, StringFormat='File size: {0:N0} bytes'}" />
+              <TextBlock Classes="section-label" Text="SHA-256" />
+              <SelectableTextBlock Classes="code-value" Text="{Binding Marketplace.Release.ArchiveSha256}" />
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </TabItem>
+    </TabControl>
   </StackPanel>
 </UserControl>

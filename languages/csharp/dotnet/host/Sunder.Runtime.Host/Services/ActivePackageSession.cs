@@ -417,6 +417,9 @@ internal sealed partial class ActivePackageSession
         await Task.WhenAll(lifecycleOperations.Select(ObserveAsync)).ConfigureAwait(false);
     }
 
+    internal ActiveLoadedPackage[] PackagesActivatingStorage()
+        => _loadedPackageMap.Values.Where(package => !IsContinuingWorker(package.Worker)).ToArray();
+
     public async Task BeginStorageActivationTransactionAsync(
         CancellationToken cancellationToken = default)
     {
@@ -425,7 +428,7 @@ internal sealed partial class ActivePackageSession
             throw new InvalidOperationException("The package storage activation transaction is already active.");
         }
         _storageActivationTransaction = await PackageStorageActivationTransaction.BeginAsync(
-            _loadedPackageMap.Values.Where(package => !IsContinuingWorker(package.Worker)).ToArray(),
+            PackagesActivatingStorage(),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -546,7 +549,7 @@ internal sealed partial class ActivePackageSession
                 .ConfigureAwait(false);
         }
         _storageActivationTransaction ??= await PackageStorageActivationTransaction.BeginAsync(
-            _loadedPackageMap.Values.Where(package => !IsContinuingWorker(package.Worker)).ToArray(),
+            PackagesActivatingStorage(),
             cancellationToken).ConfigureAwait(false);
         await _storageActivationTransaction.ValidateMigrationPlansAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -748,6 +751,12 @@ internal sealed partial class ActivePackageSession
     }
 
     public IReadOnlyDictionary<string, SessionPackageDescriptor> SessionPackageMap => _sessionPackageMap;
+
+    internal void PreserveUnavailablePackages(IEnumerable<SessionPackageDescriptor> unavailable)
+    {
+        foreach (var package in unavailable)
+            _sessionPackageMap.Add(package.PackageId, package);
+    }
 
     public IReadOnlyList<ActivePackageDescriptor> GetActivePackages()
     {

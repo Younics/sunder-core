@@ -9,7 +9,7 @@
         mc:Ignorable="d"
          Width="720"
          Height="760"
-         MinWidth="440"
+         MinWidth="360"
          MinHeight="480"
          CanResize="True"
         WindowStartupLocation="CenterOwner"
@@ -18,9 +18,9 @@
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
         ShowInTaskbar="False"
-        Classes="secondary-window">
+        Classes="secondary-window management-window">
   <Grid RowDefinitions="52,*,Auto"
-        Background="{DynamicResource Sunder.Brush.Background.App}">
+        Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
     <controls:WindowTitleBar Grid.Row="0">
       <controls:WindowTitleBar.LeadingContent>
         <TextBlock Classes="section-title"
@@ -33,99 +33,72 @@
                   Margin="20,12,20,8"
                   HorizontalScrollBarVisibility="Disabled">
       <StackPanel Spacing="14">
-        <Border Classes="card-surface">
-          <StackPanel Spacing="8">
-            <TextBlock FontSize="26"
-                       FontWeight="SemiBold"
-                       Text="{Binding PackageName}"
-                       TextWrapping="Wrap" />
-            <TextBlock Classes="caption"
-                       Text="{Binding PackageIdentity}"
-                       TextWrapping="Wrap" />
-            <TextBlock Classes="muted"
-                       Text="{Binding Summary}"
-                       TextWrapping="Wrap" />
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-              <TextBlock Classes="caption" Text="Targets" />
-              <TextBlock Grid.Column="1" Text="{Binding TargetText}" TextWrapping="Wrap" />
-            </Grid>
-            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
-              <TextBlock Classes="caption" Text="Archive" />
-              <TextBlock Grid.Column="1" Text="{Binding FileName}" TextWrapping="Wrap" />
-            </Grid>
+        <StackPanel Spacing="4">
+          <TextBlock Classes="page-title" Text="{Binding PackageName}" TextWrapping="Wrap" />
+          <TextBlock Classes="code-value" Text="{Binding PackageIdentity}" IsVisible="{Binding IsValid}" />
+          <TextBlock Classes="detail-intro" Text="{Binding Summary}" IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        </StackPanel>
+        <Border Classes="detail-row">
+          <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto,Auto" RowSpacing="5" ColumnSpacing="12">
+            <TextBlock Classes="section-label" Text="Archive" />
+            <SelectableTextBlock Grid.Column="1" Classes="code-value" Text="{Binding FileName}" />
+            <TextBlock Grid.Row="1" Classes="section-label" Text="Source" />
+            <TextBlock Grid.Row="1" Grid.Column="1" Text="Local file" />
+            <TextBlock Grid.Row="2" Classes="section-label" Text="Components" IsVisible="{Binding IsValid}" />
+            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding TargetText}" IsVisible="{Binding IsValid}" TextWrapping="Wrap" />
+          </Grid>
+        </Border>
+        <Border Classes="review-warning" IsVisible="{Binding IsValid}">
+          <StackPanel Spacing="5">
+            <TextBlock Classes="section-title" Text="Package trust" />
+            <TextBlock Text="Package code runs with your user account’s access. Only install code from a source you trust." TextWrapping="Wrap" />
+            <TextBlock Text="Approval allows the worker to receive your allowlisted Docker CLI connection variables."
+                       IsVisible="{Binding HasDockerEnvironmentAccess}" TextWrapping="Wrap" />
+            <TextBlock Classes="caption" Text="{Binding ValidationMessage}" TextWrapping="Wrap" />
+          </StackPanel>
+        </Border>
+        <Border Classes="review-error" IsVisible="{Binding IsInvalid}">
+          <StackPanel Spacing="5">
+            <TextBlock Classes="section-title" Text="Validation failed" />
+            <SelectableTextBlock Text="{Binding ValidationMessage}" TextWrapping="Wrap" />
           </StackPanel>
         </Border>
 
         <StackPanel Spacing="8" IsVisible="{Binding HasRuntimeDownloads}">
           <TextBlock Classes="section-title" Text="Package runtimes" />
-          <TextBlock Classes="caption" Text="Approved runtimes install first. This package waits in the queue and installs next." TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding RuntimeDownloads}">
             <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:ExecutionRuntimeDownloadItemViewModel">
               <Border Classes="card-surface" Margin="0,0,0,8"><StackPanel Spacing="4">
-                <TextBlock FontWeight="SemiBold" Text="{Binding IdentityText}" />
-                <TextBlock Classes="caption" Text="{Binding DownloadText}" />
-                <TextBlock Classes="caption" Text="{Binding SourceText}" />
-                <TextBlock Classes="caption" Text="{Binding TargetText}" />
+                <TextBlock FontWeight="SemiBold" Text="{Binding IdentityText}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding DownloadText}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding SourceText}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding TargetText}" TextWrapping="Wrap" />
+                <TextBlock Classes="caption" Text="{Binding DetailText}" TextWrapping="Wrap" />
               </StackPanel></Border>
             </DataTemplate></ItemsControl.ItemTemplate>
           </ItemsControl>
         </StackPanel>
 
-        <Border Classes="settings-note-card">
-          <StackPanel Spacing="5">
-            <TextBlock FontWeight="SemiBold"
-                       Text="Package trust"
-                       IsVisible="{Binding IsValid}" />
-            <TextBlock Classes="muted"
-                       Text="Installing runs package code with your user account's operating-system access. Install only packages and sources you trust."
-                       IsVisible="{Binding IsValid}"
-                       TextWrapping="Wrap" />
-            <TextBlock Classes="muted"
-                       Text="This package requests your allowlisted Docker CLI connection environment. Installing consents to passing it to the Runtime worker."
-                       IsVisible="{Binding HasDockerEnvironmentAccess}"
-                       TextWrapping="Wrap" />
-            <TextBlock Classes="caption"
-                       Text="Manifest fence"
-                       IsVisible="{Binding HasDockerEnvironmentAccess}" />
-            <TextBlock Classes="caption"
-                       FontFamily="monospace"
-                       Text="{Binding SensitiveCapabilityManifestSha256}"
-                       IsVisible="{Binding HasDockerEnvironmentAccess}"
-                       TextWrapping="Wrap" />
-            <TextBlock FontWeight="SemiBold"
-                       Foreground="{DynamicResource Sunder.Brush.Danger}"
-                       Text="Validation failed"
-                       IsVisible="{Binding IsInvalid}" />
-            <TextBlock Classes="muted"
-                       Text="{Binding ValidationMessage}"
-                       TextWrapping="Wrap" />
-          </StackPanel>
-        </Border>
-
-        <Border IsVisible="{Binding IsValid}"><controls:PackageInformationView DataContext="{Binding Information}" /></Border>
+        <StackPanel IsVisible="{Binding IsValid}" Spacing="10">
+          <controls:PackageInformationView DataContext="{Binding Information}" OverviewOnly="True" />
+          <Expander Header="Declared features and package identity">
+            <StackPanel Spacing="8"><SelectableTextBlock Classes="code-value" Text="{Binding ArchiveDetails}" />
+              <controls:PackageInformationView DataContext="{Binding Information}" />
+            </StackPanel>
+          </Expander>
+        </StackPanel>
       </StackPanel>
     </ScrollViewer>
 
-    <Border Grid.Row="2"
-            Padding="20,14"
-            BorderThickness="0,1,0,0"
-            BorderBrush="{DynamicResource Sunder.Brush.Border.Subtle}">
-      <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="10">
-        <TextBlock Classes="caption"
-                   VerticalAlignment="Center"
-                    Text="Installing grants this version’s declared service access, including internal package communication."
-                   IsVisible="{Binding IsValid}"
-                   TextWrapping="Wrap" />
-        <Button Grid.Column="1"
-                Classes="secondary-action"
-                Content="{Binding DismissButtonText}"
-                Click="CancelButton_OnClick" />
-        <Button Grid.Column="2"
-                Classes="primary-action"
-                Content="Approve &amp; Install"
-                IsVisible="{Binding IsValid}"
-                Click="InstallButton_OnClick" />
-      </Grid>
+    <Border Grid.Row="2" Classes="window-footer">
+      <StackPanel Spacing="7">
+        <TextBlock Classes="caption" Text="Installing grants this version’s declared service access, including internal package communication."
+                   IsVisible="{Binding IsValid}" TextWrapping="Wrap" />
+        <WrapPanel HorizontalAlignment="Right" ItemSpacing="8" LineSpacing="4">
+          <Button Classes="secondary-action" Content="{Binding DismissButtonText}" Click="CancelButton_OnClick" />
+          <Button Classes="primary-action" Content="Approve &amp; Install" IsVisible="{Binding IsValid}" Click="InstallButton_OnClick" />
+        </WrapPanel>
+      </StackPanel>
     </Border>
   </Grid>
 </Window>

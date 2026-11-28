@@ -4,10 +4,8 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Controls.Presenters;
 using Avalonia.Headless;
 using Avalonia.Input;
-using Avalonia.Markup.Xaml.Styling;
 using Avalonia.Media;
 using Avalonia.Styling;
-using Avalonia.Themes.Fluent;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +17,7 @@ using Sunder.App.Views;
 using Sunder.App.Views.Controls;
 using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -29,8 +28,7 @@ public sealed class SettingsWindowLayoutTests
     [Fact]
     public async Task AppearanceAndNotificationsHaveWorkingBoundControlsAndPrivacyIsAbsent()
     {
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("sunder-shell-preferences");
             using var stateService = new ShellStateService(temporary.GetPath("shell.json"));
@@ -41,10 +39,16 @@ public sealed class SettingsWindowLayoutTests
             var appearance = new SettingsAppearanceViewModel(themeManager, id => stateService.Update(state, value => value.ThemeId = id));
             var notifications = new NotificationCenterService(temporary.GetPath("notifications.json"));
             using var client = new EmptySettingsClient();
+            await using var queue = new BackgroundTaskQueueService();
+            queue.Enqueue(new("Settings task", "settings", BackgroundTaskIndicator.Settings, BackgroundTaskConcurrencyMode.SequentialWithinGroup,
+                true, context => Task.Delay(Timeout.Infinite, context.CancellationToken)));
             using var vm = new SettingsWindowViewModel(client, PackageViewHostService.Empty, new CliInstallationService(),
+                backgroundTaskQueue: queue,
                 runtimeResourcePolicySettingsService: new AppRuntimeResourcePolicySettingsService(temporary.GetPath("resources.json")),
                 appearance: appearance, notifications: new SettingsNotificationsViewModel(notifications));
             var window = new SettingsWindow { DataContext = vm };
+            var main = new MainWindow();
+            main.Show();
             window.Show();
             try
             {
@@ -52,10 +56,25 @@ public sealed class SettingsWindowLayoutTests
                 Assert.False(vm.ShowPlainCoreSelection);
                 Assert.False(await vm.SelectCoreSectionAsync("privacy"));
                 Assert.DoesNotContain(vm.CoreSections, section => section.Id == "privacy");
-                var selector = window.FindControl<SunderComboBox>("ThemeSelector")!;
+                var selector = window.FindControl<ListBox>("ThemeSelector")!;
+                var tint = main.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("shell-glass-tint"));
+                var acrylic = main.GetVisualDescendants().OfType<ExperimentalAcrylicBorder>().Single();
+                var material = Assert.IsType<ExperimentalAcrylicMaterial>(acrylic.Material);
+                var darkTint = Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color;
                 Assert.True(selector.IsEffectivelyVisible);
                 selector.SelectedItem = SunderThemeDefinition.GraphiteLight;
                 Assert.Same(SunderThemeDefinition.GraphiteLight, appearance.SelectedTheme);
+                Assert.Equal(ThemeVariant.Light, main.ActualThemeVariant);
+                Assert.Equal(SunderThemeDefinition.GraphiteLight.SurfaceWorkspace, acrylic.Material!.TintColor);
+                Assert.NotEqual(darkTint, Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color);
+                Assert.Equal(SunderThemeDefinition.GraphiteDarkId, stateService.Load().ThemeId);
+                var cancel = window.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Cancel") && button.IsEffectivelyVisible);
+                TestSupport.ManagementWindowAssert.Click(window, cancel);
+                Assert.False(window.IsVisible);
+                Assert.Equal(ThemeVariant.Dark, main.ActualThemeVariant);
+                Assert.Equal(darkTint, Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color);
+                window.Show();
+                selector.SelectedItem = SunderThemeDefinition.GraphiteLight;
                 Assert.True(await vm.ApplyAsync());
                 Assert.Same(ThemeVariant.Light, Application.Current!.RequestedThemeVariant);
                 Assert.Equal(SunderThemeDefinition.GraphiteLightId, stateService.Load().ThemeId);
@@ -74,20 +93,29 @@ public sealed class SettingsWindowLayoutTests
                 Assert.False(new NotificationCenterService(temporary.GetPath("notifications.json")).Preferences.ShowToasts);
                 Assert.True(await vm.SelectCoreSectionAsync("appearance"));
                 Assert.Same(SunderThemeDefinition.GraphiteLight, appearance.SelectedTheme);
+                Assert.True(vm.BackgroundTasks.ShowFooter);
+                await TestSupport.ManagementWindowAssert.CheckLayoutsAsync(window,
+                    () => Assert.Equal(window.ActualThemeVariant, main.ActualThemeVariant),
+                    selectTheme: theme => selector.SelectedItem = theme);
+                selector.SelectedItem = SunderThemeDefinition.GraphiteDark;
+                Assert.Equal(ThemeVariant.Dark, main.ActualThemeVariant);
                 Assert.True(await vm.SelectCoreSectionAsync("notifications"));
+                Assert.Equal(ThemeVariant.Light, main.ActualThemeVariant);
                 Assert.False(vm.Notifications.ShowToasts);
+                // ShellSession detaches the content before closing the native window.
+                main.Content = null;
+                Assert.Same(material, acrylic.Material);
             }
-            finally { window.CloseForShutdown(); }
+            finally { window.CloseForShutdown(); main.CloseForShutdown(); }
             return true;
         }, default);
     }
 
     [Fact]
-    public async Task PackagePagesOmitShellHeadingAndFrameForBothGeneratedFormsAndHostedViewsButCoreRetainsThem()
+    public async Task SettingsPagesHaveNoOuterFrameAndOnlyCorePagesHaveAShellHeading()
     {
         Assert.Null(Application.Current);
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("sunder-settings-package-layout");
             using var client = new EmptySettingsClient
@@ -155,8 +183,8 @@ public sealed class SettingsWindowLayoutTests
                 Assert.True(await vm.SelectCoreSectionAsync("advanced"));
                 window.UpdateLayout();
                 Assert.True(header.IsEffectivelyVisible);
-                Assert.Contains("workspace-surface", pane.Classes);
-                Assert.Equal(new Thickness(1), pane.BorderThickness);
+                Assert.Equal(new Thickness(0), pane.BorderThickness);
+                Assert.Equal(new CornerRadius(0), pane.CornerRadius);
             }
             finally { window.CloseForShutdown(); }
             return true;
@@ -192,8 +220,7 @@ public sealed class SettingsWindowLayoutTests
     public async Task SidebarReservesRightEdgeScrollbarAndPresetFieldsStayVisibleWithoutAnExpander()
     {
         Assert.Null(Application.Current);
-        await using var ui = HeadlessUnitTestSession.StartNew(typeof(SettingsTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var temporary = TemporaryDirectoryScope.Create("sunder-settings-layout");
             using var client = new EmptySettingsClient();
@@ -278,28 +305,35 @@ public sealed class SettingsWindowLayoutTests
                 vm.RuntimeResources.SelectedPresetOption = vm.RuntimeResources.PresetOptions.Single(option => option.Preset == RuntimeResourcePolicyPreset.Custom);
                 await Dispatcher.UIThread.InvokeAsync(window.UpdateLayout, DispatcherPriority.Render);
                 Assert.All(fields, field => Assert.False(field.IsReadOnly));
+                vm.RuntimeResources.SelectedPresetOption = vm.RuntimeResources.PresetOptions.Single(option => option.Preset == RuntimeResourcePolicyPreset.Large);
+                await TestSupport.ManagementWindowAssert.CheckLayoutsAsync(window, () =>
+                {
+                    fields[^1].BringIntoView();
+                    window.UpdateLayout();
+                    Assert.Contains(fields, field => field.Text == "8388608");
+                    foreach (var field in fields)
+                    {
+                        var text = field.GetVisualDescendants().OfType<TextPresenter>().Single();
+                        var scroll = field.GetVisualDescendants().OfType<ScrollViewer>().Single();
+                        Assert.True(text.TextLayout.Width <= scroll.Viewport.Width + 0.5,
+                            $"Limit '{field.Text}' is clipped at window width {window.Width}.");
+                    }
+                    var units = window.GetVisualDescendants().OfType<TextBlock>().Where(text => text.IsEffectivelyVisible
+                        && text.Text is "MiB" or "levels" or "nodes" or "members" or "KiB").ToArray();
+                    Assert.Equal(6, units.Length);
+                    var left = units[0].TranslatePoint(default, window)!.Value.X;
+                    Assert.All(units, unit =>
+                    {
+                        Assert.InRange(Math.Abs(unit.TranslatePoint(default, window)!.Value.X - left), 0, 0.5);
+                        Assert.Single(unit.TextLayout.TextLines);
+                        Assert.True(left + unit.TextLayout.Width <= window.Width);
+                    });
+                }, state: "advanced");
             }
             finally { window.CloseForShutdown(); }
             return true;
         }, default);
         Assert.Null(Application.Current);
-    }
-
-    public sealed class SettingsTestApplication : Application
-    {
-        public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<SettingsTestApplication>().UseHeadless(new());
-        public override void Initialize()
-        {
-            RequestedThemeVariant = ThemeVariant.Dark;
-            Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderThemeResources.axaml") });
-            Styles.Add(new FluentTheme());
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderPackageStyles.axaml") });
-            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
-                { Source = new Uri("avares://Sunder.App/Styles/SunderShellStyles.axaml") });
-            new ThemeManager(this).Initialize();
-        }
     }
 
     private sealed class EmptySettingsClient : IRuntimePackageSettingsClient

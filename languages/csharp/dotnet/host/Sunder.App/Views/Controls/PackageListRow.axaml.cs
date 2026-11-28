@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Media;
+using Sunder.App.ViewModels;
 
 namespace Sunder.App.Views.Controls;
 
@@ -21,29 +22,14 @@ public partial class PackageListRow : UserControl
     public static readonly StyledProperty<string> TitleProperty =
         AvaloniaProperty.Register<PackageListRow, string>(nameof(Title), string.Empty);
 
-    public static readonly StyledProperty<string> PackageIdProperty =
-        AvaloniaProperty.Register<PackageListRow, string>(nameof(PackageId), string.Empty);
-
-    public static readonly StyledProperty<string> PrimaryBadgeProperty =
-        AvaloniaProperty.Register<PackageListRow, string>(nameof(PrimaryBadge), string.Empty);
-
-    public static readonly StyledProperty<string> DetailBadgeProperty =
-        AvaloniaProperty.Register<PackageListRow, string>(nameof(DetailBadge), string.Empty);
-
-    public static readonly StyledProperty<bool> ShowDetailBadgeProperty =
-        AvaloniaProperty.Register<PackageListRow, bool>(nameof(ShowDetailBadge), true);
+    public static readonly StyledProperty<string> StatusProperty =
+        AvaloniaProperty.Register<PackageListRow, string>(nameof(Status), string.Empty);
 
     public static readonly StyledProperty<string> ActionBadgeProperty =
         AvaloniaProperty.Register<PackageListRow, string>(nameof(ActionBadge), string.Empty);
 
-    public static readonly StyledProperty<bool> ShowBadgeRowProperty =
-        AvaloniaProperty.Register<PackageListRow, bool>(nameof(ShowBadgeRow), true);
-
     public static readonly StyledProperty<bool> ShowActionBadgeProperty =
         AvaloniaProperty.Register<PackageListRow, bool>(nameof(ShowActionBadge), true);
-
-    public static readonly StyledProperty<bool> ActionBadgeIsUpdateProperty =
-        AvaloniaProperty.Register<PackageListRow, bool>(nameof(ActionBadgeIsUpdate));
 
     public static readonly StyledProperty<string> OperationStatusTextProperty =
         AvaloniaProperty.Register<PackageListRow, string>(nameof(OperationStatusText), string.Empty);
@@ -57,6 +43,19 @@ public partial class PackageListRow : UserControl
     public PackageListRow()
     {
         InitializeComponent();
+        EffectiveViewportChanged += (_, args) =>
+        {
+            _inViewport = args.EffectiveViewport.Intersects(new Rect(Bounds.Size));
+            LoadRowIcon();
+        };
+        DataContextChanged += (_, _) => LoadRowIcon();
+    }
+
+    private bool _inViewport;
+
+    private void LoadRowIcon()
+    {
+        if (_inViewport && IsEffectivelyVisible && DataContext is PackageIconItemViewModel row) row.EnsureIconLoaded();
     }
 
     public IImage? IconImage
@@ -89,28 +88,10 @@ public partial class PackageListRow : UserControl
         set => SetValue(TitleProperty, value);
     }
 
-    public string PackageId
+    public string Status
     {
-        get => GetValue(PackageIdProperty);
-        set => SetValue(PackageIdProperty, value);
-    }
-
-    public string PrimaryBadge
-    {
-        get => GetValue(PrimaryBadgeProperty);
-        set => SetValue(PrimaryBadgeProperty, value);
-    }
-
-    public string DetailBadge
-    {
-        get => GetValue(DetailBadgeProperty);
-        set => SetValue(DetailBadgeProperty, value);
-    }
-
-    public bool ShowDetailBadge
-    {
-        get => GetValue(ShowDetailBadgeProperty);
-        set => SetValue(ShowDetailBadgeProperty, value);
+        get => GetValue(StatusProperty);
+        set => SetValue(StatusProperty, value);
     }
 
     public string ActionBadge
@@ -119,22 +100,10 @@ public partial class PackageListRow : UserControl
         set => SetValue(ActionBadgeProperty, value);
     }
 
-    public bool ShowBadgeRow
-    {
-        get => GetValue(ShowBadgeRowProperty);
-        set => SetValue(ShowBadgeRowProperty, value);
-    }
-
     public bool ShowActionBadge
     {
         get => GetValue(ShowActionBadgeProperty);
         set => SetValue(ShowActionBadgeProperty, value);
-    }
-
-    public bool ActionBadgeIsUpdate
-    {
-        get => GetValue(ActionBadgeIsUpdateProperty);
-        set => SetValue(ActionBadgeIsUpdateProperty, value);
     }
 
     public string OperationStatusText

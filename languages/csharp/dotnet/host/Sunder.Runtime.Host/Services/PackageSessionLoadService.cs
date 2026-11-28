@@ -249,6 +249,7 @@ internal sealed partial class PackageSessionLoadService
         PackageSessionStartupTraceAttempt? startupTrace)
     {
         var started = Stopwatch.GetTimestamp();
+        var allPrepared = preparedCandidates;
         try
         {
             if (preparedCandidates.Count == 0 && initialSessionPackages.Count == 0)
@@ -261,6 +262,7 @@ internal sealed partial class PackageSessionLoadService
             try
             {
                 preparedCandidates = PackageCompatibilityAuthority.ResolveDevelopmentGraph(preparedCandidates);
+                preparedCandidates = DeferPolicyBlockedDependents(preparedCandidates, initialSessionPackages);
                 PackageCompatibilityAuthority.ValidateGraph(preparedCandidates.Select(package => package.Source).ToArray());
             }
             catch (InvalidDataException exception)
@@ -480,8 +482,37 @@ internal sealed partial class PackageSessionLoadService
         }
         finally
         {
-            await DisposeExecutionRuntimeRetentionsAsync(preparedCandidates).ConfigureAwait(false);
+            await DisposeExecutionRuntimeRetentionsAsync(allPrepared).ConfigureAwait(false);
         }
+    }
+
+    private static IReadOnlyList<PreparedRuntimePackage> DeferPolicyBlockedDependents(
+        IReadOnlyList<PreparedRuntimePackage> packages, IDictionary<string, SessionPackageDescriptor> descriptors)
+    {
+        // An enabled installed descriptor with no prepared source represents a
+        // policy denial. Propagate it before import validation so one unavailable
+        // dependency cannot prevent an independent, authorized package starting.
+        var blocked = descriptors.Values.Where(package => package.IsEnabled && package.LastError is not null)
+            .ToDictionary(package => package.PackageId, package => package.LastError!, StringComparer.Ordinal);
+        if (blocked.Count == 0) return packages;
+
+        int previousCount;
+        do
+        {
+            previousCount = blocked.Count;
+            foreach (var package in packages)
+            {
+                if (blocked.ContainsKey(package.PackageId)) continue;
+                var dependency = package.Dependencies.FirstOrDefault(value => blocked.ContainsKey(value.PackageId));
+                if (dependency is null) continue;
+                var reason = blocked[dependency.PackageId];
+                blocked.Add(package.PackageId, reason);
+                descriptors[package.PackageId] = BuildSessionDescriptor(package.Activation, isEnabled: true,
+                    readiness: PackageReadinessState.Failed, failureOrigin: PackageFailureOrigin.RuntimeActivation,
+                    lastError: reason, failureCount: 1);
+            }
+        } while (blocked.Count != previousCount);
+        return packages.Where(package => !blocked.ContainsKey(package.PackageId)).ToArray();
     }
 
     private async ValueTask<PackageActivationAttempt> ActivatePreparedPackageAsync(

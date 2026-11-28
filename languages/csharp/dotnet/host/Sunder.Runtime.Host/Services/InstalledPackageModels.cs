@@ -85,6 +85,11 @@ internal sealed record InstalledPackageProvenanceRecord(
     [property: JsonPropertyName("sourceIdentity")] string? SourceIdentity = null,
     [property: JsonPropertyName("includePrerelease")] bool IncludePrerelease = false)
 {
+    // Written only after the Registry projections have passed download and composition checks.
+    // Older installed records remain usable, but cannot stand in for an approved download.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ProjectionFingerprint { get; init; }
+
     public static InstalledPackageProvenanceRecord Unknown { get; } = new(
         InstalledPackageSourceKind.Unknown,
         InstalledPackageVersionPolicy.Unmanaged);

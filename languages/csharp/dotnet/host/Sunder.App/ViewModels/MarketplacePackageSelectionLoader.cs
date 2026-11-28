@@ -25,6 +25,7 @@ internal sealed class MarketplacePackageSelectionLoader(PackagesMarketplaceCatal
     public async Task<PackagesMarketplaceDetailsResult?> LoadDetailsAsync(
         int selectionVersion,
         string packageId,
+        string? version,
         Action<RegistryPackageVersionItemViewModel> selectVersion,
         CancellationToken cancellationToken)
     {
@@ -40,7 +41,7 @@ internal sealed class MarketplacePackageSelectionLoader(PackagesMarketplaceCatal
                 selection.Token,
                 cancellationToken);
             return await marketplaceCatalog
-                .LoadDetailsAsync(packageId, selectVersion, linkedCancellation.Token)
+                .LoadDetailsAsync(packageId, version, selectVersion, linkedCancellation.Token)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

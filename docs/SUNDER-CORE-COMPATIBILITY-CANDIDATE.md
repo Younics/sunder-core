@@ -1,13 +1,12 @@
-# Sunder Core Compatibility Candidate
+# Sunder Core compatibility checks
 
-## Current observation and protected history
+## Current contracts and protected history
 
-The current generator writes only
-`eng/compatibility/core-current-compatibility-candidate.json`, with schema 2,
-candidate ID `sunder-core-current`, status **UNFROZEN** and release state
-**UNRELEASED**. This is a current-source observation, not a release qualification
-or SDK freeze. No current candidate is claimed until its exact clean source and
-fresh build inputs are available.
+`Sunder.Sdk.PublicApi.Tests` compares the built assemblies with their reviewed
+public API baselines. The format, protocol, CLI and package tests exercise the
+current contracts directly. The [supported-release gate](SUNDER-SDK-COMPATIBILITY.md)
+compares supported releases with their independently retained artifacts and
+consumer tests. None of these checks needs a generated report of the Core checkout.
 
 The following archives are inert, byte-preserved history:
 
@@ -22,32 +21,6 @@ is excluded from compilation. Current Stack domain behavior, source parity,
 platform lifecycle, contract semantics and real artifact tests retain ownership.
 Frozen wire conformance corpora and supported released SDK baselines keep their
 separate genuine compatibility purposes.
-
-## Collecting a new current candidate
-
-After the source owner completes clean commits, select the exact reviewed Core
-source commit. The generator rejects dirty/untracked source and a checkout that
-differs from that commit, allowing only its new current candidate output to differ.
-It never infers a pin from a dirty checkout and has no historical-output override.
-Once dependencies are prepared, use:
-
-```shell
-node scripts/compatibility/generate-core-compatibility-candidate.mjs --write --source-commit <exact-clean-commit>
-node scripts/compatibility/generate-core-compatibility-candidate.mjs --check --source-commit <exact-clean-commit>
-```
-
-Both modes build the selected Release CLI and TypeScript packages before collecting
-CLI help and emitted declarations. They must not run while another owner holds the
-build outputs. `--check` compares the new current file byte-for-byte; it does not
-validate or rewrite a migration ledger. Offline source-selection fixtures run with
-`node --test scripts/compatibility/current-candidate.test.mjs` and do not build.
-
-The observation inventories public .NET/npm artifacts, API snapshots, MSBuild,
-CLI/HTTP behavior, errors, configuration, persistence, telemetry, schemas, templates
-and release/artifact identities. Source fingerprints describe the selected input;
-they do not make an output its own independent expected baseline. SDK freeze,
-native/cold/source-artifact qualification and independently retained supported
-release evidence remain separate required gates.
 
 ## Retained Surfaces
 
@@ -67,9 +40,6 @@ release evidence remain separate required gates.
 - TypeScript package tooling and SDK consumers emit Manifest V1, Worker Protocol V1, RPC descriptor V1, and runtime-backed CommonJS modules without Node executable or SEA tooling bytes.
 - .NET package builds emit framework-dependent managed modules without AppHost, runtime-pack, symbol, or generated XML documentation bytes.
 
-The new observation carries no pending migration cutovers or historical allowed
-deltas. This does not waive qualification for the first supported release.
-
 ## Ownership Boundaries
 
 - Core defines neither `Registry:PublicOrigin` nor `Registry:Artifacts:PublicOrigin`; public and artifact origin policy belongs to the Registry repository.
@@ -81,12 +51,12 @@ deltas. This does not waive qualification for the first supported release.
 
 ## Package Policy
 
-The canonical candidate accepts only archive 1, content index 1, package manifest 1, projection 1, Worker Protocol V1, RPC descriptor V1, and Stack schema/index/reader 1. Node authoring project schema 2 emits only Manifest V1 runtime-backed modules. Direct tests reject old and future values, and Stack metadata uses duplicate-property-rejecting JSON parsing.
+The current readers accept only archive 1, content index 1, package manifest 1, projection 1, Worker Protocol V1, RPC descriptor V1, and Stack schema/index/reader 1. Node authoring project schema 2 emits only Manifest V1 runtime-backed modules. Direct tests reject old and future values, and Stack metadata uses duplicate-property-rejecting JSON parsing.
 
 Runtime-package payloads exclude symbol files, apphosts, language-runtime/framework-pack bytes, and generated XML documentation companions; explicitly authored XML content remains eligible. `.sunderpkg` has no package-level signature contract; canonical content identity and immutable Registry provenance remain the integrity boundary.
 
 ## Persistence Policy
 
-The generated ledger records every durable Core state root and document version plus its read-failure policy. Runtime and App V1 state roots reject incompatible or unmarked roots instead of inferring historical layouts. Installed packages, RPC permissions, package transactions, package state, encrypted secrets, storage migration records, Runtime resource policy, Host lifecycle, Host identity, and Host payload descriptors fail closed on incompatible data.
+Runtime and App V1 state roots reject incompatible or unmarked roots instead of inferring historical layouts. Installed packages, RPC permissions, package transactions, package state, encrypted secrets, storage migration records, Runtime resource policy, Host lifecycle, Host identity, and Host payload descriptors fail closed on incompatible data.
 
 The local Stack index is schema 1. Malformed, old, and future indexes are preserved and reported as corruption rather than presented as an empty library. Notification and update-setting documents are intentionally unversioned disposable preferences: malformed files are quarantined and recreated. An incompatible shell layout resets layout fields while preserving theme and preferred Runtime URL.

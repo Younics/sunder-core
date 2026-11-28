@@ -6,7 +6,6 @@ internal sealed class PackagesSelectedOperationCommands(
     PackagesOperationCommandCoordinator operationCommands,
     PackageOperationPresentationViewModel operationState,
     Func<PackageWindowMode> getMode,
-    Action<PackageWindowMode> setMode,
     Func<PackageCatalogItemViewModel?> getSelectedInstalledPackage,
     Func<RegistryPackageSearchItemViewModel?> getSelectedMarketplacePackage,
     Func<RegistryPackageVersionItemViewModel?> getSelectedMarketplaceVersion,
@@ -18,10 +17,7 @@ internal sealed class PackagesSelectedOperationCommands(
 {
     public async Task InstallPackageAsync()
     {
-        if (await operationCommands.InstallFromDiskAsync())
-        {
-            setMode(PackageWindowMode.Installed);
-        }
+        await operationCommands.InstallFromDiskAsync();
     }
 
     public async Task EnableSelectedPackageAsync()

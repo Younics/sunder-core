@@ -5,7 +5,7 @@
              x:DataType="controls:StackRequiredInputs"
              x:Name="Root">
   <StackPanel Spacing="8">
-    <TextBlock Text="Required Inputs" FontWeight="SemiBold" />
+    <TextBlock Classes="section-title" Text="Required inputs" />
     <ItemsControl ItemsSource="{Binding Items, ElementName=Root}"
                   ItemTemplate="{Binding ItemTemplate, ElementName=Root}" />
   </StackPanel>

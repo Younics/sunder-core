@@ -11,7 +11,8 @@ public sealed class PackagesWindowFactory(
     BackgroundTaskQueueService backgroundTaskQueue,
     ShellStateService shellStateService,
     ShellState shellState,
-    RemoteImageService remoteImageService)
+    RemoteImageService remoteImageService,
+    PackageUpdateStartupCheckService updateChecks)
 {
     internal PackagesWindow Create(
         PackageOperationService packageOperationService,
@@ -27,11 +28,14 @@ public sealed class PackagesWindowFactory(
             backgroundTaskPopoverHeight: shellState.BackgroundTaskPopoverHeight,
             persistBackgroundTaskPopoverSize: persistBackgroundTaskPopoverSize,
             remoteImageService: remoteImageService,
-            confirmSharedRuntimeRepair: async (impact, cancellationToken) =>
+            updateChecks: updateChecks,
+            confirmSharedRuntimeRepair: async (runtime, impact, cancellationToken) =>
             {
                 var dialog = new ExecutionRuntimeRepairConfirmationWindow(
-                    new ExecutionRuntimeRepairConfirmationViewModel(impact));
-                return await dialog.ShowDialog<bool>(window).WaitAsync(cancellationToken);
+                    new ExecutionRuntimeRepairConfirmationViewModel(runtime, impact));
+                var result = dialog.ShowDialog<bool>(window);
+                using var registration = cancellationToken.Register(() => Avalonia.Threading.Dispatcher.UIThread.Post(() => dialog.Close(false)));
+                return await result.WaitAsync(cancellationToken);
             });
         return window;
     }

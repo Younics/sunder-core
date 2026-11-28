@@ -22,14 +22,14 @@ internal sealed class PackageRuntimePrerequisiteService(
             var package = (await installed.ListAsync(token)).SingleOrDefault(value => string.Equals(value.PackageId, adoption.PackageId, StringComparison.OrdinalIgnoreCase))
                 ?? throw new RuntimeNotFoundException("The package selected for source adoption is not installed.");
             var batch = RegistrySourceAdoptionSelection.Create(adoption, package);
-            var resolution = await registryPlans.ResolveForExecutionAsync(batch, batch.ExpectedResolutionFingerprint, token);
+            var resolution = await registryPlans.ResolveAsync(batch, token);
             if (!resolution.Plan.Success) throw new RuntimeConflictException(string.Join("; ", resolution.Plan.Errors));
             result = await InspectRegistryAsync([resolution], token, [package]);
             CheckExpectation(result, adoption.RuntimePrerequisiteExpectation);
         }
         else if (request.Registry is { } registry)
         {
-            var resolution = await registryPlans.ResolveForExecutionAsync(registry, registry.ExpectedResolutionFingerprint, token);
+            var resolution = await registryPlans.ResolveAsync(registry, token);
             if (!resolution.Plan.Success) throw new RuntimeConflictException(string.Join("; ", resolution.Plan.Errors));
             result = await InspectRegistryAsync([resolution], token);
         }
@@ -90,46 +90,71 @@ internal sealed class PackageRuntimePrerequisiteService(
         IReadOnlyList<InstalledPackageRecord>? sourceAdoptions = null)
     {
         var requirements = new List<RuntimePackageRuntimePrerequisite>();
-        foreach (var context in contexts)
-        foreach (var item in context.Plan.Items)
-        foreach (var target in item.Targets.Where(value => value.ExecutionRuntime is not null && value.Rid == Rid))
+        var sources = new List<object>();
+        var kept = contexts.Any(context => context.Plan.Items.Any(item => item.ActionKind == RegistryPackageActionKinds.Keep))
+            ? (await installed.ListAsync(token)).ToDictionary(package => package.PackageId, StringComparer.Ordinal) : null;
+        foreach (var context in contexts.OrderBy(value => value.Origin.AbsoluteUri, StringComparer.Ordinal))
+        foreach (var item in context.Plan.Items.OrderBy(value => value.PackageId, StringComparer.Ordinal))
         {
-            var requirement = new RuntimeExecutionRuntimeRequirement(
-                target.ExecutionRuntime!.RuntimeId,
-                target.ExecutionRuntime.VersionRange,
-                target.ExecutionRuntime.ModuleAbi);
-            var reference = new RuntimeExecutionRuntimePackageReference(item.PackageId, item.Version!, item.PackageContentIdentity, target.Role, target.Rid);
-            var receipt = await local.FindHealthyAsync(requirement, target.Rid, token).ConfigureAwait(false);
-            RuntimeExecutionRuntimeInstallPlan? install = null;
-            if (receipt is null) install = await installation.PreviewAsync(new(requirement, true), token).ConfigureAwait(false);
-            var manifestHash = item.Artifacts.FirstOrDefault()?.ManifestSha256;
-            if (manifestHash is null)
+            InstalledPackageRecord? existing = null;
+            RegistryAcquisition acquisition;
+            if (item.ActionKind == RegistryPackageActionKinds.Keep)
             {
-                var existing = (await installed.ListAsync(token)).Single(value => value.PackageId == item.PackageId);
+                if (!kept!.TryGetValue(item.PackageId, out existing) || existing.Version != item.Version
+                    || InstalledPackagePolicyRecord.Subject(existing).PackageContentIdentity != item.PackageContentIdentity) throw Stale();
                 var validated = await InstalledPackageProjection.ValidateAsync(existing, token);
-                if (!validated.Success || validated.ContentIndex is null) throw Stale();
-                manifestHash = PackageSensitiveCapabilityPolicy.GetManifestSha256(validated.ContentIndex);
+                if (!validated.Success || validated.ContentIndex is null || validated.Manifest is null) throw Stale();
+                acquisition = new(existing.Provenance.RegistryOrigin, existing.Provenance.ProjectionFingerprint,
+                    PackageSensitiveCapabilityPolicy.GetManifestSha256(validated.ContentIndex),
+                    InstalledPackageProjection.Keys(existing) ?? SunderPackageTargetResolver.EnumerateTargets(validated.Manifest),
+                    PackageSensitiveCapabilityPolicy.GetEffectiveCapabilities(existing).Order(StringComparer.Ordinal).ToArray());
             }
-            requirements.Add(new(reference, manifestHash, requirement,
-                receipt is not null, receipt is null ? ExecutionRuntimeErrorCodes.Missing : null,
-                receipt?.Identity.ToContract(), install));
+            else
+            {
+                var keys = item.Artifacts.Where(value => value.Rid is not null)
+                    .Select(value => new SunderPackageTargetKey(value.Kind, value.Rid!)).ToArray();
+                var capabilities = item.Targets.Where(target => keys.Contains(new(target.Role, target.Rid))
+                        && target.Role == SunderPackageFormat.RuntimeHostRole && target.Kind == SunderPackageFormat.WorkerTargetKind)
+                    .SelectMany(target => target.RequiredHostCapabilities).Where(PackageSensitiveCapabilityPolicy.IsSensitive)
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+                acquisition = new(context.Origin.AbsoluteUri, ProjectionFingerprint(item), item.Artifacts.FirstOrDefault()?.ManifestSha256,
+                    keys, capabilities);
+            }
+            acquisition = acquisition with { Targets = acquisition.Targets.OrderBy(key => key.Role, StringComparer.Ordinal).ThenBy(key => key.Rid, StringComparer.Ordinal).ToArray() };
+            sources.Add(new { Origin = context.Origin.AbsoluteUri, Rid, item.PackageId, item.Version, item.PackageContentIdentity, item.Targets, acquisition });
+            foreach (var target in item.Targets.Where(target => target.ExecutionRuntime is not null && target.Rid == Rid
+                         && acquisition.Targets.Contains(new(target.Role, target.Rid))))
+            {
+                var runtime = target.ExecutionRuntime!;
+                var requirement = new RuntimeExecutionRuntimeRequirement(runtime.RuntimeId, runtime.VersionRange, runtime.ModuleAbi);
+                var reference = new RuntimeExecutionRuntimePackageReference(item.PackageId, item.Version!, item.PackageContentIdentity, target.Role, target.Rid);
+                var receipt = existing is null ? await local.FindHealthyAsync(requirement, target.Rid, token)
+                    : await local.VerifyKeptBindingAsync(existing.ExecutionRuntimeBindings.SingleOrDefault(binding =>
+                        binding.Role == target.Role && binding.Rid == target.Rid && binding.Requirement == requirement) ?? throw Stale(), token);
+                var install = receipt is null ? await installation.PreviewAsync(new(requirement, true), token) : null;
+                requirements.Add(new(reference, acquisition.ManifestSha256 ?? throw Stale(), requirement,
+                    receipt is not null, receipt is null ? ExecutionRuntimeErrorCodes.Missing : null, receipt?.Identity.ToContract(), install));
+            }
         }
-        var sources = contexts.OrderBy(value => value.Origin.AbsoluteUri, StringComparer.Ordinal).Select(value => new
-        {
-            Origin = value.Origin.AbsoluteUri, Rid,
-            Packages = value.Plan.Items.Select(item => new { item.PackageId, item.Version, item.PackageContentIdentity, item.Targets,
-                Artifacts = item.Artifacts.Select(artifact => new { artifact.Kind, artifact.Rid, artifact.Sha256, artifact.Size, artifact.ManifestSha256 }) }),
-        }).ToArray();
         // Runtime availability/policy refresh does not change source identity. Adoption also
         // pins the actual installed origin/version/content; clients cannot manufacture it.
-        var fingerprint = sourceAdoptions is not { Count: > 0 } ? Hash(sources) : Hash(new
+        var fingerprint = Hash(new
         {
             Plans = sources,
-            SourceAdoptions = sourceAdoptions.OrderBy(value => value.PackageId, StringComparer.Ordinal)
+            Runtimes = requirements.Select(value => new { value.Package, Identity = value.InstalledRuntime ?? value.Installation?.Resolution?.Artifact.Identity }),
+            SourceAdoptions = (sourceAdoptions ?? []).OrderBy(value => value.PackageId, StringComparer.Ordinal)
                 .Select(value => new { value.PackageId, value.Version, value.ContentIdentity, value.Provenance }).ToArray(),
         });
         return Result(fingerprint, requirements);
     }
+
+    private sealed record RegistryAcquisition(string? Origin, string? Projections, string? ManifestSha256,
+        IReadOnlyList<SunderPackageTargetKey> Targets, IReadOnlyList<string> Capabilities);
+
+    internal static string ProjectionFingerprint(RegistryPackageInstallPlanItem item)
+        => Hash(item.Artifacts.OrderBy(value => value.Kind, StringComparer.Ordinal).ThenBy(value => value.Rid, StringComparer.Ordinal)
+            .Select(value => new { value.Kind, value.Rid, value.Size, value.Sha256, value.SourceArchiveSha256,
+                value.ManifestSha256, value.ProjectionContentIdentity, value.ProjectionFormatVersion }).ToArray());
 
     internal async Task<RuntimePackageRuntimePrerequisitePlan> InspectUploadsAsync(PackageStoreStageRequest request,
         CancellationToken token)

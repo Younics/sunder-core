@@ -7,12 +7,27 @@
              x:Class="Sunder.App.Views.Controls.PackageDetailsHeader"
              x:DataType="vm:PackagesWindowViewModel"
              mc:Ignorable="d">
-  <Grid ColumnDefinitions="Auto,*"
-        RowDefinitions="Auto,Auto"
-        ColumnSpacing="12"
-        RowSpacing="10">
-    <controls:PackageIconView Width="64"
-                              Height="64"
+  <UserControl.Styles>
+    <Style Selector="Border#PackageStats"><Setter Property="Grid.Column" Value="2" /></Style>
+    <Style Selector="Button.star-action">
+      <Setter Property="Width" Value="NaN" />
+      <Setter Property="Height" Value="32" />
+      <Setter Property="Padding" Value="9,4" />
+    </Style>
+    <ContainerQuery Name="PackageHeader" Query="max-width:510">
+      <Style Selector="Border#PackageStats">
+        <Setter Property="Grid.Row" Value="2" /><Setter Property="Grid.Column" Value="0" />
+        <Setter Property="Grid.ColumnSpan" Value="3" />
+        <Setter Property="BorderThickness" Value="0,1,0,0" />
+        <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
+        <Setter Property="Padding" Value="0,8,0,0" />
+      </Style>
+    </ContainerQuery>
+  </UserControl.Styles>
+  <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto,Auto" ColumnSpacing="12"
+        Container.Name="PackageHeader" Container.Sizing="Width">
+    <controls:PackageIconView Width="48"
+                              Height="48"
                               VerticalAlignment="Top"
                               IsVisible="{Binding ShowSelectedPackageIcon}"
                               IconImage="{Binding SelectedPackageIconImage}"
@@ -27,37 +42,57 @@
     <StackPanel Grid.Column="1"
                 Spacing="5">
       <TextBlock Classes="page-title" Text="{Binding SelectedPackageTitle}" TextWrapping="Wrap" />
-      <TextBlock Classes="caption" Text="{Binding SelectedPackageSubtitle}" TextWrapping="Wrap" />
-      <TextBlock Classes="muted" Text="{Binding SelectedPackageSummary}" TextWrapping="Wrap" />
+      <TextBlock Classes="caption code-value" Text="{Binding SelectedPackageSubtitle}" />
+      <TextBlock Classes="muted" Text="{Binding SelectedPackageSummary}" TextWrapping="Wrap">
+        <TextBlock.IsVisible>
+          <MultiBinding Converter="{x:Static BoolConverters.And}">
+            <Binding Path="ShowInstalledDetails" />
+            <Binding Path="SelectedPackageSummary" Converter="{x:Static StringConverters.IsNotNullOrEmpty}" />
+          </MultiBinding>
+        </TextBlock.IsVisible>
+      </TextBlock>
       <WrapPanel ItemSpacing="8" LineSpacing="6" IsVisible="{Binding ShowInstalledDetails}">
         <Border Classes="package-row-badge"><TextBlock Text="{Binding SelectedPackageStatus}" /></Border>
         <TextBlock Classes="caption" Text="{Binding SelectedInstalledPackage.UpdateText}" IsVisible="{Binding SelectedInstalledPackage.HasUpdate}" TextWrapping="Wrap" />
       </WrapPanel>
+      <WrapPanel ItemSpacing="10" LineSpacing="6" IsVisible="{Binding ShowMarketplacePackageDetailsContent}">
+        <TextBlock FontWeight="SemiBold" Text="{Binding SelectedMarketplaceVersion.Version, StringFormat='v{0}'}" TextWrapping="Wrap" />
+        <Border Classes="package-row-badge update" IsVisible="{Binding SelectedMarketplaceVersion.StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+          <TextBlock Text="{Binding SelectedMarketplaceVersion.StatusText}" />
+        </Border>
+        <TextBlock Classes="caption" Text="{Binding SelectedMarketplacePackage.InstalledVersionText}" IsVisible="{Binding IsSelectedMarketplacePackageInstalled}" TextWrapping="Wrap" />
+      </WrapPanel>
     </StackPanel>
 
-    <StackPanel Grid.Row="1"
-                Grid.ColumnSpan="2"
-                Orientation="Horizontal"
-                Spacing="10"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                IsVisible="{Binding ShowMarketplaceDetails}">
-      <TextBlock Classes="caption"
-                 Text="{Binding MarketplacePackageStatsText}"
-                 TextAlignment="Right"
-                 VerticalAlignment="Center"
-                 IsVisible="{Binding ShowMarketplacePackageStats}" />
-      <Button Classes="secondary-action star-action"
+    <WrapPanel Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,10,0,8" ItemSpacing="8" LineSpacing="6">
+      <Button Classes="primary-action" Content="Install" Command="{Binding InstallSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceInstallButton}" />
+      <Button Classes="primary-action" Content="Update…" Command="{Binding UpdateSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceUpdateButton}" />
+      <Button Classes="primary-action" Content="Update…" Command="{Binding UpdateSelectedInstalledPackageCommand}" IsVisible="{Binding ShowUpdateSelectedInstalledPackage}" />
+      <Button Classes="primary-action" Content="Adopt source &amp; update" Command="{Binding AdoptSelectedInstalledPackageSourceCommand}" IsVisible="{Binding ShowAdoptSelectedInstalledPackageSource}" />
+      <Button Classes="secondary-action" Content="Enable" Command="{Binding EnableSelectedPackageCommand}" IsVisible="{Binding ShowEnableSelectedPackage}" />
+      <Button Classes="secondary-action" Content="Disable" Command="{Binding DisableSelectedPackageCommand}" IsVisible="{Binding ShowDisableSelectedPackage}" />
+      <Button Classes="secondary-action danger-action" Content="Uninstall" Command="{Binding UninstallSelectedPackageCommand}" IsVisible="{Binding ShowUninstallSelectedPackage}" />
+      <Button Classes="secondary-action danger-action" Content="Uninstall" Command="{Binding UninstallSelectedMarketplacePackageCommand}" IsVisible="{Binding ShowMarketplaceUninstallButton}" />
+      <TextBlock Classes="caption" Text="{Binding Operations.SelectedPackageOperationStatusText}" VerticalAlignment="Center" IsVisible="{Binding Operations.ShowSelectedPackageOperationStatus}" />
+      <Button Classes="secondary-action" Content="Cancel" Command="{Binding CancelSelectedPackageOperationCommand}" IsVisible="{Binding Operations.ShowCancelSelectedPackageOperation}" />
+    </WrapPanel>
+    <Border x:Name="PackageStats" VerticalAlignment="Top" IsVisible="{Binding ShowMarketplacePackageDetailsContent}">
+      <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+        <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center" IsVisible="{Binding ShowMarketplacePackageStats}">
+          <Path Classes="icon-stroke" Width="13" Height="13" Data="{StaticResource Sunder.Icon.Download}" />
+          <TextBlock Classes="caption" Text="{Binding SelectedMarketplacePackage.Stats.TotalDownloads, StringFormat='{}{0:N0} downloads'}" />
+        </StackPanel>
+        <Button Grid.Column="1" Classes="secondary-action star-action"
               Classes.starred="{Binding SelectedMarketplacePackageIsStarred}"
               Command="{Binding ToggleSelectedMarketplacePackageStarCommand}"
-              IsEnabled="{Binding CanToggleSelectedMarketplacePackageStar}"
-              IsVisible="{Binding ShowMarketplacePackageStarAction}"
-              ToolTip.Tip="{Binding MarketplacePackageStarActionText}">
-        <Path Width="16"
-              Height="16"
-              Classes="star-icon"
-              Data="{StaticResource Sunder.Icon.Star}" />
-      </Button>
-    </StackPanel>
+               AutomationProperties.Name="{Binding MarketplacePackageStarActionText}"
+               ToolTip.Tip="{Binding MarketplacePackageStarActionText}">
+          <StackPanel Orientation="Horizontal" Spacing="5">
+            <Path Width="14" Height="14" Classes="star-icon" Data="{StaticResource Sunder.Icon.Star}" />
+            <TextBlock Text="{Binding SelectedMarketplacePackage.Stats.Stars, StringFormat='{}{0:N0}'}" IsVisible="{Binding ShowMarketplacePackageStats}" />
+          </StackPanel>
+        </Button>
+      </Grid>
+    </Border>
   </Grid>
 </UserControl>

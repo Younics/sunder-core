@@ -1,4 +1,5 @@
 using Sunder.Runtime.Contracts;
+using Sunder.Registry.Contracts;
 using Sunder.Sdk.Abstractions;
 using Sunder.Sdk.Notifications;
 
@@ -15,6 +16,14 @@ public sealed class PackageUpdateStartupCheckService(
     private readonly IBackgroundTaskQueue _backgroundTasks = backgroundTasks;
     private readonly IRuntimeApiClientFactory _runtimeApiClientFactory = runtimeApiClientFactory;
     private readonly IPackageNotificationService _notificationService = notificationService;
+    internal event Action? ResultsChanged;
+    private sealed record Observation(InstalledPackageProvenance Provenance, DateTimeOffset InstalledAt, RegistryPackageUpdate Update);
+    private volatile Observation[] _results = [];
+
+    internal IReadOnlyList<RegistryPackageUpdate> ForInstalled(IReadOnlyList<InstalledPackageDescriptor> packages)
+        => _results.Where(entry => packages.Any(package => package.PackageId == entry.Update.PackageId
+            && package.Version == entry.Update.CurrentVersion && package.Provenance == entry.Provenance
+            && package.InstalledAtUtc == entry.InstalledAt)).Select(entry => entry.Update).ToArray();
 
     public BackgroundTaskSnapshot EnqueueStartupCheck()
         => _backgroundTasks.Enqueue(new BackgroundTaskRequest(
@@ -38,12 +47,14 @@ public sealed class PackageUpdateStartupCheckService(
             var installedPackages = await runtimeApiClient.GetInstalledPackagesAsync(context.CancellationToken).ConfigureAwait(false);
             if (installedPackages.Count == 0)
             {
+                _results = [];
+                ResultsChanged?.Invoke();
                 context.ReportProgress(100, "No installed packages.");
                 return;
             }
 
             context.ReportProgress(35, "Resolving package updates...");
-            var updateCount = 0;
+            var updates = new List<Observation>();
             foreach (var request in InstalledPackageUpdateRequestBuilder.Build(installedPackages))
             {
                 var requestedPackageIds = request.Packages
@@ -57,11 +68,19 @@ public sealed class PackageUpdateStartupCheckService(
                     context.ReportProgress(100, "Package update check failed.");
                     return;
                 }
-                updateCount += plan.Items.Count(item => requestedPackageIds.Contains(item.PackageId)
-                                                        && item.CurrentVersion is not null
-                                                        && !string.Equals(item.CurrentVersion, item.Version, StringComparison.OrdinalIgnoreCase));
+                foreach (var item in plan.Items.Where(item => item.ActionKind == RegistryPackageActionKinds.PackageUpdate
+                             && requestedPackageIds.Contains(item.PackageId) && item.Version is not null && item.Version != item.CurrentVersion))
+                {
+                    var installed = installedPackages.FirstOrDefault(package => package.PackageId == item.PackageId && package.Version == item.CurrentVersion);
+                    if (installed is not null)
+                        updates.Add(new(installed.Provenance, installed.InstalledAtUtc,
+                            new(item.PackageId, installed.Version, item.Version!, item.DeprecatedMessage, [])));
+                }
             }
 
+            _results = updates.ToArray();
+            ResultsChanged?.Invoke();
+            var updateCount = updates.Count;
             if (updateCount > 0)
             {
                 await _notificationService.PublishAsync(

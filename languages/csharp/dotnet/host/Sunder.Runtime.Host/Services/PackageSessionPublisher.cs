@@ -122,7 +122,7 @@ internal sealed class PackageSessionPublisher(
             stageId,
             requiresPackageStoreCommit)
         {
-            RetainWorkersExcept = requiresPackageStoreCommit ? null : retainWorkersExcept,
+            RetainWorkersExcept = retainWorkersExcept,
             DevelopmentWorkerContinuation = !requiresPackageStoreCommit && developmentWorkerContinuation,
             UnplannedWithdrawal = unplannedWithdrawal,
         };

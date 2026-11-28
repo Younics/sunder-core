@@ -8,10 +8,7 @@
              mc:Ignorable="d">
   <Border Classes="package-list-row"
           Classes.selected="{Binding IsSelected, ElementName=Root}">
-    <Grid ColumnDefinitions="Auto,*,Auto"
-          RowDefinitions="Auto,Auto,Auto"
-          ColumnSpacing="12"
-          RowSpacing="0">
+    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10" MinHeight="38">
       <controls:PackageIconView Width="30"
                                 Height="30"
                                 IconImage="{Binding IconImage, ElementName=Root}"
@@ -21,47 +18,17 @@
                                 GlyphFontSize="13"
                                 GlyphForeground="{DynamicResource Sunder.Brush.Accent}" />
 
-      <StackPanel Grid.Column="1"
-                  Spacing="0">
-        <TextBlock Classes="section-title"
-                   Text="{Binding Title, ElementName=Root}"
-                   TextWrapping="Wrap" />
-        <TextBlock Classes="caption"
-                   Text="{Binding PackageId, ElementName=Root}"
-                   TextWrapping="Wrap" />
+      <StackPanel Grid.Column="1" VerticalAlignment="Center" Spacing="2">
+        <TextBlock FontWeight="SemiBold" Text="{Binding Title, ElementName=Root}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Classes="caption" Text="{Binding Status, ElementName=Root}"
+                   IsVisible="{Binding !ShowOperationStatus, ElementName=Root}" TextTrimming="CharacterEllipsis" />
+        <TextBlock Classes="caption" Text="{Binding OperationStatusText, ElementName=Root}"
+                   IsVisible="{Binding ShowOperationStatus, ElementName=Root}" TextTrimming="CharacterEllipsis" />
       </StackPanel>
-
-      <Border Grid.Column="2"
-              Classes="package-row-badge">
-        <TextBlock Text="{Binding PrimaryBadge, ElementName=Root}" />
+      <Border Grid.Column="2" Classes="package-row-badge update" VerticalAlignment="Center"
+              IsVisible="{Binding ShowActionBadge, ElementName=Root}">
+        <TextBlock Text="{Binding ActionBadge, ElementName=Root}" />
       </Border>
-
-      <StackPanel Grid.Row="1"
-                  Grid.Column="1"
-                  Grid.ColumnSpan="2"
-                  Orientation="Horizontal"
-                  Spacing="6"
-                  Margin="0,5,0,0"
-                  IsVisible="{Binding ShowBadgeRow, ElementName=Root}">
-        <Border Classes="package-row-badge"
-                IsVisible="{Binding ShowDetailBadge, ElementName=Root}">
-          <TextBlock Text="{Binding DetailBadge, ElementName=Root}" />
-        </Border>
-        <Border Classes="package-row-badge"
-                Classes.update="{Binding ActionBadgeIsUpdate, ElementName=Root}"
-                IsVisible="{Binding ShowActionBadge, ElementName=Root}">
-          <TextBlock Text="{Binding ActionBadge, ElementName=Root}" />
-        </Border>
-      </StackPanel>
-
-      <TextBlock Grid.Row="2"
-                 Grid.Column="1"
-                 Grid.ColumnSpan="2"
-                 Classes="caption"
-                 Margin="0,5,0,0"
-                 Text="{Binding OperationStatusText, ElementName=Root}"
-                 IsVisible="{Binding ShowOperationStatus, ElementName=Root}"
-                 TextWrapping="Wrap" />
     </Grid>
   </Border>
 </UserControl>

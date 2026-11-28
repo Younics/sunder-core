@@ -252,29 +252,42 @@ public sealed class ShellCompositionServiceTests
         Assert.False(state.ViewPlacements.ContainsKey("agent.chat"));
     }
 
-    [Fact]
-    public void ExplicitPackageRemovalAlsoPrunesSavedViewsAbsentFromTheLiveViewDictionary()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ExplicitPackageRemovalAlsoPrunesSavedViewsAbsentFromTheLiveViewDictionary(bool closed)
     {
         var state = CreateSavedState();
+        if (closed) ShellSelectionState.SetSelectedViewId(state, RailPlacement.Middle, null, explicitlyClosed: true);
         state.ViewPackageIds["agent.chat"] = "agent";
         var views = new ShellCompositionService().Compose(
             [CreatePackage("tools", "Tools", [CreateView("tools.home", "Home", "middle")])], state,
             null, [], [], ShellNormalizationPolicy.SafeModePreserveLayout).PackageViews.ToDictionary(view => view.ViewId);
         Assert.True(ShellPackageRemovalPruner.RemovePackageViews("agent", views, state));
         Assert.Equal("tools.home", state.SelectedMiddleViewId);
+        Assert.Null(state.ClosedMiddleViewId);
         Assert.False(state.ViewPlacements.ContainsKey("agent.chat"));
         Assert.False(state.ViewOrder.ContainsKey("agent.chat"));
         Assert.False(state.ViewPackageIds.ContainsKey("agent.chat"));
         Assert.False(ShellPackageRemovalPruner.RemovePackageViews("agent", views, state));
     }
 
-    [Fact]
-    public void InitializedEmptyMiddleDoesNotSelectFirstAvailableView()
+    [Theory]
+    [InlineData(null, "agent.workspaces")]
+    [InlineData("agent.chat", "agent.chat")]
+    public void InitializedLayoutRestoresMiddleSelectionOrOpensFirstVisibleViewInSavedOrder(string? saved, string expected)
     {
-        var state = new ShellState { HasInitializedLayout = true };
-        new ShellCompositionService().Compose([CreatePackage("agent", "Agent", [CreateView("agent.chat", "Chat", "middle")])],
+        var state = new ShellState
+        {
+            HasInitializedLayout = true,
+            SelectedMiddleViewId = saved,
+            ViewOrder = new() { ["agent.hidden"] = 0, ["agent.workspaces"] = 1, ["agent.chat"] = 2 },
+        };
+        new ShellCompositionService().Compose([CreatePackage("agent", "Agent", [
+            CreateView("agent.chat", "Chat", "middle"), CreateView("agent.workspaces", "Workspaces", "middle"),
+            CreateView("agent.hidden", "Hidden", "middle", showInHotbarByDefault: false)])],
             state, null, [], [], ShellNormalizationPolicy.AuthoritativeRuntimeSnapshot);
-        Assert.Null(state.SelectedMiddleViewId);
+        Assert.Equal(expected, state.SelectedMiddleViewId);
     }
 
     [Fact]

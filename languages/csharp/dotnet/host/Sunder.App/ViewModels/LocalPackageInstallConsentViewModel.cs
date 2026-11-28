@@ -43,6 +43,7 @@ public sealed class LocalPackageInstallConsentViewModel
     public string DismissButtonText => IsValid ? "Cancel" : "Close";
     public IReadOnlyList<ExecutionRuntimeDownloadItemViewModel> RuntimeDownloads { get; private init; } = [];
     public PackageInformationViewModel Information { get; private init; } = PackageInformationViewModel.Unavailable();
+    public string ArchiveDetails { get; private init; } = string.Empty;
     public bool HasRuntimeDownloads => RuntimeDownloads.Count != 0;
 
     internal LocalPackageInstallConsentViewModel WithRuntimes(RuntimePackageRuntimePrerequisitePlan plan)
@@ -50,6 +51,7 @@ public sealed class LocalPackageInstallConsentViewModel
             SensitiveCapabilityManifestSha256, ValidationMessage, IsValid)
         {
             Information = Information,
+            ArchiveDetails = ArchiveDetails,
             RuntimeDownloads = plan.Requirements.Select(item =>
             {
                 var identity = item.Installation?.Resolution?.Artifact.Identity ?? item.InstalledRuntime;
@@ -62,46 +64,35 @@ public sealed class LocalPackageInstallConsentViewModel
 
     internal static LocalPackageInstallConsentViewModel Valid(
         string fileName,
-        SunderPackageArchiveValidationResult validation)
+        SunderPackageArchiveValidationResult validation, string? archiveSha256 = null, long? archiveBytes = null)
     {
         var manifest = validation.Manifest!;
-        var roles = (manifest.Targets ?? [])
-            .Where(static target => target is not null)
-            .Select(static target => target!.Role switch
-            {
-                SunderPackageFormat.AppHostRole => "App",
-                SunderPackageFormat.RuntimeHostRole => "Runtime",
-                _ => target.Role!,
-            })
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
+        var deviceRoles = (manifest.Targets ?? []).Where(target => target?.Rid == AppPackageTargetEnvironment.CurrentRid)
+            .Select(target => target!.Role!).ToArray();
+        var manifestHash = validation.ContentIndex!.Files!.Single(entry => entry?.Path == SunderPackageFormat.ManifestPath).Sha256;
         var validationMessage = validation.Warnings.Count == 0
             ? "Archive structure and content hashes passed validation."
             : string.Join(Environment.NewLine, validation.Warnings);
+        // A disk install acquires the canonical archive, including targets for other devices.
         var hasDockerEnvironmentAccess = (manifest.Targets ?? []).Any(target =>
-            target?.RequiredHostCapabilities?.Contains(
+            target is { Role: SunderPackageFormat.RuntimeHostRole, Kind: SunderPackageFormat.WorkerTargetKind }
+            && target.RequiredHostCapabilities?.Contains(
                 SunderSdkCapabilities.DockerEnvironmentV1,
                 StringComparer.Ordinal) == true);
         return new LocalPackageInstallConsentViewModel(
             fileName,
             manifest.Name!,
             $"{manifest.Id}  {manifest.Version}",
-            string.IsNullOrWhiteSpace(manifest.Summary)
-                ? "No package summary was provided."
-                : manifest.Summary,
-            roles.Length == 0 ? "Shared contract package" : string.Join(" + ", roles),
+            manifest.Summary?.Trim() ?? string.Empty,
+            PackagePlatformsViewModel.Components(deviceRoles, manifest.Targets?.Count ?? 0),
             hasDockerEnvironmentAccess,
-            hasDockerEnvironmentAccess
-                ? validation.ContentIndex!.Files!.Single(entry => string.Equals(
-                    entry?.Path,
-                    SunderPackageFormat.ManifestPath,
-                    StringComparison.Ordinal)).Sha256
-                : null,
+            hasDockerEnvironmentAccess ? manifestHash : null,
             validationMessage,
             isValid: true)
         {
-            Information = PackageInformationViewModel.Create(SunderPackageInformation.FromManifest(manifest), AppPackageTargetEnvironment.CurrentRid),
+            ArchiveDetails = $"Manifest SHA-256: {manifestHash}\nIndexed files verified: {validation.ContentIndex.Files!.Count}"
+                + (archiveSha256 is null ? string.Empty : $"\nArchive SHA-256: {archiveSha256}\nArchive size: {archiveBytes:N0} bytes"),
+            Information = PackageInformationViewModel.Create(SunderPackageInformation.FromManifest(manifest), AppPackageTargetEnvironment.CurrentRid, deviceRoles: deviceRoles),
         };
     }
 

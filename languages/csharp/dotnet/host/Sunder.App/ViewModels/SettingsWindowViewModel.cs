@@ -120,6 +120,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
     public void SetWindowVisible(bool visible)
     {
         if (visible && !_windowVisible) PackageSettings.CollapseNavigationGroups();
+        if (!visible) Appearance?.CancelPreview();
         _windowVisible = visible;
         if (visible && IsPackageRuntimesSelection && PackageRuntimes is not null)
             _tasks.Observe(PackageRuntimes.ActivateAsync(), "opening Package Runtimes");
@@ -274,6 +275,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
 
     partial void OnIsAppearanceSelectionChanged(bool value)
     {
+        if (!value) Appearance?.CancelPreview();
         OnPropertyChanged(nameof(ShowPlainCoreSelection));
         OnPropertyChanged(nameof(ShowAppearanceSettings));
     }
@@ -571,6 +573,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         }
 
         _disposed = true;
+        Appearance?.CancelPreview();
         PackageRuntimes?.Dispose();
         _selection.Dispose();
         _selectionLoadRequest.Dispose();
@@ -829,6 +832,7 @@ public sealed partial class SettingsWindowViewModel : ViewModelBase, IDisposable
         IsUpdatesSelection = false;
         IsAdvancedSelection = false;
         IsPackageRuntimesSelection = false;
+        IsAppearanceSelection = false;
         IsPackageSelection = true;
     }
 

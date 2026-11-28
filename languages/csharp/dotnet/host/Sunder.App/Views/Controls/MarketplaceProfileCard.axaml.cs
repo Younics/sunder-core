@@ -6,10 +6,6 @@ namespace Sunder.App.Views.Controls;
 
 public partial class MarketplaceProfileCard : UserControl
 {
-    public static readonly StyledProperty<string> TitleProperty =
-        AvaloniaProperty.Register<MarketplaceProfileCard, string>(nameof(Title), "Profile");
-    public static readonly StyledProperty<string> DescriptionProperty =
-        AvaloniaProperty.Register<MarketplaceProfileCard, string>(nameof(Description), string.Empty);
     public static readonly StyledProperty<IEnumerable?> LinksProperty =
         AvaloniaProperty.Register<MarketplaceProfileCard, IEnumerable?>(nameof(Links));
     public static readonly StyledProperty<IEnumerable?> MetadataProperty =
@@ -28,8 +24,6 @@ public partial class MarketplaceProfileCard : UserControl
         InitializeComponent();
     }
 
-    public string Title { get => GetValue(TitleProperty); set => SetValue(TitleProperty, value); }
-    public string Description { get => GetValue(DescriptionProperty); set => SetValue(DescriptionProperty, value); }
     public IEnumerable? Links { get => GetValue(LinksProperty); set => SetValue(LinksProperty, value); }
     public IEnumerable? Metadata { get => GetValue(MetadataProperty); set => SetValue(MetadataProperty, value); }
     public IEnumerable? Tags { get => GetValue(TagsProperty); set => SetValue(TagsProperty, value); }

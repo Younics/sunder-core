@@ -7,8 +7,9 @@ namespace Sunder.App.ViewModels;
 public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposable
 {
     private readonly bool _ownsIconImage;
-    private readonly CancellationTokenSource? _iconLoadCts;
-    private readonly Task? _iconLoadTask;
+    private CancellationTokenSource? _iconLoadCts;
+    private Task? _iconLoadTask;
+    private Action? _startIconLoad;
     private bool _isDisposed;
 
     protected PackageIconItemViewModel(
@@ -19,7 +20,8 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
         IUiDispatcher? uiDispatcher = null,
         PackageIconTransport iconTransport = PackageIconTransport.RuntimeAsset,
         Uri? registryOrigin = null,
-        RemoteImageService? remoteImageService = null)
+        RemoteImageService? remoteImageService = null,
+        bool deferIcon = false)
     {
         IconUri = iconUri;
         _ownsIconImage = ownsIconImage;
@@ -27,21 +29,20 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
 
         if (loadIcon && IconUri is not null && IconImage is null)
         {
-            _iconLoadCts = new CancellationTokenSource();
-            _iconLoadTask = PackageIconImageViewModelLoader.LoadAsync(
-                IconUri,
-                iconTransport,
-                registryOrigin,
-                remoteImageService,
-                uiDispatcher ?? AvaloniaUiDispatcher.Instance,
-                () => _isDisposed,
-                (error, image) =>
-                {
-                    IconLoadError = error;
-                    IconImage = image;
-                },
-                _iconLoadCts.Token);
+            _startIconLoad = () =>
+            {
+                _iconLoadCts = new CancellationTokenSource();
+                _iconLoadTask = PackageIconImageViewModelLoader.LoadAsync(
+                    IconUri, iconTransport, registryOrigin, remoteImageService, uiDispatcher ?? AvaloniaUiDispatcher.Instance,
+                    () => _isDisposed, (error, image) => { IconLoadError = error; IconImage = image; }, _iconLoadCts.Token);
+            };
+            if (!deferIcon) EnsureIconLoaded();
         }
+    }
+
+    internal void EnsureIconLoaded()
+    {
+        if (!_isDisposed) Interlocked.Exchange(ref _startIconLoad, null)?.Invoke();
     }
 
     public Uri? IconUri { get; }
@@ -70,6 +71,7 @@ public abstract partial class PackageIconItemViewModel : ViewModelBase, IDisposa
     public virtual void Dispose()
     {
         _isDisposed = true;
+        _startIconLoad = null;
         if (_iconLoadCts is not null)
         {
             _iconLoadCts.Cancel();

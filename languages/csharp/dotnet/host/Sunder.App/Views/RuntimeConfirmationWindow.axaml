@@ -1,27 +1,36 @@
 <Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:Sunder.App.ViewModels" xmlns:controls="using:Sunder.App.Views.Controls"
         x:Class="Sunder.App.Views.RuntimeConfirmationWindow" x:DataType="vm:RuntimeConfirmationViewModel"
-        Width="640" Height="530" MinWidth="560" MinHeight="420" WindowStartupLocation="CenterOwner"
+         Width="640" Height="530" MinWidth="360" MinHeight="360" WindowStartupLocation="CenterOwner"
         Title="{Binding Title}" Icon="avares://Sunder.App/Assets/Images/app.ico" ShowInTaskbar="False"
-        WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True" Classes="secondary-window">
-  <Grid RowDefinitions="52,*,Auto" Background="{DynamicResource Sunder.Brush.Background.App}">
+         WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True" Classes="secondary-window management-window">
+  <Grid RowDefinitions="52,*,Auto" Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
     <controls:WindowTitleBar>
-      <controls:WindowTitleBar.LeadingContent><TextBlock Classes="section-title" Text="{Binding Title}" /></controls:WindowTitleBar.LeadingContent>
+      <controls:WindowTitleBar.LeadingContent><TextBlock Classes="section-title" Text="Confirm changes" /></controls:WindowTitleBar.LeadingContent>
     </controls:WindowTitleBar>
     <ScrollViewer Grid.Row="1" Margin="20,12" HorizontalScrollBarVisibility="Disabled">
       <StackPanel Spacing="16">
-        <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+        <StackPanel Spacing="5">
+          <TextBlock Classes="page-title" Text="{Binding Title}" TextWrapping="Wrap" />
+          <TextBlock Classes="detail-intro" Text="{Binding Message}" />
+        </StackPanel>
+        <TextBlock Classes="section-label" Text="Changes" />
         <ItemsControl ItemsSource="{Binding Items}">
           <ItemsControl.ItemTemplate><DataTemplate x:DataType="x:String">
-            <Border Classes="settings-note-card" Margin="0,0,0,8"><TextBlock Text="{Binding}" TextWrapping="Wrap" /></Border>
+            <Border Classes="detail-row" Margin="0,0,0,4"><TextBlock Text="{Binding}" TextWrapping="Wrap" /></Border>
           </DataTemplate></ItemsControl.ItemTemplate>
         </ItemsControl>
-        <Expander Header="Details"><TextBlock Margin="0,10,0,0" Classes="caption" Text="{Binding Details}" TextWrapping="Wrap" /></Expander>
+        <Border Classes="review-warning" IsVisible="{Binding Impact, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+          <StackPanel Spacing="4"><TextBlock Classes="section-label" Text="Impact" /><TextBlock Text="{Binding Impact}" TextWrapping="Wrap" /></StackPanel>
+        </Border>
+        <Expander Header="Details"><SelectableTextBlock Classes="code-value" Text="{Binding Details}" /></Expander>
       </StackPanel>
     </ScrollViewer>
-    <WrapPanel Grid.Row="2" Margin="20,12" HorizontalAlignment="Right">
-      <Button Margin="0,0,8,8" Classes="secondary-action" Content="Cancel" Click="Cancel_OnClick" />
-      <Button Margin="0,0,0,8" Classes="primary-action" Content="{Binding ConfirmText}" IsEnabled="{Binding CanConfirm}" Click="Confirm_OnClick" />
-    </WrapPanel>
+    <Border Grid.Row="2" Classes="window-footer">
+      <WrapPanel ItemSpacing="8" LineSpacing="4" HorizontalAlignment="Right">
+        <Button Classes="secondary-action" Content="Cancel" Click="Cancel_OnClick" />
+        <Button Classes="primary-action" Classes.danger-action="{Binding IsRemoval}" Content="{Binding ConfirmText}" IsEnabled="{Binding CanConfirm}" Click="Confirm_OnClick" />
+      </WrapPanel>
+    </Border>
   </Grid>
 </Window>

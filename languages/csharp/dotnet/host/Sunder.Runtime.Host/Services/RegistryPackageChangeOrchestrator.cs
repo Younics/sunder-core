@@ -1,3 +1,4 @@
+using System.Net;
 using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 
@@ -33,15 +34,15 @@ internal sealed class RegistryPackageChangeOrchestrator(
         var materialized = EnsureProvenanceChangesAreMaterialized(
             new PackageExecutionRequest(request, NoSourceAdoptions, NoPrereleasePolicyOverrides),
             installed);
-        var plan = await planResolver.ResolveAsync(materialized.Request, cancellationToken);
+        var resolution = await planResolver.ResolveAsync(materialized.Request, cancellationToken);
+        var plan = RuntimeRegistryContractMapper.ToRuntime(resolution.Plan);
         if (!plan.Success)
         {
             return plan;
         }
         return plan with
         {
-            RuntimePrerequisites = prerequisites is null ? null : await prerequisites.PreviewAsync(
-                new(Registry: materialized.Request with { ExpectedResolutionFingerprint = plan.ResolutionFingerprint }), cancellationToken),
+            RuntimePrerequisites = prerequisites is null ? null : await prerequisites.InspectRegistryAsync([resolution], cancellationToken),
             RequiredCapabilityConsents = PackageSensitiveCapabilityPolicy.GetRequiredConsents(
                 plan.Items,
                 installed),
@@ -349,14 +350,17 @@ internal sealed class RegistryPackageChangeOrchestrator(
                     materialized.Request,
                     expectedResolutionFingerprint,
                     cancellationToken);
+                if (!resolution.Plan.Success)
+                {
+                    return expectedResolutionFingerprint is not null
+                        && resolution.Plan.Conflicts.Any(conflict => conflict.ErrorCode == PackagePolicyErrorCodes.PlanStale)
+                        ? StalePreview(resolved, resolution.Plan)
+                        : PlanFailed(resolved, resolution.Plan);
+                }
                 if (expectedResolutionFingerprint is not null
                     && !ConfirmsExpectedPreview(resolution.Plan, expectedResolutionFingerprint, timeProvider.GetUtcNow()))
                 {
                     return StalePreview(resolved, resolution.Plan);
-                }
-                if (!resolution.Plan.Success)
-                {
-                    return PlanFailed(resolved, resolution.Plan);
                 }
 
                 var provenance = BuildProvenanceByPackageId(
@@ -408,7 +412,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
         catch (Exception exception)
         {
             logger.LogWarning("Registry package plan failed: {ErrorType}", exception.GetType().Name);
-            return Failed(exception.Message, RuntimeRegistryErrorCode.RegistryUnavailable, ResolvedWarnings(resolved), planItems: ResolvedPlanItems(resolved));
+            return Failed(exception.Message, RegistryRequestErrorCode(exception), ResolvedWarnings(resolved), planItems: ResolvedPlanItems(resolved));
         }
 
         var planWarnings = ResolvedWarnings(resolved);
@@ -521,6 +525,12 @@ internal sealed class RegistryPackageChangeOrchestrator(
                 installed,
                 cancellationToken);
             var exactBindingsByPackageId = preparedExactBindings.Bindings;
+            if (runtimePrerequisites is not null && runtimePrerequisites.Requirements.Any(reviewed =>
+                    !exactBindingsByPackageId.TryGetValue(reviewed.Package.PackageId, out var bindings)
+                    || !bindings.Any(binding => binding.Role == reviewed.Package.Role && binding.Rid == reviewed.Package.Rid
+                        && binding.Requirement == reviewed.Requirement && binding.Runtime == reviewed.InstalledRuntime)))
+                return ToResult(Failed("A runtime binding changed during installation. Review the selected runtimes again.",
+                    RuntimeRegistryErrorCode.StalePlan, planWarnings, planItems: planItems));
             var mutations = new List<PackageStoreMutationRequest>(planItems.Count);
             foreach (var resolution in resolved)
             {
@@ -563,6 +573,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
                             resolution.ProvenanceByPackageId[item.PackageId] with
                             {
                                 SourceIdentity = item.PackageContentIdentity,
+                                ProjectionFingerprint = PackageRuntimePrerequisiteService.ProjectionFingerprint(item),
                             },
                             item.Artifacts[0].ManifestSha256,
                             exactBindings)
@@ -711,7 +722,7 @@ internal sealed class RegistryPackageChangeOrchestrator(
             logger.LogWarning("Registry package transaction failed: {ErrorType}", exception.GetType().Name);
             return ToResult(Failed(
                 exception.Message,
-                RuntimeRegistryErrorCode.RegistryUnavailable,
+                RegistryRequestErrorCode(exception),
                 planWarnings,
                 planItems: planItems));
         }
@@ -945,6 +956,16 @@ internal sealed class RegistryPackageChangeOrchestrator(
             }
         }
     }
+
+    private static RuntimeRegistryErrorCode RegistryRequestErrorCode(Exception error)
+        => (error as HttpRequestException)?.StatusCode switch
+        {
+            HttpStatusCode.BadRequest => RuntimeRegistryErrorCode.InvalidRequest,
+            HttpStatusCode.Unauthorized => RuntimeRegistryErrorCode.AuthenticationRequired,
+            HttpStatusCode.Forbidden => RuntimeRegistryErrorCode.Forbidden,
+            HttpStatusCode.NotFound => RuntimeRegistryErrorCode.NotFound,
+            _ => RuntimeRegistryErrorCode.RegistryUnavailable,
+        };
 
     private static RuntimeRegistryPackageChangeResult PlanFailed(
         IReadOnlyList<ResolvedPackageExecution> resolved,

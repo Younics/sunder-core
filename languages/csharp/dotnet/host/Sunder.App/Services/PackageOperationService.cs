@@ -58,14 +58,13 @@ internal sealed record PackageOperationMetadata(
             [OperationMetadataKey] = bool.TrueString,
             [KindMetadataKey] = Kind.ToString(),
             [DisplayNameMetadataKey] = DisplayName,
+            ["sunder.installationMembers"] = string.Join('\n', PackageIds),
         };
 
         if (!string.IsNullOrWhiteSpace(PackageId))
         {
             metadata[PackageIdMetadataKey] = PackageId;
         }
-        if (PackageIds.Count > 0) metadata["sunder.installationMembers"] = string.Join('\n', PackageIds);
-
         return metadata;
     }
 }
@@ -90,6 +89,7 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
     private readonly RegistryPackageInstallService _registryInstallService;
     private readonly PackageOperationFinalizer _operationFinalizer;
     private readonly Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? _confirmLocalPackage;
+    private readonly Func<PackageUninstallPlan, CancellationToken, Task<bool>>? _confirmUninstall;
     private readonly object _operationGate = new();
     private readonly CancellationTokenSource _lifetime = new();
     private readonly CancellationToken _lifetimeToken;
@@ -106,12 +106,14 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         Func<RuntimePackageStamp, CancellationToken, Task<PackagePresentationResult>>? waitForPresentationAsync = null,
         TimeSpan? presentationWaitTimeout = null,
         Func<Sunder.App.ViewModels.LocalPackageInstallConsentViewModel, CancellationToken, Task<bool>>? confirmLocalPackage = null,
-        TimeProvider? uploadRetentionClock = null)
+        TimeProvider? uploadRetentionClock = null,
+        Func<PackageUninstallPlan, CancellationToken, Task<bool>>? confirmUninstall = null)
     {
         _backgroundTasks = backgroundTasks;
         _lifetimeToken = _lifetime.Token;
         _uploadRetentionClock = uploadRetentionClock ?? TimeProvider.System;
         _confirmLocalPackage = confirmLocalPackage;
+        _confirmUninstall = confirmUninstall;
         _runtimeApiClientFactory = runtimeApiClientFactory;
         _operationFinalizer = new PackageOperationFinalizer(
             waitForPresentationAsync ?? (async (stamp, cancellationToken) =>
@@ -308,11 +310,20 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             });
     }
 
-    public BackgroundTaskSnapshot EnqueueUninstall(
+    public async Task<BackgroundTaskSnapshot?> EnqueueUninstallAsync(
         string packageId,
         string displayName,
-        bool allowCascade = false)
+        CancellationToken cancellationToken = default)
     {
+        ThrowIfDisposed();
+        if (GetActiveOperationForPackageCore(packageId) is { } existing) return existing;
+        using var preparation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeToken);
+        using var client = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
+        var plan = await client.GetPackageUninstallPlanAsync(packageId, preparation.Token).ConfigureAwait(false);
+        if (_confirmUninstall is null)
+            throw new InvalidOperationException("Open Packages to review the removal before uninstalling.");
+        if (!await _confirmUninstall(plan, preparation.Token).WaitAsync(preparation.Token).ConfigureAwait(false)) return null;
+        preparation.Token.ThrowIfCancellationRequested();
         return EnqueuePackageStoreOperation(
             packageId,
             displayName,
@@ -323,19 +334,17 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
             {
                 context.ReportIndeterminate($"Uninstalling {displayName}...");
                 using var runtimeApiClient = _runtimeApiClientFactory.CreateClient<IRuntimePackageChangeClient>();
-                var plan = await runtimeApiClient.GetPackageUninstallPlanAsync(
-                    packageId,
-                    context.CancellationToken).ConfigureAwait(false);
                 var result = await StageCommitPackageStoreAsync(
                     runtimeApiClient,
                     new PackageStoreStageRequest([new PackageStoreMutationRequest(
                         PackageStoreMutationKind.Uninstall,
                         packageId,
-                        AllowCascade: allowCascade,
+                        AllowCascade: plan.RequiresCascadeConsent,
                         ConfirmationToken: plan.ConfirmationToken)]),
                     context.CancellationToken).ConfigureAwait(false);
                 await _operationFinalizer.FinishLocalOperationAsync(context, result, "Package uninstalled", $"{packageId} was uninstalled.").ConfigureAwait(false);
-            });
+            },
+            plan.ExpectedRemovalPackageIds);
     }
 
     public Task<BackgroundTaskSnapshot?> EnqueueUpdateAllAsync(CancellationToken cancellationToken = default)
@@ -473,7 +482,8 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
         PackageOperationKind kind,
         string title,
         bool canCancel,
-        Func<BackgroundTaskContext, Task> executeAsync)
+        Func<BackgroundTaskContext, Task> executeAsync,
+        IReadOnlyList<string>? packageIds = null)
     {
         lock (_operationGate)
         {
@@ -498,7 +508,10 @@ internal sealed partial class PackageOperationService : IPackageOperationExecuto
                 BackgroundTaskConcurrencyMode.SequentialWithinGroup,
                 canCancel,
                 executeAsync,
-                new PackageOperationMetadata(packageId, kind, displayName).ToMetadata()));
+                new PackageOperationMetadata(packageId, kind, displayName)
+                {
+                    PackageIds = packageIds ?? (packageId is null ? [] : [packageId]),
+                }.ToMetadata()));
         }
     }
 

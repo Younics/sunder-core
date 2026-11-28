@@ -26,7 +26,9 @@ internal static class AppActivationFingerprint
             {
                 PackageId = id, source.Kind, source.SourceFolder, source.HostRoles, source.Dependencies, source.SelectedTargetKey, source.SelectedTarget,
                 ContentIdentity = continuation ?? source.ContentIdentity, source.RegistryPolicyOrigin,
-                source.RegistryPolicyContentIdentity, InstalledPolicy = source.InstalledPolicy?.ComparisonEvidence(), source.Compatibility, source.DevelopmentImports,
+                source.RegistryPolicyContentIdentity,
+                InstalledPolicy = source.InstalledPolicy?.ComparisonEvidence(includeRegistryRevision: role != SunderPackageFormat.RuntimeHostRole),
+                source.Compatibility, source.DevelopmentImports,
                 source.DevelopmentOmittedPackages, source.AcquiredTargets, source.Manifest,
                 ContentIndex = continuation is null ? source.ContentIndex : null,
                 // Imported contract/source bytes are compatibility dependencies,

@@ -1437,8 +1437,7 @@ public sealed partial class MainWindowViewModelShellViewTests
     [Fact]
     public async Task LayoutController_RealSplitterDragHasSingleGeometryOwner()
     {
-        await using var ui = Avalonia.Headless.HeadlessUnitTestSession.StartNew(typeof(SplitterTestApplication));
-        await ui.Dispatch(async () =>
+        await HeadlessAppCollection.Session.Dispatch(async () =>
         {
             using var harness = CreateHarness();
             Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.workspaces"));
@@ -1514,12 +1513,6 @@ public sealed partial class MainWindowViewModelShellViewTests
             }
             finally { window.Close(); }
         }, default);
-    }
-
-    public sealed class SplitterTestApplication : Application
-    {
-        public static AppBuilder BuildAvaloniaApp()
-            => Avalonia.Headless.AvaloniaHeadlessPlatformExtensions.UseHeadless(AppBuilder.Configure<SplitterTestApplication>(), new());
     }
 
     [Fact]
@@ -1717,32 +1710,30 @@ public sealed partial class MainWindowViewModelShellViewTests
             rootPath,
             new ThrowingRuntimeApiClientFactory(),
             packageViewHostService,
-            packageViewHostService);
+            packageViewHostService,
+            initialState: new ShellState(),
+            initialViews: []);
+        Assert.False(harness.ViewModel.HasMiddleSelection);
+        Assert.Equal("WELCOME", harness.ViewModel.MiddlePanel.Title);
         var package = CreateActiveAgentPackage();
 
         async Task ApplyAsync(
             ActivePackageDescriptor activePackage,
             PackageUiSnapshotDescriptor source,
             long generation,
-            IReadOnlyCollection<string>? retryPackageIds = null,
-            bool openAfterInstall = false)
+            IReadOnlyCollection<string>? retryPackageIds = null)
         {
             var expectedInvocations = runtimeHandler.RpcRequestCount + 1;
             await harness.ViewModel.ApplyPackageLifecycleSnapshotAsync(
                 CreateRuntimeSnapshot([activePackage], [source], generation),
                 [source],
                 retryPackageIds).WaitAsync(TimeSpan.FromSeconds(5));
-            if (openAfterInstall)
-            {
-                // Installing into an initialized empty workspace does not silently
-                // reopen a view. Explicit navigation still must prepare Runtime RPC.
-                Assert.True(await harness.ViewModel.OpenPackageViewPanelAsync("agent.chat"));
-            }
             Assert.Equal(expectedInvocations, runtimeHandler.RpcRequestCount);
             Assert.True(harness.ViewModel.HasMiddleSelection);
+            Assert.Equal("agent.chat", Assert.Single(harness.ViewModel.MiddleBar.Items, item => item.IsSelected).Id);
             Assert.Equal("agent.chat", harness.ViewModel.MiddlePanel.ActiveViewId);
-            Assert.NotNull(Assert.IsType<HostedPackageViewBoundary>(
-                harness.ViewModel.MiddlePanel.HostedView).HostedView);
+            var boundary = Assert.IsType<HostedPackageViewBoundary>(harness.ViewModel.MiddlePanel.HostedView);
+            Assert.Equal("agent.chat", GetViewId(Assert.IsAssignableFrom<Control>(boundary.HostedView)));
         }
 
         var installSource = RuntimeContractTestData.Snapshot(
@@ -1773,7 +1764,7 @@ public sealed partial class MainWindowViewModelShellViewTests
         Assert.Equal(requestsBeforeRemove, runtimeHandler.RpcRequestCount);
         Assert.False(harness.ViewModel.HasMiddleSelection);
 
-        await ApplyAsync(updatedPackage, updateSource, generation: 5, ["agent"], openAfterInstall: true);
+        await ApplyAsync(updatedPackage, updateSource, generation: 5, ["agent"]);
 
         File.WriteAllText(
             Path.Combine(

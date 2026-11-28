@@ -50,7 +50,7 @@ public sealed class RegistryPackageInstallService : IDisposable
             (preview, ready, cancellation) => client.InstallRegistryPackageAsync(new(registry.RegistryUrl.AbsoluteUri, packageId, version,
                 version is null ? tag ?? "latest" : null, AllowDowngrade: allowDowngrade, Reinstall: reinstall,
                 CapabilityConsents: preview.Plan.RequiredCapabilityConsents, ExpectedResolutionFingerprint: preview.Plan.ResolutionFingerprint)
-            { RuntimePrerequisiteExpectation = ready }, cancellation), token);
+             { RuntimePrerequisiteExpectation = ready }, cancellation), token, reinstall ? null : new HashSet<string>(StringComparer.Ordinal) { packageId });
     }
 
     internal Task<PreparedRegistryPackageInstallation?> PrepareBatchAsync(IReadOnlyList<SunderStackPackageRequirement> packages,
@@ -69,7 +69,7 @@ public sealed class RegistryPackageInstallService : IDisposable
                 CapabilityConsents = preview.Plan.RequiredCapabilityConsents,
                 ExpectedResolutionFingerprint = preview.Plan.ResolutionFingerprint,
                 RuntimePrerequisiteExpectation = ready,
-            }, cancellation), token);
+             }, cancellation), token, request.Packages.Select(change => change.PackageId).ToHashSet(StringComparer.Ordinal));
     }
 
     internal Task<PreparedRegistryPackageInstallation?> PrepareUpdateAsync(string? packageId, IRuntimeRegistryPackageClient client, CancellationToken token)
@@ -120,7 +120,7 @@ public sealed class RegistryPackageInstallService : IDisposable
     private async Task<PreparedRegistryPackageInstallation?> PrepareAsync(IRuntimeRegistryPackageClient client,
         Func<CancellationToken, Task<RegistryInstallationPreview>> preview,
         Func<RegistryInstallationPreview, RuntimePackageRuntimePrerequisiteExpectation, CancellationToken, Task<RuntimeRegistryPackageChangeResult>> apply,
-        CancellationToken token)
+        CancellationToken token, IReadOnlySet<string>? requestedPackages = null)
     {
         var selected = await preview(token).ConfigureAwait(false);
         ValidateRuntimePreview(selected.Runtimes);
@@ -129,7 +129,7 @@ public sealed class RegistryPackageInstallService : IDisposable
         if (_confirmation is null) throw new InvalidOperationException("Package confirmation is unavailable. Open Packages to review the installation.");
         if (!await _confirmation(review, token).WaitAsync(token).ConfigureAwait(false)) return null;
         token.ThrowIfCancellationRequested();
-        return new(client, selected, preview, apply);
+        return new(client, selected, preview, apply, requestedPackages);
     }
 
     private static async Task<RegistryInstallationPreview> PreviewBatchAsync(IRuntimeRegistryPackageClient client,

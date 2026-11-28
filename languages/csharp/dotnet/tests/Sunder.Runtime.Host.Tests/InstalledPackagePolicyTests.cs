@@ -191,6 +191,62 @@ public sealed class InstalledPackagePolicyTests
     }
 
     [Fact]
+    public async Task NewBoot_RestoresOnlyFreshlyAuthorizedPackagesAndRetainsHealthyWorker()
+    {
+        using var fixture = new Fixture();
+        var agent = fixture.Package("example.agent");
+        var extension = fixture.Package("example.extension", [new(agent.PackageId, ">=1.0.0")]);
+        var healthy = fixture.Package("example.healthy");
+        var denied = fixture.Package("example.denied");
+        var disabled = fixture.Package("example.disabled") with { IsEnabled = false };
+        InstalledPackageRecord[] packages = [agent, extension, healthy, denied, disabled];
+        await fixture.Store.WriteAsync(packages);
+        await fixture.Context.RefreshAsync(packages.Select(InstalledPackagePolicyRecord.Subject).ToArray());
+        await fixture.Metadata.ReconcileAsync(default);
+        fixture.Context.Clock.Value = fixture.Context.Clock.Value with { BootSessionId = "boot-2" };
+        await fixture.Metadata.ReconcileAsync(default);
+
+        var host = new RuntimePackageSessionTestHost(NullLogger<RuntimePackageSessionTestHost>.Instance,
+            fixture.Store, new(fixture.Context.Paths), fixture.Operations, fixture.Coordinator,
+            packagePolicy: new(fixture.Context.Cache));
+        try
+        {
+            var loaded = await host.LoadInstalledPackagesAsync();
+            Assert.True(loaded.Success, loaded.Message);
+            Assert.Empty(host.ActiveSession.LoadedPackageMap);
+            var offlineGeneration = host.SessionGeneration;
+            await ReconcileAsync();
+            Assert.Equal(offlineGeneration, host.SessionGeneration);
+
+            // Extension's lease alone is insufficient while its Agent dependency awaits verification.
+            await fixture.Context.RefreshAsync([InstalledPackagePolicyRecord.Subject(healthy), InstalledPackagePolicyRecord.Subject(extension)]);
+            await ReconcileAsync();
+            var running = Assert.Single(host.ActiveSession.LoadedPackageMap).Value;
+            Assert.Equal(healthy.PackageId, running.Descriptor.PackageId);
+            Assert.Equal(PackagePolicyErrorCodes.PolicyClockInvalid, host.ActiveSession.SessionPackageMap[extension.PackageId].LastError);
+
+            await fixture.Context.RefreshAsync([InstalledPackagePolicyRecord.Subject(agent), InstalledPackagePolicyRecord.Subject(disabled)]);
+            await ReconcileAsync();
+            Assert.Equal([agent.PackageId, extension.PackageId, healthy.PackageId], host.ActiveSession.LoadedPackageMap.Keys.Order());
+            Assert.Same(running.Worker, host.ActiveSession.LoadedPackageMap[healthy.PackageId].Worker);
+            Assert.Equal(PackageReadinessState.Disabled, host.ActiveSession.SessionPackageMap[disabled.PackageId].Readiness);
+
+            fixture.Block();
+            await fixture.AllowAsync(denied);
+            await ReconcileAsync();
+            Assert.False(host.ActiveSession.LoadedPackageMap.ContainsKey(denied.PackageId));
+            Assert.Equal(PackagePolicyErrorCodes.SecurityBlocked, host.ActiveSession.SessionPackageMap[denied.PackageId].LastError);
+            Assert.Same(running.Worker, host.ActiveSession.LoadedPackageMap[healthy.PackageId].Worker);
+            var generation = host.SessionGeneration;
+            await ReconcileAsync();
+            Assert.Equal(generation, host.SessionGeneration);
+        }
+        finally { await host.ShutdownAsync(); }
+
+        Task ReconcileAsync() => fixture.Metadata.ReconcileAsync(default, host.InstalledLifecycle.RecoverClockBlockedPackagesUnderGateAsync);
+    }
+
+    [Fact]
     public async Task InstalledCopyRestoresDeletedCacheWithoutRenewingLease()
     {
         using var fixture = new Fixture();
@@ -525,11 +581,11 @@ public sealed class InstalledPackagePolicyTests
             Coordinator = new(Context.Paths, Store, new(Context.Paths), fault, packagePolicies: Context.Cache);
             Metadata = new(Store, Coordinator, Operations, Context.Cache);
         }
-        internal InstalledPackageRecord Package(string id = "example.package")
+        internal InstalledPackageRecord Package(string id = "example.package", IReadOnlyList<InstalledPackageDependencyRecord>? dependencies = null)
         {
             var path = Context.Paths.GetInstalledPackagePath(id, "1.0.0");
-            CanonicalPackageTestBuilder.WriteExplodedPackage(path, id, "1.0.0", typeof(PackageSessionOverlayTestPackageModule).Assembly.Location);
-            var value = CanonicalPackageTestBuilder.CreateInstalledRecord(path, id, "1.0.0");
+            CanonicalPackageTestBuilder.WriteExplodedPackage(path, id, "1.0.0", typeof(PackageSessionOverlayTestPackageModule).Assembly.Location, dependencies: dependencies);
+            var value = CanonicalPackageTestBuilder.CreateInstalledRecord(path, id, "1.0.0", dependencies: dependencies);
             return value with { Provenance = new(InstalledPackageSourceKind.Registry, InstalledPackageVersionPolicy.ExplicitVersion, Origin + "/", id,
                 RequestedVersion: "1.0.0", SourceIdentity: value.ContentIdentity) };
         }

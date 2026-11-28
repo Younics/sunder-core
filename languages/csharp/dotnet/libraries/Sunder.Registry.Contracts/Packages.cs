@@ -42,7 +42,30 @@ public sealed record RegistryPackageDetails(
     RegistryUserAttribution? Creator = null,
     IReadOnlyList<RegistryUserAttribution>? Maintainers = null,
     int? TotalVersionCount = null,
-    int? TotalDependentCount = null);
+    int? TotalDependentCount = null)
+{
+    /// <summary>Present on a device overview request. Describes the release, not local readiness.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RegistryPackageDeviceRelease? SelectedRelease { get; init; }
+}
+
+public sealed record RegistryPackageDeviceRelease(
+    string PackageId, string Version, string Rid, string? Summary, bool IsYanked, string? DeprecatedMessage, DateTimeOffset PublishedAtUtc,
+    IReadOnlyList<RegistryPackageTargetRequest> Platforms,
+    IReadOnlyList<RegistryExecutionRuntimeRequirement> RuntimeRequirements,
+    RegistryPackageInformation? Information, string ArchiveSha256, long ArchiveSize)
+{
+    public static RegistryPackageDeviceRelease From(RegistryPackageVersionDetails release, string rid)
+    {
+        var info = release.Information;
+        return new(release.PackageId, release.Version, rid, release.Summary, release.IsYanked, release.DeprecatedMessage, release.PublishedAtUtc,
+            release.Targets.Select(target => new RegistryPackageTargetRequest(target.Role, target.Rid)).ToArray(),
+            release.Targets.Where(target => target.Rid == rid).Select(target => target.ExecutionRuntime)
+                .OfType<RegistryExecutionRuntimeRequirement>().Distinct().ToArray(),
+            info is null ? null : new(info.PackageContentIdentity, info.Features.Where(feature => feature.Rid == rid).ToArray(),
+                info.Dependencies, info.PublicBindings, info.PublicUses), release.CanonicalArtifact.Sha256, release.CanonicalArtifact.Size);
+    }
+}
 
 public sealed record RegistryPackageVersionSummary(
     string Version,

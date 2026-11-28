@@ -35,7 +35,7 @@ public sealed class RegistryApiClientTests
         Assert.Collection(results, result => Assert.Equal("younics.ai.agent", result.PackageId));
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Get, request.Method);
-        Assert.Equal(new Uri("https://registry.example/api/v1/packages?skip=10&take=20&sort=downloads&query=agent%20package"), request.RequestUri);
+        Assert.Equal(new Uri("https://registry.example/api/v1/packages?skip=10&take=20&sort=downloads&thumbnails=true&query=agent%20package"), request.RequestUri);
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
+using Sunder.Registry.Contracts;
 using Sunder.Runtime.Contracts;
 using Sunder.Sdk.Abstractions;
 
@@ -54,16 +55,36 @@ internal sealed class PackageInstallationApproval(RuntimePackageRuntimePrerequis
                 Identity = item.Installation?.Resolution?.Artifact.Identity ?? item.InstalledRuntime,
             }).ToArray());
 
-    public static string PackageSemantics(RuntimeRegistryResolveInstallPlanResponse plan)
+    internal static void ValidatePackageChanges(RuntimeRegistryResolveInstallPlanResponse reviewed,
+        RuntimeRegistryResolveInstallPlanResponse current, IReadOnlySet<string>? requestedPackages)
+    {
+        var kept = current.Items.Where(item => item.ActionKind == RegistryPackageActionKinds.Keep
+                && item.Version is not null && item.CurrentVersion == item.Version && item.Artifacts.Count == 0)
+            .Select(item => item.PackageId).ToHashSet(StringComparer.Ordinal);
+        var reused = reviewed.Items.Where(item => requestedPackages is not null && !requestedPackages.Contains(item.PackageId)
+                && kept.Contains(item.PackageId) && item.ActionKind == RegistryPackageActionKinds.PackageInstall
+                && item.CurrentVersion is null && item.Artifacts.Count > 0)
+            .Select(item => item.PackageId).ToHashSet(StringComparer.Ordinal);
+        var expected = reviewed with
+        {
+            Items = reviewed.Items.Select(item => reused.Contains(item.PackageId)
+                ? item with { CurrentVersion = item.Version, ActionKind = RegistryPackageActionKinds.Keep, Artifacts = [] } : item).ToArray(),
+            RequiredCapabilityConsents = reviewed.RequiredCapabilityConsents.Where(item => !reused.Contains(item.PackageId)).ToArray(),
+        };
+        if (PackageSemantics(expected) != PackageSemantics(current)) throw Changed();
+    }
+
+    private static string PackageSemantics(RuntimeRegistryResolveInstallPlanResponse plan)
         => Hash(new
         {
+            Origins = plan.TrustedArtifactOrigins.Order(StringComparer.Ordinal).ToArray(),
             Items = plan.Items.OrderBy(item => item.PackageId, StringComparer.Ordinal).Select(item => new
             {
                 item.PackageId, item.CurrentVersion, item.Version, item.PackageContentIdentity, item.ActionKind,
                 Dependencies = item.DependsOn.OrderBy(dependency => dependency.PackageId, StringComparer.Ordinal).ToArray(),
                 Targets = item.Targets.OrderBy(target => target.Role, StringComparer.Ordinal).ThenBy(target => target.Rid, StringComparer.Ordinal).ToArray(),
                 Artifacts = item.Artifacts.OrderBy(artifact => artifact.Kind, StringComparer.Ordinal).ThenBy(artifact => artifact.Rid, StringComparer.Ordinal)
-                    .Select(artifact => new { artifact.Kind, artifact.Rid, artifact.Sha256, artifact.SourceArchiveSha256,
+                    .Select(artifact => new { artifact.Kind, artifact.Rid, artifact.Size, artifact.Sha256, artifact.SourceArchiveSha256,
                         artifact.ManifestSha256, artifact.ProjectionContentIdentity, artifact.ProjectionFormatVersion }).ToArray(),
             }).ToArray(),
             Consents = plan.RequiredCapabilityConsents.OrderBy(item => item.PackageId, StringComparer.Ordinal)
