@@ -62,19 +62,28 @@ public sealed class StackCommandTests
         Assert.Contains("exact destination file", result.Error, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public async Task Stack_open_launches_the_sunder_app_link()
+    [Theory]
+    [InlineData("demo")]
+    [InlineData("another-stack")]
+    public async Task Stack_open_preserves_the_requested_hub_and_identity(string returnedId)
     {
         var registry = new FakeRegistryClient
         {
-            GetStack = (_, _) => Task.FromResult<RegistryStackDetails?>(Details("demo")),
+            GetStack = (_, _) => Task.FromResult<RegistryStackDetails?>(Details(returnedId)),
         };
         var browser = new FakeBrowserLauncher();
 
-        var result = await CliTestHost.RunAsync(["stack", "open", "demo"], registry: registry, browser: browser);
+        var result = await CliTestHost.RunAsync(["stack", "open", "demo", "--registry-api-url", "https://team.example/hub/"],
+            registry: registry, browser: browser);
 
+        if (returnedId != "demo")
+        {
+            Assert.NotEqual(CliExitCodes.Success, result.ExitCode);
+            Assert.Null(browser.Opened);
+            return;
+        }
         Assert.Equal(CliExitCodes.Success, result.ExitCode);
-        Assert.Equal("sunder://stacks/demo", browser.Opened?.AbsoluteUri);
+        Assert.Equal("sunder://stacks/demo?registry=https%3A%2F%2Fteam.example%2Fhub%2F", browser.Opened?.AbsoluteUri);
         Assert.Contains("Opened Stack 'demo'", result.Output, StringComparison.Ordinal);
     }
 
