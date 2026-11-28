@@ -353,11 +353,11 @@ internal static class RuntimeRpcBrokerFixture
         TestHandler Handler,
         ActivePackageSession Session);
 
-    internal sealed class ManualTimeProvider : TimeProvider
+    internal sealed class ManualTimeProvider(DateTimeOffset? start = null) : TimeProvider
     {
         private readonly object _gate = new();
         private readonly List<ManualTimer> _timers = [];
-        private DateTimeOffset _utcNow = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        private DateTimeOffset _utcNow = start ?? new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         public Action? OnTimerCreated { get; set; }
 
@@ -390,10 +390,15 @@ internal static class RuntimeRpcBrokerFixture
             return timer;
         }
 
-        public void Advance(TimeSpan duration)
+        public void AdvanceWithoutFiringTimers(TimeSpan duration)
         {
             if (duration < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(duration));
             lock (_gate) _utcNow += duration;
+        }
+
+        public void Advance(TimeSpan duration)
+        {
+            AdvanceWithoutFiringTimers(duration);
             while (true)
             {
                 ManualTimer[] due;
