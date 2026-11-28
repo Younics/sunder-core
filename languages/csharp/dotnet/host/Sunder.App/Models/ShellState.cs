@@ -13,8 +13,8 @@ public sealed class ShellState
     public const double DefaultTopRowHeightRatio = 0.80;
     public const double DefaultBottomSplitRatio = 0.5;
     public const double DefaultSettingsSidebarWidth = 250;
-    public const double DefaultPackagesSidebarWidth = 430;
-    public const double DefaultStacksSidebarWidth = 390;
+    public const double DefaultPackagesSidebarWidth = 280;
+    public const double DefaultStacksSidebarWidth = 260;
     public const double DefaultBackgroundTaskPopoverWidth = 500;
     public const double DefaultBackgroundTaskPopoverHeight = 360;
     public const double MinimumBackgroundTaskPopoverWidth = 360;

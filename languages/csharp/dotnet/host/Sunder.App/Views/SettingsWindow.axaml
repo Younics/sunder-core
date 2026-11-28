@@ -8,16 +8,16 @@
         x:Class="Sunder.App.Views.SettingsWindow"
         x:DataType="vm:SettingsWindowViewModel"
         mc:Ignorable="d"
-        Width="1180"
+        Width="980"
         Height="800"
-        MinWidth="980"
-        MinHeight="680"
+        MinWidth="360"
+        MinHeight="480"
         CanResize="True"
         Title="Settings"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
-        Classes="secondary-window">
+        Classes="secondary-window management-window">
   <Window.DataTemplates>
     <DataTemplate DataType="vm:TextSettingsFieldViewModel" x:DataType="vm:TextSettingsFieldViewModel">
       <StackPanel Spacing="8"
@@ -101,16 +101,11 @@
       </controls:WindowTitleBar.LeadingContent>
     </controls:WindowTitleBar>
 
-    <Border Grid.Row="1"
-            Margin="20,12,20,0"
-            Classes="panel-surface"
-            Padding="0">
-      <Border Classes="secondary-panel-content-clip">
-        <Grid x:Name="SettingsContentGrid">
+    <Grid Grid.Row="1" x:Name="SettingsContentGrid">
         <Grid.ColumnDefinitions>
           <ColumnDefinition Width="250" MinWidth="180" MaxWidth="900" />
           <ColumnDefinition Width="4" />
-          <ColumnDefinition Width="*" MinWidth="420" />
+          <ColumnDefinition Width="*" MinWidth="360" />
         </Grid.ColumnDefinitions>
         <Border Grid.Column="0"
                 x:Name="SettingsSidebarPane"
@@ -121,7 +116,7 @@
                         VerticalScrollBarVisibility="Visible"
                         HorizontalScrollBarVisibility="Disabled">
             <StackPanel Spacing="10" Margin="16,16,8,16">
-              <TextBlock Classes="section-title" Text="Categories" />
+              <TextBlock Classes="section-label" Text="Categories" />
               <ItemsControl ItemsSource="{Binding CoreSections}">
                 <ItemsControl.ItemTemplate>
                   <DataTemplate x:DataType="vm:SettingsSectionItemViewModel">
@@ -139,7 +134,7 @@
                 <Border Height="1"
                         Margin="0,8,0,8"
                         Background="{DynamicResource Sunder.Brush.Border.Subtle}" />
-                <TextBlock Classes="section-title" Text="Packages" />
+                <TextBlock Classes="section-label" Text="Packages" />
               </StackPanel>
 
               <ItemsControl ItemsSource="{Binding PackageSettings.NavigationGroups}"
@@ -191,7 +186,7 @@
           </ScrollViewer>
         </Border>
 
-        <GridSplitter Grid.Column="1"
+        <GridSplitter Grid.Column="1" x:Name="SettingsSplitter"
                       Width="4"
                       ResizeDirection="Columns"
                       ResizeBehavior="PreviousAndNext"
@@ -199,8 +194,10 @@
                       Background="{DynamicResource Sunder.Brush.Border.Subtle}"
                       DragCompleted="SettingsSplitter_OnDragCompleted" />
 
-        <Border Grid.Column="2"
-                x:Name="SettingsSelectionPane"
+        <Grid Grid.Column="2" x:Name="SettingsDetailPane" RowDefinitions="Auto,*">
+          <Button x:Name="CompactSettingsBackButton" Classes="secondary-action compact-action" Margin="12,6"
+                  HorizontalAlignment="Left" Content="‹ Categories" IsVisible="False" />
+        <Border Grid.Row="1" x:Name="SettingsSelectionPane"
                 Classes.workspace-surface="{Binding IsCoreSelection}"
                 Classes.settings-package-content="{Binding IsPackageSelection}"
                 AutomationProperties.Name="{Binding SelectedTitle}">
@@ -219,15 +216,28 @@
                 </Border>
                 <Border Classes="card-surface" IsVisible="{Binding ShowAppearanceSettings}">
                   <StackPanel Spacing="14">
-                    <controls:SettingsFieldHeader Title="Theme" HelpText="Apply a theme to all open Sunder windows and package views. Your choice is kept when Sunder restarts." />
-                    <controls:SunderComboBox x:Name="ThemeSelector" ItemsSource="{Binding Appearance.Themes}"
-                                             SelectedItem="{Binding Appearance.SelectedTheme}" AutomationProperties.Name="Theme">
-                      <controls:SunderComboBox.ItemTemplate>
+                    <TextBlock Classes="section-title" Text="Theme" />
+                    <ListBox x:Name="ThemeSelector" Classes="theme-choices" ItemsSource="{Binding Appearance.Themes}"
+                             SelectedItem="{Binding Appearance.SelectedTheme, Mode=TwoWay}" AutomationProperties.Name="Theme"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                      <ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ListBox.ItemsPanel>
+                      <ListBox.ItemTemplate>
                         <DataTemplate x:DataType="themes:SunderThemeDefinition">
-                          <TextBlock Text="{Binding DisplayName}" />
+                          <StackPanel Spacing="6" Width="164">
+                            <Border Padding="10" CornerRadius="6">
+                              <Border.Background><SolidColorBrush Color="{Binding SurfaceBase}" /></Border.Background>
+                              <StackPanel Orientation="Horizontal" Spacing="4">
+                                <Border Width="32" Height="12" CornerRadius="3"><Border.Background><SolidColorBrush Color="{Binding Accent}" /></Border.Background></Border>
+                                <Border Width="24" Height="12" CornerRadius="3"><Border.Background><SolidColorBrush Color="{Binding ForegroundMuted}" /></Border.Background></Border>
+                                <Border Width="24" Height="12" CornerRadius="3"><Border.Background><SolidColorBrush Color="{Binding BorderStrong}" /></Border.Background></Border>
+                              </StackPanel>
+                            </Border>
+                            <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" />
+                          </StackPanel>
                         </DataTemplate>
-                      </controls:SunderComboBox.ItemTemplate>
-                    </controls:SunderComboBox>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock Classes="caption" Text="Preview in all open windows. Apply or Save to keep this theme." TextWrapping="Wrap" />
                   </StackPanel>
                 </Border>
                 <Border Classes="card-surface" IsVisible="{Binding ShowNotificationSettings}">
@@ -239,7 +249,7 @@
                       <CheckBox Content="Warnings" IsChecked="{Binding Notifications.ShowWarnings}" />
                     </StackPanel>
                     <Border Classes="settings-note-card">
-                      <TextBlock Classes="muted" Text="Error pop-ups always remain visible. Turning off pop-ups does not remove notifications from the notification tray. These preferences control Sunder's in-app pop-ups, not operating-system notifications." TextWrapping="Wrap" />
+                       <TextBlock Classes="muted" Text="Errors always appear. All notifications remain in the Sunder tray." TextWrapping="Wrap" />
                     </Border>
                   </StackPanel>
                 </Border>
@@ -276,8 +286,7 @@
                                    TextWrapping="Wrap" />
                       </Border>
 
-                      <StackPanel Orientation="Horizontal"
-                                  Spacing="12">
+                      <WrapPanel ItemSpacing="8" LineSpacing="6">
                         <Button Classes="primary-action"
                                 Content="Install or Repair CLI"
                                 IsEnabled="{Binding Cli.CanInstallOrRepair}"
@@ -285,16 +294,16 @@
                         <Button Classes="secondary-action"
                                 Content="Refresh Status"
                                 Command="{Binding RefreshCliStatusFromUiCommand}" />
-                        <Button Classes="secondary-action"
+                        <Button Classes="secondary-action danger-action"
                                 Content="Uninstall CLI"
                                 IsEnabled="{Binding Cli.CanUninstall}"
                                 Command="{Binding UninstallCliFromUiCommand}" />
-                      </StackPanel>
+                      </WrapPanel>
                     </StackPanel>
                   </Border>
 
                   <Border Classes="card-surface">
-                    <Grid ColumnDefinitions="160,*"
+                    <Grid ColumnDefinitions="96,*"
                           RowDefinitions="Auto,Auto,Auto,Auto"
                           RowSpacing="10"
                           ColumnSpacing="16">
@@ -382,7 +391,7 @@
                                 Command="{Binding CheckForUpdatesFromUiCommand}" />
                       </Grid>
 
-                      <Grid ColumnDefinitions="160,*"
+                      <Grid ColumnDefinitions="96,*"
                             RowDefinitions="Auto,Auto,Auto"
                             RowSpacing="10"
                             ColumnSpacing="16">
@@ -439,7 +448,7 @@
                                    Text="Choose Custom to edit. Limits apply to each message or content item, not the whole session."
                                    TextWrapping="Wrap" />
 
-                        <Grid ColumnDefinitions="*,150"
+                        <Grid ColumnDefinitions="*,100"
                               RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto"
                               ColumnSpacing="18"
                               RowSpacing="14">
@@ -563,31 +572,20 @@
           </Grid>
         </Border>
         </Grid>
-      </Border>
-    </Border>
-
-    <Grid Grid.Row="2"
-          ColumnDefinitions="*,Auto,Auto"
-          ColumnSpacing="12"
-          Margin="20,16,20,16">
-      <controls:BackgroundTaskMonitor Grid.Column="1"
-                                         HorizontalAlignment="Right"
-                                         DataContext="{Binding BackgroundTasks}" />
-      <StackPanel Grid.Column="2"
-                  Orientation="Horizontal"
-                  Spacing="12">
-        <Button Classes="secondary-action"
-                Content="Cancel"
-                Click="CancelButton_OnClick" />
-        <Button Classes="secondary-action"
-                IsVisible="{Binding ShowApplySaveButtons}"
-                Content="Apply"
-                Command="{Binding ApplyFromUiCommand}" />
-        <Button Classes="primary-action"
-                IsVisible="{Binding ShowApplySaveButtons}"
-                Content="Save"
-                Click="SaveButton_OnClick" />
-      </StackPanel>
     </Grid>
+
+    <Border Grid.Row="2" Classes="window-footer">
+      <StackPanel Spacing="4">
+        <TextBlock Classes="caption" Text="{Binding StatusText}" TextWrapping="Wrap" MaxLines="2"
+                   TextTrimming="CharacterEllipsis" ToolTip.Tip="{Binding StatusText}"
+                   IsVisible="{Binding StatusText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+        <WrapPanel HorizontalAlignment="Right" ItemSpacing="8" LineSpacing="5">
+          <controls:BackgroundTaskMonitor DataContext="{Binding BackgroundTasks}" />
+          <Button Classes="secondary-action" Content="Cancel" Click="CancelButton_OnClick" />
+          <Button Classes="secondary-action" Content="Apply" IsVisible="{Binding ShowApplySaveButtons}" Command="{Binding ApplyFromUiCommand}" />
+          <Button Classes="primary-action" Content="Save" IsVisible="{Binding ShowApplySaveButtons}" Click="SaveButton_OnClick" />
+        </WrapPanel>
+      </StackPanel>
+    </Border>
   </Grid>
 </Window>

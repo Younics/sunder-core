@@ -5,65 +5,40 @@
              x:Class="Sunder.App.Views.Controls.MarketplaceProfileCard"
              x:DataType="controls:MarketplaceProfileCard"
              x:Name="Root">
-  <Border Classes="card-surface marketplace-profile-card">
-    <StackPanel Spacing="12">
-      <StackPanel Spacing="2">
-        <TextBlock Classes="section-title" Text="{Binding Title, ElementName=Root}" />
-        <TextBlock Classes="caption" Text="{Binding Description, ElementName=Root}" />
-      </StackPanel>
-
-      <ItemsControl ItemsSource="{Binding Links, ElementName=Root}"
-                    IsVisible="{Binding HasLinks, ElementName=Root}">
+  <StackPanel Spacing="4">
+    <ItemsControl ItemsSource="{Binding Tags, ElementName=Root}" IsVisible="{Binding HasTags, ElementName=Root}">
+      <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+      <ItemsControl.ItemTemplate>
+        <DataTemplate x:DataType="x:String">
+          <Border Classes="marketplace-tag-chip"><TextBlock Text="{Binding}" TextWrapping="Wrap" /></Border>
+        </DataTemplate>
+      </ItemsControl.ItemTemplate>
+    </ItemsControl>
+    <WrapPanel ItemSpacing="14" LineSpacing="4">
+      <ItemsControl ItemsSource="{Binding Links, ElementName=Root}" IsVisible="{Binding HasLinks, ElementName=Root}">
+        <ItemsControl.ItemsPanel><ItemsPanelTemplate><WrapPanel ItemSpacing="14" /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:RegistryPackageProfileLinkViewModel">
-            <Border Classes="marketplace-profile-row marketplace-profile-link-row">
-              <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
-                <TextBlock Classes="caption marketplace-profile-label" Text="{Binding Label}" />
-                <HyperlinkButton Grid.Column="1"
-                                 Classes="marketplace-profile-link"
-                                 NavigateUri="{Binding NavigateUri}">
-                  <TextBlock Text="{Binding DisplayUrl}" TextWrapping="Wrap" />
-                </HyperlinkButton>
-              </Grid>
-            </Border>
+            <HyperlinkButton Classes="marketplace-profile-link" NavigateUri="{Binding NavigateUri}"
+                             AutomationProperties.Name="{Binding Label}" ToolTip.Tip="{Binding DisplayUrl}">
+              <StackPanel Orientation="Horizontal" Spacing="4">
+                <TextBlock Text="{Binding Label}" />
+                <Path Classes="icon-stroke" Width="10" Height="10" VerticalAlignment="Center"
+                      Stroke="{Binding $parent[HyperlinkButton].Foreground}" Data="{StaticResource Sunder.Icon.ExternalLink}" />
+              </StackPanel>
+            </HyperlinkButton>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
-
-      <ItemsControl ItemsSource="{Binding Metadata, ElementName=Root}"
-                    IsVisible="{Binding HasMetadata, ElementName=Root}">
+      <ItemsControl ItemsSource="{Binding Metadata, ElementName=Root}" IsVisible="{Binding HasMetadata, ElementName=Root}">
         <ItemsControl.ItemTemplate>
           <DataTemplate x:DataType="vm:RegistryPackageProfileMetadataItemViewModel">
-            <Border Classes="marketplace-profile-row">
-              <Grid ColumnDefinitions="96,*" ColumnSpacing="12">
-                <TextBlock Classes="caption marketplace-profile-label" Text="{Binding Label}" />
-                <TextBlock Grid.Column="1"
-                           Classes="marketplace-profile-value"
-                           Text="{Binding Value}"
-                           TextWrapping="Wrap" />
-              </Grid>
-            </Border>
+            <TextBlock Classes="caption" VerticalAlignment="Center" TextWrapping="Wrap">
+              <Run Text="{Binding Label}" /> · <Run Text="{Binding Value}" />
+            </TextBlock>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
-
-      <StackPanel Spacing="6" IsVisible="{Binding HasTags, ElementName=Root}">
-        <TextBlock Classes="caption marketplace-profile-label" Text="Tags" />
-        <ItemsControl ItemsSource="{Binding Tags, ElementName=Root}">
-          <ItemsControl.ItemsPanel>
-            <ItemsPanelTemplate>
-              <WrapPanel />
-            </ItemsPanelTemplate>
-          </ItemsControl.ItemsPanel>
-          <ItemsControl.ItemTemplate>
-            <DataTemplate x:DataType="x:String">
-              <Border Classes="marketplace-tag-chip">
-                <TextBlock Text="{Binding}" />
-              </Border>
-            </DataTemplate>
-          </ItemsControl.ItemTemplate>
-        </ItemsControl>
-      </StackPanel>
-    </StackPanel>
-  </Border>
+    </WrapPanel>
+  </StackPanel>
 </UserControl>

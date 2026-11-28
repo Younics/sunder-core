@@ -70,6 +70,7 @@ public sealed class ThemeManager(Application application, ShellState? shellState
         SetBrush(SunderThemeKeys.OverlaySurfaceBrush, WithAlpha(theme.SurfaceWorkspace, 0xB8));
         SetBrush(SunderThemeKeys.OverlayBorderBrush, WithAlpha(theme.ForegroundPrimary, 0x29));
         SetBrush(SunderThemeKeys.AccentOverlayBrush, WithAlpha(theme.Accent, 0x24));
+        SetShellGlassResources(theme);
         SetThemeColorResources(theme);
         SetThemeShadowResources(theme);
         SetFluentAccentResources(theme);
@@ -83,6 +84,28 @@ public sealed class ThemeManager(Application application, ShellState? shellState
     private void SetColor(string key, Color color)
     {
         _application.Resources[key] = color;
+    }
+
+    private void SetShellGlassResources(SunderThemeDefinition theme)
+    {
+        _application.Resources["Sunder.Shell.AcrylicMaterial"] = new ExperimentalAcrylicMaterial
+        {
+            TintColor = theme.SurfaceWorkspace,
+            TintOpacity = 0.44,
+            MaterialOpacity = 0.48,
+            PlatformTransparencyCompensationLevel = 0.18,
+        };
+        SetBrush("Sunder.Brush.Shell.Glass.Tint", WithAlpha(theme.BackgroundApp, 0xB8));
+        SetBrush("Sunder.Brush.Shell.Glass.Tint.Inactive", WithAlpha(theme.BackgroundApp, 0xD0));
+        SetBrush("Sunder.Brush.Shell.Glass.Surface", WithAlpha(theme.SurfaceBase, 0x78));
+        SetBrush("Sunder.Brush.Shell.Glass.Surface.Strong", WithAlpha(theme.SurfaceBase, 0xB4));
+        SetBrush("Sunder.Brush.Shell.Glass.Panel", WithAlpha(theme.SurfaceRaised, 0xCD));
+        SetBrush("Sunder.Brush.Shell.Glass.Rail", WithAlpha(theme.SurfaceWorkspace, 0x78));
+        SetBrush("Sunder.Brush.Shell.Glass.Hover", WithAlpha(theme.ForegroundPrimary, 0x24));
+        SetBrush("Sunder.Brush.Shell.Glass.Border", WithAlpha(theme.ForegroundPrimary, 0x26));
+        SetBrush("Sunder.Brush.Shell.Glass.Border.Strong", WithAlpha(theme.ForegroundPrimary, 0x3A));
+        SetBrush("Sunder.Brush.Shell.Glass.Highlight", WithAlpha(theme.ForegroundPrimary, 0x32));
+        SetBrush("Sunder.Brush.Shell.Glass.Highlight.Inactive", WithAlpha(theme.ForegroundPrimary, 0x24));
     }
 
     private void SetShadow(string key, string value)

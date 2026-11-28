@@ -55,6 +55,14 @@ public sealed class DeveloperLogWindowLayoutTests
                         $"Latest matching entry was not revealed: {top}, list height {list.Bounds.Height}.");
                     Assert.True(list.GetVisualDescendants().OfType<ScrollViewer>().First().Offset.Y > 0);
                 }
+                await TestSupport.ManagementWindowAssert.CheckLayoutsAsync(window, () =>
+                    Assert.Equal(window.Width > 720, window.FindControl<Grid>("TableHeader")!.IsEffectivelyVisible));
+                model.SearchText = "no such entry";
+                window.UpdateLayout();
+                var clear = window.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Clear filters"));
+                TestSupport.ManagementWindowAssert.Click(window, clear);
+                Assert.False(model.HasFilters);
+                Assert.NotEmpty(model.FilteredEntries);
             }
             finally { window.CloseForShutdown(); }
             return true;

@@ -83,9 +83,7 @@ public sealed class LocalPackageInstallConsentViewModel
             fileName,
             manifest.Name!,
             $"{manifest.Id}  {manifest.Version}",
-            string.IsNullOrWhiteSpace(manifest.Summary)
-                ? "No package summary was provided."
-                : manifest.Summary,
+            manifest.Summary?.Trim() ?? string.Empty,
             PackagePlatformsViewModel.Components(deviceRoles, manifest.Targets?.Count ?? 0),
             hasDockerEnvironmentAccess,
             hasDockerEnvironmentAccess ? manifestHash : null,

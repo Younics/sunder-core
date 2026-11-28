@@ -204,8 +204,7 @@ public sealed partial class PackagesWindowViewModel
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsLoading));
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsContent));
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsError));
-        OnPropertyChanged(nameof(ShowMarketplacePackageStats));
-        OnPropertyChanged(nameof(ShowMarketplacePackageStarAction));
+        NotifyMarketplaceStatsChanged();
         NotifyMarketplaceProfileChanged();
     }
 
@@ -218,8 +217,7 @@ public sealed partial class PackagesWindowViewModel
         OnPropertyChanged(nameof(ShowMarketplacePackageDetailsError));
         OnPropertyChanged(nameof(HasMarketplaceVersions));
         OnPropertyChanged(nameof(ShowNoMarketplaceVersions));
-        OnPropertyChanged(nameof(ShowMarketplacePackageStats));
-        OnPropertyChanged(nameof(ShowMarketplacePackageStarAction));
+        NotifyMarketplaceStatsChanged();
         NotifyMarketplaceProfileChanged();
         NotifyCommandStateChanged();
     }
@@ -233,8 +231,6 @@ public sealed partial class PackagesWindowViewModel
         OnPropertyChanged(nameof(HasMarketplaceProfile));
         OnPropertyChanged(nameof(HasMarketplaceProfileMedia));
         OnPropertyChanged(nameof(HasMarketplaceAttributions));
-        OnPropertyChanged(nameof(HasMarketplaceCreators));
-        OnPropertyChanged(nameof(HasMarketplaceMaintainers));
     }
 
     private void NotifyPackageCountsChanged()
@@ -306,50 +302,20 @@ public sealed partial class PackagesWindowViewModel
         NotifyMarketplaceProfileChanged();
     }
 
-    private void ApplyMarketplacePackageStats(RegistryPackageStats? stats)
+    private void NotifyMarketplaceStatsChanged()
     {
-        if (stats is null)
-        {
-            ClearMarketplacePackageStats();
-            return;
-        }
-
-        HasMarketplacePackageStats = true;
-        MarketplacePackageStatsText = $"{stats.TotalDownloads:N0} downloads · {stats.Stars:N0} stars";
-        SelectedMarketplacePackageIsStarred = stats.IsStarred;
-        MarketplacePackageStarActionText = stats.IsStarred ? "Unstar" : "Star";
         OnPropertyChanged(nameof(ShowMarketplacePackageStats));
-        NotifyCommandStateChanged();
-    }
-
-    private void ClearMarketplacePackageStats()
-    {
-        HasMarketplacePackageStats = false;
-        MarketplacePackageStatsText = string.Empty;
-        SelectedMarketplacePackageIsStarred = false;
-        MarketplacePackageStarActionText = "Star";
-        OnPropertyChanged(nameof(ShowMarketplacePackageStats));
-        NotifyCommandStateChanged();
+        OnPropertyChanged(nameof(ShowMarketplacePackageStarAction));
+        OnPropertyChanged(nameof(SelectedMarketplacePackageIsStarred));
+        OnPropertyChanged(nameof(MarketplacePackageStarActionText));
     }
 
     private void ApplyMarketplaceAttributions(
         RegistryUserAttribution? creator,
         IReadOnlyList<RegistryUserAttribution> maintainers)
     {
-        var creators = creator is null
-            ? Array.Empty<RegistryUserAttributionViewModel>()
-            : new[] { new RegistryUserAttributionViewModel(creator) };
-        var maintainerAttributions = maintainers
-            .Where(maintainer => creator is null || !maintainer.IsOwner)
-            .Select(maintainer => new RegistryUserAttributionViewModel(maintainer))
-            .ToArray();
-
-        Marketplace.Creators.ReplaceWith(creators);
-        Marketplace.Maintainers.ReplaceWith(maintainerAttributions);
-        Marketplace.Attributions.ReplaceWith(creators.Concat(maintainerAttributions));
+        Marketplace.Attributions.ReplaceWith(RegistryUserAttributionViewModel.People(creator, maintainers));
         OnPropertyChanged(nameof(HasMarketplaceAttributions));
-        OnPropertyChanged(nameof(HasMarketplaceCreators));
-        OnPropertyChanged(nameof(HasMarketplaceMaintainers));
     }
 
     private bool TryResolveRegistryUrl(out Uri registryUrl)

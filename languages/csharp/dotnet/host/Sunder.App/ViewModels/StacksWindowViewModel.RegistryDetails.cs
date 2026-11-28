@@ -177,7 +177,7 @@ public sealed partial class StacksWindowViewModel
         SelectedRegistryStackTitle = details.Name;
         SelectedRegistryStackSubtitle = details.StackId;
         SelectedRegistryStackSummary = string.IsNullOrWhiteSpace(details.Summary) ? string.Empty : details.Summary;
-        SelectedRegistryStackContentText = $"{details.Packages.Count} package{(details.Packages.Count == 1 ? string.Empty : "s")} · {details.Fragments.Count} fragment{(details.Fragments.Count == 1 ? string.Empty : "s")}";
+        SelectedRegistryStackContentText = StackDisplayFormatters.Contents(details.Packages.Count, details.Fragments.Count);
         SelectedRegistryStackUpdatedText = $"Updated {details.UpdatedAtUtc.LocalDateTime:g}";
         if (details.Compatibility is { } compatibility)
             SelectedRegistryStackUpdatedText += $" · Stack format {compatibility.SchemaVersion}";
@@ -219,20 +219,8 @@ public sealed partial class StacksWindowViewModel
         RegistryUserAttribution? creator,
         IReadOnlyList<RegistryUserAttribution> maintainers)
     {
-        var creators = creator is null
-            ? Array.Empty<RegistryUserAttributionViewModel>()
-            : new[] { new RegistryUserAttributionViewModel(creator) };
-        var maintainerAttributions = maintainers
-            .Where(maintainer => creator is null || !maintainer.IsOwner)
-            .Select(maintainer => new RegistryUserAttributionViewModel(maintainer))
-            .ToArray();
-
-        RegistryCreators.ReplaceWith(creators);
-        RegistryMaintainers.ReplaceWith(maintainerAttributions);
-        RegistryAttributions.ReplaceWith(creators.Concat(maintainerAttributions));
+        RegistryAttributions.ReplaceWith(RegistryUserAttributionViewModel.People(creator, maintainers));
         OnPropertyChanged(nameof(HasRegistryAttributions));
-        OnPropertyChanged(nameof(HasRegistryCreators));
-        OnPropertyChanged(nameof(HasRegistryMaintainers));
     }
 
     private void ClearSelectedRegistryStackStats()

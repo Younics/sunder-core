@@ -256,7 +256,7 @@ public sealed partial class PackagesWindowViewModel
                 cancellationToken);
             if (impact.PackageReferenceCount > 1
                 && (_confirmSharedRuntimeRepair is null
-                    || !await _confirmSharedRuntimeRepair(impact, cancellationToken)))
+                    || !await _confirmSharedRuntimeRepair(runtime, impact, cancellationToken)))
             {
                 Operations.StatusText = "Execution runtime repair cancelled.";
                 return;
@@ -340,7 +340,6 @@ public sealed partial class PackagesWindowViewModel
 
             selectedPackage.Stats = result.Stats;
             _marketplace.Catalog.InvalidateOverviews();
-            if (IsMarketplaceMode && ReferenceEquals(selectedPackage, Marketplace.SelectedPackage)) ApplyMarketplacePackageStats(result.Stats);
             Operations.StatusText = result.Message ?? "Updated package star.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

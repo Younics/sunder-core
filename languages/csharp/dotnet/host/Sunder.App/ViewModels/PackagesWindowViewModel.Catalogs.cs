@@ -179,7 +179,7 @@ public sealed partial class PackagesWindowViewModel
             await SelectMarketplacePackageAsync(selected, cancellationToken);
             if (!IsMarketplaceMode || searchVersion != _marketplaceSearchVersion || !ReferenceEquals(Marketplace.SelectedPackage, selected)
                 || HasMarketplacePackageDetailsError) return null;
-            Operations.StatusText = $"Found {Marketplace.Packages.Count} marketplace package(s).";
+            Operations.StatusText = Marketplace.Packages.Count == 1 ? "1 package found." : $"{Marketplace.Packages.Count} packages found.";
             return selected;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -257,7 +257,7 @@ public sealed partial class PackagesWindowViewModel
     private void SelectInstalledPackage(PackageCatalogItemViewModel item)
     {
         if (!IsInstalledMode || !Installed.Packages.Contains(item)) return;
-        if (Installed.SelectedPackage?.PackageId != item.PackageId) DetailTabIndex = 0;
+        if (Installed.SelectedPackage?.PackageId != item.PackageId) InstalledTabIndex = 0;
         item.EnsureIconLoaded();
         InvalidateMarketplaceSelectionLoad();
         foreach (var package in Installed.Packages)
@@ -299,7 +299,9 @@ public sealed partial class PackagesWindowViewModel
     private async Task SelectMarketplacePackageAsync(RegistryPackageSearchItemViewModel item, CancellationToken cancellationToken = default)
     {
         if (!IsMarketplaceMode || !Marketplace.Packages.Contains(item)) return;
-        DetailTabIndex = 0;
+        var samePackage = Marketplace.SelectedPackage?.PackageId == item.PackageId;
+        var selectedVersion = samePackage ? Marketplace.SelectedVersion?.Version : null;
+        if (!samePackage) MarketplaceTabIndex = 0;
         item.EnsureIconLoaded();
         _informationSource = null;
         _informationRequest.Invalidate();
@@ -328,6 +330,7 @@ public sealed partial class PackagesWindowViewModel
             var details = await _marketplace.SelectionLoader.LoadDetailsAsync(
                 selectionVersion,
                 item.PackageId,
+                selectedVersion,
                 SelectMarketplaceVersion,
                 cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -356,16 +359,17 @@ public sealed partial class PackagesWindowViewModel
             }
 
             ApplySelectedPackageDetails(PackageSelectionDetails.FromMarketplaceDetails(item, details.Package));
-            _marketplaceOverviewSummary = details.Profile?.ShortDescription ?? details.Package.Summary ?? string.Empty;
+            _marketplaceOverviewSummary = string.IsNullOrWhiteSpace(details.Profile?.ShortDescription)
+                ? details.Package.Summary?.Trim() ?? string.Empty
+                : details.Profile.ShortDescription.Trim();
             ApplyMarketplaceProfile(details.Profile);
             item.Stats = details.Stats;
-            ApplyMarketplacePackageStats(details.Stats);
             ApplyMarketplaceAttributions(details.Creator, details.Maintainers);
             _marketplace.ReplaceVersions(details.Versions);
             var release = details.Package.SelectedRelease;
             ApplyMarketplaceVersionSelection(Marketplace.Versions.FirstOrDefault(version => version.Version == release?.Version), release);
             CompleteMarketplacePackageDetailsLoad();
-            Operations.StatusText = $"Loaded {details.Versions.Count} version(s) for {item.PackageId}.";
+            Operations.StatusText = $"Loaded {item.Name}.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -385,13 +389,13 @@ public sealed partial class PackagesWindowViewModel
     {
         CancelMarketplacePackageDetailsSpinnerDelay();
         ShowMarketplacePackageDetailsSpinner = false;
+        _marketplaceOverviewSummary = string.Empty;
         Marketplace.SelectedVersion = null;
         OnPropertyChanged(nameof(SelectedMarketplaceVersion));
         _marketplace.ClearVersions();
         _marketplaceVersionDetailsRequest.Invalidate();
         Marketplace.SetRelease(null);
         ApplyMarketplaceProfile(null);
-        ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);
         ApplySelectedPackageDetails(PackageSelectionDetails.FromMarketplaceLoading(item));
         SetMarketplacePackageDetailsState(PresentationOperationState.Running);
@@ -513,7 +517,7 @@ public sealed partial class PackagesWindowViewModel
         Marketplace.SetRelease(release);
         Platforms = PackagePlatformsViewModel.Create(release.Platforms.Select(target => (target.Role, target.Rid)), release.Rid, release.Version);
         Information = CreateDeviceInformation(release);
-        SelectedPackageSummary = release.Summary ?? _marketplaceOverviewSummary;
+        SelectedPackageSummary = _marketplaceOverviewSummary.Length > 0 ? _marketplaceOverviewSummary : release.Summary?.Trim() ?? string.Empty;
     }
 
     private PackageInformationViewModel CreateDeviceInformation(RegistryPackageDeviceRelease release)
@@ -591,7 +595,6 @@ public sealed partial class PackagesWindowViewModel
         _marketplaceVersionDetailsRequest.Invalidate();
         Marketplace.SetRelease(null);
         ApplyMarketplaceProfile(null);
-        ClearMarketplacePackageStats();
         ApplyMarketplaceAttributions(null, []);
         SetMarketplacePackageDetailsState(PresentationOperationState.Idle);
         ShowMarketplacePackageDetailsSpinner = false;

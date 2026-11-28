@@ -18,9 +18,7 @@ public partial class PackagesWindow : Window
     private PackagesWindowViewModel? _subscribedViewModel;
     private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindow));
     private readonly CancellationTokenSource _lifetime = new();
-    private bool _compactLayout;
-    private bool _showCompactDetails = true;
-    private GridLength _wideSidebarWidth = new(430);
+    private readonly ListDetailLayout _layout;
     private readonly Dictionary<string, Vector> _detailOffsets = new(StringComparer.Ordinal);
     private string? _detailKey;
     private Vector? _pendingDetailOffset;
@@ -37,7 +35,8 @@ public partial class PackagesWindow : Window
             closed: OnLifecycleClosed);
         DataContextChanged += OnDataContextChanged;
         Opened += OnOpened;
-        PackagesContentGrid.SizeChanged += (_, _) => ApplyResponsiveLayout();
+        _layout = new(PackagesContentGrid, PackagesListPane, PackagesDetailPane, PackagesSplitter,
+            CompactPackageBackButton, () => ViewModel is not { ShowNoSelection: true, CanGoBackInPackageDetails: false });
     }
 
     public PackagesWindow(ShellStateService shellStateService, ShellState shellState)
@@ -59,11 +58,13 @@ public partial class PackagesWindow : Window
     public void CloseForShutdown()
         => _closeCoordinator.CloseForShutdown();
 
+    internal void ShowDetails() => _layout.OpenDetails();
+
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
         _stateController?.RecordWindowedPlacement();
-        ApplyResponsiveLayout();
+        _layout.Refresh();
 
         if (ViewModel is not null)
         {
@@ -128,9 +129,8 @@ public partial class PackagesWindow : Window
                 _detailKey = key;
                 _pendingDetailOffset = _detailOffsets.GetValueOrDefault(key);
                 PackageDetailsScroll.Offset = default;
-                _showCompactDetails = true;
             }
-            ApplyResponsiveLayout();
+            _layout.Refresh();
         }
         if (e.PropertyName == nameof(model.Information) && model.Information.IsLoaded && _pendingDetailOffset is { } offset)
         {
@@ -143,59 +143,11 @@ public partial class PackagesWindow : Window
         }
     }
 
-    private void ApplyResponsiveLayout()
-    {
-        if (PackagesContentGrid.Bounds.Width <= 0) return;
-        var compact = PackagesContentGrid.Bounds.Width < 850;
-        if (compact != _compactLayout)
-        {
-            if (compact) _wideSidebarWidth = PackagesContentGrid.ColumnDefinitions[0].Width;
-            else PackagesContentGrid.ColumnDefinitions[0].Width = _wideSidebarWidth;
-            _compactLayout = compact;
-        }
-        var showDetails = _showCompactDetails && ViewModel is { ShowNoSelection: false };
-        PackagesListPane.IsVisible = !compact || !showDetails;
-        PackagesDetailPane.IsVisible = !compact || showDetails;
-        PackagesSplitter.IsVisible = !compact;
-        CompactPackageBackButton.IsVisible = compact && showDetails;
-        PackagesContentGrid.ColumnDefinitions[0].MaxWidth = compact ? 900 : Math.Min(900, Math.Max(240, PackagesContentGrid.Bounds.Width - 364));
-        PackagesContentGrid.ColumnDefinitions[2].MinWidth = compact ? 0 : 360;
-        if (compact)
-        {
-            PackagesContentGrid.ColumnDefinitions[0].Width = new GridLength(1, GridUnitType.Star);
-            PackagesContentGrid.ColumnDefinitions[1].Width = new GridLength(0);
-            PackagesContentGrid.ColumnDefinitions[2].Width = new GridLength(0);
-            Grid.SetColumn(PackagesDetailPane, 0);
-            PackagesDetailPane.Margin = new Thickness(0);
-        }
-        else
-        {
-            PackagesContentGrid.ColumnDefinitions[1].Width = new GridLength(4);
-            PackagesContentGrid.ColumnDefinitions[2].Width = new GridLength(1, GridUnitType.Star);
-            Grid.SetColumn(PackagesDetailPane, 2);
-            PackagesDetailPane.Margin = new Thickness(16);
-        }
-    }
-
-    private void CompactPackageBackButton_OnClick(object? sender, RoutedEventArgs e)
-    {
-        _showCompactDetails = false;
-        ApplyResponsiveLayout();
-    }
-
     private void PackageList_OnPointerReleased(object? sender, PointerReleasedEventArgs e)
-    {
-        if (e.InitialPressMouseButton != MouseButton.Left || sender is not ListBox { SelectedItem: not null }) return;
-        _showCompactDetails = true;
-        ApplyResponsiveLayout();
-    }
+        => _layout.OpenSelectedRow(sender, e);
 
     private void PackageList_OnKeyUp(object? sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Enter || sender is not ListBox { SelectedItem: not null }) return;
-        _showCompactDetails = true;
-        ApplyResponsiveLayout();
-    }
+        => _layout.OpenSelectedRow(sender, e);
 
     private async Task ShowMarketplaceImageGalleryAsync(
         IReadOnlyList<RegistryPackageMediaItemViewModel> media,

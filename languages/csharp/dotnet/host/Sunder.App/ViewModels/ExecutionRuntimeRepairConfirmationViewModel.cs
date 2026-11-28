@@ -4,14 +4,20 @@ namespace Sunder.App.ViewModels;
 
 public sealed class ExecutionRuntimeRepairConfirmationViewModel
 {
-    public ExecutionRuntimeRepairConfirmationViewModel(RuntimeExecutionRuntimeImpact impact)
+    public ExecutionRuntimeRepairConfirmationViewModel(PackageExecutionRuntimeStatusViewModel runtime, RuntimeExecutionRuntimeImpact impact)
     {
         ArgumentNullException.ThrowIfNull(impact);
-        PackageReferenceText = $"{impact.PackageReferenceCount} installed packages use this exact runtime.";
+        Title = $"Repair {runtime.Title}";
+        Target = runtime.TargetText;
+        RuntimeId = runtime.Identity.RuntimeId;
+        Status = runtime.StatusText;
         ImpactedPackageIds = impact.ImpactedPackageIds;
     }
 
-    public string PackageReferenceText { get; }
+    public string Title { get; }
+    public string Target { get; }
+    public string RuntimeId { get; }
+    public string Status { get; }
 
     public IReadOnlyList<string> ImpactedPackageIds { get; }
 }

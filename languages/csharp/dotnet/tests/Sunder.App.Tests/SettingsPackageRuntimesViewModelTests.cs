@@ -317,7 +317,7 @@ public sealed class SettingsPackageRuntimesViewModelTests
         };
         await page.RestartApplyCommand.ExecuteAsync(Assert.Single(page.Prepared));
         Assert.Equal(2, confirmations.Count);
-        Assert.Contains(confirmations[1].Items, text => text.Contains("Sunder also needs to restart"));
+        Assert.Contains("Sunder also needs to restart", confirmations[1].Impact, StringComparison.Ordinal);
         Assert.Contains(confirmations[1].Items, text => text.Contains("other.active.package"));
         Assert.Equal(RuntimeExecutionRuntimeApplyMode.RestartAffectedPackages, client.UpdateApply.Mode);
         Assert.Equal(new string('f', 64), client.UpdateApply.ExpectedImpactFingerprint);

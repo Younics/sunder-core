@@ -26,7 +26,7 @@
                 Classes="toolbar-logo-badge"
                 Classes.large="{Binding IsLogoLarge, ElementName=Root}">
           <Grid>
-            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+            <Image Source="avares://Sunder.App/Assets/Images/logo.png"
                    RenderOptions.BitmapInterpolationMode="HighQuality"
                    Stretch="Uniform"
                    IsVisible="{Binding UseDefaultLogo, ElementName=Root}" />
@@ -62,7 +62,7 @@
                 Classes="toolbar-logo-badge"
                 Classes.large="{Binding IsLogoLarge, ElementName=Root}">
           <Grid>
-            <Image Source="avares://Sunder.App/Assets/Images/icon.png"
+            <Image Source="avares://Sunder.App/Assets/Images/logo.png"
                    RenderOptions.BitmapInterpolationMode="HighQuality"
                    Stretch="Uniform"
                    IsVisible="{Binding UseDefaultLogo, ElementName=Root}" />

@@ -29,8 +29,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
         }
     }
 
-    [Fact]
-    public void Valid_ProjectsIdentityFeaturesAndDeclaredPublicServiceAccess()
+    internal static SunderPackageArchiveValidationResult SampleArchive()
     {
         var manifest = new SunderPackageManifest
         {
@@ -67,7 +66,7 @@ public sealed class LocalPackageInstallConsentViewModelTests
             ContractBundles = [new SunderPackageContractBundleManifest { Source = "imported", ContractId = "example.messages", Version = "1.4.0+local", Exposure = "public" }],
             Provides = [],
         };
-        var validation = new SunderPackageArchiveValidationResult(manifest, [], [])
+        return new SunderPackageArchiveValidationResult(manifest, [], [])
         {
             ContentIndex = new SunderPackageContentIndex(1,
             [
@@ -77,8 +76,12 @@ public sealed class LocalPackageInstallConsentViewModelTests
                     42),
             ]),
         };
+    }
 
-        var viewModel = LocalPackageInstallConsentViewModel.Valid("sample.sunderpkg", validation);
+    [Fact]
+    public void Valid_ProjectsIdentityFeaturesAndDeclaredPublicServiceAccess()
+    {
+        var viewModel = LocalPackageInstallConsentViewModel.Valid("sample.sunderpkg", SampleArchive());
 
         Assert.True(viewModel.IsValid);
         Assert.Equal("sample.package  1.2.3", viewModel.PackageIdentity);

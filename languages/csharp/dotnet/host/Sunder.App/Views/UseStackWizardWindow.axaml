@@ -8,17 +8,17 @@
         x:Class="Sunder.App.Views.UseStackWizardWindow"
         x:DataType="vm:UseStackWizardViewModel"
         mc:Ignorable="d"
-        Width="980"
+        Width="780"
         Height="720"
-        MinWidth="820"
-        MinHeight="620"
+        MinWidth="360"
+        MinHeight="460"
         CanResize="True"
         WindowStartupLocation="CenterOwner"
         Title="Use Stack"
         Icon="avares://Sunder.App/Assets/Images/app.ico"
         WindowDecorations="BorderOnly"
         ExtendClientAreaToDecorationsHint="True"
-        Classes="secondary-window">
+        Classes="secondary-window management-window">
   <Window.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
@@ -33,7 +33,7 @@
   </Window.Styles>
 
   <Grid RowDefinitions="52,*,Auto"
-        Background="{DynamicResource Sunder.Brush.Background.App}">
+        Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
     <controls:WindowTitleBar Grid.Row="0">
       <controls:WindowTitleBar.LeadingContent>
         <TextBlock Classes="section-title"
@@ -42,40 +42,21 @@
       </controls:WindowTitleBar.LeadingContent>
     </controls:WindowTitleBar>
 
-    <Border Grid.Row="1"
-            Classes="workspace-surface"
-            Margin="20,12,20,0">
-          <ScrollViewer>
-            <StackPanel Margin="22"
-                        Spacing="18">
+    <ScrollViewer Grid.Row="1" HorizontalScrollBarVisibility="Disabled">
+            <StackPanel Margin="16" Spacing="14">
               <StackPanel Spacing="6">
-                <TextBlock Text="{Binding StackTitle}"
-                           FontSize="26"
-                           FontWeight="SemiBold"
+                <TextBlock Classes="page-title" Text="{Binding StackTitle}"
                            TextWrapping="Wrap" />
                 <TextBlock Classes="caption"
                            Text="{Binding StackSubtitle}"
                            TextWrapping="Wrap" />
-                <TextBlock Classes="muted"
+                <TextBlock Classes="detail-intro" IsVisible="{Binding StackSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
                            Text="{Binding StackSummary}"
                            TextWrapping="Wrap" />
                 <TextBlock Classes="caption"
                            Text="{Binding StackMetadata}"
                            TextWrapping="Wrap" />
               </StackPanel>
-
-              <Border Classes="card-surface"
-                      IsVisible="{Binding HasStackProfileMedia}">
-                <controls:MarketplaceMediaStrip Items="{Binding StackProfileMedia}" />
-              </Border>
-
-              <Border Classes="card-surface"
-                      IsVisible="{Binding HasStackReadme}">
-                <StackPanel Spacing="8">
-                  <TextBlock Classes="section-title" Text="Overview" />
-                  <md:MarkdownRenderer MarkdownBuilder="{Binding StackReadmeMarkdownBuilder}" />
-                </StackPanel>
-              </Border>
 
               <controls:StackInstallPlan Items="{Binding PackageRows}"
                                          Warnings="{Binding InstallPlanWarnings}"
@@ -84,13 +65,12 @@
                                          HasWarnings="{Binding HasInstallPlanWarnings}"
                                          HasErrors="{Binding HasInstallPlanErrors}"
                                          ShowNoChanges="{Binding ShowNoInstallPlanChanges}"
-                                         IsVisible="{Binding HasPackageRequirements}">
+                                         IsVisible="{Binding ShowInstallPlan}">
                 <controls:StackInstallPlan.ItemTemplate>
                     <DataTemplate x:DataType="vm:UseStackPackageReviewViewModel">
                       <Border Classes="stack-wizard-card package"
                               Margin="0,0,0,8">
-                        <Grid ColumnDefinitions="Auto,*,Auto"
-                              ColumnSpacing="12">
+                        <Grid ColumnDefinitions="Auto,*" RowDefinitions="Auto,Auto" RowSpacing="5" ColumnSpacing="10">
                           <controls:PackageIconView Width="34"
                                                     Height="34"
                                                     IconImage="{Binding IconImage}"
@@ -111,10 +91,8 @@
                                        Text="{Binding RequirementText}"
                                        TextWrapping="Wrap" />
                           </StackPanel>
-                          <Border Grid.Column="2"
-                                  Classes="stack-chip"
-                                  VerticalAlignment="Center">
-                            <TextBlock Text="{Binding StatusText}" />
+                          <Border Grid.Row="1" Grid.Column="1" Classes="package-row-badge" HorizontalAlignment="Left">
+                            <TextBlock Text="{Binding StatusText}" TextWrapping="Wrap" />
                           </Border>
                         </Grid>
                       </Border>
@@ -122,10 +100,12 @@
                 </controls:StackInstallPlan.ItemTemplate>
               </controls:StackInstallPlan>
 
+              <Border Classes="review-warning" IsVisible="{Binding ShowInstallBeforeImport}">
+                <TextBlock Text="Install the required packages first, then review the refreshed setup actions." TextWrapping="Wrap" />
+              </Border>
               <StackPanel Spacing="8"
                           IsVisible="{Binding HasSetupPackageGroups}">
-                <TextBlock Text="Content"
-                           FontWeight="SemiBold" />
+                <TextBlock Classes="section-title" Text="Setup items" />
                 <ItemsControl ItemsSource="{Binding SetupPackageGroups}">
                   <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:UseStackSetupPackageGroupViewModel">
@@ -186,7 +166,7 @@
                                             <StackPanel Spacing="8">
                                               <Grid ColumnDefinitions="Auto,*,Auto"
                                                     ColumnSpacing="12">
-                                                <CheckBox IsChecked="{Binding IsSelected}"
+                                                <CheckBox IsChecked="{Binding IsSelected}" AutomationProperties.Name="{Binding DisplayName}"
                                                           VerticalAlignment="Center" />
                                                 <StackPanel Grid.Column="1"
                                                             Spacing="4">
@@ -220,8 +200,7 @@
                                                             RowDefinitions="Auto,Auto,Auto"
                                                             ColumnSpacing="10"
                                                             RowSpacing="4">
-                                                        <StackPanel Orientation="Horizontal"
-                                                                    Spacing="8">
+                                                        <WrapPanel ItemSpacing="8" LineSpacing="3">
                                                           <TextBlock Text="{Binding Label}"
                                                                      FontWeight="SemiBold"
                                                                      TextWrapping="Wrap" />
@@ -229,7 +208,7 @@
                                                                   IsVisible="{Binding HasBehavior}">
                                                             <TextBlock Text="{Binding Behavior}" />
                                                           </Border>
-                                                        </StackPanel>
+                                                        </WrapPanel>
                                                         <Button Grid.Column="1"
                                                                 Classes="stack-card-toggle"
                                                                 Command="{Binding ToggleExpandedCommand}"
@@ -276,12 +255,12 @@
                                            HasRequiredInputs="{Binding HasRequiredInputs}"
                                            HasWarnings="{Binding HasImportWarnings}"
                                            HasErrors="{Binding HasImportErrors}"
-                                           IsVisible="{Binding HasSetupPackageGroups}">
+                                           IsVisible="{Binding ShowImportPreview}">
                 <controls:StackImportPreview.ActionTemplate>
                   <DataTemplate x:DataType="vm:UseStackImportActionViewModel">
-                    <Border Classes="marketplace-profile-row" Margin="0,0,0,6">
+                    <Border Classes="detail-row" Margin="0,0,0,6">
                       <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
-                        <CheckBox IsChecked="{Binding IsSelected}" VerticalAlignment="Center" />
+                        <CheckBox IsChecked="{Binding IsSelected}" AutomationProperties.Name="{Binding DisplayName}" VerticalAlignment="Center" />
                         <StackPanel Grid.Column="1" Spacing="4">
                           <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
                           <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
@@ -293,11 +272,11 @@
                 </controls:StackImportPreview.ActionTemplate>
                 <controls:StackImportPreview.RequiredInputTemplate>
                     <DataTemplate x:DataType="vm:UseStackRequiredInputValueViewModel">
-                      <Border Classes="marketplace-profile-row">
+                      <Border Classes="detail-row" Margin="0,0,0,4">
                         <Grid RowDefinitions="Auto,Auto,Auto"
                               RowSpacing="6">
                           <Grid>
-                            <TextBlock Text="{Binding Label}"
+                            <TextBlock Text="{Binding Label}" TextWrapping="Wrap"
                                        FontWeight="SemiBold" />
                           </Grid>
                           <TextBlock Grid.Row="1"
@@ -305,7 +284,7 @@
                                      Text="{Binding Description}"
                                      TextWrapping="Wrap" />
                           <TextBox Grid.Row="2"
-                                   Text="{Binding Value}"
+                                   Text="{Binding Value}" AutomationProperties.Name="{Binding Label}"
                                    PlaceholderText="{Binding Placeholder}"
                                    PasswordChar="{Binding PasswordCharacter}" />
                         </Grid>
@@ -313,27 +292,20 @@
                     </DataTemplate>
                 </controls:StackImportPreview.RequiredInputTemplate>
               </controls:StackImportPreview>
+              <Expander Header="Stack README" IsVisible="{Binding HasStackReadme}">
+                <md:MarkdownRenderer MarkdownBuilder="{Binding StackReadmeMarkdownBuilder}" />
+              </Expander>
+              <controls:MarketplaceMediaStrip Items="{Binding StackProfileMedia}" IsVisible="{Binding HasStackProfileMedia}" />
             </StackPanel>
-          </ScrollViewer>
+    </ScrollViewer>
+    <Border Grid.Row="2" Classes="window-footer">
+      <StackPanel Spacing="6">
+        <TextBlock Classes="status-text" Text="{Binding StatusText}" TextWrapping="Wrap" MaxLines="2" ToolTip.Tip="{Binding StatusText}" />
+        <WrapPanel ItemSpacing="8" LineSpacing="4" HorizontalAlignment="Right">
+          <Button Classes="secondary-action" Command="{Binding CancelCommand}" Content="Cancel" />
+          <Button Classes="primary-action" Command="{Binding ApplyCommand}" Content="Use Stack" IsEnabled="{Binding CanApply}" />
+        </WrapPanel>
+      </StackPanel>
     </Border>
-
-    <Grid Grid.Row="2"
-          ColumnDefinitions="Auto,*,Auto"
-          Margin="20,16"
-          ColumnSpacing="12">
-      <Button Classes="secondary-action"
-              Command="{Binding CancelCommand}"
-              Content="Cancel" />
-      <TextBlock Grid.Column="1"
-                 Classes="status-text"
-                 Text="{Binding StatusText}"
-                 TextWrapping="Wrap"
-                 VerticalAlignment="Center" />
-      <Button Grid.Column="2"
-              Classes="primary-action"
-              Command="{Binding ApplyCommand}"
-              Content="Use Stack"
-              IsEnabled="{Binding CanApply}" />
-    </Grid>
   </Grid>
 </Window>

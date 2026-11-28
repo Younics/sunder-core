@@ -307,8 +307,8 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
         if (item is null) return;
         var impact = await _client.GetExecutionRuntimeImpactAsync(item.Runtime.Identity, token);
         token.ThrowIfCancellationRequested();
-        if (!await _confirm(new("Repair package runtime", "Restore this exact runtime and reload its affected packages?", "Repair & Reload",
-                impact.ImpactedPackageIds, $"{item.Title}\nImpact: {impact.Fingerprint}"), token)) return;
+        if (!await _confirm(new("Repair package runtime", $"Restore {item.Title} and reload the affected packages.", "Repair & Reload",
+                impact.ImpactedPackageIds, $"{item.Title}\nImpact: {impact.Fingerprint}", Impact: "Package and runtime versions stay the same."), token)) return;
         token.ThrowIfCancellationRequested();
         StatusText = "Repairing runtime and reloading affected packages…";
         var result = await _client.RepairExecutionRuntimeAsync(item.Runtime.Identity, impact, token);
@@ -328,8 +328,9 @@ public sealed partial class SettingsPackageRuntimesViewModel : ViewModelBase, ID
         if (rowIndex >= 0) Installed[rowIndex] = new(item.Runtime, plan);
         if (!plan.Success || !plan.CanUninstall || plan.Plan is null)
             throw new InvalidOperationException(RuntimeManagementUi.Error(plan.Message, plan.ErrorCode));
-        if (!await _confirm(new("Remove package runtime", "Remove this unused runtime and its manual retention?", "Remove Runtime",
-                [item.Title], $"{plan.Message}\nReferences: {plan.Usage.PackageReferences.Count}\nActive leases: {plan.Usage.ActiveLeaseCount}\nPending transactions: {plan.Usage.PendingTransactionCount}\nImpact: {plan.Usage.Fingerprint}"), token)) return;
+        if (!await _confirm(new("Remove package runtime", "No installed package needs this runtime.", "Remove Runtime",
+                [item.Title], $"{plan.Message}\nReferences: {plan.Usage.PackageReferences.Count}\nActive leases: {plan.Usage.ActiveLeaseCount}\nPending transactions: {plan.Usage.PendingTransactionCount}\nImpact: {plan.Usage.Fingerprint}",
+                IsRemoval: true, Impact: "Manual retention will also be removed."), token)) return;
         token.ThrowIfCancellationRequested();
         var result = await _client.ApplyExecutionRuntimeUninstallAsync(RuntimeManagementUi.Confirm(plan.Plan), token);
         token.ThrowIfCancellationRequested();

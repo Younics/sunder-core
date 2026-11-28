@@ -1,635 +1,250 @@
-<Window xmlns="https://github.com/avaloniaui"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:vm="using:Sunder.App.ViewModels"
-        xmlns:controls="using:Sunder.App.Views.Controls"
+<Window xmlns="https://github.com/avaloniaui" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Sunder.App.ViewModels" xmlns:controls="using:Sunder.App.Views.Controls"
         xmlns:md="clr-namespace:LiveMarkdown.Avalonia;assembly=LiveMarkdown.Avalonia"
-        x:Class="Sunder.App.Views.StacksWindow"
-        x:DataType="vm:StacksWindowViewModel"
-        mc:Ignorable="d"
-        Width="1120"
-        Height="760"
-        MinWidth="900"
-        MinHeight="620"
-        CanResize="True"
-        WindowStartupLocation="CenterOwner"
-        Title="Stacks"
-        Icon="avares://Sunder.App/Assets/Images/app.ico"
-        WindowDecorations="BorderOnly"
-        ExtendClientAreaToDecorationsHint="True"
-        Classes="secondary-window">
+        x:Class="Sunder.App.Views.StacksWindow" x:DataType="vm:StacksWindowViewModel"
+        Width="1000" Height="760" MinWidth="360" MinHeight="480" WindowStartupLocation="CenterOwner"
+        Title="Stacks" Icon="avares://Sunder.App/Assets/Images/app.ico"
+        WindowDecorations="BorderOnly" ExtendClientAreaToDecorationsHint="True" Classes="secondary-window management-window">
   <Window.Resources>
     <ResourceDictionary>
       <ResourceDictionary.MergedDictionaries>
         <ResourceInclude Source="avares://LiveMarkdown.Avalonia/Defaults.axaml" />
       </ResourceDictionary.MergedDictionaries>
+      <ItemsPanelTemplate x:Key="TabHeaders"><WrapPanel /></ItemsPanelTemplate>
+      <DataTemplate x:Key="ContentsSummary" x:DataType="x:String">
+        <Border Classes="detail-row">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <StackPanel Spacing="5">
+              <TextBlock Classes="section-title" Text="Inside this Stack" />
+              <TextBlock Classes="caption" Text="{Binding}" TextWrapping="Wrap" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="secondary-action compact-action" Content="View contents ›" VerticalAlignment="Center" Click="ViewContents_OnClick" />
+          </Grid>
+        </Border>
+      </DataTemplate>
+      <DataTemplate x:Key="RequiredInput" x:DataType="x:String">
+        <Border Classes="detail-row"><TextBlock Text="{Binding}" TextWrapping="Wrap" /></Border>
+      </DataTemplate>
     </ResourceDictionary>
   </Window.Resources>
-
   <Window.Styles>
     <StyleInclude Source="avares://LiveMarkdown.Avalonia/Styles.axaml" />
     <StyleInclude Source="avares://Sunder.App/Styles/MarketplaceMarkdownStyles.axaml" />
   </Window.Styles>
-
-  <Grid x:Name="StacksRoot"
-        RowDefinitions="52,*,Auto"
-        Background="{DynamicResource Sunder.Brush.Background.App}">
-    <controls:WindowTitleBar Grid.Row="0">
-      <controls:WindowTitleBar.LeadingContent>
-        <TextBlock Classes="section-title"
-                   VerticalAlignment="Center"
-                   Text="Stacks" />
-      </controls:WindowTitleBar.LeadingContent>
-
-      <controls:WindowTitleBar.CenterContent>
-        <Border Classes="search-host"
-                MaxWidth="480"
-                HorizontalAlignment="Stretch">
-          <Grid ColumnDefinitions="Auto,*"
-                ColumnSpacing="10"
-                VerticalAlignment="Center">
-            <TextBlock Classes="caption"
-                       Text="Registry"
-                       VerticalAlignment="Center" />
-            <TextBox Grid.Column="1"
-                     Classes="search-box"
-                      Text="{Binding Registry.RegistryUrlText}"
-                     PlaceholderText="https://hub.sunderapp.io/" />
-          </Grid>
-        </Border>
-      </controls:WindowTitleBar.CenterContent>
-
+  <Grid x:Name="StacksRoot" RowDefinitions="52,*,Auto" Background="{DynamicResource Sunder.Brush.Surface.Workspace}">
+    <controls:WindowTitleBar>
+      <controls:WindowTitleBar.LeadingContent><TextBlock Classes="section-title" Text="Stacks" /></controls:WindowTitleBar.LeadingContent>
       <controls:WindowTitleBar.TrailingContent>
-        <Button Classes="toolbar-icon"
-                Command="{Binding RefreshCommand}"
-                VerticalAlignment="Center"
-                ToolTip.Tip="Refresh Stacks"
-                IsEnabled="{Binding CanRefresh}">
-          <Path Width="15"
-                Height="15"
-                Classes="icon-stroke"
-                Data="{StaticResource Sunder.Icon.Refresh}" />
+        <Button Classes="toolbar-icon" Command="{Binding RefreshCommand}" IsEnabled="{Binding CanRefresh}"
+                ToolTip.Tip="Refresh Stacks" AutomationProperties.Name="Refresh Stacks">
+          <Path Width="15" Height="15" Classes="icon-stroke" Data="{StaticResource Sunder.Icon.Refresh}" />
         </Button>
       </controls:WindowTitleBar.TrailingContent>
     </controls:WindowTitleBar>
-
-    <Border Grid.Row="1"
-            Margin="20,12,20,0"
-            Classes="panel-surface"
-            Padding="0">
-      <Border Classes="secondary-panel-content-clip">
-        <Grid x:Name="StacksContentGrid">
-          <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="390" MinWidth="260" MaxWidth="760" />
-            <ColumnDefinition Width="4" />
-            <ColumnDefinition Width="*" MinWidth="420" />
-          </Grid.ColumnDefinitions>
-
-          <Border Grid.Column="0"
-                  x:Name="StacksListPane"
-                  Background="{DynamicResource Sunder.Brush.Surface.Base}"
-                  Padding="16">
-            <Grid RowDefinitions="Auto,Auto,*"
-                  RowSpacing="12">
-              <Grid ColumnDefinitions="*,Auto"
-                    ColumnSpacing="10">
-                <StackPanel Orientation="Horizontal"
-                            Spacing="8">
-                  <Button Classes="secondary-action settings-nav-button"
-                          Classes.selected="{Binding IsMarketplaceMode}"
-                          Command="{Binding ShowMarketplaceCommand}"
-                          Content="Marketplace" />
-                  <Button Classes="secondary-action settings-nav-button"
-                          Classes.selected="{Binding IsLocalMode}"
-                          Command="{Binding ShowLocalCommand}"
-                          Content="Local" />
-                </StackPanel>
-                <Button Grid.Column="1"
-                        Classes="stack-card-toggle"
-                        Width="36"
-                        Height="36"
-                        Padding="0"
-                        Click="CreateStackButton_OnClick"
-                        IsEnabled="{Binding CanCreateStack}"
-                        IsVisible="{Binding IsLocalMode}"
-                        ToolTip.Tip="Create Stack">
-                  <Path Width="15"
-                        Height="15"
-                        Classes="icon-stroke"
-                        Data="{StaticResource Sunder.Icon.Plus}" />
-                </Button>
-              </Grid>
-
-              <Grid Grid.Row="1">
-                <Border Classes="search-host"
-                        IsVisible="{Binding IsLocalMode}">
-                  <Grid ColumnDefinitions="*,Auto"
-                        ColumnSpacing="8"
-                        VerticalAlignment="Center">
-                    <TextBox Classes="search-box"
-                             Text="{Binding Local.SearchText}"
-                             PlaceholderText="Search local Stacks" />
-                    <Button Grid.Column="1"
-                            Classes="search-clear-button"
-                            Command="{Binding ClearSearchCommand}"
-                            IsVisible="{Binding Local.HasSearchText}"
-                            ToolTip.Tip="Clear search">
-                      <Path Width="10"
-                            Height="10"
-                            Classes="icon-stroke"
-                            Data="{StaticResource Sunder.Icon.Close}" />
-                    </Button>
-                  </Grid>
-                </Border>
-
-                <StackPanel IsVisible="{Binding IsMarketplaceMode}"
-                            Spacing="8">
-                  <Border Classes="search-host">
-                    <Grid ColumnDefinitions="*,Auto"
-                          ColumnSpacing="8"
-                          VerticalAlignment="Center">
-                      <TextBox Classes="search-box"
-                               Text="{Binding Registry.SearchText}"
-                               PlaceholderText="Search Marketplace Stacks" />
-                      <Button Grid.Column="1"
-                              Classes="search-clear-button"
-                              Command="{Binding ClearRegistrySearchCommand}"
-                              IsVisible="{Binding Registry.HasSearchText}"
-                              ToolTip.Tip="Clear Marketplace search">
-                        <Path Width="10"
-                              Height="10"
-                              Classes="icon-stroke"
-                              Data="{StaticResource Sunder.Icon.Close}" />
-                      </Button>
-                    </Grid>
-                  </Border>
-                  <ComboBox ItemsSource="{Binding Registry.SortOptions}"
-                             SelectedItem="{Binding Registry.SelectedSortOption}"
-                            HorizontalAlignment="Stretch">
-                    <ComboBox.ItemTemplate>
-                      <DataTemplate x:DataType="vm:RegistrySearchSortOptionViewModel">
-                        <TextBlock Text="{Binding Label}" />
-                      </DataTemplate>
-                    </ComboBox.ItemTemplate>
-                  </ComboBox>
-                </StackPanel>
-              </Grid>
-
-              <Grid Grid.Row="2">
-                <ListBox Classes="package-list"
-                         ItemsSource="{Binding Local.Stacks}"
-                         SelectedItem="{Binding Local.SelectedStack, Mode=TwoWay}"
-                         IsVisible="{Binding IsLocalMode}">
-                  <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:LocalStackLibraryItemViewModel">
-                      <Border Classes="package-list-row"
-                              Classes.selected="{Binding IsSelected}">
-                        <Grid RowDefinitions="Auto,Auto,Auto"
-                              RowSpacing="7">
-                          <Grid ColumnDefinitions="*,Auto"
-                                ColumnSpacing="10">
-                            <TextBlock Text="{Binding Name}"
-                                       FontWeight="SemiBold"
-                                       TextTrimming="CharacterEllipsis" />
-                            <Border Grid.Column="1"
-                                    Classes="package-row-badge">
-                              <TextBlock Text="{Binding CountText}" />
-                            </Border>
-                          </Grid>
-                          <TextBlock Grid.Row="1"
-                                     Classes="caption"
-                                     Text="{Binding StackId}"
-                                     TextTrimming="CharacterEllipsis" />
-                          <TextBlock Grid.Row="2"
-                                     Classes="muted"
-                                     Text="{Binding Summary}"
-                                     TextWrapping="Wrap"
-                                     MaxLines="2" />
-                        </Grid>
-                      </Border>
-                    </DataTemplate>
-                  </ListBox.ItemTemplate>
-                </ListBox>
-
-                <ListBox Classes="package-list"
-                         ItemsSource="{Binding Registry.Stacks}"
-                         SelectedItem="{Binding Registry.SelectedStack, Mode=TwoWay}"
-                         IsVisible="{Binding IsMarketplaceMode}">
-                  <ListBox.ItemTemplate>
-                    <DataTemplate x:DataType="vm:RegistryStackSearchItemViewModel">
-                      <Border Classes="package-list-row"
-                              Classes.selected="{Binding IsSelected}">
-                        <Grid RowDefinitions="Auto,Auto,Auto"
-                              RowSpacing="7">
-                          <Grid ColumnDefinitions="*,Auto"
-                                ColumnSpacing="10">
-                            <TextBlock Text="{Binding Name}"
-                                       FontWeight="SemiBold"
-                                       TextTrimming="CharacterEllipsis" />
-                            <Border Grid.Column="1"
-                                    Classes="package-row-badge">
-                              <TextBlock Text="{Binding CountText}" />
-                            </Border>
-                          </Grid>
-                          <TextBlock Grid.Row="1"
-                                     Classes="caption"
-                                     Text="{Binding StackId}"
-                                     TextTrimming="CharacterEllipsis" />
-                          <TextBlock Grid.Row="2"
-                                     Classes="muted"
-                                     Text="{Binding Summary}"
-                                     TextWrapping="Wrap"
-                                     MaxLines="2" />
-                        </Grid>
-                      </Border>
-                    </DataTemplate>
-                  </ListBox.ItemTemplate>
-                </ListBox>
-
-                <TextBlock Classes="muted"
-                           IsVisible="{Binding ShowNoStacks}"
-                           Text="No local Stacks found. Import a .sunderstack file to review setup content before use."
-                           TextWrapping="Wrap" />
-                <TextBlock Classes="muted"
-                           IsVisible="{Binding ShowNoRegistryStacks}"
-                           Text="No Marketplace Stacks found. Search the Registry to review shared setup presets."
-                           TextWrapping="Wrap" />
-              </Grid>
+    <Grid Grid.Row="1" x:Name="StacksContentGrid">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="260" MinWidth="220" MaxWidth="900" />
+        <ColumnDefinition Width="4" /><ColumnDefinition Width="*" MinWidth="360" />
+      </Grid.ColumnDefinitions>
+      <Border x:Name="StacksListPane" Background="{DynamicResource Sunder.Brush.Surface.Base}" Padding="14">
+        <Grid RowDefinitions="Auto,Auto,*,Auto" RowSpacing="10">
+          <WrapPanel ItemSpacing="6">
+            <Button Classes="settings-nav-button" Classes.selected="{Binding IsMarketplaceMode}" Command="{Binding ShowMarketplaceCommand}" Content="Marketplace" />
+            <Button Classes="settings-nav-button" Classes.selected="{Binding IsLocalMode}" Command="{Binding ShowLocalCommand}" Content="Local library" />
+          </WrapPanel>
+          <StackPanel Grid.Row="1" Spacing="8">
+            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding IsLocalMode}">
+              <TextBox Text="{Binding Local.SearchText}" PlaceholderText="Search local Stacks" />
+              <Button Grid.Column="1" Classes="secondary-action" Content="Clear" Command="{Binding ClearSearchCommand}" IsVisible="{Binding Local.HasSearchText}" />
             </Grid>
-          </Border>
-
-          <GridSplitter Grid.Column="1"
-                        Width="4"
-                        ResizeDirection="Columns"
-                        ResizeBehavior="PreviousAndNext"
-                        ShowsPreview="False"
-                        Background="{DynamicResource Sunder.Brush.Border.Subtle}"
-                        DragCompleted="StacksSplitter_OnDragCompleted" />
-
-          <Border Grid.Column="2"
-                  Classes="workspace-surface"
-                  Margin="16">
-            <ScrollViewer>
-              <StackPanel Margin="18"
-                          Spacing="16">
-                <StackPanel IsVisible="{Binding ShowSelectedDetails}"
-                            Spacing="16">
-                  <Grid RowDefinitions="Auto,Auto"
-                        RowSpacing="10">
-                    <StackPanel Spacing="6">
-                      <TextBlock Text="{Binding SelectedStackTitle}"
-                                 FontSize="24"
-                                 FontWeight="SemiBold"
-                                 TextWrapping="Wrap" />
-                      <TextBlock Classes="caption"
-                                 Text="{Binding SelectedStackSubtitle}"
-                                 TextWrapping="Wrap" />
-                      <TextBlock Classes="muted"
-                                 Text="{Binding SelectedStackSummary}"
-                                 TextWrapping="Wrap"
-                                 IsVisible="{Binding HasSelectedSummary}" />
-                    </StackPanel>
-
-                    <Grid Grid.Row="1"
-                          ColumnDefinitions="Auto,*"
-                          ColumnSpacing="10">
-                      <StackPanel Grid.Column="0"
-                                  Orientation="Horizontal"
-                                  Spacing="10"
-                                  HorizontalAlignment="Left"
-                                  VerticalAlignment="Top">
-                        <Button Classes="secondary-action"
-                                Click="EditStackButton_OnClick"
-                                Content="Edit"
-                                IsEnabled="{Binding CanEditSelectedStack}" />
-                        <Button Classes="secondary-action"
-                                Command="{Binding PublishSelectedStackCommand}"
-                                Content="Publish"
-                                IsEnabled="{Binding CanPublishSelectedStack}"
-                                IsVisible="{Binding ShowPublishSelectedStack}" />
-                        <Button Classes="secondary-action danger-action"
-                                Command="{Binding UnpublishSelectedStackCommand}"
-                                Content="Unpublish"
-                                IsEnabled="{Binding CanUnpublishSelectedStack}"
-                                IsVisible="{Binding ShowUnpublishSelectedStack}" />
-                      </StackPanel>
-
-                      <StackPanel Grid.Column="1"
-                                  Orientation="Horizontal"
-                                  Spacing="10"
-                                  HorizontalAlignment="Right"
-                                  VerticalAlignment="Top">
-                        <TextBlock Classes="caption"
-                                   Text="{Binding SelectedStackStatsText}"
-                                   TextAlignment="Right"
-                                   VerticalAlignment="Center"
-                                   IsVisible="{Binding ShowSelectedStackStats}" />
-                        <Button Classes="secondary-action star-action"
-                                Classes.starred="{Binding SelectedStackIsStarred}"
-                                Command="{Binding ToggleSelectedStackStarCommand}"
-                                IsEnabled="{Binding CanToggleSelectedStackStar}"
-                                IsVisible="{Binding ShowSelectedStackStarAction}"
-                                ToolTip.Tip="{Binding SelectedStackStarActionText}">
-                          <Path Width="16"
-                                Height="16"
-                                Classes="star-icon"
-                                Data="{StaticResource Sunder.Icon.Star}" />
-                        </Button>
-                      </StackPanel>
-                    </Grid>
-                  </Grid>
-
-                  <Border Classes="card-surface"
-                          IsVisible="{Binding HasSelectedProfileMedia}">
-                    <controls:MarketplaceMediaStrip Items="{Binding SelectedStackProfileMedia}" />
-                  </Border>
-
-                  <Border Classes="card-surface"
-                          IsVisible="{Binding HasSelectedReadme}">
-                    <StackPanel Spacing="8">
-                      <TextBlock Classes="section-title" Text="Overview" />
-                      <md:MarkdownRenderer MarkdownBuilder="{Binding SelectedStackReadmeMarkdownBuilder}" />
+            <StackPanel Spacing="8" IsVisible="{Binding IsMarketplaceMode}">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBox Text="{Binding Registry.SearchText}" PlaceholderText="Search Marketplace Stacks" />
+                <Button Grid.Column="1" Classes="secondary-action" Content="Clear" Command="{Binding ClearRegistrySearchCommand}" IsVisible="{Binding Registry.HasSearchText}" />
+              </Grid>
+              <controls:SunderComboBox ItemsSource="{Binding Registry.SortOptions}" SelectedItem="{Binding Registry.SelectedSortOption}"
+                                       HorizontalAlignment="Stretch" AutomationProperties.Name="Sort Stacks">
+                <controls:SunderComboBox.ItemTemplate>
+                  <DataTemplate x:DataType="vm:RegistrySearchSortOptionViewModel"><TextBlock Text="{Binding Label}" /></DataTemplate>
+                </controls:SunderComboBox.ItemTemplate>
+              </controls:SunderComboBox>
+              <Expander Header="Registry"><TextBox Text="{Binding Registry.RegistryUrlText}" AutomationProperties.Name="Registry URL" /></Expander>
+            </StackPanel>
+          </StackPanel>
+          <Grid Grid.Row="2">
+            <ListBox Classes="package-list" ItemsSource="{Binding Local.Stacks}" SelectedItem="{Binding Local.SelectedStack, Mode=TwoWay}"
+                     PointerReleased="StackList_OnPointerReleased" KeyUp="StackList_OnKeyUp" IsVisible="{Binding IsLocalMode}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:LocalStackLibraryItemViewModel">
+                  <Border Classes="package-list-row" Classes.selected="{Binding IsSelected}" ToolTip.Tip="{Binding StackId}">
+                    <StackPanel Spacing="3">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap" />
+                      <TextBlock Classes="caption" Text="{Binding CountText}" TextWrapping="Wrap" />
+                      <TextBlock Classes="muted" Text="{Binding Summary}" MaxLines="2" TextWrapping="Wrap" IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                   </Border>
-
-                  <StackPanel Spacing="8"
-                              IsVisible="{Binding HasSelectedLocalDetails}">
-                    <controls:StackDetailTree Items="{Binding SelectedLocalDetails}" />
-                  </StackPanel>
-
-                  <StackPanel Spacing="8"
-                              IsVisible="{Binding ShowSelectedFragments}">
-                    <TextBlock Text="Fragments"
-                               FontWeight="SemiBold" />
-                    <ItemsControl ItemsSource="{Binding SelectedFragments}">
-                      <ItemsControl.ItemTemplate>
-                        <DataTemplate x:DataType="vm:StackFragmentViewModel">
-                          <Border Classes="marketplace-profile-row">
-                            <StackPanel Spacing="4">
-                              <TextBlock Text="{Binding DisplayName}"
-                                         FontWeight="SemiBold" />
-                              <TextBlock Classes="caption"
-                                         Text="{Binding Subtitle}"
-                                         TextWrapping="Wrap" />
-                              <TextBlock Classes="muted"
-                                         Text="{Binding Description}"
-                                         TextWrapping="Wrap" />
-                            </StackPanel>
-                          </Border>
-                        </DataTemplate>
-                      </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                  </StackPanel>
-
-                </StackPanel>
-
-                <StackPanel IsVisible="{Binding ShowRegistrySelectedDetails}"
-                            Spacing="16">
-                  <Grid RowDefinitions="Auto,Auto"
-                        RowSpacing="10">
-                    <StackPanel Spacing="6">
-                      <TextBlock Text="{Binding SelectedRegistryStackTitle}"
-                                 FontSize="24"
-                                 FontWeight="SemiBold"
-                                 TextWrapping="Wrap" />
-                      <TextBlock Classes="caption"
-                                 Text="{Binding SelectedRegistryStackSubtitle}"
-                                 TextWrapping="Wrap" />
-                      <TextBlock Classes="muted"
-                                 Text="{Binding SelectedRegistryStackSummary}"
-                                 TextWrapping="Wrap"
-                                 IsVisible="{Binding HasRegistrySelectedSummary}" />
-                    </StackPanel>
-
-                    <StackPanel Grid.Row="1"
-                                Orientation="Horizontal"
-                                Spacing="10"
-                                HorizontalAlignment="Right"
-                                VerticalAlignment="Top">
-                      <TextBlock Classes="caption"
-                                 Text="{Binding SelectedRegistryStackStatsText}"
-                                 TextAlignment="Right"
-                                 VerticalAlignment="Center"
-                                 IsVisible="{Binding ShowRegistryStackStats}" />
-                      <Button Classes="secondary-action star-action"
-                              Classes.starred="{Binding SelectedRegistryStackIsStarred}"
-                              Command="{Binding ToggleSelectedRegistryStackStarCommand}"
-                              IsEnabled="{Binding CanToggleSelectedRegistryStackStar}"
-                              IsVisible="{Binding ShowSelectedRegistryStackStarAction}"
-                              HorizontalAlignment="Right"
-                              ToolTip.Tip="{Binding SelectedRegistryStackStarActionText}">
-                        <Path Width="16"
-                              Height="16"
-                              Classes="star-icon"
-                              Data="{StaticResource Sunder.Icon.Star}" />
-                      </Button>
-                    </StackPanel>
-                  </Grid>
-
-                  <Grid MinHeight="300"
-                        IsVisible="{Binding ShowRegistryStackDetailsLoading}">
-                    <Path Classes="marketplace-detail-spinner"
-                          Data="M 15,3 A 12,12 0 1 1 6.5,24.5"
-                          Fill="{x:Null}"
-                          HorizontalAlignment="Center"
-                          VerticalAlignment="Center"
-                          RenderTransformOrigin="50%,50%">
-                      <Path.RenderTransform>
-                        <RotateTransform Angle="0" />
-                      </Path.RenderTransform>
-                    </Path>
-                  </Grid>
-
-                  <Border Classes="settings-note-card"
-                          IsVisible="{Binding ShowRegistryStackDetailsError}">
-                    <StackPanel Spacing="6">
-                      <TextBlock Text="Stack details unavailable"
-                                 FontWeight="SemiBold" />
-                      <TextBlock Classes="muted"
-                                 Text="{Binding RegistryStackDetailsError}"
-                                 TextWrapping="Wrap" />
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <ListBox Classes="package-list" ItemsSource="{Binding Registry.Stacks}" SelectedItem="{Binding Registry.SelectedStack, Mode=TwoWay}"
+                     PointerReleased="StackList_OnPointerReleased" KeyUp="StackList_OnKeyUp" IsVisible="{Binding IsMarketplaceMode}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:RegistryStackSearchItemViewModel">
+                  <Border Classes="package-list-row" Classes.selected="{Binding IsSelected}" ToolTip.Tip="{Binding StackId}">
+                    <StackPanel Spacing="3">
+                      <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap" />
+                      <TextBlock Classes="caption" Text="{Binding CountText}" TextWrapping="Wrap" />
+                      <TextBlock Classes="muted" Text="{Binding Summary}" MaxLines="2" TextWrapping="Wrap" IsVisible="{Binding Summary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
                     </StackPanel>
                   </Border>
-
-                  <StackPanel Spacing="16"
-                              IsVisible="{Binding ShowRegistryStackDetailsContent}">
-                  <Border Classes="settings-note-card">
-                    <Grid RowDefinitions="Auto,Auto"
-                          RowSpacing="6">
-                      <TextBlock Text="Marketplace Stack"
-                                 FontWeight="SemiBold" />
-                      <Grid Grid.Row="1"
-                            ColumnDefinitions="*,Auto"
-                            ColumnSpacing="12">
-                        <TextBlock Classes="muted"
-                                   Text="{Binding SelectedRegistryStackContentText}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock Grid.Column="1"
-                                   Classes="muted"
-                                   Text="{Binding SelectedRegistryStackUpdatedText}"
-                                   TextAlignment="Right" />
-                      </Grid>
-                    </Grid>
-                  </Border>
-
-                  <Border Classes="card-surface"
-                          IsVisible="{Binding HasRegistryProfileMedia}">
-                    <controls:MarketplaceMediaStrip Items="{Binding RegistryProfileMedia}" />
-                  </Border>
-
-                  <Border Classes="card-surface"
-                          IsVisible="{Binding HasRegistryReadme}">
-                    <StackPanel Spacing="8">
-                      <TextBlock Classes="section-title" Text="Overview" />
-                      <md:MarkdownRenderer MarkdownBuilder="{Binding RegistryReadmeMarkdownBuilder}" />
-                    </StackPanel>
-                  </Border>
-
-                  <controls:MarketplaceProfileCard Description="Project links and Stack metadata."
-                                                   Links="{Binding RegistryProfileLinks}"
-                                                   Metadata="{Binding RegistryProfileMetadata}"
-                                                   Tags="{Binding RegistryProfileTags}"
-                                                   HasLinks="{Binding HasRegistryProfileLinks}"
-                                                   HasMetadata="{Binding HasRegistryProfileMetadata}"
-                                                   HasTags="{Binding HasRegistryProfileTags}"
-                                                   IsVisible="{Binding HasRegistryProfile}" />
-
-                  <StackPanel Spacing="8"
-                              IsVisible="{Binding HasRegistrySelectedFragments}">
-                    <TextBlock Text="Fragments"
-                               FontWeight="SemiBold" />
-                    <controls:StackDetailTree Items="{Binding RegistrySelectedDetails}" />
-                  </StackPanel>
-
-                  <Border Classes="card-surface marketplace-profile-card"
-                          IsVisible="{Binding HasRegistryAttributions}">
-                    <StackPanel Spacing="12">
-                      <StackPanel Spacing="2">
-                        <TextBlock Classes="section-title" Text="People" />
-                        <TextBlock Classes="caption" Text="Creator and maintainers shown by public profile name." />
-                      </StackPanel>
-                      <StackPanel Spacing="6"
-                                  IsVisible="{Binding HasRegistryCreators}">
-                        <TextBlock Classes="caption marketplace-people-heading" Text="Creator" />
-                        <ItemsControl ItemsSource="{Binding RegistryCreators}">
-                          <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                              <WrapPanel />
-                            </ItemsPanelTemplate>
-                          </ItemsControl.ItemsPanel>
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
-                              <Border Classes="marketplace-person-chip creator">
-                                <TextBlock Classes="marketplace-person-chip-text"
-                                           Text="{Binding DisplayName}" />
-                              </Border>
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </StackPanel>
-                      <StackPanel Spacing="6"
-                                  IsVisible="{Binding HasRegistryMaintainers}">
-                        <TextBlock Classes="caption marketplace-people-heading" Text="Maintainers" />
-                        <ItemsControl ItemsSource="{Binding RegistryMaintainers}">
-                          <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                              <WrapPanel />
-                            </ItemsPanelTemplate>
-                          </ItemsControl.ItemsPanel>
-                          <ItemsControl.ItemTemplate>
-                            <DataTemplate x:DataType="vm:RegistryUserAttributionViewModel">
-                              <Border Classes="marketplace-person-chip">
-                                <TextBlock Classes="marketplace-person-chip-text"
-                                           Text="{Binding DisplayName}" />
-                              </Border>
-                            </DataTemplate>
-                          </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                      </StackPanel>
-                    </StackPanel>
-                  </Border>
-
-                  <controls:StackRequiredInputs Items="{Binding RegistrySelectedRequiredInputs}"
-                                                IsVisible="{Binding HasRegistrySelectedRequiredInputs}">
-                    <controls:StackRequiredInputs.ItemTemplate>
-                        <DataTemplate>
-                          <Border Classes="marketplace-profile-row">
-                            <TextBlock Classes="caption"
-                                       Text="{Binding}"
-                                       TextWrapping="Wrap" />
-                          </Border>
-                        </DataTemplate>
-                    </controls:StackRequiredInputs.ItemTemplate>
-                  </controls:StackRequiredInputs>
-                  </StackPanel>
-
-                </StackPanel>
-
-                <TextBlock Classes="muted"
-                           IsVisible="{Binding ShowNoSelection}"
-                           Text="Select a local Stack to inspect fragments, required inputs, and profile metadata."
-                           TextWrapping="Wrap" />
-                <TextBlock Classes="muted"
-                           IsVisible="{Binding ShowNoRegistrySelection}"
-                           Text="Search and select a Marketplace Stack to inspect its fragments and profile metadata."
-                           TextWrapping="Wrap" />
-              </StackPanel>
-            </ScrollViewer>
-          </Border>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+            <TextBlock Classes="caption" IsVisible="{Binding ShowNoStacks}" Text="No matching local Stacks." TextWrapping="Wrap" />
+            <TextBlock Classes="caption" IsVisible="{Binding ShowNoRegistryStacks}" Text="No matching Marketplace Stacks." TextWrapping="Wrap" />
+          </Grid>
+          <Button Grid.Row="3" Classes="secondary-action" HorizontalAlignment="Stretch" Click="CreateStackButton_OnClick"
+                  IsEnabled="{Binding CanCreateStack}" IsVisible="{Binding IsLocalMode}" Content="Create Stack" />
         </Grid>
       </Border>
-    </Border>
-
-    <Grid Grid.Row="2"
-          ColumnDefinitions="Auto,*,Auto"
-          Margin="20,16"
-          ColumnSpacing="12">
-      <StackPanel Orientation="Horizontal"
-                  Spacing="12">
-        <Button Classes="secondary-action"
-                Click="ImportStackButton_OnClick"
-                Content="Import Stack"
-                IsEnabled="{Binding CanImportStack}"
-                IsVisible="{Binding IsLocalMode}" />
-        <Button Classes="secondary-action"
-                Command="{Binding ImportSelectedRegistryStackCommand}"
-                Content="Import Stack"
-                IsEnabled="{Binding CanImportSelectedRegistryStack}"
-                IsVisible="{Binding IsMarketplaceMode}" />
-      </StackPanel>
-
-      <TextBlock Grid.Column="1"
-                 Classes="status-text"
-                 Text="{Binding StatusText}"
-                 TextWrapping="Wrap"
-                 VerticalAlignment="Center" />
-
-      <StackPanel Grid.Column="2"
-                  Orientation="Horizontal"
-                  Spacing="12"
-                  HorizontalAlignment="Right">
-        <Button Classes="secondary-action danger-action"
-                Command="{Binding RemoveSelectedStackCommand}"
-                Content="Remove"
-                IsEnabled="{Binding CanRemoveSelectedStack}"
-                IsVisible="{Binding ShowSelectedDetails}" />
-        <Button Classes="secondary-action"
-                Command="{Binding ExportSelectedStackCommand}"
-                Content="Export"
-                IsEnabled="{Binding CanExportSelectedStack}"
-                IsVisible="{Binding ShowSelectedDetails}" />
-        <Button Classes="primary-action"
-                Click="UseLocalStackButton_OnClick"
-                Content="Use Stack"
-                IsEnabled="{Binding CanUseSelectedStack}"
-                IsVisible="{Binding ShowSelectedDetails}" />
-        <Button Classes="primary-action"
-                Click="UseRegistryStackButton_OnClick"
-                Content="Use Stack"
-                IsEnabled="{Binding CanUseSelectedRegistryStack}"
-                IsVisible="{Binding IsMarketplaceMode}" />
-      </StackPanel>
+      <GridSplitter Grid.Column="1" x:Name="StacksSplitter" Width="4" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"
+                    Background="{DynamicResource Sunder.Brush.Border.Subtle}" DragCompleted="StacksSplitter_OnDragCompleted" />
+      <Border Grid.Column="2" x:Name="StacksDetailPane" Classes="detail-surface">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled">
+          <StackPanel Margin="18" Spacing="14">
+            <Button x:Name="CompactStackBackButton" Classes="secondary-action compact-action" Content="‹ Stacks" IsVisible="False" />
+            <StackPanel Spacing="12" IsVisible="{Binding ShowSelectedDetails}">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                <Path Classes="icon-stroke" Width="32" Height="32" Stroke="{DynamicResource Sunder.Brush.Accent}" Data="{StaticResource Sunder.Icon.Stacks}" />
+                <StackPanel Grid.Column="1" Spacing="4">
+                  <TextBlock Classes="page-title" Text="{Binding SelectedStackTitle}" TextWrapping="Wrap" />
+                  <TextBlock Classes="caption code-value" Text="{Binding SelectedStackSubtitle}" />
+                </StackPanel>
+              </Grid>
+              <WrapPanel ItemSpacing="8" IsVisible="{Binding ShowSelectedStackStarAction}">
+                <TextBlock Classes="caption" Text="{Binding SelectedStackStatsText}" IsVisible="{Binding ShowSelectedStackStats}" VerticalAlignment="Center" />
+                <Button Classes="secondary-action star-action" Classes.starred="{Binding SelectedStackIsStarred}"
+                        Command="{Binding ToggleSelectedStackStarCommand}" IsEnabled="{Binding CanToggleSelectedStackStar}"
+                        ToolTip.Tip="{Binding SelectedStackStarActionText}" AutomationProperties.Name="{Binding SelectedStackStarActionText}">
+                  <Path Width="16" Height="16" Classes="star-icon" Data="{StaticResource Sunder.Icon.Star}" />
+                </Button>
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="6">
+                <Button Classes="primary-action" Content="Use Stack" Click="UseLocalStackButton_OnClick" IsEnabled="{Binding CanUseSelectedStack}" />
+                <Button Classes="secondary-action" Content="Edit" Click="EditStackButton_OnClick" IsEnabled="{Binding CanEditSelectedStack}" />
+                <Button Classes="secondary-action" Content="Publish" Command="{Binding PublishSelectedStackCommand}"
+                        IsEnabled="{Binding CanPublishSelectedStack}" IsVisible="{Binding ShowPublishSelectedStack}" />
+                <Button Classes="secondary-action danger-action" Content="Unpublish" Command="{Binding UnpublishSelectedStackCommand}"
+                        IsEnabled="{Binding CanUnpublishSelectedStack}" IsVisible="{Binding ShowUnpublishSelectedStack}" />
+              </WrapPanel>
+              <TabControl Classes="detail-tabs" ItemsPanel="{StaticResource TabHeaders}">
+                <TabItem Header="Overview">
+                  <StackPanel Margin="0,12" Spacing="10">
+                    <TextBlock Classes="detail-intro" Text="{Binding SelectedStackSummary}" IsVisible="{Binding HasSelectedSummary}" />
+                    <ContentControl Content="{Binding Local.SelectedStack.CountText}" ContentTemplate="{StaticResource ContentsSummary}" />
+                    <TextBlock Classes="caption" Text="{Binding SelectedStackMetadata}" TextWrapping="Wrap" />
+                    <md:MarkdownRenderer MarkdownBuilder="{Binding SelectedStackReadmeMarkdownBuilder}" IsVisible="{Binding HasSelectedReadme}" />
+                    <controls:MarketplaceMediaStrip Items="{Binding SelectedStackProfileMedia}" IsVisible="{Binding HasSelectedProfileMedia}" />
+                  </StackPanel>
+                </TabItem>
+                <TabItem Header="Contents">
+                  <StackPanel Margin="0,12" Spacing="8">
+                    <TextBlock Classes="section-title" Text="Package requirements" IsVisible="{Binding HasSelectedPackages}" />
+                    <ItemsControl ItemsSource="{Binding SelectedPackages}">
+                      <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:StackPackageRequirementViewModel">
+                        <Border Classes="detail-row" Margin="0,0,0,4"><StackPanel>
+                          <TextBlock FontWeight="SemiBold" Text="{Binding PackageId}" TextWrapping="Wrap" />
+                          <TextBlock Classes="caption" Text="{Binding InstallText}" TextWrapping="Wrap" />
+                        </StackPanel></Border>
+                      </DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <controls:StackDetailTree Items="{Binding SelectedLocalDetails}" IsVisible="{Binding HasSelectedLocalDetails}" />
+                    <ItemsControl ItemsSource="{Binding SelectedFragments}" IsVisible="{Binding ShowSelectedFragments}">
+                      <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:StackFragmentViewModel">
+                        <Border Classes="detail-row"><StackPanel Spacing="3">
+                          <TextBlock FontWeight="SemiBold" Text="{Binding DisplayName}" TextWrapping="Wrap" />
+                          <TextBlock Classes="caption" Text="{Binding Subtitle}" TextWrapping="Wrap" />
+                          <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
+                        </StackPanel></Border>
+                      </DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <controls:StackRequiredInputs Items="{Binding SelectedRequiredInputs}" ItemTemplate="{StaticResource RequiredInput}" IsVisible="{Binding HasSelectedRequiredInputs}" />
+                  </StackPanel>
+                </TabItem>
+              </TabControl>
+            </StackPanel>
+            <StackPanel Spacing="12" IsVisible="{Binding ShowRegistrySelectedDetails}">
+              <Grid ColumnDefinitions="Auto,*" ColumnSpacing="12">
+                <Path Classes="icon-stroke" Width="32" Height="32" Stroke="{DynamicResource Sunder.Brush.Accent}" Data="{StaticResource Sunder.Icon.Stacks}" />
+                <StackPanel Grid.Column="1" Spacing="4">
+                  <TextBlock Classes="page-title" Text="{Binding SelectedRegistryStackTitle}" TextWrapping="Wrap" />
+                  <TextBlock Classes="caption code-value" Text="{Binding SelectedRegistryStackSubtitle}" />
+                </StackPanel>
+              </Grid>
+              <WrapPanel ItemSpacing="8" IsVisible="{Binding ShowRegistryStackDetailsContent}">
+                <TextBlock Classes="caption" Text="{Binding SelectedRegistryStackStatsText}" IsVisible="{Binding ShowRegistryStackStats}" VerticalAlignment="Center" />
+                <Button Classes="secondary-action star-action" Classes.starred="{Binding SelectedRegistryStackIsStarred}" Command="{Binding ToggleSelectedRegistryStackStarCommand}"
+                        IsEnabled="{Binding CanToggleSelectedRegistryStackStar}" IsVisible="{Binding ShowSelectedRegistryStackStarAction}"
+                        ToolTip.Tip="{Binding SelectedRegistryStackStarActionText}" AutomationProperties.Name="{Binding SelectedRegistryStackStarActionText}">
+                  <Path Width="16" Height="16" Classes="star-icon" Data="{StaticResource Sunder.Icon.Star}" />
+                </Button>
+              </WrapPanel>
+              <WrapPanel ItemSpacing="8" LineSpacing="6">
+                <Button Classes="primary-action" Content="Use Stack" Click="UseRegistryStackButton_OnClick" IsEnabled="{Binding CanUseSelectedRegistryStack}" />
+                <Button Classes="secondary-action" Content="Import Stack" Command="{Binding ImportSelectedRegistryStackCommand}" IsEnabled="{Binding CanImportSelectedRegistryStack}" />
+              </WrapPanel>
+              <ProgressBar IsIndeterminate="True" IsVisible="{Binding ShowRegistryStackDetailsLoading}" />
+              <Border Classes="review-error" IsVisible="{Binding ShowRegistryStackDetailsError}">
+                <StackPanel Spacing="4"><TextBlock Classes="section-title" Text="Stack details unavailable" />
+                  <TextBlock Text="{Binding RegistryStackDetailsError}" TextWrapping="Wrap" /></StackPanel>
+              </Border>
+              <TabControl Classes="detail-tabs" ItemsPanel="{StaticResource TabHeaders}" IsVisible="{Binding ShowRegistryStackDetailsContent}">
+                <TabItem Header="Overview">
+                  <StackPanel Margin="0,12" Spacing="10">
+                    <TextBlock Classes="detail-intro" Text="{Binding SelectedRegistryStackSummary}" IsVisible="{Binding HasRegistrySelectedSummary}" />
+                    <controls:MarketplaceProfileCard Links="{Binding RegistryProfileLinks}" Metadata="{Binding RegistryProfileMetadata}" Tags="{Binding RegistryProfileTags}"
+                        HasLinks="{Binding HasRegistryProfileLinks}" HasMetadata="{Binding HasRegistryProfileMetadata}" HasTags="{Binding HasRegistryProfileTags}" IsVisible="{Binding HasRegistryProfile}" />
+                    <ContentControl Content="{Binding SelectedRegistryStackContentText}" ContentTemplate="{StaticResource ContentsSummary}" />
+                    <TextBlock Classes="caption" Text="{Binding SelectedRegistryStackUpdatedText}" TextWrapping="Wrap" />
+                    <md:MarkdownRenderer MarkdownBuilder="{Binding RegistryReadmeMarkdownBuilder}" IsVisible="{Binding HasRegistryReadme}" />
+                    <controls:MarketplaceMediaStrip Items="{Binding RegistryProfileMedia}" IsVisible="{Binding HasRegistryProfileMedia}" />
+                  </StackPanel>
+                </TabItem>
+                <TabItem Header="Contents">
+                  <StackPanel Margin="0,12" Spacing="8">
+                    <TextBlock Classes="section-title" Text="Package requirements" IsVisible="{Binding HasRegistrySelectedPackages}" />
+                    <ItemsControl ItemsSource="{Binding RegistrySelectedPackages}">
+                      <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:RegistryStackPackageRequirementViewModel">
+                        <Border Classes="detail-row" Margin="0,0,0,4"><StackPanel>
+                          <TextBlock FontWeight="SemiBold" Text="{Binding PackageId}" TextWrapping="Wrap" />
+                          <TextBlock Classes="caption" Text="{Binding InstallText}" TextWrapping="Wrap" />
+                        </StackPanel></Border>
+                      </DataTemplate></ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <controls:StackDetailTree Items="{Binding RegistrySelectedDetails}" IsVisible="{Binding HasRegistrySelectedFragments}" />
+                    <controls:StackRequiredInputs Items="{Binding RegistrySelectedRequiredInputs}" ItemTemplate="{StaticResource RequiredInput}" IsVisible="{Binding HasRegistrySelectedRequiredInputs}" />
+                  </StackPanel>
+                </TabItem>
+                <TabItem Header="People" IsVisible="{Binding HasRegistryAttributions}">
+                  <ItemsControl Classes="people-list" Margin="0,12" ItemsSource="{Binding RegistryAttributions}" />
+                </TabItem>
+              </TabControl>
+            </StackPanel>
+            <TextBlock Classes="caption" IsVisible="{Binding ShowNoSelection}" Text="Choose a local Stack, or create one from your installed packages." TextWrapping="Wrap" />
+            <TextBlock Classes="caption" IsVisible="{Binding ShowNoRegistrySelection}" Text="Select a Stack to review its packages and setup items." TextWrapping="Wrap" />
+          </StackPanel>
+        </ScrollViewer>
+      </Border>
     </Grid>
+    <Border Grid.Row="2" Classes="window-footer">
+      <StackPanel Spacing="5">
+        <TextBlock Classes="status-text" Text="{Binding StatusText}" TextWrapping="Wrap" />
+        <WrapPanel ItemSpacing="8" LineSpacing="4" IsVisible="{Binding IsLocalMode}">
+          <Button Classes="secondary-action" Content="Import from disk" Click="ImportStackButton_OnClick" IsEnabled="{Binding CanImportStack}" />
+          <Button Classes="secondary-action" Content="Export" Command="{Binding ExportSelectedStackCommand}" IsEnabled="{Binding CanExportSelectedStack}" IsVisible="{Binding ShowSelectedDetails}" />
+          <Button Classes="secondary-action danger-action" Content="Remove" Command="{Binding RemoveSelectedStackCommand}" IsEnabled="{Binding CanRemoveSelectedStack}" IsVisible="{Binding ShowSelectedDetails}" />
+        </WrapPanel>
+      </StackPanel>
+    </Border>
   </Grid>
 </Window>

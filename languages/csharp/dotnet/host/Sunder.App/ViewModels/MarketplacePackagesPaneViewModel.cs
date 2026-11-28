@@ -49,10 +49,6 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
 
     public ObservableCollection<RegistryUserAttributionViewModel> Attributions { get; } = [];
 
-    public ObservableCollection<RegistryUserAttributionViewModel> Creators { get; } = [];
-
-    public ObservableCollection<RegistryUserAttributionViewModel> Maintainers { get; } = [];
-
     public ObservableStringBuilder ReadmeMarkdownBuilder => _profile.ReadmeMarkdownBuilder;
 
     public bool HasPackages => Packages.Count > 0;
@@ -72,10 +68,6 @@ public sealed class MarketplacePackagesPaneViewModel : ViewModelBase, IDisposabl
     public bool HasProfileMedia => _profile.HasMedia;
 
     public bool HasAttributions => Attributions.Count > 0;
-
-    public bool HasCreators => Creators.Count > 0;
-
-    public bool HasMaintainers => Maintainers.Count > 0;
 
     public RegistryPackageDeviceRelease? Release => _release;
     public bool VersionDetailsLoaded => Release is not null;

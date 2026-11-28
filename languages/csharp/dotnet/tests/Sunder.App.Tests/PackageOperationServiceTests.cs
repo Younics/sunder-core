@@ -526,7 +526,7 @@ public sealed partial class PackageOperationServiceTests
                 reviews.Add(plan.ConfirmationToken);
                 var dialog = Sunder.App.ViewModels.RuntimeConfirmationViewModel.Uninstall(plan);
                 Assert.Equal(["Requested: Agent 1.0.0", "Also removed: Extension 1.0.0"], dialog.Items);
-                Assert.Contains("Package data will be kept", dialog.Message, StringComparison.Ordinal);
+                Assert.Contains("Package data will be kept", dialog.Impact, StringComparison.Ordinal);
                 if (stale && reviews.Count == 1) runtimeClient.UninstallPlan = plan with { ConfirmationToken = new string('c', 64) };
                 return Task.FromResult(approve);
             });

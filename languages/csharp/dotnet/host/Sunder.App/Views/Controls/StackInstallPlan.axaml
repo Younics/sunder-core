@@ -5,28 +5,29 @@
              x:DataType="controls:StackInstallPlan"
              x:Name="Root">
   <StackPanel Spacing="8">
-    <TextBlock Text="Packages" FontWeight="SemiBold" />
+    <TextBlock Classes="section-title" Text="Packages" />
     <ItemsControl ItemsSource="{Binding Items, ElementName=Root}"
                   ItemTemplate="{Binding ItemTemplate, ElementName=Root}"
                   IsVisible="{Binding HasItems, ElementName=Root}" />
     <Border Classes="settings-note-card" IsVisible="{Binding ShowNoChanges, ElementName=Root}">
-      <TextBlock Classes="muted" Text="All package requirements are already satisfied." />
+      <TextBlock Classes="caption" Text="All package requirements are already satisfied." TextWrapping="Wrap" />
     </Border>
     <ItemsControl ItemsSource="{Binding Warnings, ElementName=Root}"
                   IsVisible="{Binding HasWarnings, ElementName=Root}">
       <ItemsControl.ItemTemplate>
         <DataTemplate>
-          <Border Classes="settings-note-card" Margin="0,0,0,6">
+          <Border Classes="review-warning" Margin="0,0,0,6">
             <TextBlock Classes="muted" Text="{Binding}" TextWrapping="Wrap" />
           </Border>
         </DataTemplate>
       </ItemsControl.ItemTemplate>
     </ItemsControl>
+    <TextBlock Classes="section-title" Text="Cannot apply this Stack" IsVisible="{Binding HasErrors, ElementName=Root}" />
     <ItemsControl ItemsSource="{Binding Errors, ElementName=Root}"
                   IsVisible="{Binding HasErrors, ElementName=Root}">
       <ItemsControl.ItemTemplate>
         <DataTemplate>
-          <Border Classes="settings-note-card" Margin="0,0,0,6">
+          <Border Classes="review-error" Margin="0,0,0,6">
             <TextBlock Classes="runtime-error-text" Text="{Binding}" TextWrapping="Wrap" />
           </Border>
         </DataTemplate>

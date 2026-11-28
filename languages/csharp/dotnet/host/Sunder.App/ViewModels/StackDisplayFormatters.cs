@@ -9,6 +9,9 @@ internal static class StackDisplayFormatters
 {
     public static string Plural(int count) => count == 1 ? string.Empty : "s";
 
+    public static string Contents(int packages, int setupItems)
+        => $"{packages} package{Plural(packages)} · {setupItems} setup item{Plural(setupItems)}";
+
     public static string PackageGlyph(PackageIconDescriptor? icon, string displayName, string packageId)
     {
         if (!string.IsNullOrWhiteSpace(icon?.Glyph))

@@ -1,6 +1,7 @@
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.VisualTree;
 using Avalonia.Threading;
 using Sunder.App.Models;
 using Sunder.App.Composition;
@@ -16,6 +17,7 @@ public partial class StacksWindow : Window
     private readonly WindowCloseToHideCoordinator _closeCoordinator;
     private readonly StackWizardWindowFactory? _stackWizardWindowFactory;
     private readonly WizardDialogLaunchCoordinator _wizardDialogs = new();
+    private readonly ListDetailLayout _layout;
     private readonly OwnedTaskObserver _tasks = new(nameof(StacksWindow));
     private readonly CancellationTokenSource _lifetime = new();
     private StacksWindowViewModel? _subscribedViewModel;
@@ -23,6 +25,8 @@ public partial class StacksWindow : Window
     public StacksWindow()
     {
         InitializeComponent();
+        _layout = new(StacksContentGrid, StacksListPane, StacksDetailPane, StacksSplitter,
+            CompactStackBackButton, () => ViewModel is { ShowSelectedDetails: true } or { ShowRegistrySelectedDetails: true });
         SunderWindowSizing.ApplySecondaryWindowSize(this);
         _closeCoordinator = new WindowCloseToHideCoordinator(
             this,
@@ -58,9 +62,12 @@ public partial class StacksWindow : Window
     public void CloseForShutdown()
         => _closeCoordinator.CloseForShutdown();
 
+    internal void ShowDetails() => _layout.OpenDetails();
+
     private void OnOpened(object? sender, EventArgs e)
     {
         _stateController?.ApplySidebarWidth();
+        _layout.Refresh();
         _stateController?.RecordWindowedPlacement();
 
         if (ViewModel is not null)
@@ -72,6 +79,20 @@ public partial class StacksWindow : Window
     private void StacksSplitter_OnDragCompleted(object? sender, VectorEventArgs e)
     {
         _stateController?.PersistSidebarWidth();
+    }
+
+    private void StackList_OnPointerReleased(object? sender, PointerReleasedEventArgs e) => _layout.OpenSelectedRow(sender, e);
+    private void StackList_OnKeyUp(object? sender, KeyEventArgs e) => _layout.OpenSelectedRow(sender, e);
+
+    private void ViewContents_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (sender is Button button && button.FindAncestorOfType<TabControl>() is { } tabs) tabs.SelectedIndex = 1;
+    }
+
+    private void Selection_OnPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(StacksWindowViewModel.ShowSelectedDetails) or nameof(StacksWindowViewModel.ShowRegistrySelectedDetails))
+            _layout.Refresh();
     }
 
     private void CreateStackButton_OnClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
@@ -287,6 +308,7 @@ public partial class StacksWindow : Window
         if (_subscribedViewModel is not null)
         {
             _subscribedViewModel.LocalImageGalleryRequested -= ShowImageGalleryAsync;
+            _subscribedViewModel.PropertyChanged -= Selection_OnPropertyChanged;
             _subscribedViewModel.RegistryImageGalleryRequested -= ShowRegistryImageGalleryAsync;
         }
 
@@ -294,6 +316,7 @@ public partial class StacksWindow : Window
         if (_subscribedViewModel is not null)
         {
             _subscribedViewModel.LocalImageGalleryRequested += ShowImageGalleryAsync;
+            _subscribedViewModel.PropertyChanged += Selection_OnPropertyChanged;
             _subscribedViewModel.RegistryImageGalleryRequested += ShowRegistryImageGalleryAsync;
         }
     }

@@ -46,6 +46,7 @@ internal sealed class PackagesMarketplaceCatalog(
 
     public async Task<PackagesMarketplaceDetailsResult> LoadDetailsAsync(
         string packageId,
+        string? version,
         Action<RegistryPackageVersionItemViewModel> selectVersion,
         CancellationToken cancellationToken)
     {
@@ -56,17 +57,17 @@ internal sealed class PackagesMarketplaceCatalog(
 
         using (registryClient)
         {
-            var package = await LoadOverviewAsync(registryClient, packageId, null, cancellationToken).ConfigureAwait(false);
+            var package = await LoadOverviewAsync(registryClient, packageId, version, cancellationToken).ConfigureAwait(false);
             IEnumerable<RegistryPackageVersionSummary> history = package?.Versions ?? [];
             if (package?.SelectedRelease is { } selected)
             {
-                // The latest tag can point outside the Registry's bounded version history.
+                // The selected release can fall outside the Registry's bounded version history.
                 history = history.Where(version => version.Version != selected.Version)
                     .Append(new(selected.Version, selected.IsYanked, selected.DeprecatedMessage, selected.PublishedAtUtc));
             }
             var versions = history
                 .OrderByDescending(version => version.Version, RegistryPackageVersionOrdering.Comparer)
-                .Select(version => new RegistryPackageVersionItemViewModel(version, selectVersion))
+                .Select(version => new RegistryPackageVersionItemViewModel(version, selectVersion, package?.LatestVersion))
                 .ToArray();
             return PackagesMarketplaceDetailsResult.Succeeded(package, versions);
         }

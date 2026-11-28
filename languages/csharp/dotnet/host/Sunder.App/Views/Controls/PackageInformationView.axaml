@@ -6,8 +6,11 @@
              x:DataType="vm:PackageInformationViewModel">
   <UserControl.Styles>
     <Style Selector="Border.information-row">
-      <Setter Property="Padding" Value="0,12" />
-      <Setter Property="BorderThickness" Value="0,0,0,1" />
+      <Setter Property="Padding" Value="12,9" />
+      <Setter Property="Margin" Value="0,2" />
+      <Setter Property="CornerRadius" Value="7" />
+      <Setter Property="Background" Value="{DynamicResource Sunder.Brush.Surface.Base}" />
+      <Setter Property="BorderThickness" Value="1" />
       <Setter Property="BorderBrush" Value="{DynamicResource Sunder.Brush.Border.Subtle}" />
     </Style>
     <Style Selector="Border.sensitive-access">
@@ -27,7 +30,9 @@
           <StackPanel Spacing="4">
             <WrapPanel ItemSpacing="10" LineSpacing="4">
               <TextBlock FontWeight="SemiBold" Text="{Binding Title}" TextWrapping="Wrap" />
-              <TextBlock Classes="access-label" Text="Sensitive access" IsVisible="{Binding IsSensitive}" VerticalAlignment="Center" />
+              <Border Classes="package-row-badge update" IsVisible="{Binding IsSensitive}">
+                <TextBlock Classes="access-label" Text="Sensitive access" />
+              </Border>
             </WrapPanel>
             <TextBlock Classes="muted" Text="{Binding Description}" TextWrapping="Wrap" />
             <TextBlock Classes="caption" Text="{Binding Scope}" TextWrapping="Wrap" />
@@ -50,21 +55,26 @@
     <DataTemplate x:Key="DependencyRow" x:DataType="vm:PackageDependencyItemViewModel">
       <Border Classes="information-row">
         <StackPanel Spacing="6">
-          <WrapPanel ItemSpacing="10" LineSpacing="6">
-            <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap" />
-            <Border Classes="package-row-badge"><TextBlock Text="{Binding Requirement}" /></Border>
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <StackPanel Spacing="4">
+              <WrapPanel ItemSpacing="8" LineSpacing="4">
+                <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextWrapping="Wrap" />
+                <Border Classes="package-row-badge"><TextBlock Text="{Binding Requirement}" /></Border>
+              </WrapPanel>
+              <TextBlock Classes="caption code-value" Text="{Binding PackageId}" IsVisible="{Binding HasDisplayName}" />
+            </StackPanel>
+            <Button Grid.Column="1" Classes="secondary-action compact-action" Content="Open package" Command="{Binding NavigateCommand}"
+                    IsVisible="{Binding CanNavigate}" VerticalAlignment="Top" />
+          </Grid>
+          <WrapPanel ItemSpacing="12" LineSpacing="4">
+            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
+            <TextBlock Classes="caption" Text="{Binding VersionRange, StringFormat='Compatible versions: {0}'}" TextWrapping="Wrap" />
           </WrapPanel>
-          <TextBlock Classes="caption" Text="{Binding PackageId}" IsVisible="{Binding HasDisplayName}" TextWrapping="Wrap" />
-          <TextBlock Text="{Binding Status}" TextWrapping="Wrap" />
-          <TextBlock Classes="caption" Text="{Binding VersionRange, StringFormat='Compatible versions: {0}'}" TextWrapping="Wrap" />
-          <TextBlock Classes="muted" Text="{Binding Explanation}" TextWrapping="Wrap" />
-          <Button Classes="secondary-action compact-action" Content="Open package" Command="{Binding NavigateCommand}"
-                  IsVisible="{Binding CanNavigate}" HorizontalAlignment="Left" />
+          <TextBlock Classes="muted" Text="{Binding Explanation}" IsVisible="{Binding !IsRequired}" TextWrapping="Wrap" />
           <Expander IsVisible="{Binding HasBindings}" IsExpanded="False">
             <Expander.Header><TextBlock Classes="caption" Text="{Binding BindingSummary}" TextWrapping="Wrap" /></Expander.Header>
             <ItemsControl ItemsSource="{Binding Bindings}" ItemTemplate="{StaticResource BindingRow}" />
           </Expander>
-          <TextBlock Classes="caption" Text="No public binding relationship declared." IsVisible="{Binding HasNoBindings}" TextWrapping="Wrap" />
         </StackPanel>
       </Border>
     </DataTemplate>
@@ -75,16 +85,25 @@
     </Border>
     <StackPanel Spacing="16" IsVisible="{Binding IsLoaded}">
       <StackPanel IsVisible="{Binding #Root.OverviewOnly}" Spacing="8">
-        <TextBlock FontWeight="SemiBold" Text="Sensitive access" IsVisible="{Binding HasSensitiveFeatures}" />
-        <ItemsControl ItemsSource="{Binding PrimaryFeatures}" ItemTemplate="{StaticResource FeatureRow}" />
+        <StackPanel Spacing="5" IsVisible="{Binding HasSensitiveFeatures}">
+          <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+            <TextBlock Classes="section-title" Text="Sensitive access" VerticalAlignment="Center" />
+            <Button Grid.Column="1" Classes="secondary-action compact-action" Content="View access ›" Command="{Binding #Root.AccessCommand}"
+                    IsVisible="{Binding #Root.AccessCommand, Converter={x:Static ObjectConverters.IsNotNull}}" />
+          </Grid>
+          <ItemsControl ItemsSource="{Binding PrimaryFeatures}">
+            <ItemsControl.ItemTemplate><DataTemplate x:DataType="vm:PackageFeatureItemViewModel">
+              <TextBlock TextWrapping="Wrap"><Run Text="{Binding Title}" /> · <Run Classes="caption" Text="{Binding Scope}" /></TextBlock>
+            </DataTemplate></ItemsControl.ItemTemplate>
+          </ItemsControl>
+        </StackPanel>
       </StackPanel>
       <Border Classes="card-surface" IsVisible="{Binding !#Root.OverviewOnly}">
         <StackPanel Spacing="6">
-          <TextBlock Classes="section-title" Text="Uses Sunder features" />
+          <TextBlock Classes="section-title" Text="Sensitive access" IsVisible="{Binding HasSensitiveFeatures}" />
+          <TextBlock Classes="section-title" Text="Sunder features" IsVisible="{Binding !HasSensitiveFeatures}" />
           <TextBlock Classes="caption" Text="{Binding FeatureSummary}" />
-          <TextBlock Classes="muted" Text="Declared for this platform, not live usage or a complete list of operating-system access." TextWrapping="Wrap" />
-          <TextBlock Classes="muted" Text="Review sensitive access before installing. Only install packages and sources you trust."
-                     IsVisible="{Binding HasSensitiveFeatures}" TextWrapping="Wrap" />
+          <TextBlock Classes="caption" Text="Declared for this platform. Package code can also use your operating-system permissions." TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding PrimaryFeatures}" ItemTemplate="{StaticResource FeatureRow}" />
           <Expander IsVisible="{Binding HasAdditionalFeatures}" IsExpanded="False">
             <Expander.Header><TextBlock Text="More" /></Expander.Header>
@@ -93,9 +112,12 @@
         </StackPanel>
       </Border>
       <Border Classes="card-surface">
+        <Border.IsVisible>
+          <MultiBinding Converter="{x:Static BoolConverters.Or}"><Binding Path="HasDependencies" /><Binding Path="!#Root.OverviewOnly" /></MultiBinding>
+        </Border.IsVisible>
         <StackPanel Spacing="6">
-          <TextBlock Classes="section-title" Text="Dependencies and integrations" />
-          <TextBlock Classes="caption" Text="{Binding DependencySummary}" />
+          <TextBlock Classes="section-title" Text="Dependencies" IsVisible="{Binding #Root.OverviewOnly}" />
+          <TextBlock Classes="section-title" Text="Dependencies and integrations" IsVisible="{Binding !#Root.OverviewOnly}" />
           <TextBlock Classes="muted" Text="No package dependencies declared." IsVisible="{Binding HasNoDependencies}" TextWrapping="Wrap" />
           <ItemsControl ItemsSource="{Binding PrimaryDependencies}" ItemTemplate="{StaticResource DependencyRow}" />
           <Expander IsVisible="{Binding HasAdditionalDependencies}" IsExpanded="False">

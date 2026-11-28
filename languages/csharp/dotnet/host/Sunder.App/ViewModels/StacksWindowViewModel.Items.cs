@@ -14,7 +14,7 @@ public sealed partial class RegistryStackSearchItemViewModel(RegistryStackSummar
 
     public string Name { get; } = stack.Name;
 
-    public string Summary { get; } = string.IsNullOrWhiteSpace(stack.Summary) ? "No summary provided." : stack.Summary;
+    public string Summary { get; } = stack.Summary?.Trim() ?? string.Empty;
 
     public int PackageCount { get; } = stack.PackageCount;
 
@@ -24,7 +24,7 @@ public sealed partial class RegistryStackSearchItemViewModel(RegistryStackSummar
 
     public string UpdatedText { get; } = $"Updated {stack.UpdatedAtUtc.LocalDateTime:g}";
 
-    public string CountText { get; } = $"{stack.PackageCount} package{(stack.PackageCount == 1 ? string.Empty : "s")} · {stack.FragmentCount} fragment{(stack.FragmentCount == 1 ? string.Empty : "s")}";
+    public string CountText { get; } = StackDisplayFormatters.Contents(stack.PackageCount, stack.FragmentCount);
 
     [ObservableProperty]
     private bool _isSelected;
@@ -67,7 +67,7 @@ public sealed partial class LocalStackLibraryItemViewModel(LocalStackLibraryItem
 
     public string Name => Item.Name;
 
-    public string Summary => string.IsNullOrWhiteSpace(Item.Summary) ? "No summary provided." : Item.Summary;
+    public string Summary => Item.Summary?.Trim() ?? string.Empty;
 
     public string LocalPath => Item.LocalPath;
 
@@ -83,7 +83,7 @@ public sealed partial class LocalStackLibraryItemViewModel(LocalStackLibraryItem
 
     public string UpdatedText => $"Updated {Item.UpdatedAtUtc.LocalDateTime:g}";
 
-    public string CountText => $"{PackageCount} package{(PackageCount == 1 ? string.Empty : "s")} · {FragmentCount} fragment{(FragmentCount == 1 ? string.Empty : "s")}";
+    public string CountText => StackDisplayFormatters.Contents(PackageCount, FragmentCount);
 
     [ObservableProperty]
     private bool _isSelected;

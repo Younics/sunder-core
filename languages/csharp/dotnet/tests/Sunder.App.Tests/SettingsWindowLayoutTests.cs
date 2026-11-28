@@ -19,6 +19,7 @@ using Sunder.App.Views;
 using Sunder.App.Views.Controls;
 using Sunder.Core.TestSupport;
 using Sunder.Runtime.Contracts;
+using Sunder.Sdk.Abstractions;
 using Xunit;
 
 namespace Sunder.App.Tests;
@@ -41,10 +42,16 @@ public sealed class SettingsWindowLayoutTests
             var appearance = new SettingsAppearanceViewModel(themeManager, id => stateService.Update(state, value => value.ThemeId = id));
             var notifications = new NotificationCenterService(temporary.GetPath("notifications.json"));
             using var client = new EmptySettingsClient();
+            await using var queue = new BackgroundTaskQueueService();
+            queue.Enqueue(new("Settings task", "settings", BackgroundTaskIndicator.Settings, BackgroundTaskConcurrencyMode.SequentialWithinGroup,
+                true, context => Task.Delay(Timeout.Infinite, context.CancellationToken)));
             using var vm = new SettingsWindowViewModel(client, PackageViewHostService.Empty, new CliInstallationService(),
+                backgroundTaskQueue: queue,
                 runtimeResourcePolicySettingsService: new AppRuntimeResourcePolicySettingsService(temporary.GetPath("resources.json")),
                 appearance: appearance, notifications: new SettingsNotificationsViewModel(notifications));
             var window = new SettingsWindow { DataContext = vm };
+            var main = new MainWindow();
+            main.Show();
             window.Show();
             try
             {
@@ -52,10 +59,24 @@ public sealed class SettingsWindowLayoutTests
                 Assert.False(vm.ShowPlainCoreSelection);
                 Assert.False(await vm.SelectCoreSectionAsync("privacy"));
                 Assert.DoesNotContain(vm.CoreSections, section => section.Id == "privacy");
-                var selector = window.FindControl<SunderComboBox>("ThemeSelector")!;
+                var selector = window.FindControl<ListBox>("ThemeSelector")!;
+                var tint = main.GetVisualDescendants().OfType<Border>().Single(b => b.Classes.Contains("shell-glass-tint"));
+                var acrylic = main.GetVisualDescendants().OfType<ExperimentalAcrylicBorder>().Single();
+                var darkTint = Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color;
                 Assert.True(selector.IsEffectivelyVisible);
                 selector.SelectedItem = SunderThemeDefinition.GraphiteLight;
                 Assert.Same(SunderThemeDefinition.GraphiteLight, appearance.SelectedTheme);
+                Assert.Equal(ThemeVariant.Light, main.ActualThemeVariant);
+                Assert.Equal(SunderThemeDefinition.GraphiteLight.SurfaceWorkspace, acrylic.Material!.TintColor);
+                Assert.NotEqual(darkTint, Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color);
+                Assert.Equal(SunderThemeDefinition.GraphiteDarkId, stateService.Load().ThemeId);
+                var cancel = window.GetVisualDescendants().OfType<Button>().Single(button => Equals(button.Content, "Cancel") && button.IsEffectivelyVisible);
+                TestSupport.ManagementWindowAssert.Click(window, cancel);
+                Assert.False(window.IsVisible);
+                Assert.Equal(ThemeVariant.Dark, main.ActualThemeVariant);
+                Assert.Equal(darkTint, Assert.IsAssignableFrom<ISolidColorBrush>(tint.Background).Color);
+                window.Show();
+                selector.SelectedItem = SunderThemeDefinition.GraphiteLight;
                 Assert.True(await vm.ApplyAsync());
                 Assert.Same(ThemeVariant.Light, Application.Current!.RequestedThemeVariant);
                 Assert.Equal(SunderThemeDefinition.GraphiteLightId, stateService.Load().ThemeId);
@@ -74,10 +95,17 @@ public sealed class SettingsWindowLayoutTests
                 Assert.False(new NotificationCenterService(temporary.GetPath("notifications.json")).Preferences.ShowToasts);
                 Assert.True(await vm.SelectCoreSectionAsync("appearance"));
                 Assert.Same(SunderThemeDefinition.GraphiteLight, appearance.SelectedTheme);
+                Assert.True(vm.BackgroundTasks.ShowFooter);
+                await TestSupport.ManagementWindowAssert.CheckLayoutsAsync(window,
+                    () => Assert.Equal(window.ActualThemeVariant, main.ActualThemeVariant),
+                    selectTheme: theme => selector.SelectedItem = theme);
+                selector.SelectedItem = SunderThemeDefinition.GraphiteDark;
+                Assert.Equal(ThemeVariant.Dark, main.ActualThemeVariant);
                 Assert.True(await vm.SelectCoreSectionAsync("notifications"));
+                Assert.Equal(ThemeVariant.Light, main.ActualThemeVariant);
                 Assert.False(vm.Notifications.ShowToasts);
             }
-            finally { window.CloseForShutdown(); }
+            finally { window.CloseForShutdown(); main.CloseForShutdown(); }
             return true;
         }, default);
     }
@@ -287,17 +315,26 @@ public sealed class SettingsWindowLayoutTests
 
     public sealed class SettingsTestApplication : Application
     {
-        public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<SettingsTestApplication>().UseHeadless(new());
+        public static AppBuilder BuildAvaloniaApp() => AppBuilder.Configure<SettingsTestApplication>()
+            .UseSkia().UseHeadless(new() { UseHeadlessDrawing = false });
         public override void Initialize()
         {
             RequestedThemeVariant = ThemeVariant.Dark;
             Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://Sunder.App/"))
                 { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderThemeResources.axaml") });
+            Resources.MergedDictionaries.Add(new ResourceInclude(new Uri("avares://Sunder.App/"))
+                { Source = new Uri("avares://Sunder.App/Styles/IconResources.axaml") });
             Styles.Add(new FluentTheme());
             Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
                 { Source = new Uri("avares://Sunder.App.Bridge/Themes/SunderPackageStyles.axaml") });
             Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
                 { Source = new Uri("avares://Sunder.App/Styles/SunderShellStyles.axaml") });
+            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
+                { Source = new Uri("avares://Sunder.App/Styles/PackageWindowStyles.axaml") });
+            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
+                { Source = new Uri("avares://Sunder.App/Styles/ManagementWindowStyles.axaml") });
+            Styles.Add(new StyleInclude(new Uri("avares://Sunder.App/"))
+                { Source = new Uri("avares://Sunder.App/Styles/ProcessMonitorStyles.axaml") });
             new ThemeManager(this).Initialize();
         }
     }

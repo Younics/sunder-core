@@ -35,7 +35,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private readonly LatestAsyncRequest _marketplaceVersionDetailsRequest = new();
     private readonly TimeSpan _marketplaceDetailSpinnerDelay;
     private readonly IUiDispatcher _uiDispatcher;
-    private readonly Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? _confirmSharedRuntimeRepair;
+    private readonly Func<PackageExecutionRuntimeStatusViewModel, RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? _confirmSharedRuntimeRepair;
     private readonly OwnedTaskObserver _tasks = new(nameof(PackagesWindowViewModel));
     private readonly SemaphoreSlim _installedPackageGate = new(1, 1);
     private RuntimePackageSnapshot? _latestPackageSnapshot;
@@ -43,7 +43,8 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private int _nextMarketplaceOffset;
     private string _marketplaceOverviewSummary = string.Empty;
     [ObservableProperty] private bool _hasMoreMarketplacePackages;
-    [ObservableProperty] private int _detailTabIndex;
+    [ObservableProperty] private int _marketplaceTabIndex;
+    [ObservableProperty] private int _installedTabIndex;
     private CancellationTokenSource? _marketplacePackageDetailsSpinnerCancellation;
     private bool _disposed;
     private bool _isApplyingModeSearchText;
@@ -68,7 +69,7 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
         Action<double, double>? persistBackgroundTaskPopoverSize = null,
         IUiDispatcher? uiDispatcher = null,
         RemoteImageService? remoteImageService = null,
-        Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null,
+        Func<PackageExecutionRuntimeStatusViewModel, RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null,
         PackageUpdateStartupCheckService? updateChecks = null)
     {
         _runtimeApiClient = runtimeApiClient;
@@ -166,7 +167,12 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            if (value is null) ClearInstalledSelection();
+            // Resetting the bound collection briefly deselects its old row. The catalog
+            // restores the selection by ID, or clears it if there is no remaining match.
+            if (value is null)
+            {
+                if (Installed.SelectedPackage is { } selected && Installed.Packages.Contains(selected)) ClearInstalledSelection();
+            }
             else SelectInstalledPackage(value);
         }
     }
@@ -181,7 +187,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
                 return;
             }
 
-            if (value is null) ClearMarketplaceSelection();
+            if (value is null)
+            {
+                if (Marketplace.SelectedPackage is { } selected && Marketplace.Packages.Contains(selected)) ClearMarketplaceSelection();
+            }
             else _tasks.Observe(SelectMarketplacePackageAsync(value, _tasks.Token), "loading selected marketplace package");
         }
     }
@@ -244,10 +253,6 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool HasMarketplaceAttributions => MarketplacePackageDetailsLoaded && Marketplace.HasAttributions;
 
-    public bool HasMarketplaceCreators => MarketplacePackageDetailsLoaded && Marketplace.HasCreators;
-
-    public bool HasMarketplaceMaintainers => MarketplacePackageDetailsLoaded && Marketplace.HasMaintainers;
-
     public bool ShowInstalledDetails => IsInstalledMode && Installed.SelectedPackage is not null;
 
     public bool ShowMarketplaceDetails => IsMarketplaceMode && Marketplace.SelectedPackage is not null;
@@ -309,7 +314,9 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
 
     public bool ShowMarketplaceUpdateButton => ShowMarketplaceInstalledActions && Marketplace.SelectedPackage?.HasUpdate == true && !Operations.SelectedPackageHasActiveOperation;
 
-    public bool ShowMarketplacePackageStats => ShowMarketplacePackageDetailsContent && HasMarketplacePackageStats;
+    public bool ShowMarketplacePackageStats => ShowMarketplacePackageDetailsContent && SelectedMarketplacePackage?.Stats is not null;
+    public bool SelectedMarketplacePackageIsStarred => ShowMarketplacePackageDetailsContent && SelectedMarketplacePackage?.Stats?.IsStarred == true;
+    public string MarketplacePackageStarActionText => SelectedMarketplacePackageIsStarred ? "Unstar package" : "Star package";
 
     public bool ShowMarketplacePackageStarAction => ShowMarketplacePackageDetailsContent;
 
@@ -406,23 +413,10 @@ public sealed partial class PackagesWindowViewModel : ViewModelBase, IDisposable
     private string _marketplaceSelectedVersion = "Latest";
 
     [ObservableProperty]
-    private string _marketplacePackageStatsText = string.Empty;
-
-    [ObservableProperty]
-    private string _marketplacePackageStarActionText = "Star";
-
-    [ObservableProperty]
-    private bool _hasMarketplacePackageStats;
-
-    [ObservableProperty]
-    private bool _selectedMarketplacePackageIsStarred;
-
-    [ObservableProperty]
     private bool _showMarketplacePackageDetailsSpinner;
 
     partial void OnModeChanged(PackageWindowMode value)
     {
-        DetailTabIndex = 0;
         CancelQueuedMarketplaceSearch();
         ++_marketplaceSearchVersion;
         InvalidateMarketplaceSelectionLoad();

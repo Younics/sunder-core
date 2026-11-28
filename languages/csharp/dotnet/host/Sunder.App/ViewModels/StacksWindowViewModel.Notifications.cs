@@ -84,8 +84,6 @@ public sealed partial class StacksWindowViewModel
         OnPropertyChanged(nameof(HasRegistryProfile));
         OnPropertyChanged(nameof(HasRegistryProfileMedia));
         OnPropertyChanged(nameof(HasRegistryAttributions));
-        OnPropertyChanged(nameof(HasRegistryCreators));
-        OnPropertyChanged(nameof(HasRegistryMaintainers));
     }
 
     private void DisposeSelectedLocalDetails()

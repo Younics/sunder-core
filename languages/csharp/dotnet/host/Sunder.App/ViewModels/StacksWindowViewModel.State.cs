@@ -118,10 +118,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
 
     public ObservableCollection<RegistryUserAttributionViewModel> RegistryAttributions { get; } = [];
 
-    public ObservableCollection<RegistryUserAttributionViewModel> RegistryCreators { get; } = [];
-
-    public ObservableCollection<RegistryUserAttributionViewModel> RegistryMaintainers { get; } = [];
-
     [ObservableProperty]
     private StackBrowserMode _browserMode = StackBrowserMode.Marketplace;
 
@@ -245,10 +241,6 @@ public sealed partial class StacksWindowViewModel : ViewModelBase, IDisposable
     public bool HasRegistryProfileMedia => RegistryStackDetailsLoaded && _registryProfile.HasMedia;
 
     public bool HasRegistryAttributions => RegistryStackDetailsLoaded && RegistryAttributions.Count > 0;
-
-    public bool HasRegistryCreators => RegistryStackDetailsLoaded && RegistryCreators.Count > 0;
-
-    public bool HasRegistryMaintainers => RegistryStackDetailsLoaded && RegistryMaintainers.Count > 0;
 
     public bool HasSelectedSummary => !string.IsNullOrWhiteSpace(SelectedStackSummary);
 

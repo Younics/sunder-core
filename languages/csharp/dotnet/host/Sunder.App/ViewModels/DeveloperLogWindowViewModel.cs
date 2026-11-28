@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using CommunityToolkit.Mvvm.Input;
 using Sunder.App.Services;
+using Sunder.Sdk.Logging;
 
 namespace Sunder.App.ViewModels;
 
-public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
+public sealed partial class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
 {
     private readonly DeveloperLogService _developerLog;
     private readonly IUiDispatcher _uiDispatcher;
@@ -55,6 +57,17 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
     }
 
     public string StatusText => $"{FilteredEntries.Count:N0} of {_entries.Count:N0} log entries";
+
+    public bool HasFilters => !string.IsNullOrWhiteSpace(SearchText) || SelectedFilter is { Kind: not DeveloperLogFilterKind.All };
+
+    public string EmptyText => HasFilters ? "No matching log entries" : "No log entries yet";
+
+    [RelayCommand]
+    private void ClearFilters()
+    {
+        SearchText = string.Empty;
+        SelectedFilter = DeveloperLogFilterOptionViewModel.All;
+    }
 
     public void SelectPackage(string packageId)
     {
@@ -148,6 +161,8 @@ public sealed class DeveloperLogWindowViewModel : ViewModelBase, IDisposable
         }
 
         OnPropertyChanged(nameof(StatusText));
+        OnPropertyChanged(nameof(HasFilters));
+        OnPropertyChanged(nameof(EmptyText));
     }
 
     private bool MatchesCurrentFilter(DeveloperLogEntryViewModel entry)
@@ -205,6 +220,10 @@ public sealed class DeveloperLogEntryViewModel(DeveloperLogEntry entry)
     public string TimestampText => entry.Timestamp.ToString("HH:mm:ss.fff");
 
     public string LevelText => entry.Level.ToString().ToUpperInvariant();
+
+    public bool IsWarning => entry.Level == PackageLogLevel.Warning;
+
+    public bool IsError => entry.Level is PackageLogLevel.Error or PackageLogLevel.Critical;
 
     public DeveloperLogEntryScope Scope => entry.Scope;
 

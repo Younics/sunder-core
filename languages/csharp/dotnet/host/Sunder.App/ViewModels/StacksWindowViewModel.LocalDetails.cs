@@ -90,7 +90,7 @@ public sealed partial class StacksWindowViewModel
         SelectedStackTitle = value.Name;
         SelectedStackSubtitle = value.StackId;
         SelectedStackSummary = value.Summary;
-        SelectedStackMetadata = $"{value.PackageCount} package{(value.PackageCount == 1 ? string.Empty : "s")} · {value.FragmentCount} fragment{(value.FragmentCount == 1 ? string.Empty : "s")} · {value.UpdatedText}";
+        SelectedStackMetadata = value.UpdatedText;
         SelectedStackPath = value.LocalPath;
         _selectedLocalProfile.Apply(ToRegistryStackProfile(value.Item));
         if (value.IsPublished)

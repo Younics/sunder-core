@@ -8,7 +8,7 @@
     <Style Selector="TextBlock.attention-title"><Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Accent}" /></Style>
     <Style Selector="TextBlock.attention-title.package-failed"><Setter Property="Foreground" Value="{DynamicResource Sunder.Brush.Danger}" /></Style>
   </UserControl.Styles>
-  <StackPanel Spacing="16">
+  <StackPanel Spacing="16" Container.Name="PackageTabArea" Container.Sizing="Width">
     <Border Classes="settings-note-card" IsVisible="{Binding SelectedInstalledPackage.NeedsAttention}">
       <StackPanel Spacing="6">
         <TextBlock Classes="attention-title" FontWeight="SemiBold"
@@ -26,8 +26,7 @@
       <ProgressBar Minimum="0" Maximum="100" Value="{Binding Operations.SelectedPackageOperationProgressPercent}"
                    IsIndeterminate="{Binding Operations.SelectedPackageOperationIsIndeterminate}" />
     </StackPanel>
-    <TabControl SelectedIndex="{Binding DetailTabIndex}">
-      <TabControl.ItemsPanel><ItemsPanelTemplate><WrapPanel /></ItemsPanelTemplate></TabControl.ItemsPanel>
+    <TabControl Classes="detail-tabs package-tabs" SelectedIndex="{Binding InstalledTabIndex, Mode=TwoWay}">
       <TabItem Header="Overview">
         <StackPanel Margin="0,12,0,0" Spacing="12">
           <TextBlock Classes="section-title" Text="On this device" />
@@ -57,15 +56,18 @@
           </Border>
           <TextBlock Text="{Binding Information.ProvidedServices, StringFormat='Provides: {0}'}"
                      IsVisible="{Binding Information.ProvidedServices, Converter={x:Static StringConverters.IsNotNullOrEmpty}}" TextWrapping="Wrap" />
-          <controls:PackageInformationView DataContext="{Binding Information}" OverviewOnly="True" />
+          <controls:PackageInformationView DataContext="{Binding Information}" OverviewOnly="True"
+              AccessCommand="{Binding $parent[TabControl].((vm:PackagesWindowViewModel)DataContext).ShowPackageAccessCommand}" />
         </StackPanel>
       </TabItem>
       <TabItem Header="Access &amp; integrations"><controls:PackageInformationView DataContext="{Binding Information}" /></TabItem>
       <TabItem Header="Technical details">
         <StackPanel Margin="0,12,0,0" Spacing="8">
           <controls:PackagePlatformsView DataContext="{Binding Platforms}" />
-          <TextBlock Classes="caption" Text="Local content identity" />
-          <TextBlock Text="{Binding LocalDetails.ContentIdentity}" FontFamily="monospace" TextWrapping="Wrap" />
+          <StackPanel Spacing="4" IsVisible="{Binding LocalDetails.ContentIdentity, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+            <TextBlock Classes="section-label" Text="Local content identity" />
+            <SelectableTextBlock Classes="code-value" Text="{Binding LocalDetails.ContentIdentity}" />
+          </StackPanel>
           <Expander IsExpanded="False" IsVisible="{Binding SelectedInstalledPackage.ShowHistoricalError}">
             <Expander.Header><TextBlock Text="Last recorded failure" /></Expander.Header>
             <TextBlock Classes="muted" Text="{Binding SelectedPackageError}" TextWrapping="Wrap" />

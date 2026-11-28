@@ -24,11 +24,15 @@ public sealed class PackageCapabilityConsentViewModel
         Changes = preflight.Plan.Items
             .Select(static item => new PackageChangeConfirmationItemViewModel(
                 item.PackageId,
-                item.Version ?? item.CurrentVersion ?? "-",
+                item.ActionKind == RegistryPackageActionKinds.PackageUpdate && item.CurrentVersion is not null
+                    ? $"{item.CurrentVersion} → {item.Version}"
+                    : item.Version ?? item.CurrentVersion ?? "Version unavailable",
                 FormatAction(item.ActionKind)))
-            .ToArray();
+             .ToArray();
+        var changed = preflight.Plan.Items.Where(item => item.ActionKind != RegistryPackageActionKinds.Keep).ToArray();
+        ReviewTitle = changed.Length == 1 ? $"{changed[0].PackageId} {changed[0].Version ?? changed[0].CurrentVersion}" : "Review package changes";
         var files = preflight.Plan.Items.SelectMany(item => item.Artifacts.Select(file =>
-            $"{item.PackageId} · {file.Kind} {file.Rid} · {file.Size:N0} bytes\nSHA-256: {file.Sha256}\nManifest SHA-256: {file.ManifestSha256}"));
+            $"{item.PackageId} {item.Version} · {file.Kind} {file.Rid} · {file.Size:N0} bytes\nArchive SHA-256: {file.SourceArchiveSha256}\nFile SHA-256: {file.Sha256}\nManifest SHA-256: {file.ManifestSha256}"));
         var runtimes = preflight.ExecutionRuntimes.Select(runtime =>
             $"{RuntimeManagementUi.Identity(runtime.Identity)} · {runtime.Identity.Rid} · {ExactBytes(runtime.DownloadSize)}\n"
             + $"Vendor checksum ({runtime.Identity.VendorChecksumAlgorithm}): {runtime.Identity.VendorChecksumDigest}");
@@ -65,6 +69,8 @@ public sealed class PackageCapabilityConsentViewModel
     }
 
     public string PackageDownloadText { get; }
+    public string ReviewTitle { get; }
+    public string Device => AppPackageTargetEnvironment.CurrentRid;
 
     public string SharedRuntimeDownloadText { get; }
 
@@ -95,6 +101,7 @@ public sealed class PackageCapabilityConsentViewModel
     public string ApprovalScopeText { get; }
     public string ReviewDetails { get; }
     public IReadOnlyList<string> SensitiveAccess { get; }
+    public bool HasSensitiveAccess => SensitiveAccess.Count > 0;
 
     private static string ExactBytes(long? size) => size is null ? "Size unavailable" : $"{size:N0} bytes";
 

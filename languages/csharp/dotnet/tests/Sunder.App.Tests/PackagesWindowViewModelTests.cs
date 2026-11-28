@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Sunder.App.Tests;
 
-public sealed class PackagesWindowViewModelTests
+public sealed partial class PackagesWindowViewModelTests
 {
     [Fact]
     public async Task EnableSelectedPackageCommand_UsesExplicitOperationExecutor()
@@ -431,8 +431,9 @@ public sealed class PackagesWindowViewModelTests
         RuntimeExecutionRuntimeImpact? confirmedImpact = null;
         using var viewModel = CreateViewModel(
             runtimeClient,
-            confirmSharedRuntimeRepair: (candidate, _) =>
+            confirmSharedRuntimeRepair: (runtime, candidate, _) =>
             {
+                Assert.Equal(binding.Runtime, runtime.Identity);
                 confirmedImpact = candidate;
                 return Task.FromResult(false);
             });
@@ -1220,8 +1221,9 @@ public sealed class PackagesWindowViewModelTests
         await viewModel.ToggleSelectedMarketplacePackageStarCommand.ExecuteAsync(null);
 
         Assert.Equal("Starred package.", viewModel.Operations.StatusText);
-        Assert.Equal("4 downloads · 2 stars", viewModel.MarketplacePackageStatsText);
-        Assert.Equal("Unstar", viewModel.MarketplacePackageStarActionText);
+        Assert.Equal(4, viewModel.SelectedMarketplacePackage!.Stats!.TotalDownloads);
+        Assert.Equal(2, viewModel.SelectedMarketplacePackage.Stats.Stars);
+        Assert.Equal("Unstar package", viewModel.MarketplacePackageStarActionText);
         Assert.True(viewModel.SelectedMarketplacePackageIsStarred);
         Assert.Equal("younics.ai.agent", runtimeClient.LastRegistryStarRequest?.ResourceId);
     }
@@ -1367,7 +1369,7 @@ public sealed class PackagesWindowViewModelTests
         Func<Uri, object?>? tokenProvider = null,
         TimeSpan? marketplaceDetailSpinnerDelay = null,
         FakePackageOperationExecutor? operationExecutor = null,
-        Func<RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null,
+        Func<PackageExecutionRuntimeStatusViewModel, RuntimeExecutionRuntimeImpact, CancellationToken, Task<bool>>? confirmSharedRuntimeRepair = null,
         PackageUpdateStartupCheckService? updateChecks = null
     )
     {
@@ -1921,12 +1923,14 @@ public sealed class PackagesWindowViewModelTests
 
         public RuntimeRegistryResolveInstallPlanResponse? RegistryPlanResult { get; init; }
         public int PlanCalls { get; private set; }
+        public RuntimeRegistryPackageBatchRequest? LastPlanRequest { get; private set; }
 
         public Func<RuntimeExecutionRuntimeIdentity, CancellationToken, Task<RuntimeExecutionRuntimeOperationResult>>? RepairRuntime { get; set; }
 
         public Task<RuntimeRegistryResolveInstallPlanResponse> ResolveRegistryPackagePlanAsync(RuntimeRegistryPackageBatchRequest request, CancellationToken cancellationToken = default)
         {
             PlanCalls++;
+            LastPlanRequest = request;
             return Task.FromResult(RegistryPlanResult ?? new RuntimeRegistryResolveInstallPlanResponse(
                 true,
                 RegistryUpdates.Select(update => new RuntimeRegistryPackageInstallPlanItem(
