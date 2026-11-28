@@ -26,7 +26,8 @@ public sealed class RuntimeRpcOptionalReferenceTests
     [InlineData(false, true, true, "di")]
     public async Task OptionalReference_ActualHostPreservesFallbackAndStrictLocatorCoupling(bool strict, bool midflight, bool optionalFirst, string termination = "target")
     {
-        await using var fixture = new RpcFixture();
+        var deadlineClock = termination == "deadline" ? new ManualTimeProvider(DateTimeOffset.UtcNow) : null;
+        await using var fixture = new RpcFixture(timeProvider: deadlineClock);
         var descriptor = OptionalHostContract();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -54,7 +55,7 @@ public sealed class RuntimeRpcOptionalReferenceTests
         var calleeReference = bindings.CreateProvider(callee, static (_, _, token) => new OptionalHostTarget(token)).Reference;
         await using var resources = new SunderRpcResourceLifetime(bindings);
         await using var sending = await resources.CreateCallAsync(client, callee.Endpoint,
-            new(DateTimeOffset.UtcNow.AddSeconds(termination == "deadline" ? 2 : 30)), callerCancellation.Token,
+            new((deadlineClock?.GetUtcNow() ?? DateTimeOffset.UtcNow).AddSeconds(30)), callerCancellation.Token,
             providerRetirementToken: calleeReference.RetirementToken);
         ConfigureOptionalHost(sending, bindings, descriptor);
         source.UnaryWithContext = async (invocation, wire, token) =>
@@ -115,12 +116,15 @@ public sealed class RuntimeRpcOptionalReferenceTests
         if (termination == "caller") await callerCancellation.CancelAsync();
         if (termination == "source") Assert.True(fixture.Catalog.DeactivatePackage(callee.PackageId, callee.ActivationId, faulted: false));
         if (termination == "di") await resources.DisposeAsync();
-        if (termination == "deadline") await Task.Delay(TimeSpan.FromSeconds(2.1));
+        // A provider can finish at the deadline before the timer callback gets CPU time.
+        deadlineClock?.AdvanceWithoutFiringTimers(TimeSpan.FromSeconds(30));
         release.TrySetResult();
         if (strict || termination != "target")
         {
             var error = await Record.ExceptionAsync(async () => await call.WaitAsync(TimeSpan.FromSeconds(10)));
-            Assert.True(error is SunderRpcException or OperationCanceledException, error?.ToString() ?? "Strict reference unexpectedly returned fallback.");
+            Assert.True(error is SunderRpcException or OperationCanceledException, error?.ToString() ?? "The call unexpectedly returned fallback.");
+            if (deadlineClock is not null)
+                Assert.Equal(SunderRpcErrorKind.DeadlineExceeded, Assert.IsType<SunderRpcException>(error).Error.Kind);
             if (!midflight) Assert.False(entered.Task.IsCompleted);
             Assert.Equal(generation, fixture.Owner.Generation);
             if (termination != "source")

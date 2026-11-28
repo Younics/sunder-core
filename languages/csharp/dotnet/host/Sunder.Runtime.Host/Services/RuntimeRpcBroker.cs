@@ -1783,23 +1783,9 @@ internal sealed partial class RuntimeRpcBroker
         RuntimeRpcCallLease call,
         Exception exception)
     {
-        if (call.ProviderRetirementRequested)
+        if (GetCallCancellation(call, exception is OperationCanceledException) is { } cancellation)
         {
-            return SunderRpcException.Infrastructure(
-                SunderRpcErrorKind.StaleEndpoint,
-                "rpc.endpoint.stale",
-                "The RPC endpoint identifies a retired provider activation.");
-        }
-        if (exception is OperationCanceledException || call.CancellationToken.IsCancellationRequested)
-        {
-            return call.AppCallerRetirementRequested
-                ? RetiredAppCaller()
-                : call.DeadlineElapsed || _timeProvider.GetUtcNow() >= call.Frame.DeadlineUtc
-                ? DeadlineExceeded()
-                : SunderRpcException.Infrastructure(
-                    SunderRpcErrorKind.Cancelled,
-                    "rpc.call.cancelled",
-                    "The RPC call was cancelled.");
+            return cancellation;
         }
         if (exception is WorkerTransportResourceException { Kind: WorkerTransportFailureKind.WriteQueueAdmission or WorkerTransportFailureKind.WriteQueueClosed } transport)
         {
@@ -1938,22 +1924,24 @@ internal sealed partial class RuntimeRpcBroker
 
     private void ThrowIfCallCancelled(RuntimeRpcCallLease call)
     {
-        if (call.ProviderRetirementRequested || call.CancellationToken.IsCancellationRequested)
+        if (GetCallCancellation(call) is { } cancellation)
         {
-            throw call.ProviderRetirementRequested
-                ? SunderRpcException.Infrastructure(
-                    SunderRpcErrorKind.StaleEndpoint,
-                    "rpc.endpoint.stale",
-                    "The RPC endpoint identifies a retired provider activation.")
-                : call.AppCallerRetirementRequested
-                    ? RetiredAppCaller()
-                : call.DeadlineElapsed || _timeProvider.GetUtcNow() >= call.Frame.DeadlineUtc
-                    ? DeadlineExceeded()
-                    : SunderRpcException.Infrastructure(
-                        SunderRpcErrorKind.Cancelled,
-                        "rpc.call.cancelled",
-                        "The RPC call was cancelled.");
+            throw cancellation;
         }
+    }
+
+    private SunderRpcException? GetCallCancellation(RuntimeRpcCallLease call, bool operationCancelled = false)
+    {
+        if (call.ProviderRetirementRequested)
+            return StaleEndpoint("rpc.endpoint.stale", "The RPC endpoint identifies a retired provider activation.");
+        if (call.AppCallerRetirementRequested)
+            return RetiredAppCaller();
+        // Timer callbacks can run after the provider completes. Check the agreed deadline directly.
+        if (call.DeadlineElapsed || _timeProvider.GetUtcNow() >= call.Frame.DeadlineUtc)
+            return DeadlineExceeded();
+        if (operationCancelled || call.CancellationToken.IsCancellationRequested)
+            return SunderRpcException.Infrastructure(SunderRpcErrorKind.Cancelled, "rpc.call.cancelled", "The RPC call was cancelled.");
+        return null;
     }
 
     private static SunderRpcException RetiredAppCaller()
